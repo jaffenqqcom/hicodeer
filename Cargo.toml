@@ -949,7 +949,7 @@ webpki-roots = "1.0.8"
 webrtc-sys = "0.3.23"
 # Pinned to the version provided by the `wgpu-zed` fork below; raising this
 # requires the fork to carry the matching version.
-wgpu = "29.0.3" # ===== [OHOS PORT] pinned to the wgpu-zed fork version (upstream ships 29.0.4) =====
+wgpu = "=29.0.3" # ===== [OHOS PORT] pinned to the wgpu-zed fork version (upstream ships 29.0.4); the exact requirement keeps cargo from resolving to the newer crates.io release, which would leave the fork in `[patch.crates-io]` unused =====
 which = "8"
 windows-core = "0.62"
 windows-registry = "0.6.0"

@@ -50,7 +50,7 @@ wgpu = { workspace = true, features = ["webgl"] }
 criterion.workspace = true
 gpui = { workspace = true, features = ["bench-support"] }
 image.workspace = true
-naga = { version = "29.0.3", features = ["wgsl-in"] } # ===== [OHOS PORT] must match the version of the `wgpu-zed` fork patched in the root Cargo.toml =====
+naga = { version = "=29.0.3", features = ["wgsl-in"] } # ===== [OHOS PORT] must match the version of the `wgpu-zed` fork patched in the root Cargo.toml =====
 
 [[bench]]
 name = "layout_line"

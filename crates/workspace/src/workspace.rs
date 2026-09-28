@@ -3980,6 +3980,15 @@ impl Workspace {
             open_mode = OpenMode::Activate;
         }
 
+        // ===== [OHOS PORT BEGIN] rendering goes through one XComponent surface, so a
+        // requested new window has to land in the current one; the platform refuses a
+        // second window and the rejection is swallowed by a `.log_err()` upstream =====
+        #[cfg(target_env = "ohos")]
+        if open_mode == OpenMode::NewWindow {
+            open_mode = OpenMode::Activate;
+        }
+        // ===== [OHOS PORT END] =====
+
         let app_state = self.app_state.clone();
 
         cx.spawn(async move |_, cx| {

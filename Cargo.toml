@@ -96,6 +96,11 @@ members = [
     "crates/gpui_linux",
     "crates/gpui_macos",
     "crates/gpui_macros",
+    # ===== [OHOS PORT BEGIN] OHOS-only workspace members =====
+    "crates/gpui_ohos",
+    "crates/gpui_ohos/depend/launch-zed",
+    "crates/gpui_ohos/depend/ohos-libc-shim",
+    # ===== [OHOS PORT END] =====
     "crates/gpui_platform",
     "crates/gpui_shared_string",
     "crates/gpui_tokio",
@@ -366,6 +371,9 @@ gpui_apple = { path = "crates/gpui_apple" }
 gpui_linux = { path = "crates/gpui_linux", default-features = false }
 gpui_macos = { path = "crates/gpui_macos", default-features = false }
 gpui_macros = { path = "crates/gpui_macros" }
+# ===== [OHOS PORT BEGIN] OHOS platform backend crate =====
+gpui_ohos = { path = "crates/gpui_ohos" }
+# ===== [OHOS PORT END] =====
 gpui_platform = { path = "crates/gpui_platform", default-features = false }
 gpui_shared_string = { path = "crates/gpui_shared_string" }
 gpui_tokio = { path = "crates/gpui_tokio" }
@@ -929,12 +937,19 @@ wasmtime = { version = "48", default-features = false, features = [
 ] }
 wasm-bindgen = "0.2.120"
 wasm-bindgen-futures = "0.4"
-wasmtime-wasi = { version = "48", default-features = false, features = ["p2"] }
+wasmtime-wasi = "48"
+# Referenced by the OHOS QEMU management crate (not built for the default
+# OHOS configuration); declared here so its manifest resolves.
+# ===== [OHOS PORT BEGIN] required by the OHOS-only qemu-mngt crate =====
+virtiofsd = { version = "1.14", default-features = false }
+# ===== [OHOS PORT END] =====
 wax = "0.7"
 web-time = "1.1.0"
 webpki-roots = "1.0.8"
 webrtc-sys = "0.3.23"
-wgpu = "29.0.4"
+# Pinned to the version provided by the `wgpu-zed` fork below; raising this
+# requires the fork to carry the matching version.
+wgpu = "29.0.3" # ===== [OHOS PORT] pinned to the wgpu-zed fork version (upstream ships 29.0.4) =====
 which = "8"
 windows-core = "0.62"
 windows-registry = "0.6.0"
@@ -1020,6 +1035,43 @@ libwebrtc = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev =
 notify = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
 notify-types = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
 webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "0a1c519cfce9b365229026b55de9b9dbdb6fed3c" }
+
+# ===== [OHOS PORT BEGIN] local patches and forks consumed by OHOS =====
+# Third-party crates that need OHOS-specific changes and have no upstream support
+# are consumed from local patched copies under `patches/`; the wgpu and OHOS
+# binding trees are consumed from forks. Every change in these trees is guarded
+# by `#[cfg(target_env = "ohos")]`, so other platforms compile the unmodified
+# upstream code. Crates reachable from a single fork must all be patched onto the
+# same source and revision, otherwise cargo resolves two copies and their FFI
+# types stop being interchangeable.
+cap-primitives = { path = "patches/cap-primitives" }
+rustix-openpty = { path = "patches/rustix-openpty" }
+# The `which` fork installs a resolver hook at startup that answers a name the
+# local PATH scan cannot find using the environment the commands actually run
+# in (hicodeerd); the hook is cfg-gated to OHOS, so elsewhere this is upstream.
+which = { path = "patches/which" }
+wasmtime = { path = "patches/wasmtime" }
+# Only reached by the OHOS QEMU management crate, which the default OHOS
+# configuration does not build; patched locally from the existing copy.
+virtiofsd = { path = "patches/virtiofsd" }
+wgpu = { git = "https://github.com/jaffenqqcom/wgpu-zed", tag = "v29.0.3-zed.1" }
+wgpu-core = { git = "https://github.com/jaffenqqcom/wgpu-zed", tag = "v29.0.3-zed.1" }
+wgpu-hal = { git = "https://github.com/jaffenqqcom/wgpu-zed", tag = "v29.0.3-zed.1" }
+wgpu-types = { git = "https://github.com/jaffenqqcom/wgpu-zed", tag = "v29.0.3-zed.1" }
+naga = { git = "https://github.com/jaffenqqcom/wgpu-zed", tag = "v29.0.3-zed.1" }
+ohos-xcomponent-binding = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-xcomponent-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-arkui-input-binding = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-arkui-input-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-arkui-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-enum-derive = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-native-buffer-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-resource-manager-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-image-native-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-image-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-native-drawing-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-udmf-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+# ===== [OHOS PORT END] =====
 
 # corgi runs build.rs/proc-macros in a sandbox with no write access outside the
 # action's own OUT_DIR. Upstream `scratch` bakes its build-time OUT_DIR in via

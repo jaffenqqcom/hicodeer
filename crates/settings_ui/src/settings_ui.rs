@@ -9,10 +9,11 @@ use editor::{Editor, EditorEvent};
 use futures::{StreamExt, channel::mpsc};
 use fuzzy::StringMatchCandidate;
 use gpui::{
-    Action, App, AsyncApp, ClipboardItem, DEFAULT_ADDITIONAL_WINDOW_SIZE, Div, Entity, FocusHandle,
-    Focusable, Global, KeyContext, ListState, ReadGlobal as _, Role, ScrollHandle, Stateful,
-    Subscription, Task, TitlebarOptions, UniformListScrollHandle, WeakEntity, Window, WindowBounds,
-    WindowHandle, WindowOptions, actions, div, list, point, prelude::*, px, uniform_list,
+    Action, App, AsyncApp, ClipboardItem, DEFAULT_ADDITIONAL_WINDOW_SIZE, Div, Entity, EntityId,
+    EventEmitter, FocusHandle, Focusable, Global, KeyContext, ListState, ReadGlobal as _, Role,
+    ScrollHandle, SharedString, Stateful, Subscription, Task, TaskExt as _, TitlebarOptions,
+    UniformListScrollHandle, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions, actions,
+    div, list, point, prelude::*, px, uniform_list,
 };
 
 use language::Buffer;
@@ -44,8 +45,8 @@ use ui::{
 
 use util::{ResultExt as _, paths::PathStyle, rel_path::RelPath};
 use workspace::{
-    AppState, MultiWorkspace, OpenOptions, OpenVisible, Workspace, WorkspaceSettings,
-    client_side_decorations,
+    AppState, Item as SettingsItem, MultiWorkspace, OpenOptions, OpenVisible, SaveIntent, Workspace,
+    WorkspaceSettings, client_side_decorations,
 };
 use zed_actions::{
     AGENT_SKILLS_SETTINGS_PATH, OpenProjectSettings, OpenSettings, OpenSettingsAt,
@@ -850,6 +851,36 @@ fn open_settings_editor_with(
 ) {
     telemetry::event!("Settings Viewed");
 
+    // ===== [OHOS PORT BEGIN] the platform has a single window; settings is a tab =====
+    // `Workspace::open_window` is refused once a window exists on OHOS, so the
+    // settings UI is added as an item to the active pane instead of a window.
+    // Deferred to the app queue because hosting the tab updates the window
+    // handle, and gpui takes the window out of `cx.windows` for the duration of
+    // a window update; running it inline now fails with "window not found".
+    #[cfg(target_env = "ohos")]
+    {
+        if let Some(workspace_handle) = workspace_handle {
+            cx.defer(move |cx| {
+                ohos_settings_tab::open_settings_editor_in_tab(workspace_handle, cx, callback);
+            });
+        } else {
+            log::error!(
+                "[ohos] open_settings_editor_with: no workspace window to host the settings tab"
+            );
+        }
+    }
+    // ===== [OHOS PORT END] =====
+
+    #[cfg(not(target_env = "ohos"))]
+    open_settings_editor_in_window(workspace_handle, cx, callback);
+}
+
+#[cfg(not(target_env = "ohos"))]
+fn open_settings_editor_in_window(
+    workspace_handle: Option<WindowHandle<MultiWorkspace>>,
+    cx: &mut App,
+    callback: impl FnOnce(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
+) {
     let existing_window = cx
         .windows()
         .into_iter()
@@ -1886,27 +1917,14 @@ impl SettingsWindow {
         })
         .detach();
 
-        let app_state = AppState::global(cx);
-        let workspaces: Vec<Entity<Workspace>> = app_state
-            .workspace_store
-            .read(cx)
-            .workspaces()
-            .filter_map(|weak| weak.upgrade())
-            .collect();
-
-        for workspace in workspaces {
-            let project = workspace.read(cx).project().clone();
-            cx.observe_release_in(&project, window, |this, _, window, cx| {
-                this.fetch_files(window, cx)
-            })
-            .detach();
-            cx.subscribe_in(&project, window, Self::handle_project_event)
-                .detach();
-            cx.observe_release_in(&workspace, window, |this, _, window, cx| {
-                this.fetch_files(window, cx)
-            })
-            .detach();
-        }
+        // ===== [OHOS PORT BEGIN] reading a workspace is deferred on OHOS =====
+        // When the settings page is hosted as a tab, `SettingsWindow::new` runs
+        // inside `Workspace::update`, so reading the existing workspaces here
+        // panics with "already being updated". `initialize_as_tab` runs this
+        // once the hosting update has returned.
+        #[cfg(not(target_env = "ohos"))]
+        Self::observe_existing_workspaces(window, cx);
+        // ===== [OHOS PORT END] =====
 
         let this_weak = cx.weak_entity();
         cx.observe_new::<Project>({
@@ -1967,11 +1985,13 @@ impl SettingsWindow {
         })
         .detach();
 
-        let title_bar = if !cfg!(target_os = "macos") {
+        // ===== [OHOS PORT BEGIN] the settings page is a tab, so it owns no title bar =====
+        let title_bar = if !cfg!(target_os = "macos") && !cfg!(target_env = "ohos") {
             Some(cx.new(|cx| PlatformTitleBar::new("settings-title-bar", cx)))
         } else {
             None
         };
+        // ===== [OHOS PORT END] =====
 
         let list_state = gpui::ListState::new(0, gpui::ListAlignment::Top, px(0.0)).measure_all();
         list_state.set_scroll_handler(|_, _, _| {});
@@ -2033,15 +2053,54 @@ impl SettingsWindow {
             skill_creator_page: None,
         };
 
-        this.fetch_files(window, cx);
-        this.build_ui(window, cx);
-        this.build_search_index();
+        // ===== [OHOS PORT BEGIN] a tab-hosted settings page defers its first load =====
+        // When the settings page is hosted as a tab, it is created while the
+        // window's workspace is mid-update; fetching files / building the UI here
+        // would re-enter that workspace. `initialize_as_tab` runs it at the end
+        // of the effect cycle instead.
+        #[cfg(not(target_env = "ohos"))]
+        {
+            this.fetch_files(window, cx);
+            this.build_ui(window, cx);
+            this.build_search_index();
 
-        this.search_bar.update(cx, |editor, cx| {
-            editor.focus_handle(cx).focus(window, cx);
-        });
+            this.search_bar.update(cx, |editor, cx| {
+                editor.focus_handle(cx).focus(window, cx);
+            });
+        }
+        // ===== [OHOS PORT END] =====
 
         this
+    }
+
+    /// Subscribes to the release of the workspaces (and their projects) that
+    /// exist right now, re-fetching the settings files when one goes away.
+    ///
+    /// Kept as its own function so OHOS can run it after the hosting workspace's
+    /// update has returned; doing it inside `SettingsWindow::new` reads a
+    /// workspace that is mid-update and panics.
+    fn observe_existing_workspaces(window: &mut Window, cx: &mut Context<Self>) {
+        let app_state = AppState::global(cx);
+        let workspaces: Vec<Entity<Workspace>> = app_state
+            .workspace_store
+            .read(cx)
+            .workspaces()
+            .filter_map(|weak| weak.upgrade())
+            .collect();
+
+        for workspace in workspaces {
+            let project = workspace.read(cx).project().clone();
+            cx.observe_release_in(&project, window, |this, _, window, cx| {
+                this.fetch_files(window, cx)
+            })
+            .detach();
+            cx.subscribe_in(&project, window, Self::handle_project_event)
+                .detach();
+            cx.observe_release_in(&workspace, window, |this, _, window, cx| {
+                this.fetch_files(window, cx)
+            })
+            .detach();
+        }
     }
 
     fn clear_search(&mut self, window: &mut Window, cx: &mut Context<SettingsWindow>) {
@@ -4111,24 +4170,64 @@ impl SettingsWindow {
                 let Some(original_window) = self.original_window else {
                     return;
                 };
-                original_window
-                    .update(cx, |multi_workspace, window, cx| {
-                        multi_workspace
-                            .workspace()
-                            .clone()
-                            .update(cx, |workspace, cx| {
-                                workspace
-                                    .with_local_or_wsl_workspace(
+
+                // ===== [OHOS PORT BEGIN] the settings page is a tab, not a window =====
+                // Deferring to the app queue keeps the workspace off the stack,
+                // and closing the tab replaces `window.remove_window()`, which
+                // would otherwise remove the platform's only window.
+                #[cfg(target_env = "ohos")]
+                {
+                    let settings_item_id = cx.entity_id();
+                    cx.defer(move |cx| {
+                        if let Err(err) =
+                            original_window.update(cx, |multi_workspace, window, cx| {
+                                multi_workspace.workspace().clone().update(cx, |workspace, cx| {
+                                    workspace
+                                        .with_local_or_wsl_workspace(
+                                            window,
+                                            cx,
+                                            open_user_settings_in_workspace,
+                                        )
+                                        .detach_and_log_err(cx);
+                                    close_settings_tab_in_workspace(
+                                        workspace,
+                                        settings_item_id,
                                         window,
                                         cx,
-                                        open_user_settings_in_workspace,
-                                    )
-                                    .detach();
-                            });
-                    })
-                    .ok();
+                                    );
+                                });
+                            })
+                        {
+                            log::error!(
+                                "[ohos] open_current_settings_file: failed to update workspace: {err:?}"
+                            );
+                        }
+                    });
+                    return;
+                }
+                // ===== [OHOS PORT END] =====
 
-                window.remove_window();
+                #[cfg(not(target_env = "ohos"))]
+                {
+                    original_window
+                        .update(cx, |multi_workspace, window, cx| {
+                            multi_workspace
+                                .workspace()
+                                .clone()
+                                .update(cx, |workspace, cx| {
+                                    workspace
+                                        .with_local_or_wsl_workspace(
+                                            window,
+                                            cx,
+                                            open_user_settings_in_workspace,
+                                        )
+                                        .detach();
+                                });
+                        })
+                        .ok();
+
+                    window.remove_window();
+                }
             }
             SettingsUiFile::Project((worktree_id, path)) => {
                 let settings_path = path.join(paths::local_settings_file_relative_path());
@@ -4212,7 +4311,38 @@ impl SettingsWindow {
                     })
                     .ok();
 
+                // ===== [OHOS PORT BEGIN] the settings page is a tab, not a window =====
+                // `window` is the platform's only window here, so the settings
+                // tab is closed instead of the window.
+                #[cfg(target_env = "ohos")]
+                {
+                    let settings_item_id = cx.entity_id();
+                    let original_window = self.original_window;
+                    cx.defer(move |cx| {
+                        let Some(original_window) = original_window else {
+                            return;
+                        };
+                        if let Err(err) =
+                            original_window.update(cx, |multi_workspace, window, cx| {
+                                multi_workspace.workspace().clone().update(cx, |workspace, cx| {
+                                    close_settings_tab_in_workspace(
+                                        workspace,
+                                        settings_item_id,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            })
+                        {
+                            log::error!(
+                                "[ohos] open_current_settings_file: failed to update workspace: {err:?}"
+                            );
+                        }
+                    });
+                }
+                #[cfg(not(target_env = "ohos"))]
                 window.remove_window();
+                // ===== [OHOS PORT END] =====
             }
             SettingsUiFile::Server(_) => {
                 // Server files are not editable
@@ -6866,3 +6996,128 @@ mod project_settings_update_tests {
         );
     }
 }
+
+// ===== [OHOS PORT BEGIN] settings UI hosted as a tab of the single window =====
+// OHOS exposes one XComponent surface and `Workspace::open_window` is refused
+// once a window exists, so the settings page is an item of the active pane
+// rather than a window of its own.
+#[cfg(target_env = "ohos")]
+mod ohos_settings_tab {
+    use super::*;
+
+    impl Focusable for SettingsWindow {
+        fn focus_handle(&self, _cx: &App) -> FocusHandle {
+            self.focus_handle.clone()
+        }
+    }
+
+    impl EventEmitter<()> for SettingsWindow {}
+
+    impl SettingsItem for SettingsWindow {
+        type Event = ();
+
+        fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
+            "Settings".into()
+        }
+
+        fn show_toolbar(&self) -> bool {
+            false
+        }
+    }
+
+    impl SettingsWindow {
+        /// Deferred initial load for the tab-hosted settings page.
+        ///
+        /// The item is created while the hosting workspace is mid-update, so the
+        /// file fetch and the first UI build run at the end of the effect cycle
+        /// instead of inside `SettingsWindow::new`.
+        pub(super) fn initialize_as_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+            cx.defer_in(window, |this, window, cx| {
+                Self::observe_existing_workspaces(window, cx);
+                this.fetch_files(window, cx);
+                this.build_ui(window, cx);
+                this.build_search_index();
+
+                this.search_bar.update(cx, |editor, cx| {
+                    editor.focus_handle(cx).focus(window, cx);
+                });
+            });
+        }
+    }
+
+    /// Opens the settings UI as a tab, reactivating an existing one if present.
+    pub(super) fn open_settings_editor_in_tab(
+        workspace_handle: WindowHandle<MultiWorkspace>,
+        cx: &mut App,
+        callback: impl FnOnce(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
+    ) {
+        let mut callback = Some(callback);
+        workspace_handle
+            .update(cx, |multi_workspace, window, cx| {
+                let workspace = multi_workspace.workspace().clone();
+                workspace.update(cx, |workspace, cx| {
+                    let existing = workspace.items_of_type::<SettingsWindow>(cx).next();
+                    if let Some(existing) = existing {
+                        existing.update(cx, |settings_window, cx| {
+                            settings_window.original_window = Some(workspace_handle);
+                            if let Some(callback) = callback.take() {
+                                callback(settings_window, window, cx);
+                            }
+                        });
+                        workspace.activate_item(&existing, true, true, window, cx);
+                        return;
+                    }
+
+                    let settings_window =
+                        cx.new(|cx| SettingsWindow::new(Some(workspace_handle), window, cx));
+                    settings_window.update(cx, |settings_window, cx| {
+                        settings_window.initialize_as_tab(window, cx);
+                        if let Some(callback) = callback.take() {
+                            callback(settings_window, window, cx);
+                        }
+                    });
+                    workspace.add_item_to_active_pane(
+                        Box::new(settings_window),
+                        None,
+                        true,
+                        window,
+                        cx,
+                    );
+                });
+            })
+            .log_err();
+    }
+}
+
+/// Closes the settings tab identified by `settings_item_id`.
+///
+/// Logs and returns when the tab is already gone, so the close-then-open flow in
+/// `open_current_settings_file` cannot race the pane state.
+#[cfg(target_env = "ohos")]
+fn close_settings_tab_in_workspace(
+    workspace: &mut Workspace,
+    settings_item_id: EntityId,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let pane = workspace
+        .panes()
+        .iter()
+        .find(|pane| {
+            pane.read(cx)
+                .items()
+                .any(|item| item.item_id() == settings_item_id)
+        })
+        .cloned();
+
+    let Some(pane) = pane else {
+        log::warn!("[ohos] close_settings_tab_in_workspace: settings tab is already closed");
+        return;
+    };
+
+    let task = pane.update(cx, |pane, cx| {
+        pane.close_item_by_id(settings_item_id, SaveIntent::Close, window, cx)
+    });
+    task.detach_and_log_err(cx);
+}
+// ===== [OHOS PORT END] =====

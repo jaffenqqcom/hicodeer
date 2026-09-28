@@ -15,15 +15,27 @@ doctest = false
 [dependencies]
 anyhow.workspace = true
 collections.workspace = true
-cpal.workspace = true
 crossbeam.workspace = true
 gpui.workspace = true
 log.workspace = true
 parking_lot.workspace = true
-rodio.workspace = true
 settings.workspace = true
 thiserror.workspace = true
 util.workspace = true
 
-[target.'cfg(not(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd")))'.dependencies]
+# ===== [OHOS PORT BEGIN] audio backends on OHOS =====
+# OHOS has no ALSA/CoreAudio backend for `cpal`, and `libwebrtc` (used for echo
+# cancellation) has no OHOS build. The OHOS build therefore takes `rodio` with
+# `default-features = false` - its `playback`/`recording` features depend on
+# `cpal` - and leaves the device code to `audio_pipeline_ohos`. Every other
+# target keeps the dependencies it had before.
+[target.'cfg(target_env = "ohos")'.dependencies]
+rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", default-features = false }
+
+[target.'cfg(not(target_env = "ohos"))'.dependencies]
+cpal.workspace = true
+rodio.workspace = true
+# ===== [OHOS PORT END] =====
+
+[target.'cfg(not(any(target_env = "ohos", all(target_os = "windows", target_env = "gnu"), target_os = "freebsd")))'.dependencies]
 libwebrtc.workspace = true

@@ -164,7 +164,8 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
     }
 
     // Maybe unify this with gpui::platform::linux::platform::ResultExt::notify_err(..)?
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    // ===== [OHOS PORT] `ashpd` is the XDG desktop portal, which OHOS does not have =====
+    #[cfg(all(any(target_os = "linux", target_os = "freebsd"), not(target_env = "ohos")))]
     {
         use ashpd::desktop::notification::{Notification, NotificationProxy, Priority};
         _cx.spawn(async move |_cx| {
@@ -195,8 +196,23 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
         })
         .detach();
     }
+
+    // ===== [OHOS PORT] no XDG notification portal on OHOS: exit directly as the non-Linux path does =====
+    #[cfg(target_env = "ohos")]
+    {
+        process::exit(1);
+    }
 }
 static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
+
+// ===== [OHOS PORT BEGIN] entry point for the OHOS NAPI cdylib =====
+// crates/gpui_ohos/depend/launch-zed calls this through the `zed` lib target.
+// Left unconditional (rather than `#[cfg(target_env = "ohos")]`) so the lib
+// build of this file has no dead code; nothing else calls it.
+pub fn hicodeer_main() {
+    main();
+}
+// ===== [OHOS PORT END] =====
 
 fn main() {
     STARTUP_TIME.get_or_init(|| Instant::now());

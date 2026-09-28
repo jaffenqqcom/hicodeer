@@ -247,6 +247,14 @@ impl Application {
 
         #[cfg(target_family = "wasm")]
         std::mem::forget(self);
+
+        // On OHOS the platform run loop is driven by the host application, so
+        // `Platform::run` invokes the launch callback and returns immediately.
+        // Leak the application to keep it alive for the lifetime of the host.
+        #[cfg(target_env = "ohos")]
+        {
+            _ = Box::leak(Box::new(self));
+        }
     }
 
     /// Start the application for an embedder that drives the run loop itself.

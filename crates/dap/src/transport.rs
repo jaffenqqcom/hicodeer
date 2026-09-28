@@ -19,12 +19,19 @@ use smol::{
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    process::Stdio,
     sync::Arc,
     time::Duration,
 };
 use task::TcpArgumentsTemplate;
-use util::{ConnectionResult, ResultExt, process::Child};
+use util::process::Child;
+use util::{ConnectionResult, ResultExt};
+
+// ===== [OHOS PORT BEGIN] `Stdio` is the platform router's type on OHOS =====
+#[cfg(not(target_env = "ohos"))]
+use std::process::Stdio;
+#[cfg(target_env = "ohos")]
+use util::process::Stdio;
+// ===== [OHOS PORT END] =====
 
 use crate::{
     adapters::{DebugAdapterBinary, TcpArguments},

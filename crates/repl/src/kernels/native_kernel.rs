@@ -103,8 +103,15 @@ pub struct NativeRunningKernel {
 
 impl Debug for NativeRunningKernel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // ===== [OHOS PORT BEGIN] the OHOS router child implements `Debug` but exposes no `Deref`,
+        // so the desktop `&*child` deref-to-inner-process spelling is unavailable there.
+        #[cfg(not(target_env = "ohos"))]
+        let process = &*self.process;
+        #[cfg(target_env = "ohos")]
+        let process = &self.process;
+        // ===== [OHOS PORT END] =====
         f.debug_struct("RunningKernel")
-            .field("process", &*self.process)
+            .field("process", process)
             .finish()
     }
 }
@@ -148,11 +155,17 @@ impl NativeRunningKernel {
             let mut cmd = kernel_specification.command(&connection_path)?;
             cmd.current_dir(&working_directory);
 
+            // ===== [OHOS PORT BEGIN] `Stdio` is the platform router's type on OHOS =====
+            #[cfg(not(target_env = "ohos"))]
+            use std::process::Stdio;
+            #[cfg(target_env = "ohos")]
+            use util::process::Stdio;
+            // ===== [OHOS PORT END] =====
             let mut process = util::process::Child::spawn(
                 cmd,
-                std::process::Stdio::piped(),
-                std::process::Stdio::piped(),
-                std::process::Stdio::piped(),
+                Stdio::piped(),
+                Stdio::piped(),
+                Stdio::piped(),
             )?;
 
             let session_id = Uuid::new_v4().to_string();

@@ -2034,6 +2034,13 @@ impl ConversationView {
                                 })
                             }
                         } else {
+                            // ===== [OHOS PORT BEGIN] The vendor sign-in card is
+                            // injected client-side, so the agent never sends
+                            // `elicitation/complete` for it; drop it once auth
+                            // succeeds. =====
+                            #[cfg(target_env = "ohos")]
+                            this.cancel_request_elicitations(cx);
+                            // ===== [OHOS PORT END] =====
                             this.reset(window, cx);
                         }
                         this.auth_task.take()
@@ -2082,6 +2089,13 @@ impl ConversationView {
                             active.update(cx, |active, cx| active.handle_thread_error(err, cx));
                         }
                     } else {
+                        // ===== [OHOS PORT BEGIN] The vendor sign-in card is
+                        // injected client-side, so the agent never sends
+                        // `elicitation/complete` for it; drop it once auth
+                        // succeeds. =====
+                        #[cfg(target_env = "ohos")]
+                        this.cancel_request_elicitations(cx);
+                        // ===== [OHOS PORT END] =====
                         this.reset(window, cx);
                     }
                     this.auth_task.take()

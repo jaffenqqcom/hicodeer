@@ -2,7 +2,15 @@
 use std::process::Command;
 
 fn main() {
-    #[cfg(target_os = "linux")]
+    // ===== [OHOS PORT BEGIN] CARGO_BIN_NAME for the lib target =====
+    // This crate builds src/main.rs as both the `zed` bin and the `zed` lib
+    // (see the `[lib]` section in Cargo.toml). Cargo only sets CARGO_BIN_NAME
+    // for bin targets, but src/main.rs asserts on it, so provide it uniformly.
+    println!("cargo:rustc-env=CARGO_BIN_NAME=zed");
+    // ===== [OHOS PORT END] =====
+
+    // ===== [OHOS PORT] OHOS reports target_os = "linux" but has neither pkg-config nor the libva/egl webrtc-sys libraries, so skip the rpath probe there =====
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     {
         // Add rpaths for libraries that webrtc-sys dlopens at runtime.
         // This is mostly required for hosts with non-standard SO installation
@@ -214,11 +222,11 @@ fn main() {
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(all(any(target_os = "linux", target_os = "freebsd"), not(target_env = "ohos")))]
     prepare_app_icon_x11();
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), not(target_env = "ohos")))]
 fn icon_path() -> std::path::PathBuf {
     use std::str::FromStr;
 
@@ -239,7 +247,7 @@ fn icon_path() -> std::path::PathBuf {
     std::path::PathBuf::from_str(&icon).unwrap()
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), not(target_env = "ohos")))]
 fn prepare_app_icon_x11() {
     use image::{ImageReader, imageops};
     use std::env;

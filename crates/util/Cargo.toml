@@ -65,6 +65,18 @@ mach2.workspace = true
 tendril = "0.5"
 windows.workspace = true
 
+# ===== [OHOS PORT BEGIN] on-device command router =====
+# The OHOS sandbox forbids `exec` of arbitrary binaries, so `src/command/ohos.rs`
+# routes every spawn through the on-device daemon. It depends only on the
+# self-contained `cmd-client` crate (which carries its own `ExecSpec` /
+# `RemoteCommandExecutor` contract). Non-OHOS targets keep `smol::process`
+# via `src/command.rs`.
+[target.'cfg(target_env = "ohos")'.dependencies]
+cmd-client = { path = "../gpui_ohos/depend/cmd-agent/cmd-client" }
+# Tar extraction with the OHOS sandbox link fallback (see archive.rs).
+async-tar.workspace = true
+# ===== [OHOS PORT END] =====
+
 [dev-dependencies]
 rand.workspace = true
 util_macros.workspace = true

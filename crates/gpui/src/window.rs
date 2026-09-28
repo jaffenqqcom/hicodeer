@@ -5481,6 +5481,24 @@ impl Window {
                             cursor_style: None,
                             external_payload_source: None,
                         });
+                    } else {
+                        // ===== [OHOS PORT BEGIN] refresh the payload of an in-flight
+                        // external file drag so the drop listener receives the real
+                        // paths; OHOS seeds the drag state with an empty `Entered` on
+                        // drag-enter and only delivers the paths on drop =====
+                        let is_external_drag = cx.active_drag.as_ref().is_some_and(|drag| {
+                            drag.value.downcast_ref::<crate::ExternalPaths>().is_some()
+                        });
+                        if is_external_drag {
+                            let view: AnyView = cx.new(|_| paths.clone()).into();
+                            let refreshed_paths = Arc::new(paths);
+                            if let Some(drag) = &mut cx.active_drag {
+                                drag.value = refreshed_paths;
+                                drag.view = view;
+                                drag.cursor_offset = position;
+                            }
+                        }
+                        // ===== [OHOS PORT END] =====
                     }
                     PlatformInput::MouseMove(MouseMoveEvent {
                         position,

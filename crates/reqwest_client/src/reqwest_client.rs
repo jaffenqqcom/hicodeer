@@ -15,6 +15,15 @@ use reqwest::{
 };
 
 const DEFAULT_CAPACITY: usize = 4096;
+// ===== [OHOS PORT BEGIN] direct GitHub access from the device needs a wider connect budget =====
+// The upstream 10s budget covers DNS + TCP + TLS; connections made directly
+// from the device to github.com time out at that size, so OHOS uses 30s
+// (matching the reference port). Other platforms keep the upstream value.
+#[cfg(target_env = "ohos")]
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(not(target_env = "ohos"))]
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+// ===== [OHOS PORT END] =====
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 static REDACT_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"key=[^&]+").unwrap());
 
@@ -33,7 +42,7 @@ impl ReqwestClient {
     fn builder(read_timeout: Option<Duration>) -> reqwest::ClientBuilder {
         let builder = reqwest::Client::builder()
             .use_rustls_tls()
-            .connect_timeout(Duration::from_secs(10))
+            .connect_timeout(CONNECT_TIMEOUT)
             // Detect and drop connections that have silently gone bad on a
             // flaky path (NAT timeouts, resets) instead of reusing them. A
             // stale reused HTTP/2 connection is a common source of

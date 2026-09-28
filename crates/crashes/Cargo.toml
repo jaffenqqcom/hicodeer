@@ -6,15 +6,23 @@ edition.workspace = true
 license = "GPL-3.0-or-later"
 
 [dependencies]
-async-process.workspace = true
-crash-handler.workspace = true
 log.workspace = true
-minidumper.workspace = true
-parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 system_specs.workspace = true
+
+# ===== [OHOS PORT BEGIN] desktop-only crash reporting deps =====
+# `minidumper` pulls in `uds`, whose `ControlLen` assumptions do not hold on the
+# OHOS libc; `crash-handler`, `async-process` and `zstd` only serve the desktop
+# crash-handler sidecar. All of them are dropped on OHOS, where `crashes.rs`
+# compiles the stub in `mod ohos` instead of `crashes_desktop.rs`.
+[target.'cfg(not(target_env = "ohos"))'.dependencies]
+async-process.workspace = true
+crash-handler.workspace = true
+minidumper.workspace = true
+parking_lot.workspace = true
 zstd.workspace = true
+# ===== [OHOS PORT END] =====
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true

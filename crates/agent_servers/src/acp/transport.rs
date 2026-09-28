@@ -7,9 +7,16 @@ use futures::{
 use gpui::{AsyncApp, Entity};
 use project::{Project, agent_server_store::AgentServerCommand};
 use remote::remote_client::Interactive;
-use std::{io, pin::Pin, process::Stdio};
+use std::{io, pin::Pin};
 use task::{Shell, ShellBuilder};
 use util::{ResultExt as _, process::Child};
+
+// ===== [OHOS PORT BEGIN] `Stdio` is the platform router's type on OHOS =====
+#[cfg(not(target_env = "ohos"))]
+use std::process::Stdio;
+#[cfg(target_env = "ohos")]
+use util::process::Stdio;
+// ===== [OHOS PORT END] =====
 
 pub(super) struct StdioProcess {
     pub child: Child,

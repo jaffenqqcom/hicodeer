@@ -32,10 +32,25 @@ pub async fn capture(
     args: &[String],
     directory: impl AsRef<Path>,
 ) -> Result<collections::HashMap<String, String>> {
+    #[cfg(target_env = "ohos")]
+    return capture_ohos(shell_path.as_ref(), args, directory.as_ref()).await;
     #[cfg(windows)]
     return capture_windows(shell_path.as_ref(), args, directory.as_ref()).await;
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_env = "ohos")))]
     return capture_unix(shell_path.as_ref(), args, directory.as_ref()).await;
+}
+
+/// The OHOS terminal panel spawns a device-local `/bin/sh`, which must see the
+/// device environment, not the OpenEuler VM login environment (whose HOME/PATH
+/// point at VM paths that do not exist on the device). Return the current
+/// process environment instead of running a login-shell capture on the VM.
+#[cfg(target_env = "ohos")]
+async fn capture_ohos(
+    _shell_path: &Path,
+    _args: &[String],
+    _directory: &Path,
+) -> Result<collections::HashMap<String, String>> {
+    Ok(std::env::vars().collect())
 }
 
 /// Try to parse the environment output before checking the exit status.

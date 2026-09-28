@@ -24,18 +24,16 @@ anyhow.workspace = true
 async-trait.workspace = true
 audio.workspace = true
 collections.workspace = true
-cpal.workspace = true
 futures.workspace = true
-gpui = { workspace = true, features = ["screen-capture", "x11", "wayland"] }
+gpui.workspace = true
 gpui_tokio.workspace = true
 http_client_tls.workspace = true
 image.workspace = true
-livekit_api = { workspace = true, optional = true }
+livekit_api.workspace = true
 log.workspace = true
 nanoid.workspace = true
 parking_lot.workspace = true
 postage.workspace = true
-rodio.workspace = true
 serde.workspace = true
 serde_urlencoded.workspace = true
 settings.workspace = true
@@ -43,19 +41,31 @@ smallvec.workspace = true
 ui.workspace = true
 util.workspace = true
 
-[target.'cfg(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd"))'.dependencies]
-livekit_api.workspace = true
-
-[target.'cfg(not(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd")))'.dependencies]
+# ===== [OHOS PORT BEGIN] no WebRTC/LiveKit stack on OHOS =====
+# OHOS has no build of the native libwebrtc (webrtc-sys) and no ALSA/CoreAudio
+# backend for `cpal`; the OHOS build uses `mock_client` (see the cfg selection in
+# `src/lib.rs`) and therefore needs none of these. Every other target keeps the
+# behaviour it had before.
+[target.'cfg(not(any(target_env = "ohos", all(target_os = "windows", target_env = "gnu"), target_os = "freebsd")))'.dependencies]
 libwebrtc.workspace = true
 livekit.workspace = true
+# ===== [OHOS PORT END] =====
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
 tokio = { workspace = true, features = ["time"] }
 webrtc-sys.workspace = true
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
+[target.'cfg(all(any(target_os = "linux", target_os = "freebsd", target_os = "windows"), not(target_env = "ohos")))'.dependencies]
 scap.workspace = true
+
+# OHOS has no X11/Wayland, screen-capture or ALSA stack: these features and
+# dependencies would drag in `scap` (and through it the `x11` crate) and `cpal`,
+# neither of which builds on OHOS. Every other target keeps the unconditional
+# behaviour they had before.
+[target.'cfg(not(target_env = "ohos"))'.dependencies]
+gpui = { workspace = true, features = ["screen-capture", "x11", "wayland"] }
+cpal.workspace = true
+rodio.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation.workspace = true

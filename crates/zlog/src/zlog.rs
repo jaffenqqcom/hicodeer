@@ -4,6 +4,8 @@ pub use log as log_impl;
 mod env_config;
 pub mod filter;
 pub mod sink;
+#[cfg(target_env = "ohos")]
+pub mod ohos;
 
 pub use sink::{flush, init_output_file, init_output_stderr, init_output_stdout};
 
@@ -85,6 +87,11 @@ impl log::Log for Zlog {
         };
         let level = record.metadata().level();
         if !filter::is_scope_enabled(&crate_name_scope, Some(record.target()), level) {
+            return;
+        }
+        #[cfg(target_env = "ohos")]
+        {
+            ohos::submit_to_hilog(record);
             return;
         }
         sink::submit(sink::Record {

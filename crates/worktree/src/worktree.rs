@@ -88,6 +88,20 @@ pub const FS_WATCH_LATENCY: Duration = Duration::from_millis(100);
 /// the watcher silently attached to a path that no longer exists.
 pub const ROOT_PATH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How many times a forced path refresh is attempted before giving up.
+///
+/// The background scanner is restarted once shortly after a worktree is created, when its
+/// settings finish loading. A refresh served by the outgoing scanner is lost in that
+/// handover: the incoming scanner starts from the foreground snapshot, which does not
+/// contain the entries the refresh had just inserted, so the entry stays missing even
+/// though the refresh was answered. Re-issuing the request against the scanner now in
+/// place resolves it, so a small number of attempts is enough.
+#[cfg(target_env = "ohos")]
+const REFRESH_ENTRY_MAX_ATTEMPTS: usize = 3;
+/// Delay between forced path refresh attempts, long enough for the scanner handover to finish.
+#[cfg(target_env = "ohos")]
+const REFRESH_ENTRY_RETRY_DELAY: Duration = Duration::from_millis(50);
+
 /// A set of local or remote files that are being opened as part of a project.
 /// Responsible for tracking related FS (for local)/collab (for remote) events and corresponding updates.
 /// Stores git repositories data and the diagnostics for the file(s).
@@ -2160,12 +2174,40 @@ impl LocalWorktree {
         } else {
             vec![path.clone()]
         };
+        #[cfg(not(target_env = "ohos"))]
         let t0 = Instant::now();
         let mut refresh = self.refresh_entries_for_paths(paths);
         // todo(lw): Hot foreground spawn
         cx.spawn(async move |this, cx| {
-            refresh.recv().await;
-            log::trace!("refreshed entry {path:?} in {:?}", t0.elapsed());
+            // OHOS only: a refresh answered by the outgoing scanner is lost when the scanner
+            // is restarted (see REFRESH_ENTRY_MAX_ATTEMPTS), so re-issue the request against
+            // the scanner that is now in place.
+            #[cfg(target_env = "ohos")]
+            for attempt in 0..REFRESH_ENTRY_MAX_ATTEMPTS {
+                if attempt > 0 {
+                    cx.background_executor()
+                        .timer(REFRESH_ENTRY_RETRY_DELAY)
+                        .await;
+                    let retry = this.read_with(cx, |this, _| {
+                        this.as_local()
+                            .map(|local| local.refresh_entries_for_paths(vec![path.clone()]))
+                    })?;
+                    match retry {
+                        Some(receiver) => refresh = receiver,
+                        None => break,
+                    }
+                }
+                refresh.recv().await;
+                let found = this.read_with(cx, |this, _| this.entry_for_path(&path).cloned())?;
+                if let Some(entry) = found {
+                    return Ok(Some(entry));
+                }
+            }
+            #[cfg(not(target_env = "ohos"))]
+            {
+                refresh.recv().await;
+                log::trace!("refreshed entry {path:?} in {:?}", t0.elapsed());
+            }
             let new_entry = this.read_with(cx, |this, _| {
                 this.entry_for_path(&path).cloned().with_context(|| {
                     format!("Could not find entry in worktree for {path:?} after refresh")

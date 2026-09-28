@@ -140,14 +140,24 @@ pub fn default_semantic_token_rules() -> Cow<'static, str> {
     asset_str::<SettingsAssets>("settings/default_semantic_token_rules.json")
 }
 
-#[cfg(target_os = "macos")]
+// ===== [OHOS PORT BEGIN] OHOS gets a keymap without `workspace::CloseWindow` =====
+// `default-linux.json` binds `escape` / `ctrl-w` / `ctrl-shift-w` to
+// `workspace::CloseWindow`. On OHOS the settings page is a tab of the single
+// main window rather than a window of its own, and that close flow hangs the
+// app; `default-ohos.json` is `default-linux.json` with those five bindings
+// removed and nothing else changed.
+#[cfg(target_env = "ohos")]
+pub const DEFAULT_KEYMAP_PATH: &str = "keymaps/default-ohos.json";
+
+#[cfg(all(target_os = "macos", not(target_env = "ohos")))]
 pub const DEFAULT_KEYMAP_PATH: &str = "keymaps/default-macos.json";
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(target_env = "ohos")))]
 pub const DEFAULT_KEYMAP_PATH: &str = "keymaps/default-windows.json";
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_env = "ohos")))]
 pub const DEFAULT_KEYMAP_PATH: &str = "keymaps/default-linux.json";
+// ===== [OHOS PORT END] =====
 
 pub fn default_keymap() -> Cow<'static, str> {
     asset_str::<SettingsAssets>(DEFAULT_KEYMAP_PATH)

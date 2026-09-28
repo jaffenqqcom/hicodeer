@@ -62,6 +62,16 @@ name = "zed_visual_test_runner"
 path = "src/visual_test_runner.rs"
 required-features = ["visual-tests"]
 
+# ===== [OHOS PORT BEGIN] lib target consumed by the OHOS NAPI cdylib =====
+# crates/gpui_ohos/depend/launch-zed calls `zed::hicodeer_main()` from its NAPI
+# cdylib, which needs this crate to expose a lib. Reusing the bin's own source
+# as the crate root keeps bin and lib identical by construction. A `[lib]` table
+# cannot be target-gated, so this target exists on every platform.
+[lib]
+path = "src/main.rs"
+crate-type = ["rlib"]
+# ===== [OHOS PORT END] =====
+
 [dependencies]
 acp_thread.workspace = true
 acp_tools.workspace = true
@@ -121,12 +131,11 @@ git_ui = { workspace = true, features = ["call"] }
 git_ui_core.workspace = true
 go_to_line.workspace = true
 gpui = { workspace = true, features = ["profiler", "stacker"] }
-gpui_platform = { workspace = true, features = [
-    "screen-capture",
-    "font-kit",
-    "wayland",
-    "x11",
-] }
+# Screenshot/Wayland/X11 support is armed for every non-OHOS target in the
+# target-specific section further below. It must stay off OHOS: OHOS reports
+# `target_os = "linux"`, so `screen-capture` would otherwise pull in the `x11`
+# crate through `scap`, which cannot build there.
+gpui_platform.workspace = true
 gpui_tokio.workspace = true
 hdrhistogram.workspace = true
 image = { workspace = true, optional = true }
@@ -244,17 +253,28 @@ gpui = { workspace = true, features = ["profiler", "windows-manifest"] }
 [build-dependencies]
 windows_resources = { path = "../windows_resources" }
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+# ===== [OHOS PORT BEGIN] desktop Linux/FreeBSD-only deps =====
+# OHOS reports `target_os = "linux"`, so without the `not(target_env = "ohos")`
+# guard this section would pull in `ashpd` (the XDG desktop portal, Linux-only)
+# and `image` (used solely by the X11 app-icon pipeline in build.rs).
+[target.'cfg(all(any(target_os = "linux", target_os = "freebsd"), not(target_env = "ohos")))'.dependencies]
 gpui = { workspace = true, features = ["profiler", "wayland", "x11"] }
 ashpd.workspace = true
 image.workspace = true
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.build-dependencies]
+# Every platform except OHOS keeps the screenshot and Wayland/X11 features that
+# used to be unconditional; only OHOS drops them (see the note next to the
+# `gpui_platform` entry in `[dependencies]` further up).
+[target.'cfg(not(target_env = "ohos"))'.dependencies]
+gpui_platform = { workspace = true, features = ["screen-capture", "font-kit", "wayland", "x11"] }
+
+[target.'cfg(all(any(target_os = "linux", target_os = "freebsd"), not(target_env = "ohos")))'.build-dependencies]
 image.workspace = true
 
 
-[target.'cfg(target_os = "linux")'.build-dependencies]
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.build-dependencies]
 pkg-config = "0.3.22"
+# ===== [OHOS PORT END] =====
 
 [dev-dependencies]
 activity_indicator = { workspace = true, features = ["test-support"] }

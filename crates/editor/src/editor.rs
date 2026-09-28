@@ -10157,6 +10157,22 @@ impl Editor {
                     display_map.unfold_buffers(removed_buffer_ids.iter().copied(), cx);
                 });
 
+                // ===== [OHOS PORT BEGIN] a buffer may leave the multi-buffer while
+                // selections made in it linger; drop them here so the resolve
+                // assertion in `change_with` cannot fire on the next edit
+                // (see 2026-09-21-ohos-fold-click-selection-assert-abort) =====
+                #[cfg(target_env = "ohos")]
+                {
+                    let snapshot = self.display_snapshot(cx);
+                    self.selections
+                        .change_with(&snapshot, |selections| {
+                            for buffer_id in removed_buffer_ids {
+                                selections.remove_selections_from_buffer(*buffer_id);
+                            }
+                        });
+                }
+                // ===== [OHOS PORT END] =====
+
                 jsx_tag_auto_close::refresh_enabled_in_any_buffer(self, multibuffer, cx);
                 cx.emit(EditorEvent::BuffersRemoved {
                     removed_buffer_ids: removed_buffer_ids.clone(),

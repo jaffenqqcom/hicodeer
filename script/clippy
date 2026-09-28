@@ -4,6 +4,24 @@ set -euo pipefail
 
 if [[ ! " $* " == *" -p "* && ! " $* " == *" --package "* ]]; then
     set -- "$@" --workspace
+
+    # ===== [OHOS PORT BEGIN] skip OHOS-only crates on non-OHOS targets =====
+    # The OHOS crates are OHOS-only: their non-target-gated dependencies pull in
+    # napi-ohos, openharmony-ability and the locally patched wgpu tree, none of
+    # which build for macOS/Linux. Cargo has no way to target-gate a [lib], so
+    # skip these packages on non-OHOS targets. qemu-ssh-agentd and
+    # command-executor are deliberately kept: the former is the guest-side
+    # daemon built with the host gnu toolchain, the latter is pure trait
+    # definitions.
+    if [[ "${CARGO_BUILD_TARGET:-}" != *ohos* ]]; then
+        set -- "$@" \
+            --exclude launch-zed \
+            --exclude gpui_ohos \
+            --exclude gpui_ohos_linker \
+            --exclude qemu-ssh-agent \
+            --exclude qemu-ssh-agent-linker
+    fi
+    # ===== [OHOS PORT END] =====
 fi
 
 set -x
@@ -11,11 +29,14 @@ set -x
 
 # If local, run other checks if we have the tools installed.
 if [[ -z "${GITHUB_ACTIONS+x}" ]]; then
-    which cargo-shear >/dev/null 2>&1 || exit 0
-    cargo shear --locked --deny-warnings
+    # ===== [OHOS PORT BEGIN] local tooling: use cargo-machete and the repo-local
+    # typos config (the upstream script assumes cargo-shear and .config/typos.toml) =====
+    which cargo-machete >/dev/null 2>&1 || exit 0
+    cargo machete
 
     which typos >/dev/null 2>&1 || exit 0
-    typos --config .config/typos.toml
+    typos --config typos.toml
+    # ===== [OHOS PORT END] =====
 
     which buf >/dev/null 2>&1 || exit 0
     buf lint crates/proto/proto

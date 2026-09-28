@@ -73,6 +73,11 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
+// ===== [OHOS PORT BEGIN] how long the copy confirmation stays on the button =====
+#[cfg(target_env = "ohos")]
+const COPY_SHA_FEEDBACK_DURATION: std::time::Duration = std::time::Duration::from_secs(2);
+// ===== [OHOS PORT END] =====
+
 pub struct CommitView {
     commit: CommitDetails,
     editor: Entity<SplittableEditor>,
@@ -88,6 +93,13 @@ pub struct CommitView {
     is_shallow_boundary: bool,
     file_filter: Option<RepoPath>,
     _load_diff_task: Task<Result<()>>,
+    // ===== [OHOS PORT BEGIN] OHOS reads the clipboard through a slow synchronous
+    // IPC, so the commit header must not probe it while rendering; this records
+    // whether the SHA was copied from this view instead
+    // (see 2026-08-24-ohos-render-clipboard-poll-hang) =====
+    #[cfg(target_env = "ohos")]
+    copied_sha: bool,
+    // ===== [OHOS PORT END] =====
 }
 
 pub(crate) struct GitBlob {
@@ -528,6 +540,11 @@ impl CommitView {
             is_shallow_boundary,
             file_filter,
             _load_diff_task: load_diff_task,
+            // ===== [OHOS PORT BEGIN] OHOS tracks the copied state in this field
+            // instead of reading the clipboard while rendering =====
+            #[cfg(target_env = "ohos")]
+            copied_sha: false,
+            // ===== [OHOS PORT END] =====
         }
     }
 
@@ -739,12 +756,20 @@ impl CommitView {
         let avatar_container_min = avatar_size_px + avatar_min_side_padding;
         let avatar_container_width = gutter_width.max(avatar_container_min);
 
+        // ===== [OHOS PORT BEGIN] reading the clipboard is a slow synchronous IPC
+        // on OHOS while this header renders on every frame, so probe it only
+        // where that is cheap; OHOS uses the flag set by the copy button instead
+        // (see 2026-08-24-ohos-render-clipboard-poll-hang) =====
+        #[cfg(target_env = "ohos")]
+        let clipboard_has_sha = self.copied_sha;
+        #[cfg(not(target_env = "ohos"))]
         let clipboard_has_sha = cx
             .read_from_clipboard()
             .and_then(|entry| entry.text())
             .map_or(false, |clipboard_text| {
                 clipboard_text.trim() == commit_sha.as_ref()
             });
+        // ===== [OHOS PORT END] =====
 
         let (copy_icon, copy_icon_color) = if clipboard_has_sha {
             (IconName::Check, Color::Success)
@@ -847,12 +872,39 @@ impl CommitView {
                                         )
                                     }
                                 })
-                                .on_click(move |_, _, cx| {
+                                .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     cx.write_to_clipboard(ClipboardItem::new_string(
                                         commit_sha.to_string(),
                                     ));
-                                }),
+                                    // ===== [OHOS PORT BEGIN] show the copy
+                                    // confirmation from local state and clear it
+                                    // after a beat; the header never reads the
+                                    // clipboard on OHOS =====
+                                    #[cfg(target_env = "ohos")]
+                                    {
+                                        this.copied_sha = true;
+                                        cx.notify();
+                                        let delay = cx
+                                            .background_executor()
+                                            .timer(COPY_SHA_FEEDBACK_DURATION);
+                                        cx.spawn_in(window, async move |this, cx| {
+                                            delay.await;
+                                            this.update(cx, |this, cx| {
+                                                this.copied_sha = false;
+                                                cx.notify();
+                                            })
+                                            .ok();
+                                        })
+                                        .detach();
+                                    }
+                                    // Desktop renders the icon from the clipboard
+                                    // itself, so the extra listener parameters are
+                                    // unused there.
+                                    #[cfg(not(target_env = "ohos"))]
+                                    let _ = (this, window);
+                                    // ===== [OHOS PORT END] =====
+                                })),
                         )
                     }),
             )
@@ -1376,6 +1428,11 @@ impl Item for CommitView {
                 is_shallow_boundary: self.is_shallow_boundary,
                 file_filter: self.file_filter.clone(),
                 _load_diff_task: Task::ready(Ok(())),
+                // ===== [OHOS PORT BEGIN] OHOS tracks the copied state in this
+                // field instead of reading the clipboard while rendering =====
+                #[cfg(target_env = "ohos")]
+                copied_sha: false,
+                // ===== [OHOS PORT END] =====
             }
         })))
     }

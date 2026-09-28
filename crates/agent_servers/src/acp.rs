@@ -16,6 +16,8 @@ use agent_client_protocol::schema::{
 use agent_client_protocol::{
     Agent, Builder, Client, ConnectionTo, HandleDispatchFrom, JsonRpcResponse, Lines, Responder,
 };
+#[cfg(target_env = "ohos")]
+use agent_client_protocol::{Handled, UntypedMessage};
 use anyhow::anyhow;
 use async_channel;
 use collections::{HashMap, HashSet};
@@ -578,7 +580,11 @@ fn client_builder(
         }};
     }
 
-    Client
+    // ===== [OHOS PORT BEGIN] The chain result is bound to `builder` and returned
+    // at the end of the function instead of being returned inline, so the
+    // vendor-notification catch-all can be appended on OHOS only. The chain
+    // itself is untouched; only this binding and the trailing return are edits. =====
+    let builder = Client
         .builder()
         .name(name)
         // --- Request handlers (agent→client) ---
@@ -626,7 +632,30 @@ fn client_builder(
         .on_receive_notification(
             on_notification!(handle_complete_elicitation),
             agent_client_protocol::on_receive_notification!(),
+        );
+
+    // Register the vendor-notification catch-all last so every typed handler
+    // above gets first refusal and only notifications nobody claims reach it. It
+    // always reports `Handled::No`, keeping registration order the only
+    // mechanism that holds it back.
+    #[cfg(target_env = "ohos")]
+    let builder = {
+        let dispatch_sender = dispatch_sender.clone();
+        builder.on_receive_notification(
+            async move |message: UntypedMessage, connection| {
+                let unclaimed = message.clone();
+                enqueue_notification(&dispatch_sender, message, handle_ext_notification);
+                Ok(Handled::No {
+                    message: (unclaimed, connection),
+                    retry: false,
+                })
+            },
+            agent_client_protocol::on_receive_notification!(),
         )
+    };
+
+    builder
+    // ===== [OHOS PORT END] =====
 }
 
 fn client_capabilities_for_agent(
@@ -5249,6 +5278,96 @@ fn handle_complete_elicitation(
     })
     .detach();
 }
+
+// ===== [OHOS PORT BEGIN] Some agents deliver a sign-in URL through a vendor
+// private notification instead of the standard `elicitation/create` URL mode
+// (codebuddy uses `_codebuddy.ai/authUrl`). The ACP SDK dispatches notifications
+// only to handlers whose type matches the method and silently drops the rest, so
+// without a catch-all that URL never reaches the UI. Normalize such
+// notifications into the standard URL elicitation, which is already wired end to
+// end (URL capability, `handle_create_elicitation`, `render_url_elicitation`,
+// `cx.open_url`). =====
+#[cfg(target_env = "ohos")]
+struct ExtUrlRoute {
+    /// Vendor notification method that carries the URL.
+    method: &'static str,
+    /// Key holding the URL string inside the notification params object.
+    url_key: &'static str,
+    /// Message shown on the elicitation card.
+    message: &'static str,
+}
+
+#[cfg(target_env = "ohos")]
+const EXT_URL_ROUTES: &[ExtUrlRoute] = &[ExtUrlRoute {
+    method: "_codebuddy.ai/authUrl",
+    url_key: "authUrl",
+    message: "Sign in to continue. Your browser will open the agent's sign-in page.",
+}];
+
+/// Request id shared by every vendor-normalized URL elicitation. These
+/// elicitations are injected client-side and are never correlated with a real
+/// JSON-RPC request, so a fixed id is enough.
+#[cfg(target_env = "ohos")]
+const EXT_URL_REQUEST_ID: &str = "ext-notification";
+
+#[cfg(target_env = "ohos")]
+fn handle_ext_notification(message: UntypedMessage, cx: &mut AsyncApp, ctx: &ClientContext) {
+    let Some(route) = EXT_URL_ROUTES
+        .iter()
+        .find(|route| route.method == message.method())
+    else {
+        // Not a vendor route we know about. The catch-all leaves the message
+        // unclaimed so the SDK keeps its default handling.
+        log::debug!(
+            "ACP notification `{}` matched no vendor URL route",
+            message.method()
+        );
+        return;
+    };
+
+    let Some(url) = message
+        .params()
+        .get(route.url_key)
+        .and_then(|value| value.as_str())
+    else {
+        log::warn!(
+            "ACP notification `{}` carried no string `{}` field",
+            route.method,
+            route.url_key
+        );
+        return;
+    };
+
+    log::info!(
+        "ACP notification `{}` provided sign-in URL: {}",
+        route.method,
+        url
+    );
+
+    request_url_elicitation(url, route.message, cx, ctx);
+}
+
+#[cfg(target_env = "ohos")]
+fn request_url_elicitation(url: &str, message: &str, cx: &mut AsyncApp, ctx: &ClientContext) {
+    let request = acp::CreateElicitationRequest::new(
+        acp::ElicitationUrlMode::new(
+            acp::ElicitationRequestScope::new(acp::RequestId::Str(EXT_URL_REQUEST_ID.to_string())),
+            acp::ElicitationId::new(format!("ext-url-{}", uuid::Uuid::new_v4())),
+            url,
+        ),
+        message,
+    );
+
+    // HTTP(S) checks live in `ElicitationStore::validate_request`; anything else
+    // is reported as a warning instead of being judged again here.
+    let store = ctx.request_elicitations.clone();
+    if let Err(error) = store.update(cx, |store, cx| {
+        store.request_elicitation(request, cx).map(|_| ())
+    }) {
+        log::warn!("rejected vendor sign-in URL elicitation: {error}");
+    }
+}
+// ===== [OHOS PORT END] =====
 
 fn handle_write_text_file(
     args: acp::WriteTextFileRequest,

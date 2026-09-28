@@ -296,11 +296,24 @@ async fn unpack_tar_archive(
     let archive = async_tar::ArchiveBuilder::new(archive_bytes)
         .set_preserve_mtime(false)
         .build();
-    archive
-        .unpack(&destination_path)
-        .await
-        .with_context(|| format!("extracting {url} to {destination_path:?}"))?;
-    Ok(())
+
+    // ===== [OHOS PORT BEGIN] recover link entries the sandbox denied =====
+    // The OHOS app sandbox denies symlink(2) and hard_link(2), so async-tar's
+    // default unpack aborts as soon as a tar contains a link entry. On OHOS,
+    // recover those links in the unpack error path and materialize them as
+    // real copies (see util::archive::unpack_tar_ohos).
+    #[cfg(target_env = "ohos")]
+    return util::archive::unpack_tar_ohos(archive, destination_path, url).await;
+
+    #[cfg(not(target_env = "ohos"))]
+    {
+        archive
+            .unpack(destination_path)
+            .await
+            .with_context(|| format!("extracting {url} to {destination_path:?}"))?;
+        Ok(())
+    }
+    // ===== [OHOS PORT END] =====
 }
 
 async fn extract_gz(

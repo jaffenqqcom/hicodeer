@@ -2,6 +2,7 @@
 **/*.proptest-regressions
 **/cargo-target
 **/target
+**/build
 .webrtc-sys/
 **/venv
 **/.direnv
@@ -24,6 +25,8 @@
 .vscode
 .wrangler
 .perf-runs
+
+*.log
 /assets/*licenses.*
 /crates/collab/seed.json
 /crates/theme/schemas/theme.json
@@ -39,6 +42,8 @@ DerivedData/
 Packages
 xcuserdata/
 crates/docs_preprocessor/actions.json
+hap/entry/libs
+**/oh_modules
 
 # Don't commit any secrets to the repo.
 .env
@@ -61,3 +66,16 @@ crates/docs_preprocessor/actions.json
 
 .local*
 .cache
+# WorkBuddy workspace data
+**/.workbuddy
+
+# The HAP resfile is populated by bundle-ohos at build time (guest kernel
+# Image, golden.qcow2, guest daemon, per-build management keys). Only the CA
+# bundle is a checked-in source; everything else is a build artifact.
+hap/entry/src/main/resources/resfile/*
+!hap/entry/src/main/resources/resfile/ca-bundle.crt
+build/
+hap/cerfile/
+
+hap/entry/hnp/arm64-v8a/hicodeerd.hnp
+crates/gpui_ohos/depend/cmd-agent/hicodeerd/shim/musllib-shim.so

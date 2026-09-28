@@ -42,11 +42,17 @@ gpui_macos.workspace = true
 gpui_windows.workspace = true
 gpui = { workspace = true, features = ["windows-manifest"] }
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+# ===== [OHOS PORT] `not(target_env = "ohos")` keeps the Linux backend out of the
+# OHOS build: OHOS reports target_os = "linux" but is served by `gpui_ohos`.
+[target.'cfg(all(any(target_os = "linux", target_os = "freebsd"), not(target_env = "ohos")))'.dependencies]
 gpui_linux.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui_wgpu = { workspace = true, optional = true }
+
+# ===== [OHOS PORT] OHOS platform backend =====
+[target.'cfg(target_env = "ohos")'.dependencies]
+gpui_ohos.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 gpui_web.workspace = true

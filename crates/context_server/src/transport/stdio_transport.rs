@@ -14,6 +14,13 @@ use util::process::Child;
 use util::shell::Shell;
 use util::shell_builder::ShellBuilder;
 
+// ===== [OHOS PORT BEGIN] `Stdio` is the platform router's type on OHOS =====
+#[cfg(not(target_env = "ohos"))]
+use std::process::Stdio;
+#[cfg(target_env = "ohos")]
+use util::process::Stdio;
+// ===== [OHOS PORT END] =====
+
 use crate::client::ModelContextServerBinary;
 use crate::transport::Transport;
 
@@ -42,9 +49,9 @@ impl StdioTransport {
 
         let mut server = Child::spawn(
             command,
-            std::process::Stdio::piped(),
-            std::process::Stdio::piped(),
-            std::process::Stdio::piped(),
+            Stdio::piped(),
+            Stdio::piped(),
+            Stdio::piped(),
         )?;
 
         let stdin = server.stdin.take().unwrap();

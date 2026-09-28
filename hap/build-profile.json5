@@ -1,0 +1,107 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "material": {
+          "storePassword": "000000200B27DBA50FFE09A38ABAE9D79E082F5D9B09D7B2889CFA062D5DDDD96334F3056E279B5AA6BBD386287C1C98",
+          "certpath": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "000000200B27DBA50FFE09A38ABAE9D79E082F5D9B09D7B2889CFA062D5DDDD96334F3056E279B5AA6BBD386287C1C98",
+          "profile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p12"
+        },
+        "type": "HarmonyOS"
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "targetSdkVersion": "6.1.0(23)",
+        "compatibleSdkVersion": "6.1.0(23)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "packOptions": {
+            "enableSourceCodeCheck": false
+          },
+          "nativeLib": {
+            "collectAllLibs": true
+          },
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          },
+          "externalNativeOptions": {
+            "path": "./src/main/cpp/CMakeLists.txt",
+            "abiFilters": [
+              "arm64-v8a"
+            ]
+          }
+        },
+        "bundleName": "com.hicodeer.studio",
+        "signingConfig": "default"
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+        "buildOption": {
+          "debuggable": true
+        }
+      },
+      {
+        "name": "release",
+        "buildOption": {
+          "debuggable": false
+        }
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "native_ability",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/native_ability"
+    },
+    {
+      "name": "plugin_files",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/files"
+    },
+    {
+      "name": "plugin_cursor",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/cursor"
+    },
+    {
+      "name": "plugin_pinch",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/pinch"
+    },
+    {
+      "name": "plugin_filedrop",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/filedrop"
+    },
+    {
+      "name": "plugin_openwith",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/openwith"
+    },
+    {
+      "name": "plugin_ime",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/ime"
+    },
+    {
+      "name": "plugin_url",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/url"
+    }
+  ]
+}

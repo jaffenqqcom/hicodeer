@@ -1,0 +1,52 @@
+[package]
+name = "launch-zed"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "NAPI entry that launches Zed on HarmonyOS NEXT"
+
+[lib]
+name = "hicodeer"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[features]
+# Default backend: the on-device command service (public HNP on the same device),
+# reached over loopback SSH through the self-contained cmd-client crate. The
+# embedded QEMU guest backend is off by default and is turned on only by
+# script/bundle-ohos (see ENABLE_QEMU_AGENT there).
+default = ["daemon-agent"]
+daemon-agent = ["dep:cmd-client"]
+# Embedded QEMU guest backend: boot the guest and mount work dirs into it.
+qemu-agent = ["dep:qemu-manager", "dep:cmd-client"]
+
+[dependencies]
+zed = { path = "../../../zed" }
+workspace = { path = "../../../workspace" }
+zlog = { path = "../../../zlog" }
+gpui_ohos = { path = "../.." }
+# Consumed from the HiCodeer fork of openharmony-ability, matching the source
+# gpui_ohos uses. A path dependency here would put a second copy of the crate in
+# the graph and its types would no longer match gpui_ohos's.
+openharmony-ability = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", tag = "v1.0.0-beta.1-zed.1" }
+openharmony-ability-derive = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", tag = "v1.0.0-beta.1-zed.1" }
+# Link-time shim for the path-taking libc calls. Its `__wrap_*` symbols are what
+# build.rs redirects `open`/`stat`/... to, so the crate has to stay linked into
+# the final cdylib even though no Rust code calls into it.
+ohos-libc-shim = { path = "../ohos-libc-shim" }
+cmd-client = { path = "../cmd-agent/cmd-client", optional = true }
+# qemu_debug_assertions is deliberately NOT enabled by default: it forwards the
+# guest serial console (QEMU stdout/stderr) into hilog, which blocks the TCG
+# vCPUs on every console write and makes hilog a heavy device disk writer. Add
+# `, features = ["qemu_debug_assertions"]` back only when debugging guest boot.
+qemu-manager = { path = "../qemu-mngt/qemuctrl", optional = true, features = ["qemu_debug_assertions"] }
+util = { path = "../../../util" }
+paths = { path = "../../../paths" }
+log = "0.4"
+libc = "0.2"
+smol.workspace = true
+napi-ohos = "1.1.6"
+napi-derive-ohos = "1.1.6"
+
+[build-dependencies]
+napi-build-ohos = "1.1.6"

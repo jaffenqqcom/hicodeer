@@ -1,0 +1,19 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Please describe the basic information.",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {
+    "@ohos-rs/ability": "file:../../target/ohos-arkts/openharmony-ability/native_ability",
+    "@ohos-rs/ability-plugin-cursor": "file:../../target/ohos-arkts/openharmony-ability/plugins/cursor",
+    "@ohos-rs/ability-plugin-files": "file:../../target/ohos-arkts/openharmony-ability/plugins/files",
+    "@ohos-rs/ability-plugin-pinch": "file:../../target/ohos-arkts/openharmony-ability/plugins/pinch",
+    "@ohos-rs/ability-plugin-filedrop": "file:../../target/ohos-arkts/openharmony-ability/plugins/filedrop",
+    "@ohos-rs/ability-plugin-openwith": "file:../../target/ohos-arkts/openharmony-ability/plugins/openwith",
+    "@ohos-rs/ability-plugin-ime": "file:../../target/ohos-arkts/openharmony-ability/plugins/ime",
+    "@ohos-rs/ability-plugin-url": "file:../../target/ohos-arkts/openharmony-ability/plugins/url",
+    "libhicodeer.so": "file:./src/main/cpp/types/libhicodeer"
+  }
+}

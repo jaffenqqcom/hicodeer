@@ -273,8 +273,8 @@ export RANLIB_aarch64_unknown_linux_ohos="$SDK_LLVM_BIN/llvm-ranlib"
 # 换到支持硬链接的本地盘，可以考虑恢复下行的 incremental。
 SHARED_TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
 # hmdfs 上增量缓存无法硬链接、只能逐文件拷贝：每轮为每个重编 crate 存一份新会话，
-# 磁盘与 IO 代价远超收益，故本机构建关掉增量编译。
-export CARGO_INCREMENTAL=0
+# CARGO_INCREMENTAL设置为0，编码很慢；设置为1，target目录会不断膨胀，需要定期清理。
+export CARGO_INCREMENTAL=1
 mkdir -p "$SHARED_TARGET_DIR"
 
 # ==================== 编译期 shim（LD_PRELOAD） ====================

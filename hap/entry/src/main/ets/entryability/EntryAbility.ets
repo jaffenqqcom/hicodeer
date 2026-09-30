@@ -1,10 +1,11 @@
 import 'libhicodeer.so';
 import { BridgePlugin, LazyPlugin, MainPageRouteName, NativeAbility } from '@ohos-rs/ability';
 import { CursorPlugin } from '@ohos-rs/ability-plugin-cursor';
-import { FilesPlugin } from '@ohos-rs/ability-plugin-files';
+import { FilePickerPlugin } from '@ohos-rs/ability-plugin-filepicker';
 import { PinchPlugin } from '@ohos-rs/ability-plugin-pinch';
-import { FileDropPlugin } from '@ohos-rs/ability-plugin-filedrop';
-import { OpenWithPlugin } from '@ohos-rs/ability-plugin-openwith';
+import { FileDropInPlugin } from '@ohos-rs/ability-plugin-filedropin';
+import { FileLaunchPlugin } from '@ohos-rs/ability-plugin-filelaunch';
+import { OpenBySysPlugin } from '@ohos-rs/ability-plugin-openbysys';
 import { ImePlugin } from '@ohos-rs/ability-plugin-ime';
 import { UrlPlugin } from '@ohos-rs/ability-plugin-url';
 import { Want, AbilityConstant, ConfigurationConstant } from '@kit.AbilityKit';
@@ -20,8 +21,8 @@ import * as Setup from './Setup';
 // and the main page is loaded explicitly afterwards; the base class must not load it twice.
 // loadMode='sync'：同步加载 native 模块，避免默认页动态 import 导致黑屏（无错误日志）。
 // bridgePlugins：注册 ArkTS 侧能力插件，与 Rust 侧 app.register_plugin 声明一一对应。
-// 单一共享的 openWith 实例：onCreate/onNewWant 触发后需引用它，且插件安装前可能先收到 want。
-const openWith = new OpenWithPlugin();
+// 单一共享的 fileLaunch 实例：onCreate/onNewWant 触发后需引用它，且插件安装前可能先收到 want。
+const fileLaunch = new FileLaunchPlugin();
 
 const DOMAIN: number = 0x0001;
 const TAG: string = 'EntryAbility';
@@ -32,16 +33,17 @@ export default class EntryAbility extends NativeAbility {
   public loadMode: 'sync' | 'async' = 'sync';
   public bridgePlugins: LazyPlugin[] = [
     new LazyPlugin((): BridgePlugin => new CursorPlugin()),
-    new LazyPlugin((): BridgePlugin => new FilesPlugin()),
+    new LazyPlugin((): BridgePlugin => new FilePickerPlugin()),
     new LazyPlugin((): BridgePlugin => new PinchPlugin()),
-    new LazyPlugin((): BridgePlugin => new FileDropPlugin()),
-    new LazyPlugin((): BridgePlugin => openWith),
+    new LazyPlugin((): BridgePlugin => new FileDropInPlugin()),
+    new LazyPlugin((): BridgePlugin => fileLaunch),
+    new LazyPlugin((): BridgePlugin => new OpenBySysPlugin()),
     new LazyPlugin((): BridgePlugin => new ImePlugin()),
     new LazyPlugin((): BridgePlugin => new UrlPlugin()),
   ];
 
   // 冷启动：系统带 want（含要打开的文件 URI）启动。必须先让基类完成会话初始化，
-  // 再把 want 交给 openWith 处理（若插件尚未 onInstall，会在内部暂存）。
+  // 再把 want 交给 fileLaunch 处理（若插件尚未 onInstall，会在内部暂存）。
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     // Defer loading libhicodeer until the home directory is resolved: module.init runs
     // launch_app -> start_zed_main, which must already know the user's data root.
@@ -56,13 +58,13 @@ export default class EntryAbility extends NativeAbility {
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'setColorMode(COLOR_MODE_NOT_SET) failed: %{public}s', String(error));
     }
-    openWith.openFromWant(want);
+    fileLaunch.openFromWant(want);
   }
 
   // 已运行时再次收到打开请求（如文件管理器“打开方式”选 HiCodeer）。
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     super.onNewWant(want, launchParam);
-    openWith.openFromWant(want);
+    fileLaunch.openFromWant(want);
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

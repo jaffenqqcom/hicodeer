@@ -25,6 +25,9 @@ pub fn launch_app(app: openharmony_ability::OpenHarmonyApp) {
     // (every present entry resolves to /bin/false), so alacritty's shell
     // discovery would otherwise fail before spawn. See ensure_shell_env.
     ensure_shell_env(app.base_path(), app.home_directory());
+    // Publish the system languages the ets side read through `@ohos.i18n`; upstream resolves the
+    // UI locale and the date/time formats from the POSIX `LANGUAGE` list. See export_system_locale.
+    export_system_locale(app.preferred_locales());
     // Snapshot the private HNP install dir (/data/app/bin) once: the set of
     // on-device tools never changes while the process lives, so util::command
     // routes local vs the daemon from this snapshot without re-reading the directory.
@@ -81,6 +84,22 @@ fn start_zed_main(base_path: Option<String>, home_directory: Option<String>) {
         }
     }
     zed::hicodeer_main();
+}
+
+/// Publishes the system's preferred languages as the POSIX `LANGUAGE` list.
+///
+/// Upstream determines the UI locale and the date/time formats through `sys-locale`, whose unix
+/// backend reads `LANGUAGE` - a colon-separated preference list of BCP 47 tags, highest priority
+/// first. An OHOS app process has no such variable, and `@ohos.i18n` is the only source of the
+/// system's languages, so the ets side hands the list over in the init context and it is published
+/// here. Must run before `zed::main` builds the application: `localization` and `time_format`
+/// resolve the locale once and cache it.
+fn export_system_locale(locales: Option<String>) {
+    let Some(locales) = locales.filter(|locales| !locales.is_empty()) else {
+        log::warn!("export_system_locale: the ets side reported no system languages");
+        return;
+    };
+    std::env::set_var("LANGUAGE", locales);
 }
 
 /// Resolves the directory to use as the data root. Prefers the user home

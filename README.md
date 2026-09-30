@@ -1,3 +1,5 @@
+将Zed移植到鸿蒙系统。为了在鸿蒙系统上使用全功能的Zed功能，需要在系统命令行终端上运行hicodeerd命令（会随app一起安装）
+
 # Zed
 
 [![Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/zed-industries/zed/main/assets/badge/v0.json)](https://zed.dev)

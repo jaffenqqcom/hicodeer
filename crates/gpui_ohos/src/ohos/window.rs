@@ -111,7 +111,7 @@ impl Drop for OhosWindow {
         self.window_alive.set(false);
         // Release the pinch/drop event callbacks that reference this window.
         openharmony_ability_plugin_pinch::clear_pinch_callback();
-        openharmony_ability_plugin_filedrop::clear_filedrop_callback();
+        openharmony_ability_plugin_filedropin::clear_filedropin_callback();
     }
 }
 
@@ -2135,16 +2135,16 @@ impl OhosWindow {
             Self::dispatch_pinch_event(&callbacks, &pinch_accumulator, sample);
         }));
         let drop_callbacks = self.callbacks.clone();
-        openharmony_ability_plugin_filedrop::set_filedrop_callback(Box::new(move |data| {
+        openharmony_ability_plugin_filedropin::set_filedropin_callback(Box::new(move |data| {
             match data {
-                openharmony_ability_plugin_filedrop::FileDropEventData::Enter => {
+                openharmony_ability_plugin_filedropin::FileDropEventData::Enter => {
                     Self::dispatch_filedrop_enter(&drop_callbacks);
                 }
-                openharmony_ability_plugin_filedrop::FileDropEventData::Move {
+                openharmony_ability_plugin_filedropin::FileDropEventData::Move {
                     position_x,
                     position_y,
                 } => Self::dispatch_filedrop_move(&drop_callbacks, position_x, position_y),
-                openharmony_ability_plugin_filedrop::FileDropEventData::Drop {
+                openharmony_ability_plugin_filedropin::FileDropEventData::Drop {
                     files,
                     position_x,
                     position_y,

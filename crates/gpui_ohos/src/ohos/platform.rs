@@ -12,21 +12,23 @@ use anyhow::Result;
 use futures::channel::oneshot;
 use openharmony_ability::{ColorMode, Event, InputEvent, OpenHarmonyApp, path_from_uri};
 use openharmony_ability_plugin_cursor::{CursorBridgePlugin, CursorExt};
-use openharmony_ability_plugin_files::{
-    FileDialogOptions, FilesBridgePlugin, FilesExt, dialog_type,
+use openharmony_ability_plugin_filedropin::FileDropInBridgePlugin;
+use openharmony_ability_plugin_filelaunch::FileLaunchBridgePlugin;
+use openharmony_ability_plugin_filepicker::{
+    FileDialogOptions, FilePickerBridgePlugin, FilePickerExt, dialog_type,
 };
-use openharmony_ability_plugin_pinch::PinchBridgePlugin;
-use openharmony_ability_plugin_filedrop::FileDropBridgePlugin;
-use openharmony_ability_plugin_openwith::OpenWithBridgePlugin;
 use openharmony_ability_plugin_ime::ImeBridgePlugin;
+use openharmony_ability_plugin_openbysys::{OpenBySysBridgePlugin, OpenBySysExt};
+use openharmony_ability_plugin_pinch::PinchBridgePlugin;
 use openharmony_ability_plugin_url::{UrlBridgePlugin, UrlExt};
 
 use crate::{
     Action, ActivityGuard, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle,
     ForegroundExecutor, Keymap, Menu, MenuItem, OwnedMenu, PathPromptOptions, Platform,
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, PriorityQueueReceiver, Result as GpuiResult, RunnableVariant, Task,
-    ThermalState, WindowAppearance, WindowParams,
+    PlatformWindow, PriorityQueueReceiver, Result as GpuiResult, RunnableVariant,
+    SystemNotification, SystemNotificationResponse, Task, ThermalState, WindowAppearance,
+    WindowParams,
 };
 
 use super::{
@@ -62,6 +64,8 @@ pub(crate) struct OhosPlatform {
     /// gpui modal, so nothing upstream keeps a second request out while the first
     /// is still open; each extra request would launch another UIExtension.
     path_prompt_busy: Rc<Cell<bool>>,
+    /// Callback registered by gpui; invoked when the user activates a system notification.
+    notification_response_callback: Rc<RefCell<Option<Box<dyn FnMut(SystemNotificationResponse)>>>>,
 }
 
 impl OhosPlatform {
@@ -87,6 +91,7 @@ impl OhosPlatform {
             pending_open_with: Rc::new(RefCell::new(Vec::new())),
             open_urls_callback: Rc::new(RefCell::new(None)),
             path_prompt_busy: Rc::new(Cell::new(false)),
+            notification_response_callback: Rc::new(RefCell::new(None)),
         };
         // The ArkTS host provides the OpenHarmonyApp on the main thread before this
         // platform is constructed; own it from creation, mirroring how MacPlatform /
@@ -104,6 +109,7 @@ impl OhosPlatform {
         self.dispatcher.set_waker(app.create_waker());
         self.register_plugins(&app);
         self.register_openwith_handler();
+        self.register_notification_response_handler();
     }
 
     /// Registers every OHOS bridge plugin used by this platform layer.
@@ -116,9 +122,9 @@ impl OhosPlatform {
                 "register_plugins: register_plugin(CursorBridgePlugin) failed: {error}"
             );
         }
-        if let Err(error) = app.register_plugin(FilesBridgePlugin) {
+        if let Err(error) = app.register_plugin(FilePickerBridgePlugin) {
             log::error!(
-                "register_plugins: register_plugin(FilesBridgePlugin) failed: {error}"
+                "register_plugins: register_plugin(FilePickerBridgePlugin) failed: {error}"
             );
         }
         if let Err(error) = app.register_plugin(PinchBridgePlugin) {
@@ -126,19 +132,24 @@ impl OhosPlatform {
                 "register_plugins: register_plugin(PinchBridgePlugin) failed: {error}"
             );
         }
-        if let Err(error) = app.register_plugin(FileDropBridgePlugin) {
+        if let Err(error) = app.register_plugin(FileDropInBridgePlugin) {
             log::error!(
-                "register_plugins: register_plugin(FileDropBridgePlugin) failed: {error}"
+                "register_plugins: register_plugin(FileDropInBridgePlugin) failed: {error}"
             );
         }
-        if let Err(error) = app.register_plugin(OpenWithBridgePlugin) {
+        if let Err(error) = app.register_plugin(FileLaunchBridgePlugin) {
             log::error!(
-                "register_plugins: register_plugin(OpenWithBridgePlugin) failed: {error}"
+                "register_plugins: register_plugin(FileLaunchBridgePlugin) failed: {error}"
             );
         }
         if let Err(error) = app.register_plugin(ImeBridgePlugin) {
             log::error!(
                 "register_plugins: register_plugin(ImeBridgePlugin) failed: {error}"
+            );
+        }
+        if let Err(error) = app.register_plugin(OpenBySysBridgePlugin) {
+            log::error!(
+                "register_plugins: register_plugin(OpenBySysBridgePlugin) failed: {error}"
             );
         }
         if let Err(error) = app.register_plugin(UrlBridgePlugin) {
@@ -148,14 +159,28 @@ impl OhosPlatform {
         }
     }
 
-    /// Registers the open-with handler. The ArkTS `OpenWithPlugin` forwards file URIs
+    /// Registers the open-with handler. The ArkTS `FileLaunchPlugin` forwards file URIs
     /// received from the system "open with" action; we resolve them to paths and deliver
     /// them to Zed through gpui's `on_open_urls` callback (the same path macOS uses for
     /// "open with"), or buffer them until that callback is registered (cold start).
+    /// Forwards notification activations reported by ArkTS into the callback gpui registered.
+    fn register_notification_response_handler(&self) {
+        let callback = self.notification_response_callback.clone();
+        openharmony_ability::set_notification_response_handler(move |tag, action_id| {
+            let mut callback = callback.borrow_mut();
+            if let Some(callback) = callback.as_mut() {
+                callback(SystemNotificationResponse {
+                    tag: tag.into(),
+                    action_id: action_id.map(Into::into),
+                });
+            }
+        });
+    }
+
     fn register_openwith_handler(&self) {
         let open_urls_callback = self.open_urls_callback.clone();
         let pending = self.pending_open_with.clone();
-        openharmony_ability_plugin_openwith::set_openwith_callback(Box::new(
+        openharmony_ability_plugin_filelaunch::set_filelaunch_callback(Box::new(
             move |uris: Vec<String>| {
                 let mut paths: Vec<PathBuf> = Vec::new();
                 for uri in &uris {
@@ -338,6 +363,7 @@ impl Clone for OhosPlatform {
             pending_open_with: self.pending_open_with.clone(),
             open_urls_callback: self.open_urls_callback.clone(),
             path_prompt_busy: self.path_prompt_busy.clone(),
+            notification_response_callback: self.notification_response_callback.clone(),
         }
     }
 }
@@ -678,12 +704,34 @@ impl Platform for OhosPlatform {
         false
     }
 
-    fn reveal_path(&self, _path: &std::path::Path) {
-        // Not supported on OHOS
+    fn reveal_path(&self, path: &std::path::Path) {
+        let Some(app) = self.app.borrow().clone() else {
+            warn!("reveal_path: the OHOS app is not initialised yet");
+            return;
+        };
+        let path = path.to_string_lossy().into_owned();
+        self.background_executor
+            .spawn(async move {
+                if let Err(error) = app.reveal_in_file_manager(path).await {
+                    warn!("reveal_path: the system file manager rejected the request: {error}");
+                }
+            })
+            .detach();
     }
 
-    fn open_with_system(&self, _path: &std::path::Path) {
-        // Not supported on OHOS
+    fn open_with_system(&self, path: &std::path::Path) {
+        let Some(app) = self.app.borrow().clone() else {
+            warn!("open_with_system: the OHOS app is not initialised yet");
+            return;
+        };
+        let path = path.to_string_lossy().into_owned();
+        self.background_executor
+            .spawn(async move {
+                if let Err(error) = app.open_file(path).await {
+                    warn!("open_with_system: the system rejected the request: {error}");
+                }
+            })
+            .detach();
     }
 
     // Since 1.23 the callback may veto the quit by returning `true`; the OHOS
@@ -766,12 +814,23 @@ impl Platform for OhosPlatform {
     }
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        openharmony_ability::read_text().map(ClipboardItem::new_string)
+        let content = openharmony_ability::read_content();
+        if content.plain_text.is_empty() {
+            None
+        } else {
+            Some(ClipboardItem::new_string(content.plain_text))
+        }
     }
 
     fn write_to_clipboard(&self, item: ClipboardItem) {
         if let Some(text) = item.text() {
-            openharmony_ability::write_text(&text);
+            let content = openharmony_ability::ClipboardContent {
+                plain_text: text,
+                ..Default::default()
+            };
+            if !openharmony_ability::write_content(&content) {
+                warn!("write_to_clipboard: the OHOS pasteboard left the content unchanged");
+            }
         }
     }
 
@@ -809,16 +868,51 @@ impl Platform for OhosPlatform {
 
     fn on_thermal_state_change(&self, _callback: Box<dyn FnMut()>) {}
 
+    fn show_system_notification(&self, notification: SystemNotification) {
+        // Each action becomes a notification button whose wantAgent carries the action id back
+        // through the launch want; the ArkTS side owns that mapping.
+        let actions = notification
+            .actions
+            .iter()
+            .map(|action| openharmony_ability::NotificationAction {
+                id: action.id.to_string(),
+                title: action.label.to_string(),
+            })
+            .collect();
+        let request = openharmony_ability::NotificationRequest {
+            tag: notification.tag.to_string(),
+            title: notification.title.to_string(),
+            body: notification.body.to_string(),
+            actions,
+        };
+        if !openharmony_ability::publish_notification(request) {
+            warn!("show_system_notification: ArkTS has not registered its notification actions");
+        }
+    }
+
+    fn dismiss_system_notification(&self, tag: &str) {
+        if !openharmony_ability::cancel_notification(tag) {
+            warn!("dismiss_system_notification: ArkTS has not registered its notification actions");
+        }
+    }
+
+    fn on_system_notification_response(
+        &self,
+        callback: Box<dyn FnMut(SystemNotificationResponse)>,
+    ) {
+        *self.notification_response_callback.borrow_mut() = Some(callback);
+    }
+
     fn prevent_idle_sleep(&self, reason: &str) -> Task<Result<ActivityGuard>> {
-        // OHOS exposes a running lock (`RUNNING_LOCK` is already declared in
-        // `module.json5`), but the binding for it is not wired up yet, so report
-        // the capability as unavailable rather than pretend to hold a lock.
-        log::warn!(
-            "OhosPlatform::prevent_idle_sleep: not supported on OHOS yet (reason={reason:?})"
-        );
-        Task::ready(Err(anyhow::anyhow!(
-            "Idle sleep prevention is not supported on OHOS yet"
-        )))
+        // Keeping the screen awake is ArkTS-only (window-level `setWindowKeepScreenOn`); the
+        // ability host hands the acquire/release closures to
+        // `openharmony_ability::set_running_lock_actions` when the session starts.
+        match openharmony_ability::acquire_running_lock(reason) {
+            Ok(guard) => Task::ready(Ok(ActivityGuard::new(move || drop(guard)))),
+            Err(error) => Task::ready(Err(anyhow::anyhow!(
+                "unable to take the OHOS running lock: {error}"
+            ))),
+        }
     }
 
     fn read_from_primary(&self) -> Option<ClipboardItem> {

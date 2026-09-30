@@ -79,8 +79,8 @@
       "srcPath": "../target/ohos-arkts/openharmony-ability/native_ability"
     },
     {
-      "name": "plugin_files",
-      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/files"
+      "name": "plugin_filepicker",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/filepicker"
     },
     {
       "name": "plugin_cursor",
@@ -91,12 +91,12 @@
       "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/pinch"
     },
     {
-      "name": "plugin_filedrop",
-      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/filedrop"
+      "name": "plugin_filedropin",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/filedropin"
     },
     {
-      "name": "plugin_openwith",
-      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/openwith"
+      "name": "plugin_filelaunch",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/filelaunch"
     },
     {
       "name": "plugin_ime",
@@ -105,6 +105,10 @@
     {
       "name": "plugin_url",
       "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/url"
+    },
+    {
+      "name": "plugin_openbysys",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/openbysys"
     }
   ]
 }

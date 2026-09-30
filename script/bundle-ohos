@@ -770,6 +770,24 @@ CARGO_GIT_CHECKOUTS="${CARGO_HOME:-$HOME/.cargo}/git/checkouts"
 # path, so ohpm has to run again even though the symbolic links themselves still resolve.
 ARKTS_RESYNCED=false
 
+# Local working copy the `path` override in gpui_ohos/Cargo.toml points at, if there is one.
+# While the openharmony-ability interfaces are being re-adapted, the ArkTS sources come straight
+# from that tree instead of a cargo git checkout, so both sides always match.
+arkts_local_source_dir() {
+  local manifest="$PROJECT_ROOT/crates/gpui_ohos/Cargo.toml" dir path root
+  [ -f "$manifest" ] || return 1
+  dir="$(grep -o '^openharmony-ability = { path = "[^"]*"' "$manifest" | head -n 1 | cut -d'"' -f2)"
+  [ -n "$dir" ] || return 1
+  path="$(cd "$(dirname "$manifest")/$dir" 2>/dev/null && pwd)" || return 1
+  # The dependency path points at `crates/ability`; the ArkTS sources sit at the repository
+  # root, next to `plugins/`.
+  root="${path%/crates/*}"
+  [ "$root" != "$path" ] || return 1
+  [ -d "$root/native_ability" ] || return 1
+  [ -d "$root/plugins" ] || return 1
+  printf '%s\n' "$root"
+}
+
 # Full 40-character revision cargo resolved for the openharmony-ability dependency.
 arkts_revision_from_lock() {
   grep -A2 '^name = "openharmony-ability"$' "$PROJECT_ROOT/Cargo.lock" \
@@ -789,7 +807,21 @@ arkts_checkout_dir() {
 }
 
 sync_arkts_sources() {
-  local revision short checkout
+  local revision short checkout local_source
+  if local_source="$(arkts_local_source_dir)"; then
+    # The copy is always refreshed: a working tree has no revision to compare against, and the
+    # whole tree is small enough that re-copying costs less than tracking edits.
+    echo "[hicodeer-ohos-build] syncing ArkTS sources from the local working copy ($local_source) ..."
+    ARKTS_RESYNCED=true
+    rm -rf "$ARKTS_SYNC_DIR"
+    mkdir -p "$ARKTS_SYNC_DIR"
+    (cd "$local_source" && tar cf - \
+        --exclude=build --exclude=oh_modules --exclude=.cxx --exclude=node_modules \
+        "${ARKTS_SUBDIRS[@]}") | (cd "$ARKTS_SYNC_DIR" && tar xf -)
+    printf 'path:%s\n' "$local_source" > "$ARKTS_SYNC_STAMP"
+    echo "[hicodeer-ohos-build] ArkTS sources ready: $ARKTS_SYNC_DIR"
+    return 0
+  fi
   revision="$(arkts_revision_from_lock || true)"
   if [ -z "$revision" ]; then
     echo "[hicodeer-ohos-build] ERROR: no git revision for openharmony-ability in Cargo.lock" >&2

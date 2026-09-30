@@ -70,6 +70,7 @@ hap/entry/libs
 /.zed-i18n-universal.json
 # WorkBuddy workspace data
 **/.workbuddy
+**/.codebuddy
 
 # The HAP resfile is populated by bundle-ohos at build time (guest kernel
 # Image, golden.qcow2, guest daemon, per-build management keys). Only the CA

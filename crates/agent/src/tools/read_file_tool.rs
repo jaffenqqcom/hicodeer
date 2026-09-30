@@ -229,16 +229,46 @@ impl AgentTool for ReadFileTool {
         {
             match (input.start_line, input.end_line) {
                 (Some(start), Some(end)) => {
-                    format!("Read file `{path}` (lines {}-{})", start, end,)
+                    {
+        let __zed_i18n_arg_0 = format!("{}", start);
+        let __zed_i18n_arg_1 = format!("{}", end);
+        let __zed_i18n_arg_2 = format!("{}", path);
+        localization::format_message(
+            "Read file `{path}` (lines {}-{})",
+            &[
+                ("path", __zed_i18n_arg_2),
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    }
                 }
                 (Some(start), None) => {
-                    format!("Read file `{path}` (from line {})", start)
+                    {
+        let __zed_i18n_arg_0 = format!("{}", start);
+        let __zed_i18n_arg_1 = format!("{}", path);
+        localization::format_message(
+            "Read file `{path}` (from line {})",
+            &[
+                ("path", __zed_i18n_arg_1),
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                 }
-                _ => format!("Read file `{path}`"),
+                _ => {
+        let __zed_i18n_arg_0 = format!("{}", path);
+        localization::format_message(
+            "Read file `{path}`",
+            &[
+                ("path", __zed_i18n_arg_0)
+            ],
+        )
+    },
             }
             .into()
         } else {
-            "Read file".into()
+            localization::localized_str!("Read file").into()
         }
     }
 

@@ -1424,9 +1424,9 @@ impl ToolchainLister for PythonToolchainProvider {
     }
     fn meta(&self) -> ToolchainMetadata {
         ToolchainMetadata {
-            term: SharedString::new_static("Virtual Environment"),
+            term: SharedString::new_static(localization::localized_str!("Virtual Environment")),
             new_toolchain_placeholder: SharedString::new_static(
-                "A path to the python3 executable within a virtual environment, or path to virtual environment itself",
+                localization::localized_str!("A path to the python3 executable within a virtual environment, or path to virtual environment itself"),
             ),
             manifest_name: ManifestName::from(SharedString::new_static("pyproject.toml")),
         }

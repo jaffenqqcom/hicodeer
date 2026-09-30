@@ -144,7 +144,7 @@ impl Component for Banner {
             single_example(
                 "Default",
                 Banner::new()
-                    .child(Label::new("This is a default banner with no customization"))
+                    .child(Label::new(localization::localized_str!("This is a default banner with no customization")))
                     .into_any_element(),
             ),
             single_example(
@@ -153,7 +153,7 @@ impl Component for Banner {
                     .severity(Severity::Info)
                     .child(Label::new("This is an informational message"))
                     .action_slot(
-                        Button::new("learn-more", "Learn More")
+                        Button::new("learn-more", localization::localized_str!("Learn More"))
                             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small)),
                     )
                     .into_any_element(),
@@ -162,24 +162,24 @@ impl Component for Banner {
                 "Success",
                 Banner::new()
                     .severity(Severity::Success)
-                    .child(Label::new("Operation completed successfully"))
-                    .action_slot(Button::new("dismiss", "Dismiss"))
+                    .child(Label::new(localization::localized_str!("Operation completed successfully")))
+                    .action_slot(Button::new("dismiss", localization::localized_str!("Dismiss")))
                     .into_any_element(),
             ),
             single_example(
                 "Warning",
                 Banner::new()
                     .severity(Severity::Warning)
-                    .child(Label::new("Your settings file uses deprecated settings"))
-                    .action_slot(Button::new("update", "Update Settings"))
+                    .child(Label::new(localization::localized_str!("Your settings file uses deprecated settings")))
+                    .action_slot(Button::new("update", localization::localized_str!("Update Settings")))
                     .into_any_element(),
             ),
             single_example(
                 "Error",
                 Banner::new()
                     .severity(Severity::Error)
-                    .child(Label::new("Connection error: unable to connect to server"))
-                    .action_slot(Button::new("reconnect", "Retry"))
+                    .child(Label::new(localization::localized_str!("Connection error: unable to connect to server")))
+                    .action_slot(Button::new("reconnect", localization::localized_str!("Retry")))
                     .into_any_element(),
             ),
         ];

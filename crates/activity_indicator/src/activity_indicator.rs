@@ -253,7 +253,17 @@ impl ActivityIndicator {
                     let buffer = create_buffer.await?;
                     buffer.update(cx, |buffer, cx| {
                         buffer.edit(
-                            [(0..0, format!("Language server {server_name}:\n\n{status}"))],
+                            [(0..0, {
+        let __zed_i18n_arg_0 = format!("{}", server_name);
+        let __zed_i18n_arg_1 = format!("{}", status);
+        localization::format_message(
+            "Language server {server_name}:\n\n{status}",
+            &[
+                ("server_name", __zed_i18n_arg_0),
+                ("status", __zed_i18n_arg_1)
+            ],
+        )
+    })],
                             None,
                             cx,
                         );
@@ -426,7 +436,15 @@ impl ActivityIndicator {
 
                 let additional_work_count = pending_work.count();
                 if additional_work_count > 0 {
-                    write!(&mut message, " + {} more", additional_work_count).unwrap();
+                    write!(&mut message, "{}", {
+        let __zed_i18n_arg_0 = format!("{}", additional_work_count);
+        localization::format_message(
+            " + {} more",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }).unwrap();
                 }
 
                 return Some(Content {
@@ -448,7 +466,15 @@ impl ActivityIndicator {
         {
             return Some(Content {
                 icon: ActivityIcon::LoadingSpinner,
-                message: format!("Debug: {}", session.read(cx).adapter()),
+                message: {
+        let __zed_i18n_arg_0 = format!("{}", session.read(cx).adapter());
+        localization::format_message(
+            "Debug: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 tooltip_message: session.read(cx).label().map(|label| label.to_string()),
                 on_click: None,
             });
@@ -530,9 +556,8 @@ impl ActivityIndicator {
         if !downloading.is_empty() {
             return Some(Content {
                 icon: ActivityIcon::Icon(IconName::Download),
-                message: format!(
-                    "Downloading {}...",
-                    downloading.iter().map(|name| name.as_ref()).fold(
+                message: {
+        let __zed_i18n_arg_0 = format!("{}", downloading.iter().map(|name| name.as_ref()).fold(
                         String::new(),
                         |mut acc, s| {
                             if !acc.is_empty() {
@@ -541,8 +566,14 @@ impl ActivityIndicator {
                             acc.push_str(s);
                             acc
                         }
-                    )
-                ),
+                    ));
+        localization::format_message(
+            "Downloading {}...",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 on_click: Some(Arc::new(move |this, window, cx| {
                     this.statuses
                         .retain(|status| !downloading.contains(&status.name));
@@ -555,9 +586,8 @@ impl ActivityIndicator {
         if !checking_for_update.is_empty() {
             return Some(Content {
                 icon: ActivityIcon::Icon(IconName::Download),
-                message: format!(
-                    "Checking for updates to {}...",
-                    checking_for_update.iter().map(|name| name.as_ref()).fold(
+                message: {
+        let __zed_i18n_arg_0 = format!("{}", checking_for_update.iter().map(|name| name.as_ref()).fold(
                         String::new(),
                         |mut acc, s| {
                             if !acc.is_empty() {
@@ -566,8 +596,14 @@ impl ActivityIndicator {
                             acc.push_str(s);
                             acc
                         }
-                    ),
-                ),
+                    ));
+        localization::format_message(
+            "Checking for updates to {}...",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 on_click: Some(Arc::new(move |this, window, cx| {
                     this.statuses
                         .retain(|status| !checking_for_update.contains(&status.name));
@@ -580,9 +616,8 @@ impl ActivityIndicator {
         if !failed.is_empty() {
             return Some(Content {
                 icon: ActivityIcon::Icon(IconName::Warning),
-                message: format!(
-                    "Failed to run {}. Click to show error.",
-                    failed
+                message: {
+        let __zed_i18n_arg_0 = format!("{}", failed
                         .iter()
                         .map(|name| name.as_ref())
                         .fold(String::new(), |mut acc, s| {
@@ -591,8 +626,14 @@ impl ActivityIndicator {
                             }
                             acc.push_str(s);
                             acc
-                        }),
-                ),
+                        }));
+        localization::format_message(
+            "Failed to run {}. Click to show error.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 on_click: Some(Arc::new(|this, window, cx| {
                     this.show_error_message(&ShowErrorMessage, window, cx)
                 })),
@@ -604,7 +645,15 @@ impl ActivityIndicator {
         if let Some(failure) = self.project.read(cx).last_formatting_failure(cx) {
             return Some(Content {
                 icon: ActivityIcon::Icon(IconName::Warning),
-                message: format!("Formatting failed: {failure}. Click to see logs."),
+                message: {
+        let __zed_i18n_arg_0 = format!("{}", failure);
+        localization::format_message(
+            "Formatting failed: {failure}. Click to see logs.",
+            &[
+                ("failure", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 on_click: Some(Arc::new(|indicator, window, cx| {
                     indicator.project.update(cx, |project, cx| {
                         project.reset_last_formatting_failure(cx);
@@ -619,8 +668,24 @@ impl ActivityIndicator {
         if let Some((server_name, health, message)) = health_messages.pop() {
             let health_str = match health {
                 ServerHealth::Ok => format!("({server_name}) "),
-                ServerHealth::Warning => format!("({server_name}) Warning: "),
-                ServerHealth::Error => format!("({server_name}) Error: "),
+                ServerHealth::Warning => {
+        let __zed_i18n_arg_0 = format!("{}", server_name);
+        localization::format_message(
+            "({server_name}) Warning: ",
+            &[
+                ("server_name", __zed_i18n_arg_0)
+            ],
+        )
+    },
+                ServerHealth::Error => {
+        let __zed_i18n_arg_0 = format!("{}", server_name);
+        localization::format_message(
+            "({server_name}) Error: ",
+            &[
+                ("server_name", __zed_i18n_arg_0)
+            ],
+        )
+    },
             };
             let single_line_message = message
                 .lines()
@@ -669,15 +734,39 @@ impl ActivityIndicator {
         {
             let (message, icon) = match operation {
                 ExtensionOperation::Install => (
-                    format!("Installing {extension_id} extension…"),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", extension_id);
+        localization::format_message(
+            "Installing {extension_id} extension…",
+            &[
+                ("extension_id", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     ActivityIcon::LoadingSpinner,
                 ),
                 ExtensionOperation::Upgrade => (
-                    format!("Updating {extension_id} extension…"),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", extension_id);
+        localization::format_message(
+            "Updating {extension_id} extension…",
+            &[
+                ("extension_id", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     ActivityIcon::Icon(IconName::Download),
                 ),
                 ExtensionOperation::Remove => (
-                    format!("Removing {extension_id} extension…"),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", extension_id);
+        localization::format_message(
+            "Removing {extension_id} extension…",
+            &[
+                ("extension_id", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     ActivityIcon::LoadingSpinner,
                 ),
             };
@@ -718,8 +807,8 @@ impl ActivityIndicator {
         }
         Some(Content {
             icon: ActivityIcon::Icon(IconName::Info),
-            message: "Partial file index".to_string(),
-            tooltip_message: Some("Directories outside of git repositories and deeper than the `file_scan_depth` setting will be indexed on demand.".to_string()),
+            message: localization::localized_str!("Partial file index").to_string(),
+            tooltip_message: Some(localization::localized_str!("Directories outside of git repositories and deeper than the `file_scan_depth` setting will be indexed on demand.").to_string()),
             on_click: Some(Arc::new(|this, _, cx| {
                 this.deferred_scan_message = DeferredScanMessage::Dismissed;
                 cx.notify();
@@ -800,7 +889,15 @@ impl Render for ActivityIndicator {
                                     has_cancellable_work = true;
                                     let language_server_id = work.language_server_id;
                                     let token = work.progress_token.clone();
-                                    let title = SharedString::from(format!("Cancel {title}"));
+                                    let title = SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "Cancel {title}",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    });
                                     menu = menu.custom_entry(
                                         move |_, _| {
                                             h_flex()

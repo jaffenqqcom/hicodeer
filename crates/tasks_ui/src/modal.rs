@@ -55,9 +55,9 @@ impl TasksModalDelegate {
             reveal_target: Some(RevealTarget::Center),
         }) = &task_overrides
         {
-            Arc::from("Find a task, or run a command in the central pane")
+            Arc::from(localization::localized_str!("Find a task, or run a command in the central pane"))
         } else {
-            Arc::from("Find a task, or run a command")
+            Arc::from(localization::localized_str!("Find a task, or run a command"))
         };
         Self {
             task_store,
@@ -569,7 +569,7 @@ impl PickerDelegate for TasksModalDelegate {
                                         .checked_sub(1);
                                     picker.refresh(window, cx);
                                 }))
-                                .tooltip(|_, cx| Tooltip::simple("Delete from Recent Tasks", cx)),
+                                .tooltip(|_, cx| Tooltip::simple(localization::localized_str!("Delete from Recent Tasks"), cx)),
                         );
                         item.end_slot_on_hover(delete_button)
                     } else {
@@ -680,9 +680,9 @@ impl PickerDelegate for TasksModalDelegate {
                         .boxed_clone();
                         this.child({
                             let spawn_oneshot_label = if current_modifiers.secondary() {
-                                "Spawn Oneshot Without History"
+                                localization::localized_str!("Spawn Oneshot Without History")
                             } else {
-                                "Spawn Oneshot"
+                                localization::localized_str!("Spawn Oneshot")
                             };
 
                             Button::new("spawn-onehshot", spawn_oneshot_label)
@@ -694,9 +694,9 @@ impl PickerDelegate for TasksModalDelegate {
                     } else if current_modifiers.secondary() {
                         this.child({
                             let label = if is_recent_selected {
-                                "Rerun Without History"
+                                localization::localized_str!("Rerun Without History")
                             } else {
-                                "Spawn Without History"
+                                localization::localized_str!("Spawn Without History")
                             };
                             Button::new("spawn", label)
                                 .key_binding(KeyBinding::for_action(&menu::SecondaryConfirm, cx))
@@ -707,7 +707,7 @@ impl PickerDelegate for TasksModalDelegate {
                     } else {
                         this.child({
                             let run_entry_label =
-                                if is_recent_selected { "Rerun" } else { "Spawn" };
+                                if is_recent_selected { localization::localized_str!("Rerun") } else { localization::localized_str!("Spawn") };
 
                             Button::new("spawn", run_entry_label)
                                 .key_binding(KeyBinding::for_action(&menu::Confirm, cx))

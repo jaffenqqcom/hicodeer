@@ -508,7 +508,7 @@ impl Component for ListItem {
                             ListItem::new("selected")
                                 .toggle_state(true)
                                 .start_slot(Icon::new(IconName::Check))
-                                .child(Label::new("Selected item"))
+                                .child(Label::new(localization::localized_str!("Selected item")))
                                 .into_any_element(),
                         ),
                     ],

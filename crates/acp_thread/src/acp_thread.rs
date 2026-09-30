@@ -1023,7 +1023,7 @@ impl ToolCall {
             return tool_name
                 .filter(|name| !name.trim().is_empty())
                 .cloned()
-                .unwrap_or_else(|| "Tool call".into());
+                .unwrap_or_else(|| localization::localized_str!("Tool call").into());
         };
 
         if kind == acp::ToolKind::Execute {
@@ -1760,7 +1760,7 @@ impl ContentBlock {
                 } else {
                     RenderBlock::Unsupported {
                         markdown: Self::create_markdown(
-                            "Image content could not be displayed.".into(),
+                            localization::localized_str!("Image content could not be displayed.").into(),
                             language_registry,
                             cx,
                         ),
@@ -1781,9 +1781,9 @@ impl ContentBlock {
         cx: &mut App,
     ) -> RenderBlock {
         let description = if matches!(content, acp::ContentBlock::Audio(_)) {
-            "Audio content is not supported."
+            localization::localized_str!("Audio content is not supported.")
         } else {
-            "This content is not supported."
+            localization::localized_str!("This content is not supported.")
         };
         RenderBlock::Unsupported {
             markdown: Self::create_markdown(description.into(), language_registry, cx),
@@ -3679,11 +3679,11 @@ impl AcpThread {
                 // Tool call not found - create a failed tool call entry
                 let failed_tool_call = ToolCall {
                     id: update.id().clone(),
-                    label: cx.new(|cx| Markdown::new("Tool call not found".into(), None, None, cx)),
-                    title: Some("Tool call not found".into()),
+                    label: cx.new(|cx| Markdown::new(localization::localized_str!("Tool call not found").into(), None, None, cx)),
+                    title: Some(localization::localized_str!("Tool call not found").into()),
                     kind: acp::ToolKind::Fetch,
                     structured_content: vec![ToolCallContent::ContentBlock(
-                        ContentBlock::new_output("Tool call not found".into(), &languages, cx),
+                        ContentBlock::new_output(localization::localized_str!("Tool call not found").into(), &languages, cx),
                     )],
                     status: ToolCallStatus::Failed,
                     locations: Vec::new(),

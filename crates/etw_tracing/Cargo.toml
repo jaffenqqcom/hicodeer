@@ -11,6 +11,7 @@ test = false
 doctest = false
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 gpui.workspace = true
 net.workspace = true

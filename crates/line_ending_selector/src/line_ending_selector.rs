@@ -119,7 +119,7 @@ impl PickerDelegate for LineEndingSelectorDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Select a line ending…".into()
+        localization::localized_str!("Select a line ending…").into()
     }
 
     fn match_count(&self) -> usize {

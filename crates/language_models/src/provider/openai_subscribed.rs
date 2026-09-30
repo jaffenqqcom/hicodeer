@@ -16,8 +16,11 @@ use openai_subscribed::{ChatGptModel, PROVIDER_ID, PROVIDER_NAME, State, languag
 use std::sync::Arc;
 use ui::{ConfiguredApiCard, prelude::*};
 
-const SUBSCRIPTION_DESCRIPTION: &str =
-    "Sign in with your ChatGPT Plus or Pro subscription to use OpenAI models in Zed's agent.";
+fn subscription_description() -> &'static str {
+    localization::localized_str!(
+        "Sign in with your ChatGPT Plus or Pro subscription to use OpenAI models in Zed's agent."
+    )
+}
 
 pub struct OpenAiSubscribedProvider {
     state: Entity<State>,
@@ -135,12 +138,12 @@ impl LanguageModelProvider for OpenAiSubscribedProvider {
         let title = if is_authenticated {
             None
         } else {
-            Some("Configure ChatGPT".into())
+            Some(localization::localized_str!("Configure ChatGPT").into())
         };
         let description = if is_authenticated {
             None
         } else {
-            Some(InlineDescription::Text(SUBSCRIPTION_DESCRIPTION.into()))
+            Some(InlineDescription::Text(subscription_description().into()))
         };
 
         Some(ProviderSettingsView::Inline(
@@ -162,23 +165,23 @@ impl LanguageModelProvider for OpenAiSubscribedProvider {
     }
 
     fn authentication_error_message(&self) -> SharedString {
-        "Your ChatGPT subscription session is invalid or has expired. \
-        Sign in again via Settings > AI > LLM Providers to continue."
+        localization::localized_str!("Your ChatGPT subscription session is invalid or has expired. \
+        Sign in again via Settings > AI > LLM Providers to continue.")
             .into()
     }
 
     fn missing_credentials_error_message(&self) -> SharedString {
-        "You are not signed in to your ChatGPT account. \
-        Sign in via Settings > AI > LLM Providers to continue."
+        localization::localized_str!("You are not signed in to your ChatGPT account. \
+        Sign in via Settings > AI > LLM Providers to continue.")
             .into()
     }
 
     fn fast_mode_confirmation(&self, _cx: &App) -> Option<FastModeConfirmation> {
         Some(FastModeConfirmation {
-            title: "Enable Fast Mode for OpenAI?".into(),
-            message: "Fast mode sends requests using OpenAI's Priority processing tier, which \
+            title: localization::localized_str!("Enable Fast Mode for OpenAI?").into(),
+            message: localization::localized_str!("Fast mode sends requests using OpenAI's Priority processing tier, which \
                 targets significantly lower latency than the standard tier and is billed at a \
-                premium per-token rate."
+                premium per-token rate.")
                 .into(),
         })
     }
@@ -229,8 +232,16 @@ impl Render for ConfigurationView {
         if state.is_authenticated() {
             let label = state
                 .email()
-                .map(|e| format!("Signed in as {e}"))
-                .unwrap_or_else(|| "Signed in".to_string());
+                .map(|e| {
+        let __zed_i18n_arg_0 = format!("{}", e);
+        localization::format_message(
+            "Signed in as {e}",
+            &[
+                ("e", __zed_i18n_arg_0)
+            ],
+        )
+    })
+                .unwrap_or_else(|| localization::localized_str!("Signed in").to_string());
             let model_catalog_error = state.model_catalog_error();
 
             let state_entity = self.state.clone();
@@ -239,7 +250,7 @@ impl Render for ConfigurationView {
                 .gap_2()
                 .child(
                     ConfiguredApiCard::new("openai-subscribed-sign-out", SharedString::from(label))
-                        .button_label("Sign Out")
+                        .button_label(localization::localized_str!("Sign Out"))
                         .on_click(cx.listener(move |_this, _, _window, cx| {
                             state_entity
                                 .update(cx, |state, cx| state.sign_out(cx))
@@ -269,15 +280,15 @@ impl Render for ConfigurationView {
         let is_signing_in = state.is_signing_in();
         let is_sign_in_cancellable = state.is_sign_in_cancellable();
         let button_label = if is_signing_in {
-            "Signing in…"
+            localization::localized_str!("Signing in…")
         } else {
-            "Sign In"
+            localization::localized_str!("Sign In")
         };
 
         v_flex()
             .gap_2()
             .when(!self.compact, |this| {
-                this.child(Label::new(SUBSCRIPTION_DESCRIPTION))
+                this.child(Label::new(subscription_description()))
             })
             .child(
                 h_flex()
@@ -295,7 +306,7 @@ impl Render for ConfigurationView {
                     )
                     .when(is_sign_in_cancellable, |this| {
                         this.child(
-                            Button::new("cancel-sign-in", "Cancel")
+                            Button::new("cancel-sign-in", localization::localized_str!("Cancel"))
                                 .style(ButtonStyle::Subtle)
                                 .size(ButtonSize::Medium)
                                 .on_click(move |_, _window, cx| {

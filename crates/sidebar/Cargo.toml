@@ -16,6 +16,7 @@ doctest = false
 default = []
 
 [dependencies]
+localization.workspace = true
 acp_thread.workspace = true
 action_log.workspace = true
 async-channel.workspace = true

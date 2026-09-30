@@ -68,9 +68,17 @@ impl AgentTool for DeletePathTool {
         _cx: &mut App,
     ) -> SharedString {
         if let Ok(input) = input {
-            format!("Delete “`{}`”", input.path).into()
+            {
+        let __zed_i18n_arg_0 = format!("{}", input.path);
+        localization::format_message(
+            "Delete “`{}`”",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
         } else {
-            "Delete path".into()
+            localization::localized_str!("Delete path").into()
         }
     }
 

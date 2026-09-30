@@ -1788,7 +1788,7 @@ impl PickerDelegate for FileFinderDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search project files...".into()
+        localization::localized_str!("Search project files...").into()
     }
 
     fn searchbar_trailer(
@@ -1801,9 +1801,9 @@ impl PickerDelegate for FileFinderDelegate {
         // Clicking includes ignored files unless they're already included, in
         // which case it excludes them again (see `handle_toggle_ignored`).
         let tooltip_label = if including_ignored {
-            "Exclude Ignored Files"
+            localization::localized_str!("Exclude Ignored Files")
         } else {
-            "Include Ignored Files"
+            localization::localized_str!("Include Ignored Files")
         };
 
         let filter_button = IconButton::new("filter-ignored", IconName::FileIgnored)
@@ -2061,7 +2061,7 @@ impl PickerDelegate for FileFinderDelegate {
                     ..Default::default()
                 };
                 let mut message = picker::HighlightedTextBuilder::default();
-                message.push_plain("Create file ");
+                message.push_plain(localization::localized_str!("Create file "));
                 message.push_styled(project_path.path.display(path_style), path_highlight);
                 message.push_plain("?");
                 Some(picker::PreviewUpdate::message(message.build()))
@@ -2101,14 +2101,14 @@ impl PickerDelegate for FileFinderDelegate {
         let open_label: SharedString = if self.selected_matches.len() > 1 {
             "Open multiple".into()
         } else {
-            "Open File".into()
+            localization::localized_str!("Open File").into()
         };
         vec![
-            picker::PickerAction::header("Split…"),
-            picker::PickerAction::button("Left", pane::SplitLeft::default().boxed_clone()),
-            picker::PickerAction::button("Right", pane::SplitRight::default().boxed_clone()),
-            picker::PickerAction::button("Up", pane::SplitUp::default().boxed_clone()),
-            picker::PickerAction::button("Down", pane::SplitDown::default().boxed_clone()),
+            picker::PickerAction::header(localization::localized_str!("Split…")),
+            picker::PickerAction::button(localization::localized_str!("Left"), pane::SplitLeft::default().boxed_clone()),
+            picker::PickerAction::button(localization::localized_str!("Right"), pane::SplitRight::default().boxed_clone()),
+            picker::PickerAction::button(localization::localized_str!("Up"), pane::SplitUp::default().boxed_clone()),
+            picker::PickerAction::button(localization::localized_str!("Down"), pane::SplitDown::default().boxed_clone()),
             picker::PickerAction::separator(),
             picker::PickerAction::button(open_label, menu::Confirm.boxed_clone()),
         ]

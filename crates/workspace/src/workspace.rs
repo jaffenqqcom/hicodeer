@@ -807,11 +807,21 @@ fn handle_file_permalink(
             }
             Err(err) => {
                 let action = if copy {
-                    "copy file permalink"
+                    localization::localized_str!("copy file permalink")
                 } else {
-                    "open file permalink"
+                    localization::localized_str!("open file permalink")
                 };
-                let message = format!("Failed to {action}: {err}");
+                let message = {
+        let __zed_i18n_arg_0 = format!("{}", action);
+        let __zed_i18n_arg_1 = format!("{}", err);
+        localization::format_message(
+            "Failed to {action}: {err}",
+            &[
+                ("action", __zed_i18n_arg_0),
+                ("err", __zed_i18n_arg_1)
+            ],
+        )
+    };
                 anyhow::Result::<()>::Err(err).log_err();
 
                 workspace
@@ -3678,9 +3688,9 @@ impl Workspace {
                     let answer = cx.update(|window, cx| {
                         window.prompt(
                             PromptLevel::Warning,
-                            "Do you want to leave the current call?",
+                            localization::localized_str!("Do you want to leave the current call?"),
                             None,
-                            &["Close window and hang up", "Cancel"],
+                            &[localization::localized_str!("Close window and hang up"), localization::localized_str!("Cancel")],
                             cx,
                         )
                     })?;
@@ -3926,9 +3936,9 @@ impl Workspace {
                         );
                         window.prompt(
                             PromptLevel::Warning,
-                            "Do you want to save all changes in the following files?",
+                            localization::localized_str!("Do you want to save all changes in the following files?"),
                             Some(&detail),
-                            &["Save all", "Discard all", "Cancel"],
+                            &[localization::localized_str!("Save all"), localization::localized_str!("Discard all"), localization::localized_str!("Cancel")],
                             cx,
                         )
                     })?;
@@ -4239,7 +4249,7 @@ impl Workspace {
     ) {
         let project = self.project.read(cx);
         if project.is_via_collab() {
-            self.show_error("You cannot add folders to someone else's project", cx);
+            self.show_error(localization::localized_str!("You cannot add folders to someone else's project"), cx);
             return;
         }
         let paths = self.prompt_for_open_path(
@@ -6563,7 +6573,7 @@ impl Workspace {
                     cx,
                 )
                 .detach_and_prompt_err(
-                    "Failed to join project",
+                    localization::localized_str!("Failed to join project"),
                     window,
                     cx,
                     |error, _, _| Some(format!("{error:#}")),
@@ -8101,25 +8111,25 @@ impl Workspace {
                             window,
                             cx,
                         )
-                        .detach_and_prompt_err("Failed to save", window, cx, |_, _, _| None);
+                        .detach_and_prompt_err(localization::localized_str!("Failed to save"), window, cx, |_, _, _| None);
                 }))
                 .on_action(cx.listener(|workspace, _: &FormatAndSave, window, cx| {
                     workspace
                         .save_active_item(SaveIntent::FormatAndSave, window, cx)
-                        .detach_and_prompt_err("Failed to save", window, cx, |_, _, _| None);
+                        .detach_and_prompt_err(localization::localized_str!("Failed to save"), window, cx, |_, _, _| None);
                 }))
                 .on_action(cx.listener(
                     |workspace, _: &SaveWithoutFormat, window, cx| {
                         workspace
                             .save_active_item(SaveIntent::SaveWithoutFormat, window, cx)
-                            .detach_and_prompt_err("Failed to save", window, cx, |_, _, _| None);
+                            .detach_and_prompt_err(localization::localized_str!("Failed to save"), window, cx, |_, _, _| None);
                     },
                 ))
             })
             .on_action(cx.listener(|workspace, _: &SaveAs, window, cx| {
                 workspace
                     .save_active_item(SaveIntent::SaveAs, window, cx)
-                    .detach_and_prompt_err("Failed to save", window, cx, |_, _, _| None);
+                    .detach_and_prompt_err(localization::localized_str!("Failed to save"), window, cx, |_, _, _| None);
             }))
             .on_action(
                 cx.listener(|workspace, _: &ActivatePreviousPane, window, cx| {
@@ -8669,9 +8679,9 @@ impl Workspace {
         // window. We only make it focusable in that case so it never adds a
         // hitbox or intercepts mouse focus for other users.
         let (dock_element_id, dock_label) = match position {
-            DockPosition::Left => ("left-dock", "Left dock"),
-            DockPosition::Right => ("right-dock", "Right dock"),
-            DockPosition::Bottom => ("bottom-dock", "Bottom dock"),
+            DockPosition::Left => ("left-dock", localization::localized_str!("Left dock")),
+            DockPosition::Right => ("right-dock", localization::localized_str!("Right dock")),
+            DockPosition::Bottom => ("bottom-dock", localization::localized_str!("Bottom dock")),
         };
         let dock_is_open = dock.read(cx).is_open();
         let a11y_active = window.is_a11y_active();
@@ -8890,7 +8900,7 @@ impl Workspace {
         div()
             .id("editor-region")
             .role(gpui::Role::Main)
-            .aria_label("Editor")
+            .aria_label(localization::localized_str!("Editor"))
             .when(window.is_a11y_active(), |this| {
                 this.track_focus(&self.region_focus_handles.editor)
             })
@@ -9475,8 +9485,8 @@ fn notify_if_database_failed(window: WindowHandle<MultiWorkspace>, cx: &mut Asyn
                         cx,
                         |cx| {
                             cx.new(|cx| {
-                                MessageNotification::new("Failed to load the database file.", cx)
-                                    .primary_message("File an Issue")
+                                MessageNotification::new(localization::localized_str!("Failed to load the database file."), cx)
+                                    .primary_message(localization::localized_str!("File an Issue"))
                                     .primary_icon(IconName::Plus)
                                     .primary_on_click(|window, cx| {
                                         window.dispatch_action(Box::new(FileBugReport), cx)
@@ -9641,7 +9651,7 @@ impl Render for Workspace {
                         .track_focus(&self.titlebar_focus_handle)
                         .tab_group()
                         .role(gpui::Role::Toolbar)
-                        .aria_label("Title bar")
+                        .aria_label(localization::localized_str!("Title bar"))
                         .on_key_down(cx.listener(
                             |workspace, event: &gpui::KeyDownEvent, window, cx| {
                                 if event.keystroke.modifiers.modified() {
@@ -10524,9 +10534,9 @@ async fn join_channel_internal(
                 .update(cx, |_, window, cx| {
                     window.prompt(
                         PromptLevel::Warning,
-                        "Do you want to switch channels?",
-                        Some("Leaving this call will unshare your current project."),
-                        &["Yes, Join Channel", "Cancel"],
+                        localization::localized_str!("Do you want to switch channels?"),
+                        Some(localization::localized_str!("Leaving this call will unshare your current project.")),
+                        &[localization::localized_str!("Yes, Join Channel"), localization::localized_str!("Cancel")],
                         cx,
                     )
                 })?
@@ -10731,7 +10741,7 @@ pub fn join_channel(
                 active_window
                     .update(cx, |_, window, cx| {
                         let detail: SharedString = match err.error_code() {
-                            ErrorCode::SignedOut => "Please sign in to continue.".into(),
+                            ErrorCode::SignedOut => localization::localized_str!("Please sign in to continue.").into(),
                             ErrorCode::UpgradeRequired => concat!(
                                 "Your are running an unsupported version of Zed. ",
                                 "Please update to continue."
@@ -10748,15 +10758,23 @@ pub fn join_channel(
                             )
                             .into(),
                             ErrorCode::Disconnected => {
-                                "Please check your internet connection and try again.".into()
+                                localization::localized_str!("Please check your internet connection and try again.").into()
                             }
-                            _ => format!("{}\n\nPlease try again.", err).into(),
+                            _ => {
+        let __zed_i18n_arg_0 = format!("{}", err);
+        localization::format_message(
+            "{}\n\nPlease try again.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into(),
                         };
                         window.prompt(
                             PromptLevel::Critical,
-                            "Failed to join channel",
+                            localization::localized_str!("Failed to join channel"),
                             Some(&detail),
-                            &["OK"],
+                            &[localization::localized_str!("OK")],
                             cx,
                         )
                     })?
@@ -11268,7 +11286,15 @@ pub fn open_paths(
                 workspace.update(cx, |workspace, cx| {
                     for item in open_task.iter().flatten() {
                         if let Err(e) = item {
-                            workspace.show_error(format!("Error: {e}"), cx);
+                            workspace.show_error({
+        let __zed_i18n_arg_0 = format!("{}", e);
+        localization::format_message(
+            "Error: {e}",
+            &[
+                ("e", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx);
                         }
                     }
                 });
@@ -11319,10 +11345,18 @@ pub fn open_paths(
                     workspace.update(cx, |workspace, cx| {
                         workspace.show_notification(NotificationId::unique::<OpenInWsl>(), cx, move |cx| {
                             let display_path = util::markdown::MarkdownInlineCode(&path.to_string_lossy());
-                            let msg = format!("{display_path} is inside a WSL filesystem, some features may not work unless you open it with WSL remote");
+                            let msg = {
+        let __zed_i18n_arg_0 = format!("{}", display_path);
+        localization::format_message(
+            "{display_path} is inside a WSL filesystem, some features may not work unless you open it with WSL remote",
+            &[
+                ("display_path", __zed_i18n_arg_0)
+            ],
+        )
+    };
                             cx.new(move |cx| {
                                 MessageNotification::new(msg, cx)
-                                    .primary_message("Open in WSL")
+                                    .primary_message(localization::localized_str!("Open in WSL"))
                                     .primary_icon(IconName::FolderOpen)
                                     .primary_on_click(move |window, cx| {
                                         window.dispatch_action(Box::new(remote::OpenWslPath {
@@ -11608,7 +11642,15 @@ async fn open_remote_project_inner(
         for error in project_path_errors {
             if error.error_code() == proto::ErrorCode::DevServerProjectPathDoesNotExist {
                 if let Some(path) = error.error_tag("path") {
-                    workspace.show_error(format!("'{path}' does not exist"), cx)
+                    workspace.show_error({
+        let __zed_i18n_arg_0 = format!("{}", path);
+        localization::format_message(
+            "'{path}' does not exist",
+            &[
+                ("path", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx)
                 }
             } else {
                 workspace.show_error(format!("{error}"), cx)
@@ -11759,9 +11801,9 @@ pub fn reload(cx: &mut App) {
             .update(cx, |_, window, cx| {
                 window.prompt(
                     PromptLevel::Info,
-                    "Are you sure you want to restart?",
+                    localization::localized_str!("Are you sure you want to restart?"),
                     None,
-                    &["Restart", "Cancel"],
+                    &[localization::localized_str!("Restart"), localization::localized_str!("Cancel")],
                     cx,
                 )
             })

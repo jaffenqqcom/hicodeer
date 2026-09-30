@@ -79,10 +79,10 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "Accept"),
-                            Button::new("decline", "Decline"),
+                            Button::new("accept", localization::localized_str!("Accept")),
+                            Button::new("decline", localization::localized_str!("Decline")),
                         )
-                        .child(Label::new("the user is inviting you to a call")),
+                        .child(Label::new(localization::localized_str!("the user is inviting you to a call"))),
                     )
                     .into_any_element(),
             ),
@@ -92,10 +92,10 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "View"),
-                            Button::new("decline", "Ignore"),
+                            Button::new("accept", localization::localized_str!("View")),
+                            Button::new("decline", localization::localized_str!("Ignore")),
                         )
-                        .child(Label::new("the user is sharing their screen")),
+                        .child(Label::new(localization::localized_str!("the user is sharing their screen"))),
                     )
                     .into_any_element(),
             ),
@@ -105,10 +105,10 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "Open"),
-                            Button::new("decline", "Dismiss"),
+                            Button::new("accept", localization::localized_str!("Open")),
+                            Button::new("decline", localization::localized_str!("Dismiss")),
                         )
-                        .child(Label::new("the user is sharing a project"))
+                        .child(Label::new(localization::localized_str!("the user is sharing a project")))
                         .child(Label::new("zed").color(Color::Muted)),
                     )
                     .into_any_element(),
@@ -119,8 +119,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "Accept"),
-                            Button::new("decline", "Decline"),
+                            Button::new("accept", localization::localized_str!("Accept")),
+                            Button::new("decline", localization::localized_str!("Decline")),
                         )
                         .child(Label::new(
                             "a_very_long_username_that_might_overflow is sharing a project in Zed:",
@@ -141,8 +141,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "Accept"),
-                            Button::new("decline", "Decline"),
+                            Button::new("accept", localization::localized_str!("Accept")),
+                            Button::new("decline", localization::localized_str!("Decline")),
                         )
                         .child(Label::new("maxbrunsfeld wants to add you as a contact")),
                     )
@@ -154,8 +154,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("dismiss", "Dismiss"),
-                            Button::new("close", "Close"),
+                            Button::new("dismiss", localization::localized_str!("Dismiss")),
+                            Button::new("close", localization::localized_str!("Close")),
                         )
                         .child(Label::new("maxbrunsfeld accepted your contact request")),
                     )
@@ -167,8 +167,8 @@ impl Component for CollabNotification {
                     .child(
                         CollabNotification::new(
                             avatar,
-                            Button::new("accept", "Accept"),
-                            Button::new("decline", "Decline"),
+                            Button::new("accept", localization::localized_str!("Accept")),
+                            Button::new("decline", localization::localized_str!("Decline")),
                         )
                         .child(Label::new(
                             "maxbrunsfeld invited you to join the #zed channel",

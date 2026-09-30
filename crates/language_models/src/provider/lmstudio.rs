@@ -325,7 +325,7 @@ impl LanguageModelProvider for LmStudioLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "Run local LLMs like Llama, Phi, and Qwen with LM Studio.".into(),
+                localization::localized_str!("Run local LLMs like Llama, Phi, and Qwen with LM Studio.").into(),
             )),
         ))
     }
@@ -594,10 +594,10 @@ struct ConfigurationView {
 
 impl ConfigurationView {
     pub fn new(state: Entity<State>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key_editor = cx.new(|cx| InputField::new(_window, cx, "sk-...").label("API key"));
+        let api_key_editor = cx.new(|cx| InputField::new(_window, cx, "sk-...").label(localization::localized_str!("API key")));
 
         let api_url_editor = cx.new(|cx| {
-            let input = InputField::new(_window, cx, LMSTUDIO_API_URL).label("API URL");
+            let input = InputField::new(_window, cx, LMSTUDIO_API_URL).label(localization::localized_str!("API URL"));
             input.set_text(&LmStudioLanguageModelProvider::api_url(cx), _window, cx);
             input
         });
@@ -729,9 +729,17 @@ impl ConfigurationView {
         let state = self.state.read(cx);
         let env_var_set = state.api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API key set in {API_KEY_ENV_VAR_NAME} environment variable.")
+            {
+        let __zed_i18n_arg_0 = format!("{}", API_KEY_ENV_VAR_NAME);
+        localization::format_message(
+            "API key set in {API_KEY_ENV_VAR_NAME} environment variable.",
+            &[
+                ("API_KEY_ENV_VAR_NAME", __zed_i18n_arg_0)
+            ],
+        )
+    }
         } else {
-            "API key configured".to_string()
+            localization::localized_str!("API key configured").to_string()
         };
 
         let api_key_control = if !state.api_key_state.has_key() {
@@ -741,9 +749,15 @@ impl ConfigurationView {
                 .disabled(env_var_set)
                 .on_click(cx.listener(|this, _, _window, cx| this.reset_api_key(_window, cx)))
                 .when(env_var_set, |this| {
-                    this.tooltip_label(format!(
-                        "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable."
-                    ))
+                    this.tooltip_label({
+        let __zed_i18n_arg_0 = format!("{}", API_KEY_ENV_VAR_NAME);
+        localization::format_message(
+            "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable.",
+            &[
+                ("API_KEY_ENV_VAR_NAME", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 })
                 .into_any_element()
         };
@@ -754,9 +768,15 @@ impl ConfigurationView {
             .gap_1p5()
             .mb_2()
             .child(
-                Label::new(format!(
-                    "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
-                ))
+                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", API_KEY_ENV_VAR_NAME);
+        localization::format_message(
+            "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed.",
+            &[
+                ("API_KEY_ENV_VAR_NAME", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 .size(LabelSize::Small)
                 .color(Color::Muted),
             )
@@ -772,24 +792,24 @@ impl Render for ConfigurationView {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(Headline::new("LM Studio").size(HeadlineSize::Small))
+                    .child(Headline::new(localization::localized_str!("LM Studio")).size(HeadlineSize::Small))
                     .child(
-                        Label::new("Run local LLMs like Llama, Phi, and Qwen.").color(Color::Muted),
+                        Label::new(localization::localized_str!("Run local LLMs like Llama, Phi, and Qwen.")).color(Color::Muted),
                     )
                     .child(
                         List::new()
                             .child(ListBulletItem::new(
-                                "LM Studio needs to be running with at least one model downloaded.",
+                                localization::localized_str!("LM Studio needs to be running with at least one model downloaded."),
                             ).label_color(Color::Muted))
                             .child(
                                 ListBulletItem::new("")
-                                    .child(Label::new("To get your first model, try running").color(Color::Muted))
+                                    .child(Label::new(localization::localized_str!("To get your first model, try running")).color(Color::Muted))
                                     .child(Label::new("lms get qwen2.5-coder-7b").inline_code(cx).color(Color::Muted).ml_1()),
                             ),
                     )
                     .child(Label::new(
-                        "Alternatively, you can connect to an LM Studio server by specifying its \
-                        URL and API key (may not be required):",
+                        localization::localized_str!("Alternatively, you can connect to an LM Studio server by specifying its \
+                        URL and API key (may not be required):"),
                     ).color(Color::Muted)),
             )
             .child(self.render_api_url_editor(cx))
@@ -808,7 +828,7 @@ impl Render for ConfigurationView {
                             .map(|this| {
                                 if is_authenticated {
                                     this.child(
-                                        Button::new("lmstudio-site", "LM Studio")
+                                        Button::new("lmstudio-site", localization::localized_str!("LM Studio"))
                                             .style(ButtonStyle::OutlinedGhost)
                                             .size(ButtonSize::Medium)
                                             .end_icon(
@@ -825,7 +845,7 @@ impl Render for ConfigurationView {
                                     this.child(
                                         Button::new(
                                             "download_lmstudio_button",
-                                            "Download LM Studio",
+                                            localization::localized_str!("Download LM Studio"),
                                         )
                                         .style(ButtonStyle::OutlinedGhost)
                                         .size(ButtonSize::Medium)
@@ -842,7 +862,7 @@ impl Render for ConfigurationView {
                                 }
                             })
                             .child(
-                                Button::new("view-models", "Model Catalog")
+                                Button::new("view-models", localization::localized_str!("Model Catalog"))
                                     .style(ButtonStyle::OutlinedGhost)
                                     .size(ButtonSize::Medium)
                                     .end_icon(
@@ -864,11 +884,11 @@ impl Render for ConfigurationView {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Check).color(Color::Success))
-                                            .child(Label::new("Connected"))
+                                            .child(Label::new(localization::localized_str!("Connected")))
                                     )
                                     .child(
                                         IconButton::new("refresh-models", IconName::RotateCcw)
-                                            .tooltip(Tooltip::text("Refresh Models"))
+                                            .tooltip(Tooltip::text(localization::localized_str!("Refresh Models")))
                                             .icon_size(IconSize::Small)
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 this.state.update(cx, |state, _| {
@@ -880,7 +900,7 @@ impl Render for ConfigurationView {
                             )
                         } else {
                             this.child(
-                                Button::new("retry_lmstudio_models", "Connect")
+                                Button::new("retry_lmstudio_models", localization::localized_str!("Connect"))
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .start_icon(

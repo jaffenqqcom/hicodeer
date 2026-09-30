@@ -79,9 +79,9 @@ fn format_absolute_date(
         let timestamp_date = timestamp.date();
         let reference_date = reference.date();
         if timestamp_date == reference_date {
-            "Today".to_string()
+            localization::localized_str!("Today").to_string()
         } else if reference_date.previous_day() == Some(timestamp_date) {
-            "Yesterday".to_string()
+            localization::localized_str!("Yesterday").to_string()
         } else {
             macos::format_date(&timestamp)
         }
@@ -95,9 +95,9 @@ fn format_absolute_date(
         let timestamp_date = timestamp.date();
         let reference_date = reference.date();
         if timestamp_date == reference_date {
-            "Today".to_string()
+            localization::localized_str!("Today").to_string()
         } else if reference_date.previous_day() == Some(timestamp_date) {
-            "Yesterday".to_string()
+            localization::localized_str!("Yesterday").to_string()
         } else {
             windows::format_date(&timestamp)
         }
@@ -154,9 +154,25 @@ fn format_absolute_timestamp(
         let timestamp_date = timestamp.date();
         let reference_date = reference.date();
         if timestamp_date == reference_date {
-            format!("Today at {}", format_absolute_time(timestamp))
+            {
+        let __zed_i18n_arg_0 = format!("{}", format_absolute_time(timestamp));
+        localization::format_message(
+            "Today at {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
         } else if reference_date.previous_day() == Some(timestamp_date) {
-            format!("Yesterday at {}", format_absolute_time(timestamp))
+            {
+        let __zed_i18n_arg_0 = format!("{}", format_absolute_time(timestamp));
+        localization::format_message(
+            "Yesterday at {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
         } else {
             format!(
                 "{} {}",
@@ -186,9 +202,9 @@ fn format_absolute_date_medium(
         let timestamp_date = timestamp.date();
         let reference_date = reference.date();
         if timestamp_date == reference_date {
-            "Today".to_string()
+            localization::localized_str!("Today").to_string()
         } else if reference_date.previous_day() == Some(timestamp_date) {
-            "Yesterday".to_string()
+            localization::localized_str!("Yesterday").to_string()
         } else {
             macos::format_date_medium(&timestamp)
         }
@@ -202,9 +218,9 @@ fn format_absolute_date_medium(
         let timestamp_date = timestamp.date();
         let reference_date = reference.date();
         if timestamp_date == reference_date {
-            "Today".to_string()
+            localization::localized_str!("Today").to_string()
         } else if reference_date.previous_day() == Some(timestamp_date) {
-            "Yesterday".to_string()
+            localization::localized_str!("Yesterday").to_string()
         } else {
             windows::format_date_medium(&timestamp)
         }
@@ -224,9 +240,9 @@ fn format_absolute_date_medium(
         let timestamp_date = timestamp.date();
         let reference_date = reference.date();
         if timestamp_date == reference_date {
-            "Today".to_string()
+            localization::localized_str!("Today").to_string()
         } else if reference_date.previous_day() == Some(timestamp_date) {
-            "Yesterday".to_string()
+            localization::localized_str!("Yesterday").to_string()
         } else {
             format_timestamp_naive_date_medium(
                 timestamp,
@@ -260,14 +276,30 @@ fn format_relative_time(timestamp: OffsetDateTime, reference: OffsetDateTime) ->
     let difference = reference - timestamp;
     let minutes = difference.whole_minutes();
     match minutes {
-        0 => Some("Just now".to_string()),
-        1 => Some("1 minute ago".to_string()),
-        2..=59 => Some(format!("{} minutes ago", minutes)),
+        0 => Some(localization::localized_str!("Just now").to_string()),
+        1 => Some(localization::localized_str!("1 minute ago").to_string()),
+        2..=59 => Some({
+        let __zed_i18n_arg_0 = format!("{}", minutes);
+        localization::format_message(
+            "{} minutes ago",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }),
         _ => {
             let hours = difference.whole_hours();
             match hours {
-                1 => Some("1 hour ago".to_string()),
-                2..=23 => Some(format!("{} hours ago", hours)),
+                1 => Some(localization::localized_str!("1 hour ago").to_string()),
+                2..=23 => Some({
+        let __zed_i18n_arg_0 = format!("{}", hours);
+        localization::format_message(
+            "{} hours ago",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }),
                 _ => None,
             }
         }
@@ -280,19 +312,43 @@ fn format_relative_date(timestamp: OffsetDateTime, reference: OffsetDateTime) ->
     let difference = reference_date - timestamp_date;
     let days = difference.whole_days();
     match days {
-        0 => "Today".to_string(),
-        1 => "Yesterday".to_string(),
-        2..=6 => format!("{} days ago", days),
+        0 => localization::localized_str!("Today").to_string(),
+        1 => localization::localized_str!("Yesterday").to_string(),
+        2..=6 => {
+        let __zed_i18n_arg_0 = format!("{}", days);
+        localization::format_message(
+            "{} days ago",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
         _ => {
             let weeks = difference.whole_weeks();
             match weeks {
-                1 => "1 week ago".to_string(),
-                2..=4 => format!("{} weeks ago", weeks),
+                1 => localization::localized_str!("1 week ago").to_string(),
+                2..=4 => {
+        let __zed_i18n_arg_0 = format!("{}", weeks);
+        localization::format_message(
+            "{} weeks ago",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 _ => {
                     let month_diff = calculate_month_difference(timestamp, reference);
                     match month_diff {
-                        0..=1 => "1 month ago".to_string(),
-                        2..=11 => format!("{} months ago", month_diff),
+                        0..=1 => localization::localized_str!("1 month ago").to_string(),
+                        2..=11 => {
+        let __zed_i18n_arg_0 = format!("{}", month_diff);
+        localization::format_message(
+            "{} months ago",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                         // Match git's `show_date_relative` behavior: for dates under 5 years old,
                         // include both years and months so, for example, 22 months is shown as
                         // "1 year, 10 months ago" instead of being collapsed to "1 year ago".
@@ -300,7 +356,15 @@ fn format_relative_date(timestamp: OffsetDateTime, reference: OffsetDateTime) ->
                         // Beyond 5 years, round to the nearest year.
                         months => {
                             let years = (months + 6) / 12;
-                            format!("{years} years ago")
+                            {
+        let __zed_i18n_arg_0 = format!("{}", years);
+        localization::format_message(
+            "{years} years ago",
+            &[
+                ("years", __zed_i18n_arg_0)
+            ],
+        )
+    }
                         }
                     }
                 }
@@ -312,12 +376,36 @@ fn format_relative_date(timestamp: OffsetDateTime, reference: OffsetDateTime) ->
 fn format_compound_year_month(month_diff: usize) -> String {
     let years = month_diff / 12;
     let months = month_diff % 12;
-    let year_unit = if years == 1 { "year" } else { "years" };
+    let year_unit = if years == 1 { localization::localized_str!("year") } else { localization::localized_str!("years") };
     if months == 0 {
-        format!("{years} {year_unit} ago")
+        {
+        let __zed_i18n_arg_0 = format!("{}", years);
+        let __zed_i18n_arg_1 = format!("{}", year_unit);
+        localization::format_message(
+            "{years} {year_unit} ago",
+            &[
+                ("years", __zed_i18n_arg_0),
+                ("year_unit", __zed_i18n_arg_1)
+            ],
+        )
+    }
     } else {
-        let month_unit = if months == 1 { "month" } else { "months" };
-        format!("{years} {year_unit}, {months} {month_unit} ago")
+        let month_unit = if months == 1 { localization::localized_str!("month") } else { localization::localized_str!("months") };
+        {
+        let __zed_i18n_arg_0 = format!("{}", years);
+        let __zed_i18n_arg_1 = format!("{}", year_unit);
+        let __zed_i18n_arg_2 = format!("{}", months);
+        let __zed_i18n_arg_3 = format!("{}", month_unit);
+        localization::format_message(
+            "{years} {year_unit}, {months} {month_unit} ago",
+            &[
+                ("years", __zed_i18n_arg_0),
+                ("year_unit", __zed_i18n_arg_1),
+                ("months", __zed_i18n_arg_2),
+                ("month_unit", __zed_i18n_arg_3)
+            ],
+        )
+    }
     }
 }
 
@@ -389,9 +477,9 @@ fn format_timestamp_naive_date(
     let timestamp_local_date = timestamp_local.date();
 
     if timestamp_local_date == reference_local_date {
-        "Today".to_string()
+        localization::localized_str!("Today").to_string()
     } else if reference_local_date.previous_day() == Some(timestamp_local_date) {
-        "Yesterday".to_string()
+        localization::localized_str!("Yesterday").to_string()
     } else {
         match is_12_hour_time {
             true => format!(
@@ -443,9 +531,25 @@ pub fn format_timestamp_naive(
     let timestamp_local_date = timestamp_local.date();
 
     if timestamp_local_date == reference_local_date {
-        format!("Today at {}", formatted_time)
+        {
+        let __zed_i18n_arg_0 = format!("{}", formatted_time);
+        localization::format_message(
+            "Today at {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
     } else if reference_local_date.previous_day() == Some(timestamp_local_date) {
-        format!("Yesterday at {}", formatted_time)
+        {
+        let __zed_i18n_arg_0 = format!("{}", formatted_time);
+        localization::format_message(
+            "Yesterday at {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
     } else {
         let formatted_date = match is_12_hour_time {
             true => format!(

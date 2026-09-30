@@ -46,18 +46,18 @@ impl RenderOnce for SkillsIllustration {
                 h_flex()
                     .gap_2p5()
                     .child(skill_crease("img-gen".into(), "studio".into()))
-                    .child(skill_crease("frontend-design".into(), "global".into())),
+                    .child(skill_crease("frontend-design".into(), localization::localized_str!("global").into())),
             )
             .child(
                 h_flex()
                     .gap_2p5()
-                    .child(skill_crease("brainstorming".into(), "global".into()))
+                    .child(skill_crease("brainstorming".into(), localization::localized_str!("global").into()))
                     .child(skill_crease("borrow-checker-expert".into(), "zed".into())),
             )
             .child(
                 h_flex()
                     .gap_2p5()
-                    .child(skill_crease("grill-with-docs".into(), "global".into()))
+                    .child(skill_crease("grill-with-docs".into(), localization::localized_str!("global").into()))
                     .child(skill_crease("video-edit".into(), "studio".into())),
             );
 

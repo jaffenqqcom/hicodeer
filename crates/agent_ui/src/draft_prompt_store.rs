@@ -180,7 +180,15 @@ pub fn empty_draft_placeholder_label(
             .unwrap_or_else(|| SharedString::from(agent_id.to_string()))
     };
 
-    format!("New {} Thread", agent_name).into()
+    {
+        let __zed_i18n_arg_0 = format!("{}", agent_name);
+        localization::format_message(
+            "New {} Thread",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
 }
 
 #[cfg(test)]

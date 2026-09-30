@@ -17,6 +17,7 @@ doctest = false
 default = []
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 client.workspace = true
 cloud_api_types.workspace = true

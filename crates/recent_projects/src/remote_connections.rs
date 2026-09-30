@@ -314,18 +314,18 @@ pub async fn open_remote_project(
                         window.prompt(
                             PromptLevel::Critical,
                             match connection_options {
-                                RemoteConnectionOptions::Ssh(_) => "Failed to connect over SSH",
-                                RemoteConnectionOptions::Wsl(_) => "Failed to connect to WSL",
+                                RemoteConnectionOptions::Ssh(_) => localization::localized_str!("Failed to connect over SSH"),
+                                RemoteConnectionOptions::Wsl(_) => localization::localized_str!("Failed to connect to WSL"),
                                 RemoteConnectionOptions::Docker(_) => {
-                                    "Failed to connect to Dev Container"
+                                    localization::localized_str!("Failed to connect to Dev Container")
                                 }
                                 #[cfg(any(test, feature = "test-support"))]
                                 RemoteConnectionOptions::Mock(_) => {
-                                    "Failed to connect to mock server"
+                                    localization::localized_str!("Failed to connect to mock server")
                                 }
                             },
                             Some(&format!("{e:#}")),
-                            &["Retry", "Cancel"],
+                            &[localization::localized_str!("Retry"), localization::localized_str!("Cancel")],
                             cx,
                         )
                     })?
@@ -375,18 +375,18 @@ pub async fn open_remote_project(
                         window.prompt(
                             PromptLevel::Critical,
                             match connection_options {
-                                RemoteConnectionOptions::Ssh(_) => "Failed to connect over SSH",
-                                RemoteConnectionOptions::Wsl(_) => "Failed to connect to WSL",
+                                RemoteConnectionOptions::Ssh(_) => localization::localized_str!("Failed to connect over SSH"),
+                                RemoteConnectionOptions::Wsl(_) => localization::localized_str!("Failed to connect to WSL"),
                                 RemoteConnectionOptions::Docker(_) => {
-                                    "Failed to connect to Dev Container"
+                                    localization::localized_str!("Failed to connect to Dev Container")
                                 }
                                 #[cfg(any(test, feature = "test-support"))]
                                 RemoteConnectionOptions::Mock(_) => {
-                                    "Failed to connect to mock server"
+                                    localization::localized_str!("Failed to connect to mock server")
                                 }
                             },
                             Some(&format!("{e:#}")),
-                            &["Retry", "Cancel"],
+                            &[localization::localized_str!("Retry"), localization::localized_str!("Cancel")],
                             cx,
                         )
                     })?

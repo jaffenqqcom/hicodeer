@@ -351,11 +351,11 @@ impl Render for Onboarding {
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        Headline::new("Welcome to Zed")
+                                                        Headline::new(localization::localized_str!("Welcome to Zed"))
                                                             .size(HeadlineSize::Small),
                                                     )
                                                     .child(
-                                                        Label::new("The editor for what's next")
+                                                        Label::new(localization::localized_str!("The editor for what's next"))
                                                             .color(Color::Muted)
                                                             .size(LabelSize::Small)
                                                             .italic(),
@@ -363,7 +363,7 @@ impl Render for Onboarding {
                                             ),
                                     )
                                     .child({
-                                        Button::new("finish_setup", "Finish Setup")
+                                        Button::new("finish_setup", localization::localized_str!("Finish Setup"))
                                             .style(ButtonStyle::Filled)
                                             .size(ButtonSize::Medium)
                                             .width(rems_from_px(200_f32))
@@ -397,7 +397,7 @@ impl Item for Onboarding {
     type Event = ItemEvent;
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "Onboarding".into()
+        localization::localized_str!("Onboarding").into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -484,9 +484,17 @@ pub async fn handle_import_vscode_settings(
                 zlog::error!("{err:?}");
                 let _ = cx.prompt(
                     gpui::PromptLevel::Info,
-                    &format!("Could not find or load a {source} settings file"),
+                    &{
+        let __zed_i18n_arg_0 = format!("{}", source);
+        localization::format_message(
+            "Could not find or load a {source} settings file",
+            &[
+                ("source", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     None,
-                    &["OK"],
+                    &[localization::localized_str!("OK")],
                 );
                 return;
             }
@@ -495,14 +503,19 @@ pub async fn handle_import_vscode_settings(
     if !skip_prompt {
         let prompt = cx.prompt(
             gpui::PromptLevel::Warning,
-            &format!(
-                "Importing {} settings may overwrite your existing settings. \
-                Will import settings from {}",
-                vscode_settings.source,
-                truncate_and_remove_front(&vscode_settings.path.to_string_lossy(), 128),
-            ),
+            &{
+        let __zed_i18n_arg_0 = format!("{}", vscode_settings.source);
+        let __zed_i18n_arg_1 = format!("{}", truncate_and_remove_front(&vscode_settings.path.to_string_lossy(), 128));
+        localization::format_message(
+            "Importing {} settings may overwrite your existing settings. Will import settings from {}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    },
             None,
-            &["Import", "Cancel"],
+            &[localization::localized_str!("Import"), localization::localized_str!("Cancel")],
         );
         let result = cx.spawn(async move |_| prompt.await.ok()).await;
         if result != Some(0) {
@@ -527,7 +540,15 @@ pub async fn handle_import_vscode_settings(
         .update_in(cx, |workspace, _, cx| match result {
             Ok(_) => {
                 let confirmation_toast = StatusToast::new(
-                    format!("Your {} settings were successfully imported.", source),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", source);
+        localization::format_message(
+            "Your {} settings were successfully imported.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     cx,
                     |this, _| {
                         this.icon(
@@ -550,7 +571,7 @@ pub async fn handle_import_vscode_settings(
             }
             Err(_) => {
                 let error_toast = StatusToast::new(
-                    "Failed to import settings. See log for details",
+                    localization::localized_str!("Failed to import settings. See log for details"),
                     cx,
                     |this, _| {
                         this.icon(
@@ -558,7 +579,7 @@ pub async fn handle_import_vscode_settings(
                                 .size(IconSize::Small)
                                 .color(Color::Error),
                         )
-                        .action("Open Log", |window, cx| {
+                        .action(localization::localized_str!("Open Log"), |window, cx| {
                             window.dispatch_action(workspace::OpenLog.boxed_clone(), cx)
                         })
                         .dismiss_button(true)

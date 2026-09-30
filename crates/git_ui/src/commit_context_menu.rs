@@ -51,15 +51,31 @@ pub(crate) fn commit_context_menu(
         cx,
     );
     let header = match &ref_name {
-        Some(ref_name) => format!("Ref {ref_name}"),
-        None => format!("Commit {sha_short}"),
+        Some(ref_name) => {
+        let __zed_i18n_arg_0 = format!("{}", ref_name);
+        localization::format_message(
+            "Ref {ref_name}",
+            &[
+                ("ref_name", __zed_i18n_arg_0)
+            ],
+        )
+    },
+        None => {
+        let __zed_i18n_arg_0 = format!("{}", sha_short);
+        localization::format_message(
+            "Commit {sha_short}",
+            &[
+                ("sha_short", __zed_i18n_arg_0)
+            ],
+        )
+    },
     };
 
     ContextMenu::build(window, cx, move |context_menu, _, _| {
         context_menu
             .context(focus_handle)
             .header(header)
-            .entry("View Diff", Some(OpenCommitView.boxed_clone()), {
+            .entry(localization::localized_str!("View Diff"), Some(OpenCommitView.boxed_clone()), {
                 let repository = repository.clone();
                 let workspace = workspace.clone();
                 move |window, cx| {
@@ -78,21 +94,21 @@ pub(crate) fn commit_context_menu(
                 }
             })
             .entry(
-                "Copy SHA",
+                localization::localized_str!("Copy SHA"),
                 Some(CopyCommitSha.boxed_clone()),
                 move |_window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(sha.to_string()));
                 },
             )
             .when_some(ref_name.clone(), |menu, ref_name| {
-                menu.entry("Copy Ref Name", None, move |_window, cx| {
+                menu.entry(localization::localized_str!("Copy Ref Name"), None, move |_window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(ref_name.to_string()));
                 })
             })
             .when(ref_name.is_none(), |menu| {
                 menu.map(|menu| {
                     let tag_names = commit.tag_names.clone();
-                    let copy_tag_label = "Copy Tag";
+                    let copy_tag_label = localization::localized_str!("Copy Tag");
 
                     match tag_names.as_slice() {
                         [] => menu.item(
@@ -102,7 +118,17 @@ pub(crate) fn commit_context_menu(
                         ),
                         [tag_name] => {
                             let tag_name = tag_name.clone();
-                            let label = format!("{copy_tag_label}: {tag_name}");
+                            let label = {
+        let __zed_i18n_arg_0 = format!("{}", copy_tag_label);
+        let __zed_i18n_arg_1 = format!("{}", tag_name);
+        localization::format_message(
+            "{copy_tag_label}: {tag_name}",
+            &[
+                ("copy_tag_label", __zed_i18n_arg_0),
+                ("tag_name", __zed_i18n_arg_1)
+            ],
+        )
+    };
                             menu.entry(
                                 label,
                                 Some(CopyCommitTag.boxed_clone()),
@@ -130,7 +156,7 @@ pub(crate) fn commit_context_menu(
                 })
             })
             .when(source == CommitContextMenuSource::GitPanel, |menu| {
-                menu.entry("Show in Git Graph", None, move |window, cx| {
+                menu.entry(localization::localized_str!("Show in Git Graph"), None, move |window, cx| {
                     window.dispatch_action(
                         Box::new(crate::git_graph::OpenAtCommit {
                             sha: sha.to_string(),
@@ -140,11 +166,11 @@ pub(crate) fn commit_context_menu(
                 })
             })
             .map(|mut menu| {
-                menu = menu.separator().header("Custom Commands");
+                menu = menu.separator().header(localization::localized_str!("Custom Commands"));
 
                 if git_tasks.is_empty() {
                     return menu.item(
-                        ContextMenuEntry::new("Learn More")
+                        ContextMenuEntry::new(localization::localized_str!("Learn More"))
                             .icon(IconName::ArrowUpRight)
                             .icon_color(Color::Muted)
                             .icon_position(IconPosition::End)

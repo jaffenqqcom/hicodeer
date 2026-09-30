@@ -211,17 +211,17 @@ enum StashKind {
 impl StashKind {
     fn title(self) -> &'static str {
         match self {
-            StashKind::All => "Stash All",
-            StashKind::Tracked => "Stash Tracked",
-            StashKind::Staged => "Stash Staged",
+            StashKind::All => localization::localized_str!("Stash All"),
+            StashKind::Tracked => localization::localized_str!("Stash Tracked"),
+            StashKind::Staged => localization::localized_str!("Stash Staged"),
         }
     }
 
     fn error_action(self) -> &'static str {
         match self {
-            StashKind::All => "stash",
-            StashKind::Tracked => "stash tracked",
-            StashKind::Staged => "stash staged",
+            StashKind::All => localization::localized_str!("stash"),
+            StashKind::Tracked => localization::localized_str!("stash tracked"),
+            StashKind::Staged => localization::localized_str!("stash staged"),
         }
     }
 }
@@ -243,7 +243,7 @@ impl StashMessageModal {
     ) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Optionally provide a stash message", window, cx);
+            editor.set_placeholder_text(localization::localized_str!("Optionally provide a stash message"), window, cx);
             editor
         });
         Self {
@@ -314,17 +314,17 @@ fn git_panel_context_menu(
     ContextMenu::build(window, cx, |context_menu, _, _| {
         context_menu
             .context(focus_handle.clone())
-            .action_disabled_when(!has_unstaged_changes, "Stage All", StageAll.boxed_clone())
-            .action_disabled_when(!has_staged_changes, "Unstage All", UnstageAll.boxed_clone())
+            .action_disabled_when(!has_unstaged_changes, localization::localized_str!("Stage All"), StageAll.boxed_clone())
+            .action_disabled_when(!has_staged_changes, localization::localized_str!("Unstage All"), UnstageAll.boxed_clone())
             .action_disabled_when(
                 !has_staged_tracked_changes,
-                "Restore All Changes",
+                localization::localized_str!("Restore All Changes"),
                 RestoreTrackedFiles.boxed_clone(),
             )
             .separator()
             .action_disabled_when(
                 !(has_new_changes || has_tracked_changes),
-                "Stash All",
+                localization::localized_str!("Stash All"),
                 StashAll.boxed_clone(),
             )
             // Offer the stash variant that matches how the list is currently grouped,
@@ -332,34 +332,34 @@ fn git_panel_context_menu(
             .when(group_by == GitPanelGroupBy::Status, |context_menu| {
                 context_menu.action_disabled_when(
                     !has_tracked_changes,
-                    "Stash Tracked",
+                    localization::localized_str!("Stash Tracked"),
                     StashTracked.boxed_clone(),
                 )
             })
             .when(group_by == GitPanelGroupBy::Staging, |context_menu| {
                 context_menu.action_disabled_when(
                     !has_staged_changes,
-                    "Stash Staged",
+                    localization::localized_str!("Stash Staged"),
                     StashStaged.boxed_clone(),
                 )
             })
-            .action_disabled_when(!has_stash_items, "Stash Pop", StashPop.boxed_clone())
-            .action("View Stash", zed_actions::git::ViewStash.boxed_clone())
+            .action_disabled_when(!has_stash_items, localization::localized_str!("Stash Pop"), StashPop.boxed_clone())
+            .action(localization::localized_str!("View Stash"), zed_actions::git::ViewStash.boxed_clone())
             .when(include_copy_paths, |context_menu| {
                 context_menu
                     .separator()
-                    .action("Copy Path", CopyPath.boxed_clone())
-                    .action("Copy Relative Path", CopyRelativePath.boxed_clone())
+                    .action(localization::localized_str!("Copy Path"), CopyPath.boxed_clone())
+                    .action(localization::localized_str!("Copy Relative Path"), CopyRelativePath.boxed_clone())
             })
             .separator()
             .action_disabled_when(
                 !has_staged_tracked_changes,
-                "Discard Tracked Changes",
+                localization::localized_str!("Discard Tracked Changes"),
                 RestoreTrackedFiles.boxed_clone(),
             )
             .action_disabled_when(
                 !has_new_changes,
-                "Trash Untracked Files",
+                localization::localized_str!("Trash Untracked Files"),
                 TrashUntrackedFiles.boxed_clone(),
             )
     })
@@ -384,7 +384,7 @@ fn git_panel_view_options_menu(
             .header("View")
             .item({
                 let view_options_menu_state = view_options_menu_state.clone();
-                ContextMenuEntry::new("List")
+                ContextMenuEntry::new(localization::localized_str!("List"))
                     .toggle(IconPosition::End, !state.tree_view)
                     .handler(move |window, cx| {
                         if state.tree_view {
@@ -398,7 +398,7 @@ fn git_panel_view_options_menu(
             })
             .item({
                 let view_options_menu_state = view_options_menu_state.clone();
-                ContextMenuEntry::new("Tree")
+                ContextMenuEntry::new(localization::localized_str!("Tree"))
                     .toggle(IconPosition::End, state.tree_view)
                     .handler(move |window, cx| {
                         if !state.tree_view {
@@ -415,7 +415,7 @@ fn git_panel_view_options_menu(
                     .header("Sort By")
                     .item({
                         let view_options_menu_state = view_options_menu_state.clone();
-                        ContextMenuEntry::new("Path")
+                        ContextMenuEntry::new(localization::localized_str!("Path"))
                             .toggle(IconPosition::End, state.sort_by == GitPanelSortBy::Path)
                             .handler(move |window, cx| {
                                 if !state.tree_view {
@@ -429,7 +429,7 @@ fn git_panel_view_options_menu(
                     })
                     .item({
                         let view_options_menu_state = view_options_menu_state.clone();
-                        ContextMenuEntry::new("Name")
+                        ContextMenuEntry::new(localization::localized_str!("Name"))
                             .toggle(IconPosition::End, state.sort_by == GitPanelSortBy::Name)
                             .handler(move |window, cx| {
                                 if !state.tree_view {
@@ -446,7 +446,7 @@ fn git_panel_view_options_menu(
             .header("Group By")
             .item({
                 let view_options_menu_state = view_options_menu_state.clone();
-                ContextMenuEntry::new("None")
+                ContextMenuEntry::new(localization::localized_str!("None"))
                     .toggle(IconPosition::End, state.group_by == GitPanelGroupBy::None)
                     .handler(move |window, cx| {
                         if state.group_by != GitPanelGroupBy::None {
@@ -460,7 +460,7 @@ fn git_panel_view_options_menu(
             })
             .item({
                 let view_options_menu_state = view_options_menu_state.clone();
-                ContextMenuEntry::new("Tracked & Untracked")
+                ContextMenuEntry::new(localization::localized_str!("Tracked & Untracked"))
                     .toggle(IconPosition::End, state.group_by == GitPanelGroupBy::Status)
                     .handler(move |window, cx| {
                         if state.group_by != GitPanelGroupBy::Status {
@@ -474,7 +474,7 @@ fn git_panel_view_options_menu(
             })
             .item({
                 let view_options_menu_state = view_options_menu_state.clone();
-                ContextMenuEntry::new("Staged & Unstaged")
+                ContextMenuEntry::new(localization::localized_str!("Staged & Unstaged"))
                     .toggle(
                         IconPosition::End,
                         state.group_by == GitPanelGroupBy::Staging,
@@ -692,11 +692,11 @@ impl GitHeaderEntry {
     }
     pub fn title(&self) -> &'static str {
         match self.header {
-            Section::Conflict => "Conflicts",
-            Section::Tracked => "Tracked",
-            Section::New => "Untracked",
-            Section::Staged => "Staged",
-            Section::Unstaged => "Unstaged",
+            Section::Conflict => localization::localized_str!("Conflicts"),
+            Section::Tracked => localization::localized_str!("Tracked"),
+            Section::New => localization::localized_str!("Untracked"),
+            Section::Staged => localization::localized_str!("Staged"),
+            Section::Unstaged => localization::localized_str!("Unstaged"),
         }
     }
 }
@@ -1230,7 +1230,7 @@ pub(crate) fn commit_message_editor(
     commit_editor.set_use_modal_editing(true);
     commit_editor.set_show_wrap_guides(false, cx);
     commit_editor.set_show_indent_guides(false, cx);
-    let placeholder = placeholder.unwrap_or("Enter commit message".into());
+    let placeholder = placeholder.unwrap_or(localization::localized_str!("Enter commit message").into());
     commit_editor.set_placeholder_text(&placeholder, window, cx);
     commit_editor.set_custom_context_menu(|editor, _point, window, cx| {
         let has_selection = editor.has_non_empty_selection(&editor.display_snapshot(cx));
@@ -1238,9 +1238,9 @@ pub(crate) fn commit_message_editor(
 
         Some(ContextMenu::build(window, cx, |menu, _, _| {
             menu.context(focus_handle)
-                .action_disabled_when(!has_selection, "Cut", Box::new(editor::actions::Cut))
-                .action_disabled_when(!has_selection, "Copy", Box::new(editor::actions::Copy))
-                .action("Paste", Box::new(editor::actions::Paste))
+                .action_disabled_when(!has_selection, localization::localized_str!("Cut"), Box::new(editor::actions::Cut))
+                .action_disabled_when(!has_selection, localization::localized_str!("Copy"), Box::new(editor::actions::Copy))
+                .action(localization::localized_str!("Paste"), Box::new(editor::actions::Paste))
         }))
     });
     commit_editor
@@ -2768,13 +2768,13 @@ impl GitPanel {
                 let entry = tracked.first().or_else(|| untracked.first())?;
 
                 let (message, confirm_text) = if entry.status.is_deleted() {
-                    ("Are you sure you want to restore ", "Restore File")
+                    (localization::localized_str!("Are you sure you want to restore "), localization::localized_str!("Restore File"))
                 } else if entry.status.is_created() {
                     ("Trash ", "Trash")
                 } else {
                     (
-                        "Are you sure you want to discard changes to ",
-                        "Discard Changes",
+                        localization::localized_str!("Are you sure you want to discard changes to "),
+                        localization::localized_str!("Discard Changes"),
                     )
                 };
 
@@ -2791,7 +2791,7 @@ impl GitPanel {
                         )
                     ),
                     None,
-                    &[confirm_text, "Cancel"],
+                    &[confirm_text, localization::localized_str!("Cancel")],
                     cx,
                 ))
             } else {
@@ -2814,7 +2814,7 @@ impl GitPanel {
                     PromptLevel::Warning,
                     &message,
                     None,
-                    &[confirm_text, "Cancel"],
+                    &[confirm_text, localization::localized_str!("Cancel")],
                     cx,
                 ))
             };
@@ -2973,7 +2973,15 @@ impl GitPanel {
             .take(5)
             .join("\n");
         if entries.len() > 5 {
-            details.push_str(&format!("\nand {} more…", entries.len() - 5))
+            details.push_str(&{
+        let __zed_i18n_arg_0 = format!("{}", entries.len() - 5);
+        localization::format_message(
+            "\nand {} more…",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
         }
 
         #[derive(strum::EnumIter, strum::VariantNames)]
@@ -2983,7 +2991,7 @@ impl GitPanel {
             Cancel,
         }
         let prompt = prompt(
-            "Discard changes to these files?",
+            localization::localized_str!("Discard changes to these files?"),
             Some(&details),
             window,
             cx,
@@ -3032,10 +3040,18 @@ impl GitPanel {
             .join("\n");
 
         if to_delete.len() > 5 {
-            details.push_str(&format!("\nand {} more…", to_delete.len() - 5))
+            details.push_str(&{
+        let __zed_i18n_arg_0 = format!("{}", to_delete.len() - 5);
+        localization::format_message(
+            "\nand {} more…",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
         }
 
-        let prompt = prompt("Trash these files?", Some(&details), window, cx);
+        let prompt = prompt(localization::localized_str!("Trash these files?"), Some(&details), window, cx);
         cx.spawn_in(window, async move |this, cx| {
             match prompt.await? {
                 TrashCancel::Trash => {}
@@ -3071,7 +3087,7 @@ impl GitPanel {
             }
             Ok(())
         })
-        .detach_and_prompt_err("Failed to trash files", window, cx, |e, _, _| {
+        .detach_and_prompt_err(localization::localized_str!("Failed to trash files"), window, cx, |e, _, _| {
             Some(format!("{e}"))
         });
     }
@@ -3715,7 +3731,7 @@ impl GitPanel {
             return;
         };
         let error_spawn = |message, window: &mut Window, cx: &mut App| {
-            let prompt = window.prompt(PromptLevel::Warning, message, None, &["OK"], cx);
+            let prompt = window.prompt(PromptLevel::Warning, message, None, &[localization::localized_str!("OK")], cx);
             cx.spawn(async move |_| {
                 prompt.await.ok();
             })
@@ -3724,7 +3740,7 @@ impl GitPanel {
 
         if self.has_unstaged_conflicts() {
             error_spawn(
-                "There are still conflicts. You must stage these before committing",
+                localization::localized_str!("There are still conflicts. You must stage these before committing"),
                 window,
                 cx,
             );
@@ -3760,7 +3776,7 @@ impl GitPanel {
                 .collect::<Vec<_>>();
 
             if changed_files.is_empty() && !options.amend {
-                error_spawn("No changes to commit", window, cx);
+                error_spawn(localization::localized_str!("No changes to commit"), window, cx);
                 return;
             }
 
@@ -3853,7 +3869,7 @@ impl GitPanel {
         let mut cx = window.to_async(cx);
 
         async move {
-            let repo = repo.context("No active repository")?;
+            let repo = repo.context(localization::localized_str!("No active repository"))?;
 
             let pushed_to: Vec<SharedString> = repo
                 .update(&mut cx, |repo, _| repo.check_for_pushed_commits())
@@ -3868,10 +3884,15 @@ impl GitPanel {
                     Uncommit,
                     Cancel,
                 }
-                let detail = format!(
-                    "This commit was already pushed to {}.",
-                    pushed_to.into_iter().join(", ")
-                );
+                let detail = {
+        let __zed_i18n_arg_0 = format!("{}", pushed_to.into_iter().join(", "));
+        localization::format_message(
+            "This commit was already pushed to {}.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    };
                 let result = cx
                     .update(|window, cx| prompt("Are you sure?", Some(&detail), window, cx))?
                     .await?;
@@ -3905,11 +3926,11 @@ impl GitPanel {
         }?;
 
         let action_text = if git_status_entry.status.is_deleted() {
-            Some("Delete")
+            Some(localization::localized_str!("Delete"))
         } else if git_status_entry.status.is_created() {
-            Some("Create")
+            Some(localization::localized_str!("Create"))
         } else if git_status_entry.status.is_modified() {
-            Some("Update")
+            Some(localization::localized_str!("Update"))
         } else {
             None
         }?;
@@ -4127,7 +4148,15 @@ impl GitPanel {
                 if let Some(workspace) = self.workspace.upgrade() {
                     workspace.update(cx, |workspace, cx| {
                         workspace
-                            .show_error(format!("Failed to generate commit message: {error}"), cx);
+                            .show_error({
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Failed to generate commit message: {error}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx);
                     });
                 }
                 return;
@@ -4320,7 +4349,7 @@ impl GitPanel {
             let selection = cx
                 .update(|window, cx| {
                     picker_prompt::prompt(
-                        "Pick which remote to fetch",
+                        localization::localized_str!("Pick which remote to fetch"),
                         remotes.iter().map(|r| r.name()).collect(),
                         workspace,
                         window,
@@ -4419,9 +4448,9 @@ impl GitPanel {
         } else if worktrees.is_empty() {
             let result = window.prompt(
                 PromptLevel::Warning,
-                "Unable to initialize a git repository",
-                Some("Open a directory first"),
-                &["OK"],
+                localization::localized_str!("Unable to initialize a git repository"),
+                Some(localization::localized_str!("Open a directory first")),
+                &[localization::localized_str!("OK")],
                 cx,
             );
             cx.background_executor()
@@ -4447,7 +4476,7 @@ impl GitPanel {
                 })
                 .collect_vec();
             let prompt = picker_prompt::prompt(
-                "Where would you like to initialize this git repository?",
+                localization::localized_str!("Where would you like to initialize this git repository?"),
                 worktree_directories,
                 self.workspace.clone(),
                 window,
@@ -4687,7 +4716,7 @@ impl GitPanel {
             let repo = self
                 .active_repository
                 .clone()
-                .ok_or_else(|| anyhow::anyhow!("No active repository"))?;
+                .ok_or_else(|| anyhow::anyhow!(localization::localized_str!("No active repository")))?;
 
             let (branch, remote_origin, remote_upstream) = {
                 let repository = repo.read(cx);
@@ -4811,7 +4840,7 @@ impl GitPanel {
         let mut cx = window.to_async(cx);
 
         async move {
-            let repo = repo.context("No active repository")?;
+            let repo = repo.context(localization::localized_str!("No active repository"))?;
             let current_remotes: Vec<Remote> = repo
                 .update(&mut cx, |repo, _| {
                     let current_branch = if always_select {
@@ -4831,7 +4860,7 @@ impl GitPanel {
             let selection = cx
                 .update(|window, cx| {
                     picker_prompt::prompt(
-                        "Pick which remote to push to",
+                        localization::localized_str!("Pick which remote to push to"),
                         current_remotes.clone(),
                         workspace,
                         window,
@@ -5693,7 +5722,7 @@ impl GitPanel {
         self.select_last_entry_if_out_of_bounds(window, cx);
 
         let suggested_commit_message = self.suggest_commit_message(cx);
-        let placeholder_text = suggested_commit_message.unwrap_or("Enter commit message".into());
+        let placeholder_text = suggested_commit_message.unwrap_or(localization::localized_str!("Enter commit message").into());
 
         self.commit_editor.update(cx, |editor, cx| {
             editor.set_placeholder_text(&placeholder_text, window, cx)
@@ -5889,7 +5918,7 @@ impl GitPanel {
                         workspace.show_toast(
                             workspace::Toast::new(
                                 NotificationId::unique::<GitJobQueueToast>(),
-                                "No active repository",
+                                localization::localized_str!("No active repository"),
                             )
                             .autohide(),
                             cx,
@@ -5974,7 +6003,15 @@ impl GitPanel {
     {
         if let Ok(Some(workspace)) = weak_this.update(cx, |this, _cx| this.workspace.upgrade()) {
             let _ = workspace.update(cx, |workspace, cx| {
-                workspace.show_error(format!("Failed to generate commit message: {err}"), cx);
+                workspace.show_error({
+        let __zed_i18n_arg_0 = format!("{}", err);
+        localization::format_message(
+            "Failed to generate commit message: {err}",
+            &[
+                ("err", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx);
             });
         }
     }
@@ -6012,14 +6049,14 @@ impl GitPanel {
                         // output of a push command, we'll simply dispatch the
                         // generic `CreatePullRequest` action when the toast
                         // button is pressed.
-                        this.action("Create Pull Request", move |window, cx| {
+                        this.action(localization::localized_str!("Create Pull Request"), move |window, cx| {
                             window
                                 .dispatch_action(Box::new(zed_actions::git::CreatePullRequest), cx);
                         })
                     }
                     (Toast, false) => this,
                     (ToastWithLog { output }, false) => {
-                        this.action("View Log", move |window, cx| {
+                        this.action(localization::localized_str!("View Log"), move |window, cx| {
                             let output = output.clone();
                             let output =
                                 format!("stdout:\n{}\nstderr:\n{}", output.stdout, output.stderr);
@@ -6118,7 +6155,7 @@ impl GitPanel {
             .trigger_with_tooltip(
                 IconButton::new("view-options-menu-trigger", IconName::Filter)
                     .icon_size(IconSize::Small),
-                Tooltip::text("View Options"),
+                Tooltip::text(localization::localized_str!("View Options")),
             )
             .menu(move |window, cx| {
                 Some(git_panel_view_options_menu(
@@ -6147,14 +6184,14 @@ impl GitPanel {
                             .icon_color(Color::Error)
                             .icon_size(IconSize::Small)
                             .style(ButtonStyle::Tinted(TintColor::Error))
-                            .tooltip(Tooltip::text("Cancel Commit Message Generation"))
+                            .tooltip(Tooltip::text(localization::localized_str!("Cancel Commit Message Generation")))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.generate_commit_message_task.take();
                                 cx.notify();
                             })),
                     )
                     .child(
-                        Label::new("Generating Commit…")
+                        Label::new(localization::localized_str!("Generating Commit…"))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
@@ -6189,10 +6226,10 @@ impl GitPanel {
         } else {
             button.tooltip(move |_window, cx| {
                 if !can_commit {
-                    Tooltip::simple("No Changes to Commit", cx)
+                    Tooltip::simple(localization::localized_str!("No Changes to Commit"), cx)
                 } else {
                     Tooltip::for_action_in(
-                        "Generate Commit Message",
+                        localization::localized_str!("Generate Commit Message"),
                         &git::GenerateCommitMessage,
                         &editor_focus_handle,
                         cx,
@@ -6208,9 +6245,9 @@ impl GitPanel {
         let potential_co_authors = self.potential_co_authors(cx);
 
         let (tooltip_label, icon) = if self.add_coauthors {
-            ("Remove co-authored-by", IconName::Person)
+            (localization::localized_str!("Remove co-authored-by"), IconName::Person)
         } else {
-            ("Add co-authored-by", IconName::UserCheck)
+            (localization::localized_str!("Add co-authored-by"), IconName::UserCheck)
         };
 
         if potential_co_authors.is_empty() {
@@ -6277,7 +6314,7 @@ impl GitPanel {
                             })
                             .when(has_previous_commit, |this| {
                                 this.toggleable_entry(
-                                    "Amend",
+                                    localization::localized_str!("Amend"),
                                     amend,
                                     IconPosition::Start,
                                     Some(Box::new(Amend)),
@@ -6294,14 +6331,14 @@ impl GitPanel {
                                 )
                             })
                             .toggleable_entry(
-                                "Signoff",
+                                localization::localized_str!("Signoff"),
                                 signoff,
                                 IconPosition::Start,
                                 Some(Box::new(Signoff)),
                                 move |window, cx| window.dispatch_action(Box::new(Signoff), cx),
                             )
                             .item(
-                                ContextMenuEntry::new("Skip Hooks")
+                                ContextMenuEntry::new(localization::localized_str!("Skip Hooks"))
                                     .toggleable(IconPosition::Start, skip_hooks)
                                     .action(Box::new(SkipHooks))
                                     .handler(move |window, cx| {
@@ -6327,17 +6364,17 @@ impl GitPanel {
 
     pub fn configure_commit_button(&self, cx: &mut Context<Self>) -> (bool, &'static str) {
         if self.generate_commit_message_task.is_some() {
-            (false, "Generating commit message...")
+            (false, localization::localized_str!("Generating commit message..."))
         } else if self.has_unstaged_conflicts() {
-            (false, "You must resolve conflicts before committing")
+            (false, localization::localized_str!("You must resolve conflicts before committing"))
         } else if !self.has_staged_changes() && !self.has_tracked_changes() && !self.amend_pending {
-            (false, "No changes to commit")
+            (false, localization::localized_str!("No changes to commit"))
         } else if self.pending_commit.is_some() {
-            (false, "Commit in progress")
+            (false, localization::localized_str!("Commit in progress"))
         } else if !self.has_commit_message(cx) {
-            (false, "No commit message")
+            (false, localization::localized_str!("No commit message"))
         } else if !self.has_write_access(cx) {
-            (false, "You do not have write access to this project")
+            (false, localization::localized_str!("You do not have write access to this project"))
         } else {
             (true, self.commit_button_title())
         }
@@ -6346,16 +6383,16 @@ impl GitPanel {
     pub fn commit_button_title(&self) -> &'static str {
         if self.amend_pending {
             if self.has_staged_changes() {
-                "Amend"
+                localization::localized_str!("Amend")
             } else if self.has_tracked_changes() {
-                "Amend Tracked"
+                localization::localized_str!("Amend Tracked")
             } else {
-                "Amend"
+                localization::localized_str!("Amend")
             }
         } else if self.has_staged_changes() {
-            "Commit"
+            localization::localized_str!("Commit")
         } else {
-            "Commit Tracked"
+            localization::localized_str!("Commit Tracked")
         }
     }
 
@@ -6446,9 +6483,9 @@ impl GitPanel {
 
     fn render_git_changes_actions_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (text, action, stage, tooltip) = if self.primary_changes_action_stages() {
-            ("Stage All", StageAll.boxed_clone(), true, "git add --all")
+            (localization::localized_str!("Stage All"), StageAll.boxed_clone(), true, "git add --all")
         } else {
-            ("Unstage All", UnstageAll.boxed_clone(), false, "git reset")
+            (localization::localized_str!("Unstage All"), UnstageAll.boxed_clone(), false, "git reset")
         };
 
         SplitButton::new(
@@ -6511,7 +6548,7 @@ impl GitPanel {
                                         .color(Color::Muted),
                                 )
                                 .child(
-                                    Label::new("View Diff")
+                                    Label::new(localization::localized_str!("View Diff"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -6528,7 +6565,7 @@ impl GitPanel {
                                 ),
                         )
                         .tooltip(Tooltip::for_action_title_in(
-                            "View Diff",
+                            localization::localized_str!("View Diff"),
                             &Diff,
                             &self.focus_handle,
                         ))
@@ -6621,7 +6658,7 @@ impl GitPanel {
                     .tooltip({
                         move |_window, cx| {
                             Tooltip::for_action_in(
-                                "Open Commit Modal",
+                                localization::localized_str!("Open Commit Modal"),
                                 &git::ExpandCommitEditor,
                                 &editor_focus_handle,
                                 cx,
@@ -6636,9 +6673,9 @@ impl GitPanel {
             )
             .child({
                 let (icon, label) = if self.commit_editor_expanded {
-                    (IconName::Minimize, "Collapse Commit Editor")
+                    (IconName::Minimize, localization::localized_str!("Collapse Commit Editor"))
                 } else {
-                    (IconName::Maximize, "Expand Commit Editor")
+                    (IconName::Maximize, localization::localized_str!("Expand Commit Editor"))
                 };
                 let focus_handle = self.focus_handle.clone();
 
@@ -6684,9 +6721,15 @@ impl GitPanel {
                                 .color(Color::Warning),
                         )
                         .child(
-                            Label::new(format!(
-                                "Commit message title exceeds {max_title_length}-character limit."
-                            ))
+                            Label::new({
+        let __zed_i18n_arg_0 = format!("{}", max_title_length);
+        localization::format_message(
+            "Commit message title exceeds {max_title_length}-character limit.",
+            &[
+                ("max_title_length", __zed_i18n_arg_0)
+            ],
+        )
+    })
                             .size(LabelSize::Small),
                         ),
                 )
@@ -6844,13 +6887,13 @@ impl GitPanel {
                     .overflow_hidden()
                     .max_w(relative(0.85))
                     .child(
-                        Label::new("This will update your most recent commit.")
+                        Label::new(localization::localized_str!("This will update your most recent commit."))
                             .size(LabelSize::Small)
                             .truncate(),
                     ),
             )
             .child(
-                Button::new("cancel", "Cancel")
+                Button::new("cancel", localization::localized_str!("Cancel"))
                     .label_size(LabelSize::Small)
                     .layer(ElevationIndex::ModalSurface)
                     .on_click(cx.listener(|this, _, _, cx| this.set_amend_pending(false, cx))),
@@ -6927,7 +6970,7 @@ impl GitPanel {
                                     .icon_size(IconSize::Small)
                                     .tooltip(move |_window, cx| {
                                         Tooltip::with_meta(
-                                            "Uncommit",
+                                            localization::localized_str!("Uncommit"),
                                             Some(&git::Uncommit),
                                             if has_unstaged {
                                                 "git reset HEAD^ --soft"
@@ -6949,7 +6992,7 @@ impl GitPanel {
                                 .icon_size(IconSize::Small)
                                 .tooltip(|_window, cx| {
                                     Tooltip::for_action(
-                                        "Open Git Graph",
+                                        localization::localized_str!("Open Git Graph"),
                                         &crate::git_graph::Open,
                                         cx,
                                     )
@@ -6997,7 +7040,15 @@ impl GitPanel {
                     )
                 })
                 .tooltip(Tooltip::for_action_title_in(
-                    format!("Toggle {} Tab", label),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", label);
+        localization::format_message(
+            "Toggle {} Tab",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     tooltip_action.as_ref(),
                     &focus_handle,
                 ))
@@ -7014,7 +7065,7 @@ impl GitPanel {
                 ElementId::Name("changes-tab".into()),
                 active_tab == GitPanelTab::Changes,
                 true,
-                "Changes".into(),
+                localization::localized_str!("Changes").into(),
                 GitPanelTab::Changes,
                 ActivateChangesTab.boxed_clone(),
             ))
@@ -7027,7 +7078,7 @@ impl GitPanel {
                 ElementId::Name("history-tab".into()),
                 active_tab != GitPanelTab::Changes,
                 false,
-                "History".into(),
+                localization::localized_str!("History").into(),
                 GitPanelTab::History,
                 ActivateHistoryTab.boxed_clone(),
             ))
@@ -7038,20 +7089,20 @@ impl GitPanel {
             let has_repo = self.active_repository.is_some();
             match &self.commit_history {
                 _ if !has_repo => {
-                    this.child(Self::render_history_placeholder("No repository found"))
+                    this.child(Self::render_history_placeholder(localization::localized_str!("No repository found")))
                 }
                 CommitHistory::Error(_) => this.child(Self::render_history_placeholder(
-                    "Failed to load commit history",
+                    localization::localized_str!("Failed to load commit history"),
                 )),
                 CommitHistory::Loading => {
-                    this.child(Self::render_history_placeholder("Loading Commit History…"))
+                    this.child(Self::render_history_placeholder(localization::localized_str!("Loading Commit History…")))
                 }
                 CommitHistory::Loaded(entries) if entries.is_empty() => {
-                    this.child(Self::render_history_placeholder("No commits yet"))
+                    this.child(Self::render_history_placeholder(localization::localized_str!("No commits yet")))
                 }
                 CommitHistory::Loaded(_) => match self.render_commit_history(window, cx) {
                     Some(history) => this.child(history),
-                    None => this.child(Self::render_history_placeholder("Failed to load commits")),
+                    None => this.child(Self::render_history_placeholder(localization::localized_str!("Failed to load commits"))),
                 },
             }
         })
@@ -7383,7 +7434,7 @@ impl GitPanel {
                                             Some(data.author_email.clone()),
                                             Some(data.commit_timestamp),
                                         ),
-                                        None => ("Loading…".into(), "".into(), None, None),
+                                        None => (localization::localized_str!("Loading…").into(), "".into(), None, None),
                                     };
 
                                     let relative_time: SharedString = timestamp
@@ -7557,16 +7608,21 @@ impl GitPanel {
                                         .when(!has_context_menu, |this| {
                                             this.tooltip(move |_, cx| {
                                                 let description = if is_unpushed {
-                                                    SharedString::from(format!(
-                                                        "Contains Unpushed Changes — {}",
-                                                        short_sha.clone(),
-                                                    ))
+                                                    SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", short_sha.clone());
+        localization::format_message(
+            "Contains Unpushed Changes — {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                                                 } else {
                                                     short_sha.clone()
                                                 };
 
                                                 Tooltip::with_meta(
-                                                    "View Commit Diff",
+                                                    localization::localized_str!("View Commit Diff"),
                                                     None,
                                                     description,
                                                     cx,
@@ -7645,10 +7701,10 @@ impl GitPanel {
         v_flex()
             .gap_1()
             .items_center()
-            .child(Label::new("No changes to commit").color(Color::Muted))
+            .child(Label::new(localization::localized_str!("No changes to commit")).color(Color::Muted))
             .when(show_branch_diff, |this| {
                 this.child(
-                    Button::new("view_branch_diff", "View Branch Diff")
+                    Button::new("view_branch_diff", localization::localized_str!("View Branch Diff"))
                         .label_size(LabelSize::Small)
                         .style(ButtonStyle::Outlined)
                         .on_click(move |_, _, cx| {
@@ -7670,12 +7726,15 @@ impl GitPanel {
             repository.snapshot().work_directory_abs_path
         });
 
-        let message = format!(
-            "Detected dubious ownership in repository at {}. \
-            This happens when the .git/ directory is not owned by the current user. \
-            If you want to learn more about safe directories, visit git's documentation.",
-            directory.display()
-        );
+        let message = {
+        let __zed_i18n_arg_0 = format!("{}", directory.display());
+        localization::format_message(
+            "Detected dubious ownership in repository at {}. This happens when the .git/ directory is not owned by the current user. If you want to learn more about safe directories, visit git's documentation.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    };
 
         v_flex()
                 .px_4()
@@ -7686,7 +7745,7 @@ impl GitPanel {
                         .flex_wrap()
                         .gap_1()
                         .child(
-                            Button::new("trust_directory", "Trust Directory")
+                            Button::new("trust_directory", localization::localized_str!("Trust Directory"))
                             .label_size(LabelSize::Small)
                             .layer(ElevationIndex::ModalSurface)
                             .style(ButtonStyle::Filled)
@@ -7700,7 +7759,7 @@ impl GitPanel {
                             )
                     )
                     .child(
-                        Button::new("learn_more", "Learn More")
+                        Button::new("learn_more", localization::localized_str!("Learn More"))
                             .label_size(LabelSize::Small)
                             .style(ButtonStyle::Outlined)
                             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small).color(Color::Muted))
@@ -7716,9 +7775,9 @@ impl GitPanel {
             v_flex()
                 .gap_1()
                 .items_center()
-                .child(Label::new("No Git Repositories").color(Color::Muted))
+                .child(Label::new(localization::localized_str!("No Git Repositories")).color(Color::Muted))
                 .child(
-                    Button::new("initialize_repository", "Initialize Repository")
+                    Button::new("initialize_repository", localization::localized_str!("Initialize Repository"))
                         .label_size(LabelSize::Small)
                         .style(ButtonStyle::Outlined)
                         .tooltip(Tooltip::for_action_title_in(
@@ -7736,7 +7795,7 @@ impl GitPanel {
         } else if worktree_count == 0 {
             let focus_handle = self.focus_handle.clone();
             ProjectEmptyState::new(
-                "Git Panel",
+                localization::localized_str!("Git Panel"),
                 focus_handle.clone(),
                 KeyBinding::for_action_in(&workspace::Open::default(), &focus_handle, cx),
             )
@@ -8049,7 +8108,7 @@ impl GitPanel {
                             .ok();
                     });
                 let tooltip_label = if all_conflicts_resolved {
-                    Some("All conflicts marked as resolved")
+                    Some(localization::localized_str!("All conflicts marked as resolved"))
                 } else {
                     match stage_intent {
                         StageIntent::Stage => Some("Stage All"),
@@ -8076,9 +8135,9 @@ impl GitPanel {
 
     fn render_empty_section(&self, section: Section) -> AnyElement {
         let message = match section {
-            Section::Staged => "No staged changes yet",
-            Section::Unstaged => "No unstaged changes",
-            _ => "No changes",
+            Section::Staged => localization::localized_str!("No staged changes yet"),
+            Section::Unstaged => localization::localized_str!("No unstaged changes"),
+            _ => localization::localized_str!("No changes"),
         };
         h_flex()
             .h(self.list_item_height())
@@ -8125,26 +8184,76 @@ impl GitPanel {
         let file_label = if file_count == 1 { "File" } else { "Files" };
 
         let stage_title = match (target_kind, will_unstage) {
-            (SelectionTargetKind::Directory, true) => "Unstage Folder",
-            (SelectionTargetKind::Directory, false) => "Stage Folder",
-            (SelectionTargetKind::File, true) => "Unstage File",
-            (SelectionTargetKind::File, false) => "Stage File",
-            (SelectionTargetKind::Multiple, true) => &format!("Unstage {file_count} {file_label}"),
-            (SelectionTargetKind::Multiple, false) => &format!("Stage {file_count} {file_label}"),
+            (SelectionTargetKind::Directory, true) => localization::localized_str!("Unstage Folder"),
+            (SelectionTargetKind::Directory, false) => localization::localized_str!("Stage Folder"),
+            (SelectionTargetKind::File, true) => localization::localized_str!("Unstage File"),
+            (SelectionTargetKind::File, false) => localization::localized_str!("Stage File"),
+            (SelectionTargetKind::Multiple, true) => &{
+        let __zed_i18n_arg_0 = format!("{}", file_count);
+        let __zed_i18n_arg_1 = format!("{}", file_label);
+        localization::format_message(
+            "Unstage {file_count} {file_label}",
+            &[
+                ("file_count", __zed_i18n_arg_0),
+                ("file_label", __zed_i18n_arg_1)
+            ],
+        )
+    },
+            (SelectionTargetKind::Multiple, false) => &{
+        let __zed_i18n_arg_0 = format!("{}", file_count);
+        let __zed_i18n_arg_1 = format!("{}", file_label);
+        localization::format_message(
+            "Stage {file_count} {file_label}",
+            &[
+                ("file_count", __zed_i18n_arg_0),
+                ("file_label", __zed_i18n_arg_1)
+            ],
+        )
+    },
         };
 
         let restore_title = match (target_kind, all_created, all_deleted) {
-            (SelectionTargetKind::Directory, true, _) => "Trash Folder",
-            (SelectionTargetKind::Directory, false, _) => "Discard Changes",
-            (SelectionTargetKind::File, true, _) => "Trash File",
-            (SelectionTargetKind::File, _, true) => "Restore File",
-            (SelectionTargetKind::File, _, _) => "Discard Changes",
-            (SelectionTargetKind::Multiple, true, _) => &format!("Trash {file_count} {file_label}"),
+            (SelectionTargetKind::Directory, true, _) => localization::localized_str!("Trash Folder"),
+            (SelectionTargetKind::Directory, false, _) => localization::localized_str!("Discard Changes"),
+            (SelectionTargetKind::File, true, _) => localization::localized_str!("Trash File"),
+            (SelectionTargetKind::File, _, true) => localization::localized_str!("Restore File"),
+            (SelectionTargetKind::File, _, _) => localization::localized_str!("Discard Changes"),
+            (SelectionTargetKind::Multiple, true, _) => &{
+        let __zed_i18n_arg_0 = format!("{}", file_count);
+        let __zed_i18n_arg_1 = format!("{}", file_label);
+        localization::format_message(
+            "Trash {file_count} {file_label}",
+            &[
+                ("file_count", __zed_i18n_arg_0),
+                ("file_label", __zed_i18n_arg_1)
+            ],
+        )
+    },
             (SelectionTargetKind::Multiple, _, true) => {
-                &format!("Restore {file_count} {file_label}")
+                &{
+        let __zed_i18n_arg_0 = format!("{}", file_count);
+        let __zed_i18n_arg_1 = format!("{}", file_label);
+        localization::format_message(
+            "Restore {file_count} {file_label}",
+            &[
+                ("file_count", __zed_i18n_arg_0),
+                ("file_label", __zed_i18n_arg_1)
+            ],
+        )
+    }
             }
             (SelectionTargetKind::Multiple, _, _) => {
-                &format!("Discard Changes to {file_count} {file_label}")
+                &{
+        let __zed_i18n_arg_0 = format!("{}", file_count);
+        let __zed_i18n_arg_1 = format!("{}", file_label);
+        localization::format_message(
+            "Discard Changes to {file_count} {file_label}",
+            &[
+                ("file_count", __zed_i18n_arg_0),
+                ("file_label", __zed_i18n_arg_1)
+            ],
+        )
+    }
             }
         };
 
@@ -8157,33 +8266,33 @@ impl GitPanel {
                 .action(stage_title, ToggleStaged.boxed_clone())
                 .action(restore_title, RestoreFile::default().boxed_clone())
                 .separator()
-                .action("Unstaged Changes", ViewUnstagedChanges.boxed_clone())
-                .action("Staged Changes", ViewStagedChanges.boxed_clone())
+                .action(localization::localized_str!("Unstaged Changes"), ViewUnstagedChanges.boxed_clone())
+                .action(localization::localized_str!("Staged Changes"), ViewStagedChanges.boxed_clone())
                 .separator()
-                .action("Copy Path", CopyPath.boxed_clone())
-                .action("Copy Relative Path", CopyRelativePath.boxed_clone())
+                .action(localization::localized_str!("Copy Path"), CopyPath.boxed_clone())
+                .action(localization::localized_str!("Copy Relative Path"), CopyRelativePath.boxed_clone())
                 .separator()
                 .action_disabled_when(
                     !all_created || is_bulk,
-                    "Add to .gitignore",
+                    localization::localized_str!("Add to .gitignore"),
                     AddToGitignore.boxed_clone(),
                 )
                 .action_disabled_when(
                     !all_created || is_bulk,
-                    "Add to .git/info/exclude",
+                    localization::localized_str!("Add to .git/info/exclude"),
                     AddToGitInfoExclude.boxed_clone(),
                 )
                 .when(is_file, |context_menu| {
                     context_menu
                         .separator()
-                        .action("Open Diff", menu::Confirm.boxed_clone())
-                        .action("Open File Diff", menu::SecondaryConfirm.boxed_clone())
-                        .action("View File", ViewFile.boxed_clone())
+                        .action(localization::localized_str!("Open Diff"), menu::Confirm.boxed_clone())
+                        .action(localization::localized_str!("Open File Diff"), menu::SecondaryConfirm.boxed_clone())
+                        .action(localization::localized_str!("View File"), ViewFile.boxed_clone())
                 })
                 .when(is_file && !all_created, |context_menu| {
                     context_menu
                         .separator()
-                        .action("View File History", Box::new(git::FileHistory))
+                        .action(localization::localized_str!("View File History"), Box::new(git::FileHistory))
                 })
         })
     }
@@ -8539,7 +8648,7 @@ impl GitPanel {
                             })
                             .tooltip(move |_window, cx| {
                                 if resolved_conflict {
-                                    Tooltip::simple("Conflict marked as resolved", cx)
+                                    Tooltip::simple(localization::localized_str!("Conflict marked as resolved"), cx)
                                 } else {
                                     let action = stage_intent.label(|| stage_status);
                                     Tooltip::for_action(action, &ToggleStaged, cx)
@@ -8737,10 +8846,18 @@ impl GitPanel {
                             })
                             .tooltip(move |_window, cx| {
                                 if resolved_conflict {
-                                    Tooltip::simple("Conflicts marked as resolved", cx)
+                                    Tooltip::simple(localization::localized_str!("Conflicts marked as resolved"), cx)
                                 } else {
                                     let action = stage_intent.label(|| stage_status);
-                                    Tooltip::simple(format!("{action} Folder"), cx)
+                                    Tooltip::simple({
+        let __zed_i18n_arg_0 = format!("{}", action);
+        localization::format_message(
+            "{action} Folder",
+            &[
+                ("action", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx)
                                 }
                             }),
                     ),
@@ -8987,13 +9104,13 @@ impl Render for GenerateCommitMessageConfigurationTooltip {
             container
                 .gap_1p5()
                 .child(Label::new(
-                    "Configure an LLM provider to generate commit messages.",
+                    localization::localized_str!("Configure an LLM provider to generate commit messages."),
                 ))
                 .child(
                     h_flex()
                         .gap_1()
                         .child(
-                            Button::new("configure-commit-message-provider", "Configure Provider")
+                            Button::new("configure-commit-message-provider", localization::localized_str!("Configure Provider"))
                                 .style(ButtonStyle::Filled)
                                 .layer(ElevationIndex::ModalSurface)
                                 .label_size(LabelSize::Small)
@@ -9009,7 +9126,7 @@ impl Render for GenerateCommitMessageConfigurationTooltip {
                                 }),
                         )
                         .child(
-                            Button::new("llm-provider-docs", "See Docs")
+                            Button::new("llm-provider-docs", localization::localized_str!("See Docs"))
                                 .style(ButtonStyle::OutlinedGhost)
                                 .end_icon(
                                     Icon::new(IconName::ArrowUpRight)
@@ -9269,7 +9386,7 @@ impl Panel for GitPanel {
     }
 
     fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
-        Some("Git Panel")
+        Some(localization::localized_str!("Git Panel"))
     }
 
     fn icon_label(&self, _: &Window, cx: &App) -> Option<String> {
@@ -9487,7 +9604,7 @@ impl RenderOnce for PanelRepoFooter {
                     if single_repo {
                         cx.new(|_| Empty).into()
                     } else {
-                        Tooltip::simple("Switch Active Repository", cx)
+                        Tooltip::simple(localization::localized_str!("Switch Active Repository"), cx)
                     }
                 },
             )
@@ -9514,7 +9631,7 @@ impl RenderOnce for PanelRepoFooter {
             })
             .trigger_with_tooltip(
                 branch_selector_button,
-                Tooltip::for_action_title("Switch Branch", &zed_actions::git::Switch),
+                Tooltip::for_action_title(localization::localized_str!("Switch Branch"), &zed_actions::git::Switch),
             )
             .anchor(Anchor::BottomLeft)
             .offset(gpui::Point {
@@ -13850,7 +13967,7 @@ mod tests {
 
             let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
                 menu.context(panel.focus_handle.clone())
-                    .action("Stage All", StageAll.boxed_clone())
+                    .action(localization::localized_str!("Stage All"), StageAll.boxed_clone())
             });
 
             panel.set_context_menu(

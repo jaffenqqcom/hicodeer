@@ -190,7 +190,15 @@ unsafe extern "system" fn wnd_proc(
                     && let Err(e) = result
                 {
                     log::error!("Failed to update Zed: {:?}", e);
-                    show_error(format!("Error: {:?}", e));
+                    show_error({
+        let __zed_i18n_arg_0 = format!("{:?}", e);
+        localization::format_message(
+            "Error: {:?}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    });
                 }
             });
             unsafe { PostQuitMessage(0) };

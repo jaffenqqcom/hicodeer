@@ -96,9 +96,17 @@ impl AgentTool for CreateDirectoryTool {
         _cx: &mut App,
     ) -> SharedString {
         if let Ok(input) = input {
-            format!("Create directory {}", MarkdownInlineCode(&input.path)).into()
+            {
+        let __zed_i18n_arg_0 = format!("{}", MarkdownInlineCode(&input.path));
+        localization::format_message(
+            "Create directory {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
         } else {
-            "Create directory".into()
+            localization::localized_str!("Create directory").into()
         }
     }
 

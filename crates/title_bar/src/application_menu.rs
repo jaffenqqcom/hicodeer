@@ -32,6 +32,8 @@ actions!(
 #[action(namespace = app_menu)]
 pub struct OpenApplicationMenu(String);
 
+mod menu_labels;
+
 #[cfg(not(target_os = "macos"))]
 pub enum ActivateDirection {
     Left,
@@ -196,14 +198,14 @@ impl ApplicationMenu {
                         .style(ButtonStyle::Subtle)
                         .icon_size(IconSize::Small)
                         .tab_index(0isize)
-                        .aria_label("Application menu"),
-                        Tooltip::text("Open Application Menu"),
+                        .aria_label(localization::localized_str!("Application menu")),
+                        Tooltip::text(localization::localized_str!("Open Application Menu")),
                     )
                     .with_handle(handle),
             )
     }
 
-    fn render_standard_menu(&self, entry: &MenuEntry) -> impl IntoElement {
+    fn render_standard_menu(&self, entry: &MenuEntry, window: &Window, cx: &App) -> impl IntoElement {
         let current_handle = entry.handle.clone();
 
         let menu_name = entry.menu.name.clone();
@@ -226,7 +228,7 @@ impl ApplicationMenu {
                     .trigger(
                         Button::new(
                             SharedString::from(format!("{}-menu-trigger", menu_name)),
-                            menu_name,
+                            menu_labels::label(&menu_name, window, cx),
                         )
                         .style(ButtonStyle::Subtle)
                         .label_size(LabelSize::Small)
@@ -323,13 +325,13 @@ impl Render for ApplicationMenu {
             && let Some(entry) = self
                 .entries
                 .iter()
-                .find(|entry| entry.menu.name == pending_menu_open && !entry.handle.is_deployed())
+                .find(|entry| menu_labels::matches(&entry.menu.name, &pending_menu_open) && !entry.handle.is_deployed())
         {
             let handle_to_show = entry.handle.clone();
             let handles_to_hide: Vec<_> = self
                 .entries
                 .iter()
-                .filter(|e| e.menu.name != pending_menu_open && e.handle.is_deployed())
+                .filter(|e| !menu_labels::matches(&e.menu.name, &pending_menu_open) && e.handle.is_deployed())
                 .map(|e| e.handle.clone())
                 .collect();
 
@@ -359,7 +361,7 @@ impl Render for ApplicationMenu {
                 this.children(
                     self.entries
                         .iter()
-                        .map(|entry| self.render_standard_menu(entry)),
+                        .map(|entry| self.render_standard_menu(entry, window, cx)),
                 )
             })
     }
@@ -416,12 +418,12 @@ mod tests {
         let mut items = Vec::new();
         if include_agent_panel {
             items.push(MenuItem::action(
-                "Agent Panel",
+                localization::localized_str!("Agent Panel"),
                 OpenApplicationMenu(String::new()),
             ));
         }
         items.push(MenuItem::action(
-            "Diagnostics",
+            localization::localized_str!("Diagnostics"),
             OpenApplicationMenu(String::new()),
         ));
 
@@ -517,8 +519,8 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_menus(vec![
-                Menu::new("Zed").items([MenuItem::action(
-                    "Settings",
+                Menu::new(localization::localized_str!("Zed")).items([MenuItem::action(
+                    localization::localized_str!("Settings"),
                     OpenApplicationMenu(String::new()),
                 )]),
                 view_menu(true),

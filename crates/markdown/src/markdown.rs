@@ -2081,11 +2081,11 @@ impl MarkdownElement {
 
         let header = kind.map(|kind| {
             let (icon_name, label) = match kind {
-                BlockQuoteKind::Note => (IconName::Info, "Note"),
-                BlockQuoteKind::Tip => (IconName::Sparkle, "Tip"),
-                BlockQuoteKind::Important => (IconName::Chat, "Important"),
-                BlockQuoteKind::Warning => (IconName::Warning, "Warning"),
-                BlockQuoteKind::Caution => (IconName::Stop, "Caution"),
+                BlockQuoteKind::Note => (IconName::Info, localization::localized_str!("Note")),
+                BlockQuoteKind::Tip => (IconName::Sparkle, localization::localized_str!("Tip")),
+                BlockQuoteKind::Important => (IconName::Chat, localization::localized_str!("Important")),
+                BlockQuoteKind::Warning => (IconName::Warning, localization::localized_str!("Warning")),
+                BlockQuoteKind::Caution => (IconName::Stop, localization::localized_str!("Caution")),
             };
             h_flex()
                 .gap_1()
@@ -3414,14 +3414,22 @@ fn image_fallback_element(
         .filter(|alt| !alt.is_empty())
         .unwrap_or_else(|| dest_url.clone());
 
-    let label = format!("Failed to Load: {link_label}");
+    let label = {
+        let __zed_i18n_arg_0 = format!("{}", link_label);
+        localization::format_message(
+            "Failed to Load: {link_label}",
+            &[
+                ("link_label", __zed_i18n_arg_0)
+            ],
+        )
+    };
 
     div()
         .id("image-fallback")
         .min_w_0()
         .child(Label::new(label).color(Color::Warning).underline())
         .tooltip(Tooltip::text(
-            "Image failed to load. Open `zed: log` for more details.",
+            localization::localized_str!("Image failed to load. Open `zed: log` for more details."),
         ))
         .when(open_image_url_on_click, |this| {
             this.cursor_pointer()
@@ -3490,9 +3498,9 @@ fn render_wrap_code_block_button(
     markdown: Entity<Markdown>,
 ) -> impl IntoElement {
     let (icon, tooltip) = if is_wrapped {
-        (IconName::TextUnwrap, "Unwrap Content")
+        (IconName::TextUnwrap, localization::localized_str!("Unwrap Content"))
     } else {
-        (IconName::TextWrap, "Wrap Content")
+        (IconName::TextWrap, localization::localized_str!("Wrap Content"))
     };
     let button_id = ElementId::NamedChild(
         Arc::new(ElementId::from(("wrap-code-block", markdown.entity_id()))),

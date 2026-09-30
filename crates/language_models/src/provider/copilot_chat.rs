@@ -154,7 +154,7 @@ impl LanguageModelProvider for CopilotChatLanguageModelProvider {
             None
         } else {
             Some(language_model::InlineDescription::Text(
-                "Requires an active GitHub Copilot subscription.".into(),
+                localization::localized_str!("Requires an active GitHub Copilot subscription.").into(),
             ))
         };
 

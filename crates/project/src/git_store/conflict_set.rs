@@ -256,7 +256,7 @@ impl ConflictSet {
                         .unwrap_or_else(|| SharedString::new_static("HEAD")),
                     theirs_branch_name: theirs_branch_name
                         .take()
-                        .unwrap_or_else(|| SharedString::new_static("Origin")),
+                        .unwrap_or_else(|| SharedString::new_static(localization::localized_str!("Origin"))),
                     range,
                     ours,
                     theirs,

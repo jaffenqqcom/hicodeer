@@ -196,7 +196,7 @@ impl ExtensionCard {
     ) -> Button {
         Button::new(
             Self::button_id(extension_id, ExtensionOperation::Remove),
-            "Uninstall",
+            localization::localized_str!("Uninstall"),
         )
         .when(ENABLE_HANDLERS, |button| {
             button.on_click({
@@ -221,7 +221,7 @@ impl ExtensionCard {
     ) -> Button {
         Button::new(
             SharedString::from(format!("configure-{extension_id}")),
-            "Configure",
+            localization::localized_str!("Configure"),
         )
         .when(ENABLE_HANDLERS, |button| {
             button.on_click({
@@ -251,7 +251,7 @@ impl ExtensionCard {
     ) -> ExtensionCardActions {
         let rebuild = Button::new(
             SharedString::from(format!("rebuild-{}", extension.id)),
-            "Rebuild",
+            localization::localized_str!("Rebuild"),
         )
         .color(Color::Accent)
         .disabled(status.disables_actions())
@@ -280,7 +280,7 @@ impl ExtensionCard {
     fn install_button<const ENABLE_HANDLERS: bool>(extension_id: &Arc<str>) -> Button {
         Button::new(
             Self::button_id(extension_id, ExtensionOperation::Install),
-            "Install",
+            localization::localized_str!("Install"),
         )
         .style(ButtonStyle::Tinted(ui::TintColor::Accent))
         .start_icon(
@@ -329,7 +329,7 @@ impl ExtensionCard {
                 let upgrade = matches!(status, ExtensionStatus::Upgrading).then(|| {
                     Button::new(
                         Self::button_id(&extension.id, ExtensionOperation::Upgrade),
-                        "Upgrade",
+                        localization::localized_str!("Upgrade"),
                     )
                     .disabled(status.disables_actions())
                 });
@@ -350,7 +350,7 @@ impl ExtensionCard {
                     );
                     Button::new(
                         Self::button_id(&extension.id, ExtensionOperation::Upgrade),
-                        "Upgrade",
+                        localization::localized_str!("Upgrade"),
                     )
                     .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                     .when(!is_compatible, |button| {
@@ -358,9 +358,15 @@ impl ExtensionCard {
                             let version = extension.manifest.version.clone();
                             move |_, cx| {
                                 Tooltip::simple(
-                                    format!(
-                                        "v{version} is not compatible with this version of Zed."
-                                    ),
+                                    {
+        let __zed_i18n_arg_0 = format!("{}", version);
+        localization::format_message(
+            "v{version} is not compatible with this version of Zed.",
+            &[
+                ("version", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                     cx,
                                 )
                             }
@@ -423,17 +429,17 @@ fn provided_feature_labels(
 
 pub(crate) fn extension_provides_label(provides: ExtensionProvides) -> &'static str {
     match provides {
-        ExtensionProvides::Themes => "Themes",
-        ExtensionProvides::IconThemes => "Icon Themes",
-        ExtensionProvides::Languages => "Languages",
-        ExtensionProvides::Grammars => "Grammars",
-        ExtensionProvides::LanguageServers => "Language Servers",
-        ExtensionProvides::ContextServers => "MCP Servers",
+        ExtensionProvides::Themes => localization::localized_str!("Themes"),
+        ExtensionProvides::IconThemes => localization::localized_str!("Icon Themes"),
+        ExtensionProvides::Languages => localization::localized_str!("Languages"),
+        ExtensionProvides::Grammars => localization::localized_str!("Grammars"),
+        ExtensionProvides::LanguageServers => localization::localized_str!("Language Servers"),
+        ExtensionProvides::ContextServers => localization::localized_str!("MCP Servers"),
         ExtensionProvides::AgentServers => "Agent Servers",
         ExtensionProvides::SlashCommands => "Slash Commands",
         ExtensionProvides::IndexedDocsProviders => "Indexed Docs Providers",
-        ExtensionProvides::Snippets => "Snippets",
-        ExtensionProvides::DebugAdapters => "Debug Adapters",
+        ExtensionProvides::Snippets => localization::localized_str!("Snippets"),
+        ExtensionProvides::DebugAdapters => localization::localized_str!("Debug Adapters"),
     }
 }
 
@@ -647,15 +653,39 @@ impl RenderOnce for ExtensionCard {
                                 .child(Headline::new(name).size(HeadlineSize::Small))
                                 .child(
                                     Headline::new(if is_dev {
-                                        format!("v{version} (dev)")
+                                        {
+        let __zed_i18n_arg_0 = format!("{}", version);
+        localization::format_message(
+            "v{version} (dev)",
+            &[
+                ("version", __zed_i18n_arg_0)
+            ],
+        )
+    }
                                     } else {
-                                        format!("v{version}")
+                                        {
+        let __zed_i18n_arg_0 = format!("{}", version);
+        localization::format_message(
+            "v{version}",
+            &[
+                ("version", __zed_i18n_arg_0)
+            ],
+        )
+    }
                                     })
                                     .size(HeadlineSize::XSmall)
                                     .color(Color::Muted),
                                 )
                                 .children(installed_version.map(|installed_version| {
-                                    Headline::new(format!("(v{installed_version} installed)"))
+                                    Headline::new({
+        let __zed_i18n_arg_0 = format!("{}", installed_version);
+        localization::format_message(
+            "(v{installed_version} installed)",
+            &[
+                ("installed_version", __zed_i18n_arg_0)
+            ],
+        )
+    })
                                         .size(HeadlineSize::XSmall)
                                 }))
                                 .when(!provided_features.is_empty(), |parent| {
@@ -684,10 +714,15 @@ impl RenderOnce for ExtensionCard {
                                 .truncate()
                         }))
                         .children(download_count.map(|download_count| {
-                            Label::new(format!(
-                                "Downloads: {}",
-                                download_count.to_formatted_string(&Locale::en)
-                            ))
+                            Label::new({
+        let __zed_i18n_arg_0 = format!("{}", download_count.to_formatted_string(&Locale::en));
+        localization::format_message(
+            "Downloads: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                             .size(LabelSize::Small)
                         })),
                 )
@@ -723,7 +758,7 @@ impl RenderOnce for ExtensionCard {
                                             .icon_size(IconSize::Small)
                                             .tooltip(move |_, cx| {
                                                 Tooltip::with_meta(
-                                                    "Visit Extension Repository",
+                                                    localization::localized_str!("Visit Extension Repository"),
                                                     None,
                                                     repository_url_for_tooltip.clone(),
                                                     cx,
@@ -772,7 +807,7 @@ impl RenderOnce for ExtensionCard {
                             .size_full()
                             .justify_center()
                             .bg(cx.theme().colors().elevated_surface_background.alpha(0.8))
-                            .child(Label::new("Overridden by dev extension.")),
+                            .child(Label::new(localization::localized_str!("Overridden by dev extension."))),
                     )
                 }),
         )

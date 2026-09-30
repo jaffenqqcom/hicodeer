@@ -151,9 +151,17 @@ impl AgentTool for DiagnosticsTool {
             Some(path) if !path.is_empty() => Some(path),
             _ => None,
         }) {
-            format!("Check diagnostics for {}", MarkdownInlineCode(&path)).into()
+            {
+        let __zed_i18n_arg_0 = format!("{}", MarkdownInlineCode(&path));
+        localization::format_message(
+            "Check diagnostics for {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
         } else {
-            "Check project diagnostics".into()
+            localization::localized_str!("Check project diagnostics").into()
         }
     }
 

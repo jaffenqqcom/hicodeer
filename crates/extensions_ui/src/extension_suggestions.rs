@@ -138,10 +138,10 @@ fn suggest_for_buffer(
                         .into_any_element()
                 })
                 .with_title(suggestion.title)
-                .more_info_message("Learn more")
+                .more_info_message(localization::localized_str!("Learn more"))
                 .more_info_url(suggestion.docs_url)
                 .primary_message(suggestion.install_message)
-                .secondary_message("Don't show again")
+                .secondary_message(localization::localized_str!("Don't show again"))
             });
         }
         None => {
@@ -163,13 +163,21 @@ fn suggest_for_buffer(
             };
             show_suggestion(workspace, &extension_id, cx, |cx| {
                 MessageNotification::new(
-                    format!(
-                        "Do you want to install the recommended '{extension_id}' extension for '{file_name_or_extension}' files?"
-                    ),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", extension_id);
+        let __zed_i18n_arg_1 = format!("{}", file_name_or_extension);
+        localization::format_message(
+            "Do you want to install the recommended '{extension_id}' extension for '{file_name_or_extension}' files?",
+            &[
+                ("extension_id", __zed_i18n_arg_0),
+                ("file_name_or_extension", __zed_i18n_arg_1)
+            ],
+        )
+    },
                     cx,
                 )
-                .primary_message("Yes, install extension")
-                .secondary_message("No, don't install it")
+                .primary_message(localization::localized_str!("Yes, install extension"))
+                .secondary_message(localization::localized_str!("No, don't install it"))
             });
         }
     }

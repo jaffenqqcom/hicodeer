@@ -397,14 +397,14 @@ impl Component for Label {
                         vec![
                             single_example("Default", Label::new("Project Explorer").into_any_element()),
                             single_example("Small", Label::new("File: main.rs").size(LabelSize::Small).into_any_element()),
-                            single_example("Large", Label::new("Welcome to Zed").size(LabelSize::Large).into_any_element()),
+                            single_example("Large", Label::new(localization::localized_str!("Welcome to Zed")).size(LabelSize::Large).into_any_element()),
                         ],
                     ),
                     example_group_with_title(
                         "Colors",
                         vec![
                             single_example("Default", Label::new("Status: Ready").into_any_element()),
-                            single_example("Accent", Label::new("New Update Available").color(Color::Accent).into_any_element()),
+                            single_example("Accent", Label::new(localization::localized_str!("New Update Available")).color(Color::Accent).into_any_element()),
                             single_example("Error", Label::new("Build Failed").color(Color::Error).into_any_element()),
                         ],
                     ),
@@ -413,7 +413,7 @@ impl Component for Label {
                         vec![
                             single_example("Default", Label::new("Normal Text").into_any_element()),
                             single_example("Bold", Label::new("Important Notice").weight(gpui::FontWeight::BOLD).into_any_element()),
-                            single_example("Italic", Label::new("Code Comment").italic().into_any_element()),
+                            single_example("Italic", Label::new(localization::localized_str!("Code Comment")).italic().into_any_element()),
                             single_example("Strikethrough", Label::new("Deprecated Feature").strikethrough().into_any_element()),
                             single_example("Underline", Label::new("Clickable Link").underline().into_any_element()),
                             single_example("Inline Code", Label::new("fn main() {}").inline_code(cx).into_any_element()),

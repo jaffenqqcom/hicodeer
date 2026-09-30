@@ -491,14 +491,14 @@ impl MessageEditor {
                 let has_selection = editor.has_non_empty_selection(&editor.display_snapshot(cx));
 
                 Some(ContextMenu::build(window, cx, |menu, _, _| {
-                    menu.action("Cut", Box::new(editor::actions::Cut))
+                    menu.action(localization::localized_str!("Cut"), Box::new(editor::actions::Cut))
                         .action_disabled_when(
                             !has_selection,
-                            "Copy",
+                            localization::localized_str!("Copy"),
                             Box::new(editor::actions::Copy),
                         )
-                        .action("Paste", Box::new(editor::actions::Paste))
-                        .action("Paste as Plain Text", Box::new(PasteRaw))
+                        .action(localization::localized_str!("Paste"), Box::new(editor::actions::Paste))
+                        .action(localization::localized_str!("Paste as Plain Text"), Box::new(PasteRaw))
                 }))
             });
 
@@ -1459,7 +1459,7 @@ impl MessageEditor {
                     .ok()
                     .and_then(|r| r.ok())
                     .flatten()
-                    .ok_or_else(|| anyhow!("Could not determine default branch"))?;
+                    .ok_or_else(|| anyhow!(localization::localized_str!("Could not determine default branch")))?;
 
                 cx.update(|window, cx| {
                     let mention_uri = MentionUri::GitDiff {
@@ -2757,7 +2757,7 @@ mod tests {
         }
 
         fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-            "Test".into()
+            localization::localized_str!("Test").into()
         }
     }
 

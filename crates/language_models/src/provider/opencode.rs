@@ -56,12 +56,12 @@ fn normalize_reasoning_effort(effort: &str) -> Option<ReasoningEffort> {
 fn reasoning_effort_display(effort: ReasoningEffort) -> (&'static str, &'static str) {
     match effort {
         ReasoningEffort::None => ("None", "none"),
-        ReasoningEffort::Minimal => ("Minimal", "minimal"),
-        ReasoningEffort::Low => ("Low", "low"),
-        ReasoningEffort::Medium => ("Medium", "medium"),
-        ReasoningEffort::High => ("High", "high"),
-        ReasoningEffort::XHigh => ("XHigh", "xhigh"),
-        ReasoningEffort::Max => ("Max", "max"),
+        ReasoningEffort::Minimal => (localization::localized_str!("Minimal"), "minimal"),
+        ReasoningEffort::Low => (localization::localized_str!("Low"), "low"),
+        ReasoningEffort::Medium => (localization::localized_str!("Medium"), "medium"),
+        ReasoningEffort::High => (localization::localized_str!("High"), "high"),
+        ReasoningEffort::XHigh => (localization::localized_str!("XHigh"), "xhigh"),
+        ReasoningEffort::Max => (localization::localized_str!("Max"), "max"),
     }
 }
 
@@ -723,7 +723,7 @@ impl LanguageModelProvider for OpenCodeLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "To use OpenCode models in Zed, you need an API key.".into(),
+                localization::localized_str!("To use OpenCode models in Zed, you need an API key.").into(),
             )),
         ))
     }
@@ -1215,7 +1215,7 @@ struct ConfigurationView {
 impl ConfigurationView {
     fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let api_key_editor = cx.new(|cx| {
-            InputField::new(window, cx, "sk-00000000000000000000000000000000").label("API key")
+            InputField::new(window, cx, "sk-00000000000000000000000000000000").label(localization::localized_str!("API key"))
         });
 
         cx.observe(&state, |_, _, cx| {
@@ -1307,13 +1307,29 @@ impl Render for ConfigurationView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let env_var_set = self.state.read(cx).api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API key set in {API_KEY_ENV_VAR_NAME} environment variable")
+            {
+        let __zed_i18n_arg_0 = format!("{}", API_KEY_ENV_VAR_NAME);
+        localization::format_message(
+            "API key set in {API_KEY_ENV_VAR_NAME} environment variable",
+            &[
+                ("API_KEY_ENV_VAR_NAME", __zed_i18n_arg_0)
+            ],
+        )
+    }
         } else {
             let api_url = OpenCodeLanguageModelProvider::api_url(cx);
             if api_url == OPENCODE_API_URL {
-                "API key configured".to_string()
+                localization::localized_str!("API key configured").to_string()
             } else {
-                format!("API key configured for {}", api_url)
+                {
+        let __zed_i18n_arg_0 = format!("{}", api_url);
+        localization::format_message(
+            "API key configured for {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             }
         };
 
@@ -1325,9 +1341,15 @@ impl Render for ConfigurationView {
             ConfiguredApiCard::new("opencode-reset-key", configured_card_label)
                 .disabled(env_var_set)
                 .when(env_var_set, |this| {
-                    this.tooltip_label(format!(
-                        "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable."
-                    ))
+                    this.tooltip_label({
+        let __zed_i18n_arg_0 = format!("{}", API_KEY_ENV_VAR_NAME);
+        localization::format_message(
+            "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable.",
+            &[
+                ("API_KEY_ENV_VAR_NAME", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 })
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
                 .into_any_element()
@@ -1336,36 +1358,42 @@ impl Render for ConfigurationView {
         let api_key_section = v_flex()
             .on_action(cx.listener(Self::save_api_key))
             .child(Label::new(
-                "To use OpenCode models in Zed, you need an API key:",
+                localization::localized_str!("To use OpenCode models in Zed, you need an API key:"),
             ).color(Color::Muted))
             .child(
                 List::new()
                     .child(
                         ListBulletItem::new("")
-                            .child(Label::new("Sign in and get your key at").color(Color::Muted))
+                            .child(Label::new(localization::localized_str!("Sign in and get your key at")).color(Color::Muted))
                             .child(ButtonLink::new(
-                                "OpenCode Console",
+                                localization::localized_str!("OpenCode Console"),
                                 "https://opencode.ai/auth",
                             )),
                     )
                     .when(is_editing, |this| {
                         this.child(ListBulletItem::new(
-                            "Paste your API key below and hit enter to start using OpenCode",
+                            localization::localized_str!("Paste your API key below and hit enter to start using OpenCode"),
                         ).label_color(Color::Muted))
                     }),
             )
             .child(api_key_control)
             .child(
-                Label::new(format!(
-                    "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed."
-                ))
+                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", API_KEY_ENV_VAR_NAME);
+        localization::format_message(
+            "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed.",
+            &[
+                ("API_KEY_ENV_VAR_NAME", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 .size(LabelSize::Small)
                 .color(Color::Muted).mt_1p5(),
             )
             .into_any_element();
 
         if self.load_credentials_task.is_some() {
-            Label::new("Loading Credentials…").into_any_element()
+            Label::new(localization::localized_str!("Loading Credentials…")).into_any_element()
         } else {
             let settings = OpenCodeLanguageModelProvider::settings(cx);
             let show_zen = settings.show_zen_models;
@@ -1373,11 +1401,11 @@ impl Render for ConfigurationView {
 
             let subscription_toggles = v_flex()
                 .gap_2()
-                .child(Label::new("Subscriptions"))
+                .child(Label::new(localization::localized_str!("Subscriptions")))
                 .child(
                     Switch::new("opencode-show-zen-models", show_zen.into())
                         .full_width(true)
-                        .label("Show Zen models")
+                        .label(localization::localized_str!("Show Zen models"))
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -1392,7 +1420,7 @@ impl Render for ConfigurationView {
                 .child(
                     Switch::new("opencode-show-go-models", show_go.into())
                         .full_width(true)
-                        .label("Show Go models")
+                        .label(localization::localized_str!("Show Go models"))
                         .label_position(SwitchLabelPosition::Start)
                         .on_click(cx.listener(|this, state, window, cx| {
                             this.set_subscription_enabled(
@@ -1406,7 +1434,7 @@ impl Render for ConfigurationView {
 
             let no_subscriptions_warning = if !show_zen && !show_go {
                 Some(Banner::new().severity(Severity::Warning).child(Label::new(
-                    "No subscriptions enabled. Enable at least one subscription to use OpenCode.",
+                    localization::localized_str!("No subscriptions enabled. Enable at least one subscription to use OpenCode."),
                 )))
             } else {
                 None
@@ -1419,16 +1447,23 @@ impl Render for ConfigurationView {
                     .map(|(subscription, error)| {
                         Banner::new()
                             .severity(Severity::Error)
-                            .child(Label::new(format!(
-                                "Failed to load OpenCode {} models: {error}",
-                                subscription.display_name()
-                            )))
+                            .child(Label::new({
+        let __zed_i18n_arg_0 = format!("{}", subscription.display_name());
+        let __zed_i18n_arg_1 = format!("{}", error);
+        localization::format_message(
+            "Failed to load OpenCode {} models: {error}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("error", __zed_i18n_arg_1)
+            ],
+        )
+    }))
                     });
 
             v_flex()
                 .size_full()
                 .gap_2p5()
-                .child(Headline::new("OpenCode").size(HeadlineSize::Small))
+                .child(Headline::new(localization::localized_str!("OpenCode")).size(HeadlineSize::Small))
                 .child(api_key_section)
                 .child(Divider::horizontal())
                 .child(subscription_toggles)

@@ -243,7 +243,7 @@ impl CommitTooltip {
                 author_name: blame
                     .author
                     .clone()
-                    .unwrap_or("<no name>".to_string())
+                    .unwrap_or(localization::localized_str!("<no name>").to_string())
                     .into(),
                 author_email: blame.author_mail.clone().unwrap_or("".to_string()).into(),
                 message: details,
@@ -320,7 +320,7 @@ impl Render for CommitTooltip {
                     .scroll_handle(self.scroll_handle.clone())
                     .into_any()
             })
-            .unwrap_or("<no commit message>".into_any());
+            .unwrap_or(localization::localized_str!("<no commit message>").into_any());
 
         let pull_request = self
             .commit
@@ -460,7 +460,7 @@ impl Render for CommitTooltip {
                                         .child(Divider::vertical())
                                         .child(
                                             CopyButton::new("copy-commit-sha", full_sha)
-                                                .tooltip_label("Copy SHA"),
+                                                .tooltip_label(localization::localized_str!("Copy SHA")),
                                         ),
                                 ),
                         ),
@@ -525,7 +525,7 @@ pub(crate) fn shallow_boundary_notice(
                     .child(
                         div().flex_1().min_w_0().child(
                             Label::new(
-                                "Shallow clone boundary: earlier history is missing, so these lines may come from an older commit.",
+                                localization::localized_str!("Shallow clone boundary: earlier history is missing, so these lines may come from an older commit."),
                             )
                             .size(LabelSize::Small)
                             .line_height_style(LineHeightStyle::UiLabel),
@@ -541,16 +541,16 @@ pub(crate) fn shallow_boundary_notice(
                             Button::new(
                                 "fetch-unshallow",
                                 if in_flight {
-                                    "Fetching…"
+                                    localization::localized_str!("Fetching…")
                                 } else {
-                                    "Fetch Missing History"
+                                    localization::localized_str!("Fetch Missing History")
                                 },
                             )
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .disabled(in_flight)
                             .tooltip(Tooltip::text(
-                                "Run `git fetch --unshallow` to download the full history",
+                                localization::localized_str!("Run `git fetch --unshallow` to download the full history"),
                             ))
                             .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
@@ -620,7 +620,7 @@ pub(crate) fn fetch_unshallow(
                 Ok(_) => {
                     workspace.update(cx, |workspace, cx| {
                         let toast = StatusToast::new(
-                            "Fetched the missing commit history",
+                            localization::localized_str!("Fetched the missing commit history"),
                             cx,
                             |this, _| {
                                 this.icon(

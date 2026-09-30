@@ -6,61 +6,69 @@ use settings::Settings;
 use terminal_view::terminal_panel;
 use zed_actions::{Quit, assistant, debug_panel, dev, git_panel, project_panel};
 
+fn application_menu_name(name: &'static str) -> gpui::SharedString {
+    if cfg!(target_os = "macos") {
+        localization::translate_static(name).into()
+    } else {
+        name.into()
+    }
+}
+
 pub fn app_menus(cx: &mut App) -> Vec<Menu> {
     let mut view_items = vec![
         MenuItem::action(
-            "Zoom In",
+            localization::localized_str!("Zoom In"),
             zed_actions::IncreaseBufferFontSize { persist: false },
         ),
         MenuItem::action(
-            "Zoom Out",
+            localization::localized_str!("Zoom Out"),
             zed_actions::DecreaseBufferFontSize { persist: false },
         ),
         MenuItem::action(
-            "Reset Zoom",
+            localization::localized_str!("Reset Zoom"),
             zed_actions::ResetBufferFontSize { persist: false },
         ),
         MenuItem::action(
-            "Reset All Zoom",
+            localization::localized_str!("Reset All Zoom"),
             zed_actions::ResetAllZoom { persist: false },
         ),
         MenuItem::separator(),
-        MenuItem::action("Toggle Left Dock", workspace::ToggleLeftDock),
-        MenuItem::action("Toggle Right Dock", workspace::ToggleRightDock),
-        MenuItem::action("Toggle Bottom Dock", workspace::ToggleBottomDock),
-        MenuItem::action("Toggle All Docks", workspace::ToggleAllDocks),
+        MenuItem::action(localization::localized_str!("Toggle Left Dock"), workspace::ToggleLeftDock),
+        MenuItem::action(localization::localized_str!("Toggle Right Dock"), workspace::ToggleRightDock),
+        MenuItem::action(localization::localized_str!("Toggle Bottom Dock"), workspace::ToggleBottomDock),
+        MenuItem::action(localization::localized_str!("Toggle All Docks"), workspace::ToggleAllDocks),
         MenuItem::submenu(Menu {
-            name: "Editor Layout".into(),
+            name: localization::localized_str!("Editor Layout").into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Split Up", workspace::SplitUp::default()),
-                MenuItem::action("Split Down", workspace::SplitDown::default()),
-                MenuItem::action("Split Left", workspace::SplitLeft::default()),
-                MenuItem::action("Split Right", workspace::SplitRight::default()),
+                MenuItem::action(localization::localized_str!("Split Up"), workspace::SplitUp::default()),
+                MenuItem::action(localization::localized_str!("Split Down"), workspace::SplitDown::default()),
+                MenuItem::action(localization::localized_str!("Split Left"), workspace::SplitLeft::default()),
+                MenuItem::action(localization::localized_str!("Split Right"), workspace::SplitRight::default()),
             ],
         }),
         MenuItem::separator(),
-        MenuItem::action("Project Panel", project_panel::ToggleFocus),
-        MenuItem::action("Outline Panel", outline_panel::ToggleFocus),
-        MenuItem::action("Collab Panel", collab_panel::ToggleFocus),
-        MenuItem::action("Terminal Panel", terminal_panel::Toggle),
-        MenuItem::action("Debugger Panel", debug_panel::ToggleFocus),
+        MenuItem::action(localization::localized_str!("Project Panel"), project_panel::ToggleFocus),
+        MenuItem::action(localization::localized_str!("Outline Panel"), outline_panel::ToggleFocus),
+        MenuItem::action(localization::localized_str!("Collab Panel"), collab_panel::ToggleFocus),
+        MenuItem::action(localization::localized_str!("Terminal Panel"), terminal_panel::Toggle),
+        MenuItem::action(localization::localized_str!("Debugger Panel"), debug_panel::ToggleFocus),
     ];
 
     if !DisableAiSettings::get_global(cx).disable_ai {
-        view_items.push(MenuItem::action("Agent Panel", assistant::ToggleFocus));
+        view_items.push(MenuItem::action(localization::localized_str!("Agent Panel"), assistant::ToggleFocus));
     }
 
     view_items.extend([
-        MenuItem::action("Git Panel", git_panel::ToggleFocus),
+        MenuItem::action(localization::localized_str!("Git Panel"), git_panel::ToggleFocus),
         MenuItem::separator(),
-        MenuItem::action("Diagnostics", diagnostics::Deploy),
+        MenuItem::action(localization::localized_str!("Diagnostics"), diagnostics::Deploy),
         MenuItem::separator(),
     ]);
 
     if ReleaseChannel::try_global(cx) == Some(ReleaseChannel::Dev) {
         view_items.push(MenuItem::action(
-            "Toggle GPUI Inspector",
+            localization::localized_str!("Toggle GPUI Inspector"),
             dev::ToggleInspector,
         ));
         view_items.push(MenuItem::separator());
@@ -68,29 +76,29 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
 
     vec![
         Menu {
-            name: "Zed".into(),
+            name: application_menu_name("Zed"),
             disabled: false,
             items: vec![
-                MenuItem::action("About Zed", zed_actions::About),
-                MenuItem::action("Check for Updates", auto_update::Check),
+                MenuItem::action(localization::localized_str!("About Zed"), zed_actions::About),
+                MenuItem::action(localization::localized_str!("Check for Updates"), auto_update::Check),
                 MenuItem::separator(),
-                MenuItem::submenu(Menu::new("Settings").items([
-                    MenuItem::action("Open Settings", zed_actions::OpenSettings),
-                    MenuItem::action("Open Settings File", super::OpenSettingsFile),
-                    MenuItem::action("Open Project Settings", zed_actions::OpenProjectSettings),
-                    MenuItem::action("Open Project Settings File", super::OpenProjectSettingsFile),
-                    MenuItem::action("Open Default Settings", super::OpenDefaultSettings),
+                MenuItem::submenu(Menu::new(localization::localized_str!("Settings")).items([
+                    MenuItem::action(localization::localized_str!("Open Settings"), zed_actions::OpenSettings),
+                    MenuItem::action(localization::localized_str!("Open Settings File"), super::OpenSettingsFile),
+                    MenuItem::action(localization::localized_str!("Open Project Settings"), zed_actions::OpenProjectSettings),
+                    MenuItem::action(localization::localized_str!("Open Project Settings File"), super::OpenProjectSettingsFile),
+                    MenuItem::action(localization::localized_str!("Open Default Settings"), super::OpenDefaultSettings),
                     MenuItem::separator(),
-                    MenuItem::action("Open Keymap", zed_actions::OpenKeymap),
-                    MenuItem::action("Open Keymap File", zed_actions::OpenKeymapFile),
-                    MenuItem::action("Open Default Key Bindings", zed_actions::OpenDefaultKeymap),
+                    MenuItem::action(localization::localized_str!("Open Keymap"), zed_actions::OpenKeymap),
+                    MenuItem::action(localization::localized_str!("Open Keymap File"), zed_actions::OpenKeymapFile),
+                    MenuItem::action(localization::localized_str!("Open Default Key Bindings"), zed_actions::OpenDefaultKeymap),
                     MenuItem::separator(),
                     MenuItem::action(
-                        "Select Theme...",
+                        localization::localized_str!("Select Theme..."),
                         zed_actions::theme_selector::Toggle::default(),
                     ),
                     MenuItem::action(
-                        "Select Icon Theme...",
+                        localization::localized_str!("Select Icon Theme..."),
                         zed_actions::icon_theme_selector::Toggle::default(),
                     ),
                 ])),
@@ -98,239 +106,239 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 #[cfg(target_os = "macos")]
                 MenuItem::os_submenu("Services", gpui::SystemMenuType::Services),
                 MenuItem::separator(),
-                MenuItem::action("Extensions", zed_actions::Extensions::default()),
+                MenuItem::action(localization::localized_str!("Extensions"), zed_actions::Extensions::default()),
                 #[cfg(not(target_os = "windows"))]
-                MenuItem::action("Install CLI", install_cli::InstallCliBinary),
+                MenuItem::action(localization::localized_str!("Install CLI"), install_cli::InstallCliBinary),
                 MenuItem::separator(),
                 #[cfg(target_os = "macos")]
-                MenuItem::action("Hide Zed", super::Hide),
+                MenuItem::action(localization::localized_str!("Hide Zed"), super::Hide),
                 #[cfg(target_os = "macos")]
-                MenuItem::action("Hide Others", super::HideOthers),
+                MenuItem::action(localization::localized_str!("Hide Others"), super::HideOthers),
                 #[cfg(target_os = "macos")]
-                MenuItem::action("Show All", super::ShowAll),
+                MenuItem::action(localization::localized_str!("Show All"), super::ShowAll),
                 MenuItem::separator(),
-                MenuItem::action("Quit Zed", Quit),
+                MenuItem::action(localization::localized_str!("Quit Zed"), Quit),
             ],
         },
         Menu {
-            name: "File".into(),
+            name: application_menu_name("File"),
             disabled: false,
             items: vec![
-                MenuItem::action("New", workspace::NewFile),
-                MenuItem::action("New Window", workspace::NewWindow),
+                MenuItem::action(localization::localized_str!("New"), workspace::NewFile),
+                MenuItem::action(localization::localized_str!("New Window"), workspace::NewWindow),
                 MenuItem::separator(),
                 #[cfg(not(target_os = "macos"))]
-                MenuItem::action("Open File...", workspace::OpenFiles),
+                MenuItem::action(localization::localized_str!("Open File..."), workspace::OpenFiles),
                 MenuItem::action(
                     if cfg!(not(target_os = "macos")) {
-                        "Open Folder..."
+                        localization::localized_str!("Open Folder...")
                     } else {
                         "Open…"
                     },
                     workspace::Open::default(),
                 ),
-                MenuItem::action("Open Recent…", zed_actions::OpenRecent::default()),
-                MenuItem::action("Open Remote…", zed_actions::OpenRemote::default()),
+                MenuItem::action(localization::localized_str!("Open Recent…"), zed_actions::OpenRecent::default()),
+                MenuItem::action(localization::localized_str!("Open Remote…"), zed_actions::OpenRemote::default()),
                 MenuItem::separator(),
-                MenuItem::action("Add Folder to Project…", workspace::AddFolderToProject),
+                MenuItem::action(localization::localized_str!("Add Folder to Project…"), workspace::AddFolderToProject),
                 MenuItem::separator(),
-                MenuItem::action("Save", workspace::Save { save_intent: None }),
-                MenuItem::action("Save As…", workspace::SaveAs),
-                MenuItem::action("Save All", workspace::SaveAll { save_intent: None }),
+                MenuItem::action(localization::localized_str!("Save"), workspace::Save { save_intent: None }),
+                MenuItem::action(localization::localized_str!("Save As…"), workspace::SaveAs),
+                MenuItem::action(localization::localized_str!("Save All"), workspace::SaveAll { save_intent: None }),
                 MenuItem::separator(),
                 MenuItem::action(
-                    "Close Editor",
+                    localization::localized_str!("Close Editor"),
                     workspace::CloseActiveItem {
                         save_intent: None,
                         close_pinned: true,
                     },
                 ),
-                MenuItem::action("Close Project", workspace::CloseProject),
-                MenuItem::action("Close Window", workspace::CloseWindow),
+                MenuItem::action(localization::localized_str!("Close Project"), workspace::CloseProject),
+                MenuItem::action(localization::localized_str!("Close Window"), workspace::CloseWindow),
             ],
         },
         Menu {
-            name: "Edit".into(),
+            name: application_menu_name("Edit"),
             disabled: false,
             items: vec![
-                MenuItem::os_action("Undo", editor::actions::Undo, OsAction::Undo),
-                MenuItem::os_action("Redo", editor::actions::Redo, OsAction::Redo),
+                MenuItem::os_action(localization::localized_str!("Undo"), editor::actions::Undo, OsAction::Undo),
+                MenuItem::os_action(localization::localized_str!("Redo"), editor::actions::Redo, OsAction::Redo),
                 MenuItem::separator(),
-                MenuItem::os_action("Cut", editor::actions::Cut, OsAction::Cut),
-                MenuItem::os_action("Copy", editor::actions::Copy, OsAction::Copy),
-                MenuItem::action("Copy and Trim", editor::actions::CopyAndTrim),
-                MenuItem::os_action("Paste", editor::actions::Paste, OsAction::Paste),
+                MenuItem::os_action(localization::localized_str!("Cut"), editor::actions::Cut, OsAction::Cut),
+                MenuItem::os_action(localization::localized_str!("Copy"), editor::actions::Copy, OsAction::Copy),
+                MenuItem::action(localization::localized_str!("Copy and Trim"), editor::actions::CopyAndTrim),
+                MenuItem::os_action(localization::localized_str!("Paste"), editor::actions::Paste, OsAction::Paste),
                 MenuItem::separator(),
-                MenuItem::action("Find", search::buffer_search::Deploy::find()),
-                MenuItem::action("Find in Project", workspace::DeploySearch::default()),
+                MenuItem::action(localization::localized_str!("Find"), search::buffer_search::Deploy::find()),
+                MenuItem::action(localization::localized_str!("Find in Project"), workspace::DeploySearch::default()),
                 MenuItem::separator(),
                 MenuItem::action(
-                    "Toggle Line Comment",
+                    localization::localized_str!("Toggle Line Comment"),
                     editor::actions::ToggleComments::default(),
                 ),
             ],
         },
         Menu {
-            name: "Selection".into(),
+            name: application_menu_name("Selection"),
             disabled: false,
             items: vec![
                 MenuItem::os_action(
-                    "Select All",
+                    localization::localized_str!("Select All"),
                     editor::actions::SelectAll,
                     OsAction::SelectAll,
                 ),
-                MenuItem::action("Expand Selection", editor::actions::SelectLargerSyntaxNode),
-                MenuItem::action("Shrink Selection", editor::actions::SelectSmallerSyntaxNode),
-                MenuItem::action("Select Next Sibling", editor::actions::SelectNextSyntaxNode),
+                MenuItem::action(localization::localized_str!("Expand Selection"), editor::actions::SelectLargerSyntaxNode),
+                MenuItem::action(localization::localized_str!("Shrink Selection"), editor::actions::SelectSmallerSyntaxNode),
+                MenuItem::action(localization::localized_str!("Select Next Sibling"), editor::actions::SelectNextSyntaxNode),
                 MenuItem::action(
-                    "Select Previous Sibling",
+                    localization::localized_str!("Select Previous Sibling"),
                     editor::actions::SelectPreviousSyntaxNode,
                 ),
                 MenuItem::separator(),
                 MenuItem::action(
-                    "Add Cursor Above",
+                    localization::localized_str!("Add Cursor Above"),
                     editor::actions::AddSelectionAbove {
                         skip_soft_wrap: true,
                     },
                 ),
                 MenuItem::action(
-                    "Add Cursor Below",
+                    localization::localized_str!("Add Cursor Below"),
                     editor::actions::AddSelectionBelow {
                         skip_soft_wrap: true,
                     },
                 ),
                 MenuItem::action(
-                    "Select Next Occurrence",
+                    localization::localized_str!("Select Next Occurrence"),
                     editor::actions::SelectNext {
                         replace_newest: false,
                     },
                 ),
                 MenuItem::action(
-                    "Select Previous Occurrence",
+                    localization::localized_str!("Select Previous Occurrence"),
                     editor::actions::SelectPrevious {
                         replace_newest: false,
                     },
                 ),
-                MenuItem::action("Select All Occurrences", editor::actions::SelectAllMatches),
+                MenuItem::action(localization::localized_str!("Select All Occurrences"), editor::actions::SelectAllMatches),
                 MenuItem::separator(),
-                MenuItem::action("Move Line Up", editor::actions::MoveLineUp),
-                MenuItem::action("Move Line Down", editor::actions::MoveLineDown),
-                MenuItem::action("Duplicate Selection", editor::actions::DuplicateLineDown),
+                MenuItem::action(localization::localized_str!("Move Line Up"), editor::actions::MoveLineUp),
+                MenuItem::action(localization::localized_str!("Move Line Down"), editor::actions::MoveLineDown),
+                MenuItem::action(localization::localized_str!("Duplicate Selection"), editor::actions::DuplicateLineDown),
             ],
         },
         Menu {
-            name: "View".into(),
+            name: application_menu_name("View"),
             disabled: false,
             items: view_items,
         },
         Menu {
-            name: "Go".into(),
+            name: application_menu_name("Go"),
             disabled: false,
             items: vec![
-                MenuItem::action("Back", workspace::GoBack),
-                MenuItem::action("Forward", workspace::GoForward),
+                MenuItem::action(localization::localized_str!("Back"), workspace::GoBack),
+                MenuItem::action(localization::localized_str!("Forward"), workspace::GoForward),
                 MenuItem::separator(),
-                MenuItem::action("Command Palette...", zed_actions::command_palette::Toggle),
+                MenuItem::action(localization::localized_str!("Command Palette..."), zed_actions::command_palette::Toggle),
                 MenuItem::separator(),
-                MenuItem::action("Go to File...", workspace::ToggleFileFinder::default()),
+                MenuItem::action(localization::localized_str!("Go to File..."), workspace::ToggleFileFinder::default()),
                 // MenuItem::action("Go to Symbol in Project", project_symbols::Toggle),
                 MenuItem::action(
-                    "Go to Symbol in Editor...",
+                    localization::localized_str!("Go to Symbol in Editor..."),
                     zed_actions::outline::ToggleOutline,
                 ),
-                MenuItem::action("Go to Line/Column...", editor::actions::ToggleGoToLine),
+                MenuItem::action(localization::localized_str!("Go to Line/Column..."), editor::actions::ToggleGoToLine),
                 MenuItem::separator(),
                 MenuItem::action(
-                    "Go to Definition",
+                    localization::localized_str!("Go to Definition"),
                     editor::actions::GoToDefinition::default(),
                 ),
                 MenuItem::action(
-                    "Go to Declaration",
+                    localization::localized_str!("Go to Declaration"),
                     editor::actions::GoToDeclaration::default(),
                 ),
                 MenuItem::action(
-                    "Go to Type Definition",
+                    localization::localized_str!("Go to Type Definition"),
                     editor::actions::GoToTypeDefinition::default(),
                 ),
                 MenuItem::action(
-                    "Find All References",
+                    localization::localized_str!("Find All References"),
                     editor::actions::FindAllReferences::default(),
                 ),
-                MenuItem::action("Show Incoming Calls", call_hierarchy::ShowIncomingCalls),
-                MenuItem::action("Show Outgoing Calls", call_hierarchy::ShowOutgoingCalls),
+                MenuItem::action(localization::localized_str!("Show Incoming Calls"), call_hierarchy::ShowIncomingCalls),
+                MenuItem::action(localization::localized_str!("Show Outgoing Calls"), call_hierarchy::ShowOutgoingCalls),
                 MenuItem::separator(),
-                MenuItem::action("Next Problem", editor::actions::GoToDiagnostic::default()),
+                MenuItem::action(localization::localized_str!("Next Problem"), editor::actions::GoToDiagnostic::default()),
                 MenuItem::action(
-                    "Previous Problem",
+                    localization::localized_str!("Previous Problem"),
                     editor::actions::GoToPreviousDiagnostic::default(),
                 ),
             ],
         },
         Menu {
-            name: "Run".into(),
+            name: application_menu_name("Run"),
             disabled: false,
             items: vec![
                 MenuItem::action(
-                    "Spawn Task",
+                    localization::localized_str!("Spawn Task"),
                     zed_actions::Spawn::ViaModal {
                         reveal_target: None,
                     },
                 ),
-                MenuItem::action("Start Debugger", debugger_ui::Start),
+                MenuItem::action(localization::localized_str!("Start Debugger"), debugger_ui::Start),
                 MenuItem::separator(),
-                MenuItem::action("Edit tasks.json…", zed_actions::OpenProjectTasks),
-                MenuItem::action("Edit debug.json…", zed_actions::OpenProjectDebugTasks),
+                MenuItem::action(localization::localized_str!("Edit tasks.json…"), zed_actions::OpenProjectTasks),
+                MenuItem::action(localization::localized_str!("Edit debug.json…"), zed_actions::OpenProjectDebugTasks),
                 MenuItem::separator(),
-                MenuItem::action("Continue", debugger_ui::Continue),
-                MenuItem::action("Step Over", debugger_ui::StepOver),
-                MenuItem::action("Step Into", debugger_ui::StepInto),
-                MenuItem::action("Step Out", debugger_ui::StepOut),
+                MenuItem::action(localization::localized_str!("Continue"), debugger_ui::Continue),
+                MenuItem::action(localization::localized_str!("Step Over"), debugger_ui::StepOver),
+                MenuItem::action(localization::localized_str!("Step Into"), debugger_ui::StepInto),
+                MenuItem::action(localization::localized_str!("Step Out"), debugger_ui::StepOut),
                 MenuItem::separator(),
-                MenuItem::action("Toggle Breakpoint", editor::actions::ToggleBreakpoint),
-                MenuItem::action("Edit Breakpoint", editor::actions::EditLogBreakpoint),
-                MenuItem::action("Clear All Breakpoints", debugger_ui::ClearAllBreakpoints),
+                MenuItem::action(localization::localized_str!("Toggle Breakpoint"), editor::actions::ToggleBreakpoint),
+                MenuItem::action(localization::localized_str!("Edit Breakpoint"), editor::actions::EditLogBreakpoint),
+                MenuItem::action(localization::localized_str!("Clear All Breakpoints"), debugger_ui::ClearAllBreakpoints),
             ],
         },
         Menu {
-            name: "Window".into(),
+            name: application_menu_name("Window"),
             disabled: false,
             items: vec![
-                MenuItem::action("Minimize", super::Minimize),
-                MenuItem::action("Zoom", super::Zoom),
+                MenuItem::action(localization::localized_str!("Minimize"), super::Minimize),
+                MenuItem::action(localization::localized_str!("Zoom"), super::Zoom),
                 MenuItem::separator(),
             ],
         },
         Menu {
-            name: "Help".into(),
+            name: application_menu_name("Help"),
             disabled: false,
             items: vec![
                 MenuItem::action(
-                    "View Release Notes Locally",
+                    localization::localized_str!("View Release Notes Locally"),
                     auto_update_ui::ViewReleaseNotesLocally,
                 ),
-                MenuItem::action("View Telemetry", zed_actions::OpenTelemetryLog),
-                MenuItem::action("View Dependency Licenses", zed_actions::OpenLicenses),
-                MenuItem::action("Show Welcome", onboarding::ShowWelcome),
+                MenuItem::action(localization::localized_str!("View Telemetry"), zed_actions::OpenTelemetryLog),
+                MenuItem::action(localization::localized_str!("View Dependency Licenses"), zed_actions::OpenLicenses),
+                MenuItem::action(localization::localized_str!("Show Welcome"), onboarding::ShowWelcome),
                 MenuItem::separator(),
-                MenuItem::action("File Bug Report...", zed_actions::feedback::FileBugReport),
-                MenuItem::action("Request Feature...", zed_actions::feedback::RequestFeature),
-                MenuItem::action("Email Us...", zed_actions::feedback::EmailZed),
+                MenuItem::action(localization::localized_str!("File Bug Report..."), zed_actions::feedback::FileBugReport),
+                MenuItem::action(localization::localized_str!("Request Feature..."), zed_actions::feedback::RequestFeature),
+                MenuItem::action(localization::localized_str!("Email Us..."), zed_actions::feedback::EmailZed),
                 MenuItem::separator(),
                 MenuItem::action(
-                    "Documentation",
+                    localization::localized_str!("Documentation"),
                     super::OpenBrowser {
                         url: "https://zed.dev/docs".into(),
                     },
                 ),
-                MenuItem::action("Zed Repository", feedback::OpenZedRepo),
+                MenuItem::action(localization::localized_str!("Zed Repository"), feedback::OpenZedRepo),
                 MenuItem::action(
-                    "Zed Twitter",
+                    localization::localized_str!("Zed Twitter"),
                     super::OpenBrowser {
                         url: "https://twitter.com/zeddotdev".into(),
                     },
                 ),
                 MenuItem::action(
-                    "Join the Team",
+                    localization::localized_str!("Join the Team"),
                     super::OpenBrowser {
                         url: "https://zed.dev/jobs".into(),
                     },

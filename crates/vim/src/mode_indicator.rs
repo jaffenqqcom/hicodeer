@@ -128,7 +128,15 @@ impl Render for ModeIndicator {
             (label, None)
         } else {
             let mode_str = if temp_mode {
-                format!("(insert) {}", mode)
+                {
+        let __zed_i18n_arg_0 = format!("{}", mode);
+        localization::format_message(
+            "(insert) {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             } else {
                 mode.to_string()
             };
@@ -141,7 +149,15 @@ impl Render for ModeIndicator {
             let mode = if bg_color != system_transparent {
                 mode_str.into()
             } else {
-                format!("-- {} --", mode_str).into()
+                {
+        let __zed_i18n_arg_0 = format!("{}", mode_str);
+        localization::format_message(
+            "-- {} --",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
             };
             (pending.into(), Some(mode))
         };

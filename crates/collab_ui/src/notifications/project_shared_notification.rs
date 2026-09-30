@@ -124,19 +124,25 @@ impl Render for ProjectSharedNotification {
         let no_worktree_root_names = self.worktree_root_names.is_empty();
 
         let punctuation = if no_worktree_root_names { "" } else { ":" };
-        let main_label = format!(
+        let main_label = {
+        let __zed_i18n_arg_0 = format!("{}", self.owner.username.clone());
+        let __zed_i18n_arg_1 = format!("{}", punctuation);
+        localization::format_message(
             "{} is sharing a project with you{}",
-            self.owner.username.clone(),
-            punctuation
-        );
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    };
 
         div().size_full().font(ui_font).child(
             CollabNotification::new(
                 self.owner.avatar_uri.clone(),
-                Button::new("open", "Open").on_click(cx.listener(move |this, _event, _, cx| {
+                Button::new("open", localization::localized_str!("Open")).on_click(cx.listener(move |this, _event, _, cx| {
                     this.join(cx);
                 })),
-                Button::new("dismiss", "Dismiss").on_click(cx.listener(
+                Button::new("dismiss", localization::localized_str!("Dismiss")).on_click(cx.listener(
                     move |this, _event, _, cx| {
                         this.dismiss(cx);
                     },

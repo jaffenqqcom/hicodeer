@@ -227,8 +227,24 @@ impl TextDiffView {
 
         Self {
             diff_editor,
-            title: format!("Clipboard ↔ {selection_location_title}").into(),
-            path: Some(format!("Clipboard ↔ {selection_location_path}").into()),
+            title: {
+        let __zed_i18n_arg_0 = format!("{}", selection_location_title);
+        localization::format_message(
+            "Clipboard ↔ {selection_location_title}",
+            &[
+                ("selection_location_title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into(),
+            path: Some({
+        let __zed_i18n_arg_0 = format!("{}", selection_location_path);
+        localization::format_message(
+            "Clipboard ↔ {selection_location_path}",
+            &[
+                ("selection_location_path", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()),
             buffer_changes_tx,
             _recalculate_diff_task: cx.spawn(async move |_, cx| {
                 while buffer_changes_rx.recv().await.is_ok() {

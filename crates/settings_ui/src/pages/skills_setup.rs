@@ -58,9 +58,9 @@ pub(crate) fn render_skills_setup_page(
         .map(|this| {
             if skills.is_empty() {
                 let message = match &settings_window.current_file {
-                    SettingsUiFile::User => "No global skills installed.",
-                    SettingsUiFile::Project(_) => "No project skills found.",
-                    _ => "No skills available for this context.",
+                    SettingsUiFile::User => localization::localized_str!("No global skills installed."),
+                    SettingsUiFile::Project(_) => localization::localized_str!("No project skills found."),
+                    _ => localization::localized_str!("No skills available for this context."),
                 };
 
                 this.px_8().items_center().justify_center().child(
@@ -69,7 +69,7 @@ pub(crate) fn render_skills_setup_page(
                         .gap_2()
                         .child(Label::new(message).color(Color::Muted))
                         .child(
-                            Button::new("open-skill-creator-empty", "Create a Skill")
+                            Button::new("open-skill-creator-empty", localization::localized_str!("Create a Skill"))
                                 .tab_index(0_isize)
                                 .style(ButtonStyle::Outlined)
                                 .start_icon(
@@ -119,8 +119,8 @@ fn render_skill_row(
     let skill_name = skill.name.clone();
 
     let (skill_scope, shared_scope) = match &skill.source {
-        SkillSource::ProjectLocal { .. } => ("project", "used in this project"),
-        _ => ("global", "on this machine"),
+        SkillSource::ProjectLocal { .. } => (localization::localized_str!("project"), localization::localized_str!("used in this project")),
+        _ => (localization::localized_str!("global"), localization::localized_str!("on this machine")),
     };
 
     let share_copied = settings_window.last_copied_skill_directory_path.as_deref()
@@ -149,7 +149,7 @@ fn render_skill_row(
             .shape(ui::IconButtonShape::Square)
             .icon_size(IconSize::Small)
             .icon_color(share_icon_color)
-            .tooltip(Tooltip::text("Copy Share Link"))
+            .tooltip(Tooltip::text(localization::localized_str!("Copy Share Link")))
             .visible_on_hover(&group)
             .on_click(cx.listener(move |_settings_window, _event, _window, cx| {
                 let skill_file_path = share_skill_file_path.clone();
@@ -219,7 +219,7 @@ fn render_skill_row(
                     )
                     .tab_index(0_isize)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("Delete Skill"))
+                    .tooltip(Tooltip::text(localization::localized_str!("Delete Skill")))
                     .on_click(cx.listener(
                         move |settings_window, _event, window, cx| {
                             let directory_path = directory_path.clone();
@@ -231,18 +231,33 @@ fn render_skill_row(
                             }
 
                             let prompt_message =
-                                format!("Delete the {skill_scope} skill \"{skill_name}\"?");
-                            let prompt_detail = format!(
-                                "This will move {} to the trash. This skill is shared with other \
-                                 agent tools {shared_scope}, so it will no longer be available to \
-                                 them either.",
-                                directory_path.compact().display(),
-                            );
+                                {
+        let __zed_i18n_arg_0 = format!("{}", skill_scope);
+        let __zed_i18n_arg_1 = format!("{}", skill_name);
+        localization::format_message(
+            "Delete the {skill_scope} skill \"{skill_name}\"?",
+            &[
+                ("skill_scope", __zed_i18n_arg_0),
+                ("skill_name", __zed_i18n_arg_1)
+            ],
+        )
+    };
+                            let prompt_detail = {
+        let __zed_i18n_arg_0 = format!("{}", directory_path.compact().display());
+        let __zed_i18n_arg_1 = format!("{}", shared_scope);
+        localization::format_message(
+            "This will move {} to the trash. This skill is shared with other agent tools {shared_scope}, so it will no longer be available to them either.",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("shared_scope", __zed_i18n_arg_1)
+            ],
+        )
+    };
                             let answer = window.prompt(
                                 PromptLevel::Info,
                                 &prompt_message,
                                 Some(&prompt_detail),
-                                &["Delete", "Cancel"],
+                                &[localization::localized_str!("Delete"), localization::localized_str!("Cancel")],
                                 cx,
                             );
 
@@ -297,7 +312,7 @@ fn render_skill_row(
                     )),
                 )
                 .child(
-                    Button::new(SharedString::from(format!("open-{}", skill.name)), "Open")
+                    Button::new(SharedString::from(format!("open-{}", skill.name)), localization::localized_str!("Open"))
                         .tab_index(0_isize)
                         .style(ButtonStyle::OutlinedGhost)
                         .size(ButtonSize::Medium)

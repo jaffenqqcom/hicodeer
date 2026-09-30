@@ -16,6 +16,7 @@ doctest = false
 cli-support = []
 
 [dependencies]
+localization.workspace = true
 ai_onboarding.workspace = true
 anyhow.workspace = true
 heapless.workspace = true

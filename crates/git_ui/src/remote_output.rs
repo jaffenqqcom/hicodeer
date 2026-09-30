@@ -56,7 +56,7 @@ fn extract_pull_request_link(output: &RemoteCommandOutput) -> Option<(&'static s
             .iter()
             .find(|(hint, _)| remote_line.contains(hint))
         {
-            pending_label = Some(label);
+            pending_label = Some(localization::translate_static(label));
         }
 
         if let Some(url) = extract_url(remote_line)
@@ -84,13 +84,21 @@ pub fn format_output(action: &RemoteAction, output: RemoteCommandOutput) -> Succ
         RemoteAction::Fetch(remote) => {
             if output.stderr.is_empty() {
                 SuccessMessage {
-                    message: "Fetch: Already up to date".into(),
+                    message: localization::localized_str!("Fetch: Already up to date").into(),
                     style: SuccessStyle::Toast,
                 }
             } else {
                 let message = match remote {
-                    Some(remote) => format!("Synchronized with {}", remote.name),
-                    None => "Synchronized with remotes".into(),
+                    Some(remote) => {
+        let __zed_i18n_arg_0 = format!("{}", remote.name);
+        localization::format_message(
+            "Synchronized with {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
+                    None => localization::localized_str!("Synchronized with remotes").into(),
                 };
                 SuccessMessage {
                     message,
@@ -117,7 +125,7 @@ pub fn format_output(action: &RemoteAction, output: RemoteCommandOutput) -> Succ
             };
             if output.stdout.ends_with("Already up to date.\n") {
                 SuccessMessage {
-                    message: "Pull: Already up to date".into(),
+                    message: localization::localized_str!("Pull: Already up to date").into(),
                     style: SuccessStyle::Toast,
                 }
             } else if output.stdout.starts_with("Updating") {
@@ -130,7 +138,15 @@ pub fn format_output(action: &RemoteAction, output: RemoteCommandOutput) -> Succ
                         remote_ref.name
                     )
                 } else {
-                    format!("Fast forwarded from {}", remote_ref.name)
+                    {
+        let __zed_i18n_arg_0 = format!("{}", remote_ref.name);
+        localization::format_message(
+            "Fast forwarded from {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                 };
                 SuccessMessage {
                     message,
@@ -146,7 +162,15 @@ pub fn format_output(action: &RemoteAction, output: RemoteCommandOutput) -> Succ
                         remote_ref.name
                     )
                 } else {
-                    format!("Merged from {}", remote_ref.name)
+                    {
+        let __zed_i18n_arg_0 = format!("{}", remote_ref.name);
+        localization::format_message(
+            "Merged from {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                 };
                 SuccessMessage {
                     message,
@@ -154,12 +178,28 @@ pub fn format_output(action: &RemoteAction, output: RemoteCommandOutput) -> Succ
                 }
             } else if output.stdout.contains("Successfully rebased") {
                 SuccessMessage {
-                    message: format!("Successfully rebased from {}", remote_ref.name),
+                    message: {
+        let __zed_i18n_arg_0 = format!("{}", remote_ref.name);
+        localization::format_message(
+            "Successfully rebased from {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     style: SuccessStyle::ToastWithLog { output },
                 }
             } else {
                 SuccessMessage {
-                    message: format!("Successfully pulled from {}", remote_ref.name),
+                    message: {
+        let __zed_i18n_arg_0 = format!("{}", remote_ref.name);
+        localization::format_message(
+            "Successfully pulled from {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     style: SuccessStyle::ToastWithLog { output },
                 }
             }
@@ -167,17 +207,37 @@ pub fn format_output(action: &RemoteAction, output: RemoteCommandOutput) -> Succ
         RemoteAction::Push(branch_name, remote_ref) => {
             if output.stderr.ends_with("Everything up-to-date\n") {
                 SuccessMessage {
-                    message: "Push: Everything is up-to-date".to_string(),
+                    message: localization::localized_str!("Push: Everything is up-to-date").to_string(),
                     style: SuccessStyle::Toast,
                 }
             } else if let Some((label, url)) = extract_pull_request_link(&output) {
                 SuccessMessage {
-                    message: format!("Pushed {} to {}", branch_name, remote_ref.name),
+                    message: {
+        let __zed_i18n_arg_0 = format!("{}", branch_name);
+        let __zed_i18n_arg_1 = format!("{}", remote_ref.name);
+        localization::format_message(
+            "Pushed {} to {}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    },
                     style: SuccessStyle::PushPrLink { label, url },
                 }
             } else {
                 SuccessMessage {
-                    message: format!("Pushed {} to {}", branch_name, remote_ref.name),
+                    message: {
+        let __zed_i18n_arg_0 = format!("{}", branch_name);
+        let __zed_i18n_arg_1 = format!("{}", remote_ref.name);
+        localization::format_message(
+            "Pushed {} to {}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    },
                     style: SuccessStyle::ToastWithLog { output },
                 }
             }

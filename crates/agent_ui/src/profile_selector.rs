@@ -181,11 +181,11 @@ impl Render for ProfileSelector {
         }
 
         if !self.provider.profiles_supported(cx) {
-            return Button::new("tools-not-supported-button", "Tools Unsupported")
+            return Button::new("tools-not-supported-button", localization::localized_str!("Tools Unsupported"))
                 .disabled(true)
                 .label_size(LabelSize::Small)
                 .color(Color::Muted)
-                .tooltip(Tooltip::text("This model does not support tools."))
+                .tooltip(Tooltip::text(localization::localized_str!("This model does not support tools.")))
                 .into_any_element();
         }
 
@@ -231,7 +231,7 @@ impl Render for ProfileSelector {
                     .gap_1()
                     .child(
                         container()
-                            .child(Label::new("Change Profile"))
+                            .child(Label::new(localization::localized_str!("Change Profile")))
                             .child(KeyBinding::for_action(&ToggleProfileSelector, cx)),
                     )
                     .child(
@@ -239,7 +239,7 @@ impl Render for ProfileSelector {
                             .pt_1()
                             .border_t_1()
                             .border_color(cx.theme().colors().border_variant)
-                            .child(Label::new("Cycle Through Profiles"))
+                            .child(Label::new(localization::localized_str!("Cycle Through Profiles")))
                             .child(KeyBinding::for_action(&CycleModeSelector, cx)),
                     )
                     .into_any()
@@ -388,9 +388,9 @@ impl ProfilePickerDelegate {
 
     fn documentation(candidate: &ProfileCandidate) -> Option<&'static str> {
         match candidate.id.as_str() {
-            builtin_profiles::WRITE => Some("Get help to write anything."),
-            builtin_profiles::ASK => Some("Chat about your codebase."),
-            builtin_profiles::MINIMAL => Some("Chat about anything with no tools."),
+            builtin_profiles::WRITE => Some(localization::localized_str!("Get help to write anything.")),
+            builtin_profiles::ASK => Some(localization::localized_str!("Chat about your codebase.")),
+            builtin_profiles::MINIMAL => Some(localization::localized_str!("Chat about anything with no tools.")),
             _ => None,
         }
     }
@@ -481,14 +481,14 @@ impl PickerDelegate for ProfilePickerDelegate {
     }
 
     fn placeholder_text(&self, _: &mut Window, _: &mut App) -> Arc<str> {
-        "Search profiles…".into()
+        localization::localized_str!("Search profiles…").into()
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.candidates.is_empty() {
-            "No profiles.".into()
+            localization::localized_str!("No profiles.").into()
         } else {
-            "No profiles match your search.".into()
+            localization::localized_str!("No profiles match your search.").into()
         };
         Some(text)
     }
@@ -752,7 +752,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                                                 .color(Color::Warning),
                                         )
                                         .child(
-                                            Label::new("Disabled in Restricted Mode")
+                                            Label::new(localization::localized_str!("Disabled in Restricted Mode"))
                                                 .size(LabelSize::Small),
                                         ),
                                 )
@@ -790,7 +790,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                         .border_color(cx.theme().colors().border_variant)
                         .p_1p5()
                         .child(
-                            Button::new("configure", "Configure")
+                            Button::new("configure", localization::localized_str!("Configure"))
                                 .full_width()
                                 .style(ButtonStyle::Outlined)
                                 .key_binding(
@@ -817,7 +817,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                             .border_color(cx.theme().colors().border_variant)
                             .p_1p5()
                             .child(
-                                Button::new("restricted-mode", "Restricted Mode")
+                                Button::new("restricted-mode", localization::localized_str!("Restricted Mode"))
                                     .full_width()
                                     .style(ButtonStyle::Tinted(TintColor::Warning))
                                     .color(Color::Warning)
@@ -827,7 +827,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                                             .color(Color::Warning),
                                     )
                                     .tooltip(Tooltip::text(
-                                        "Some tools are disabled. Click to review trust settings.",
+                                        localization::localized_str!("Some tools are disabled. Click to review trust settings."),
                                     ))
                                     .on_click(|_, window, cx| {
                                         window.dispatch_action(

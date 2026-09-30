@@ -57,36 +57,36 @@ impl DebuggerPaneItem {
 
     pub(crate) fn to_shared_string(self) -> SharedString {
         match self {
-            DebuggerPaneItem::Console => SharedString::new_static("Console"),
-            DebuggerPaneItem::Variables => SharedString::new_static("Variables"),
-            DebuggerPaneItem::BreakpointList => SharedString::new_static("Breakpoints"),
-            DebuggerPaneItem::Frames => SharedString::new_static("Frames"),
-            DebuggerPaneItem::Modules => SharedString::new_static("Modules"),
-            DebuggerPaneItem::LoadedSources => SharedString::new_static("Sources"),
-            DebuggerPaneItem::Terminal => SharedString::new_static("Terminal"),
-            DebuggerPaneItem::MemoryView => SharedString::new_static("Memory View"),
+            DebuggerPaneItem::Console => SharedString::new_static(localization::localized_str!("Console")),
+            DebuggerPaneItem::Variables => SharedString::new_static(localization::localized_str!("Variables")),
+            DebuggerPaneItem::BreakpointList => SharedString::new_static(localization::localized_str!("Breakpoints")),
+            DebuggerPaneItem::Frames => SharedString::new_static(localization::localized_str!("Frames")),
+            DebuggerPaneItem::Modules => SharedString::new_static(localization::localized_str!("Modules")),
+            DebuggerPaneItem::LoadedSources => SharedString::new_static(localization::localized_str!("Sources")),
+            DebuggerPaneItem::Terminal => SharedString::new_static(localization::localized_str!("Terminal")),
+            DebuggerPaneItem::MemoryView => SharedString::new_static(localization::localized_str!("Memory View")),
         }
     }
     pub(crate) fn tab_tooltip(self) -> SharedString {
         let tooltip = match self {
             DebuggerPaneItem::Console => {
-                "Displays program output and allows manual input of debugger commands"
+                localization::localized_str!("Displays program output and allows manual input of debugger commands")
             }
             DebuggerPaneItem::Variables => {
-                "Shows current values of local and global variables in the current stack frame"
+                localization::localized_str!("Shows current values of local and global variables in the current stack frame")
             }
-            DebuggerPaneItem::BreakpointList => "Lists all active breakpoints set in the code",
+            DebuggerPaneItem::BreakpointList => localization::localized_str!("Lists all active breakpoints set in the code"),
             DebuggerPaneItem::Frames => {
-                "Displays the call stack, letting you navigate between function calls"
+                localization::localized_str!("Displays the call stack, letting you navigate between function calls")
             }
-            DebuggerPaneItem::Modules => "Shows all modules or libraries loaded by the program",
+            DebuggerPaneItem::Modules => localization::localized_str!("Shows all modules or libraries loaded by the program"),
             DebuggerPaneItem::LoadedSources => {
-                "Lists all source files currently loaded and used by the debugger"
+                localization::localized_str!("Lists all source files currently loaded and used by the debugger")
             }
             DebuggerPaneItem::Terminal => {
-                "Provides an interactive terminal session within the debugging environment"
+                localization::localized_str!("Provides an interactive terminal session within the debugging environment")
             }
-            DebuggerPaneItem::MemoryView => "Allows inspection of memory contents",
+            DebuggerPaneItem::MemoryView => localization::localized_str!("Allows inspection of memory contents"),
         };
         SharedString::new_static(tooltip)
     }

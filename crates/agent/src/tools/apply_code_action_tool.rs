@@ -63,12 +63,28 @@ impl AgentTool for ApplyCodeActionTool {
                     Some(pending.actions.get(index)?.lsp_action.title().to_string())
                 });
             if let Some(title) = title {
-                format!("Apply code action: {title}").into()
+                {
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "Apply code action: {title}",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
             } else {
-                format!("Apply code action #{}", input.index).into()
+                {
+        let __zed_i18n_arg_0 = format!("{}", input.index);
+        localization::format_message(
+            "Apply code action #{}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
             }
         } else {
-            "Apply code action".into()
+            localization::localized_str!("Apply code action").into()
         }
     }
 

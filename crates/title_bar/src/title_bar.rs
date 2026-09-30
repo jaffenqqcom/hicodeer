@@ -391,7 +391,7 @@ impl Render for TitleBar {
                 )
                 .when(is_signing_in, |this| {
                     this.child(
-                        Label::new("Signing in…")
+                        Label::new(localization::localized_str!("Signing in…"))
                             .size(LabelSize::Small)
                             .color(Color::Muted)
                             .with_animation(
@@ -617,12 +617,12 @@ impl TitleBar {
         let (nickname, tooltip_title, icon) = match options {
             RemoteConnectionOptions::Ssh(options) => (
                 options.nickname.map(|nick| nick.into()),
-                "Remote Project",
+                localization::localized_str!("Remote Project"),
                 IconName::Server,
             ),
-            RemoteConnectionOptions::Wsl(_) => (None, "Remote Project", IconName::Linux),
+            RemoteConnectionOptions::Wsl(_) => (None, localization::localized_str!("Remote Project"), IconName::Linux),
             RemoteConnectionOptions::Docker(_dev_container_connection) => {
-                (None, "Dev Container", IconName::Box)
+                (None, localization::localized_str!("Dev Container"), IconName::Box)
             }
             #[cfg(any(test, feature = "test-support"))]
             RemoteConnectionOptions::Mock(_) => (None, "Mock Remote Project", IconName::Server),
@@ -631,18 +631,58 @@ impl TitleBar {
         let nickname = nickname.unwrap_or_else(|| host.clone());
 
         let (indicator_color, meta) = match self.project.read(cx).remote_connection_state(cx)? {
-            remote::ConnectionState::Connecting => (Color::Info, format!("Connecting to: {host}")),
-            remote::ConnectionState::Connected => (Color::Success, format!("Connected to: {host}")),
+            remote::ConnectionState::Connecting => (Color::Info, {
+        let __zed_i18n_arg_0 = format!("{}", host);
+        localization::format_message(
+            "Connecting to: {host}",
+            &[
+                ("host", __zed_i18n_arg_0)
+            ],
+        )
+    }),
+            remote::ConnectionState::Connected => (Color::Success, {
+        let __zed_i18n_arg_0 = format!("{}", host);
+        localization::format_message(
+            "Connected to: {host}",
+            &[
+                ("host", __zed_i18n_arg_0)
+            ],
+        )
+    }),
             remote::ConnectionState::HeartbeatMissed => (
                 Color::Warning,
-                format!("Connection attempt to {host} missed. Retrying..."),
+                {
+        let __zed_i18n_arg_0 = format!("{}", host);
+        localization::format_message(
+            "Connection attempt to {host} missed. Retrying...",
+            &[
+                ("host", __zed_i18n_arg_0)
+            ],
+        )
+    },
             ),
             remote::ConnectionState::Reconnecting => (
                 Color::Warning,
-                format!("Lost connection to {host}. Reconnecting..."),
+                {
+        let __zed_i18n_arg_0 = format!("{}", host);
+        localization::format_message(
+            "Lost connection to {host}. Reconnecting...",
+            &[
+                ("host", __zed_i18n_arg_0)
+            ],
+        )
+    },
             ),
             remote::ConnectionState::Disconnected => {
-                (Color::Error, format!("Disconnected from {host}"))
+                (Color::Error, {
+        let __zed_i18n_arg_0 = format!("{}", host);
+        localization::format_message(
+            "Disconnected from {host}",
+            &[
+                ("host", __zed_i18n_arg_0)
+            ],
+        )
+    })
             }
         };
 
@@ -709,7 +749,7 @@ impl TitleBar {
             return None;
         }
 
-        let button = Button::new("restricted_mode_trigger", "Restricted Mode")
+        let button = Button::new("restricted_mode_trigger", localization::localized_str!("Restricted Mode"))
             .style(ButtonStyle::Tinted(TintColor::Warning))
             .label_size(LabelSize::Small)
             .color(Color::Warning)
@@ -720,9 +760,9 @@ impl TitleBar {
             )
             .tooltip(|_, cx| {
                 Tooltip::with_meta(
-                    "You're in Restricted Mode",
+                    localization::localized_str!("You're in Restricted Mode"),
                     Some(&ToggleWorktreeSecurity),
-                    "Mark this project as trusted and unlock all features",
+                    localization::localized_str!("Mark this project as trusted and unlock all features"),
                     cx,
                 )
             })
@@ -751,7 +791,7 @@ impl TitleBar {
 
         if self.project.read(cx).is_disconnected(cx) {
             return Some(
-                Button::new("disconnected", "Disconnected")
+                Button::new("disconnected", localization::localized_str!("Disconnected"))
                     .disabled(true)
                     .color(Color::Disabled)
                     .label_size(LabelSize::Small)
@@ -773,12 +813,17 @@ impl TitleBar {
                 .label_size(LabelSize::Small)
                 .tab_index(0isize)
                 .tooltip(move |_, cx| {
-                    let tooltip_title = format!(
-                        "{} is sharing this project. Click to follow.",
-                        host_user.username
-                    );
+                    let tooltip_title = {
+        let __zed_i18n_arg_0 = format!("{}", host_user.username);
+        localization::format_message(
+            "{} is sharing this project. Click to follow.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    };
 
-                    Tooltip::with_meta(tooltip_title, None, "Click to Follow", cx)
+                    Tooltip::with_meta(tooltip_title, None, localization::localized_str!("Click to Follow"), cx)
                 })
                 .on_click({
                     let host_peer_id = host.peer_id;
@@ -807,7 +852,7 @@ impl TitleBar {
         let display_name = if let Some(ref name) = name {
             util::truncate_and_trailoff(name, MAX_PROJECT_NAME_LENGTH)
         } else {
-            "Open Recent Project".to_string()
+            localization::localized_str!("Open Recent Project").to_string()
         };
 
         let is_sidebar_open = self
@@ -868,7 +913,7 @@ impl TitleBar {
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
-                    Tooltip::for_action("Recent Projects", &zed_actions::OpenRecent::default(), cx)
+                    Tooltip::for_action(localization::localized_str!("Recent Projects"), &zed_actions::OpenRecent::default(), cx)
                 },
             )
             .anchor(gpui::Anchor::TopLeft)
@@ -920,7 +965,7 @@ impl TitleBar {
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
-                    Tooltip::for_action("Recent Projects", &zed_actions::OpenRecent::default(), cx)
+                    Tooltip::for_action(localization::localized_str!("Recent Projects"), &zed_actions::OpenRecent::default(), cx)
                 },
             )
             .anchor(gpui::Anchor::TopLeft)
@@ -1022,9 +1067,17 @@ impl TitleBar {
                         ),
                     move |_window, cx| {
                         Tooltip::with_meta(
-                            "Worktree",
+                            localization::localized_str!("Worktree"),
                             Some(&zed_actions::git::Worktree),
-                            format!("Currently In Use: {}", worktree_label),
+                            {
+        let __zed_i18n_arg_0 = format!("{}", worktree_label);
+        localization::format_message(
+            "Currently In Use: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                             cx,
                         )
                     },
@@ -1042,7 +1095,7 @@ impl TitleBar {
                 };
 
                 let trigger = if is_detached_head {
-                    Button::new("project_branch_trigger", "Create Branch")
+                    Button::new("project_branch_trigger", localization::localized_str!("Create Branch"))
                         .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                         .label_size(LabelSize::Small)
                         .tab_index(0isize)
@@ -1075,12 +1128,28 @@ impl TitleBar {
                     })
                     .trigger_with_tooltip(trigger, move |_window, cx| {
                         let meta = if is_detached_head {
-                            format!("Detached HEAD: {}", branch_tooltip_label)
+                            {
+        let __zed_i18n_arg_0 = format!("{}", branch_tooltip_label);
+        localization::format_message(
+            "Detached HEAD: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                         } else {
-                            format!("Currently Checked Out: {}", branch_tooltip_label)
+                            {
+        let __zed_i18n_arg_0 = format!("{}", branch_tooltip_label);
+        localization::format_message(
+            "Currently Checked Out: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                         };
                         Tooltip::with_meta(
-                            "Branch & Stash",
+                            localization::localized_str!("Branch & Stash"),
                             Some(&zed_actions::git::Branch),
                             meta,
                             cx,
@@ -1161,19 +1230,19 @@ impl TitleBar {
                 div()
                     .id("disconnected")
                     .child(Icon::new(IconName::Disconnected).size(IconSize::Small))
-                    .tooltip(Tooltip::text("Disconnected"))
+                    .tooltip(Tooltip::text(localization::localized_str!("Disconnected")))
                     .into_any_element(),
             ),
             client::Status::UpgradeRequired => {
                 let auto_updater = auto_update::AutoUpdater::get(cx);
                 let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
-                    Some(AutoUpdateStatus::Updated { .. }) => "Please restart Zed to Collaborate",
+                    Some(AutoUpdateStatus::Updated { .. }) => localization::localized_str!("Please restart Zed to Collaborate"),
                     Some(AutoUpdateStatus::Installing { .. })
                     | Some(AutoUpdateStatus::Downloading { .. })
-                    | Some(AutoUpdateStatus::Checking) => "Updating...",
+                    | Some(AutoUpdateStatus::Checking) => localization::localized_str!("Updating..."),
                     Some(AutoUpdateStatus::Idle)
                     | Some(AutoUpdateStatus::Errored { .. })
-                    | None => "Please update Zed to Collaborate",
+                    | None => localization::localized_str!("Please update Zed to Collaborate"),
                 };
 
                 Some(
@@ -1198,7 +1267,7 @@ impl TitleBar {
     pub fn render_sign_in_button(&mut self, _: &mut Context<Self>) -> Button {
         let client = self.client.clone();
         let workspace = self.workspace.clone();
-        Button::new("sign_in", "Sign In")
+        Button::new("sign_in", localization::localized_str!("Sign In"))
             .label_size(LabelSize::Small)
             .tab_index(0isize)
             .on_click(move |_, window, cx| {
@@ -1259,7 +1328,7 @@ impl TitleBar {
             });
 
             ButtonLike::new("user-menu")
-                .aria_label("User menu")
+                .aria_label(localization::localized_str!("User menu"))
                 .tab_index(0isize)
                 .child(
                     h_flex()
@@ -1271,7 +1340,7 @@ impl TitleBar {
                 )
         } else {
             ButtonLike::new("user-menu")
-                .aria_label("User menu")
+                .aria_label(localization::localized_str!("User menu"))
                 .tab_index(0isize)
                 .child(Icon::new(IconName::ChevronDown).size(IconSize::Small))
         };
@@ -1317,7 +1386,7 @@ impl TitleBar {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Restart to update Zed").color(Color::Accent))
+                                    .child(Label::new(localization::localized_str!("Restart to update Zed")).color(Color::Accent))
                                     .child(
                                         Icon::new(IconName::Download)
                                             .size(IconSize::Small)
@@ -1385,25 +1454,25 @@ impl TitleBar {
 
                         this.separator()
                     })
-                    .action("Settings", zed_actions::OpenSettings.boxed_clone())
-                    .action("Keymap", Box::new(zed_actions::OpenKeymap))
+                    .action(localization::localized_str!("Settings"), zed_actions::OpenSettings.boxed_clone())
+                    .action(localization::localized_str!("Keymap"), Box::new(zed_actions::OpenKeymap))
                     .action(
-                        "Themes…",
+                        localization::localized_str!("Themes…"),
                         zed_actions::theme_selector::Toggle::default().boxed_clone(),
                     )
                     .action(
-                        "Icon Themes…",
+                        localization::localized_str!("Icon Themes…"),
                         zed_actions::icon_theme_selector::Toggle::default().boxed_clone(),
                     )
                     .action(
-                        "Extensions",
+                        localization::localized_str!("Extensions"),
                         zed_actions::Extensions::default().boxed_clone(),
                     )
                     .when(ai_enabled, |menu| {
                         menu.separator()
-                            .submenu("Panel Layout", move |menu, _window, _cx| {
+                            .submenu(localization::localized_str!("Panel Layout"), move |menu, _window, _cx| {
                                 menu.toggleable_entry(
-                                    "Classic",
+                                    localization::localized_str!("Classic"),
                                     is_editor,
                                     IconPosition::Start,
                                     Some(UseClassicLayout.boxed_clone()),
@@ -1412,7 +1481,7 @@ impl TitleBar {
                                     },
                                 )
                                 .toggleable_entry(
-                                    "Agentic",
+                                    localization::localized_str!("Agentic"),
                                     is_agent,
                                     IconPosition::Start,
                                     Some(UseAgenticLayout.boxed_clone()),
@@ -1422,7 +1491,7 @@ impl TitleBar {
                                 )
                                 .when(is_custom, |menu| {
                                     menu.item(
-                                        ContextMenuEntry::new("Custom")
+                                        ContextMenuEntry::new(localization::localized_str!("Custom"))
                                             .toggleable(IconPosition::Start, true)
                                             .disabled(true),
                                     )
@@ -1431,7 +1500,7 @@ impl TitleBar {
                     })
                     .when(is_signed_in, |this| {
                         this.separator()
-                            .action("Sign Out", client::SignOut.boxed_clone())
+                            .action(localization::localized_str!("Sign Out"), client::SignOut.boxed_clone())
                     })
                 })
                 .into()

@@ -830,33 +830,33 @@ pub fn authorize_dirty_buffer(
 ) -> Task<Result<DirtyBufferDecision>> {
     let (message, options) = match kind {
         DirtyBufferPromptKind::Edit => (
-            "This file has unsaved changes. Do you want to save or discard them \
-             before the agent continues editing?"
+            localization::localized_str!("This file has unsaved changes. Do you want to save or discard them \
+             before the agent continues editing?")
                 .to_string(),
             vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("save"),
-                    "Save",
+                    localization::localized_str!("Save"),
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("discard"),
-                    "Discard",
+                    localization::localized_str!("Discard"),
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ],
         ),
         DirtyBufferPromptKind::Overwrite => (
-            "This file has unsaved changes and the agent wants to overwrite it.".to_string(),
+            localization::localized_str!("This file has unsaved changes and the agent wants to overwrite it.").to_string(),
             vec![
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("discard"),
-                    "Overwrite",
+                    localization::localized_str!("Overwrite"),
                     acp::PermissionOptionKind::AllowOnce,
                 ),
                 acp::PermissionOption::new(
                     acp::PermissionOptionId::new("keep"),
-                    "Cancel",
+                    localization::localized_str!("Cancel"),
                     acp::PermissionOptionKind::RejectOnce,
                 ),
             ],

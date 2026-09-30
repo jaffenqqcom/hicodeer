@@ -20,7 +20,10 @@ use crate::{
     runnables::RunnableTaskStatus,
 };
 
-static EMPTY_LENS_FALLBACK_TITLE: SharedString = SharedString::new_static("0 references");
+fn empty_lens_fallback_title() -> &'static SharedString {
+    static TITLE: std::sync::OnceLock<SharedString> = std::sync::OnceLock::new();
+    TITLE.get_or_init(|| localization::localized_str!("0 references").into())
+}
 const CODE_LENS_SEPARATOR: &str = " | ";
 
 #[derive(Clone, Debug)]
@@ -574,7 +577,7 @@ fn rendered_text_matches(a: &CodeLensLine, b: &CodeLensLine) -> bool {
 fn displayed_title(item: &CodeLensItem) -> Option<&SharedString> {
     item.title
         .as_ref()
-        .or_else(|| item.action.resolved.then_some(&EMPTY_LENS_FALLBACK_TITLE))
+        .or_else(|| item.action.resolved.then_some(empty_lens_fallback_title()))
 }
 
 fn group_lenses_by_row(

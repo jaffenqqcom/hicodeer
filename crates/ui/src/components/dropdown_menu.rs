@@ -337,24 +337,24 @@ impl Component for DropdownMenu {
         });
 
         let menu_with_submenu = ContextMenu::build(window, cx, |this, _, _| {
-            this.entry("Toggle All Docks", None, |_, _| {})
-                .submenu("Editor Layout", |menu, _, _| {
-                    menu.entry("Split Up", None, |_, _| {})
-                        .entry("Split Down", None, |_, _| {})
+            this.entry(localization::localized_str!("Toggle All Docks"), None, |_, _| {})
+                .submenu(localization::localized_str!("Editor Layout"), |menu, _, _| {
+                    menu.entry(localization::localized_str!("Split Up"), None, |_, _| {})
+                        .entry(localization::localized_str!("Split Down"), None, |_, _| {})
                         .separator()
-                        .entry("Split Side", None, |_, _| {})
+                        .entry(localization::localized_str!("Split Side"), None, |_, _| {})
                 })
                 .separator()
-                .entry("Project Panel", None, |_, _| {})
-                .entry("Outline Panel", None, |_, _| {})
+                .entry(localization::localized_str!("Project Panel"), None, |_, _| {})
+                .entry(localization::localized_str!("Outline Panel"), None, |_, _| {})
                 .separator()
                 .submenu("Autofill", |menu, _, _| {
                     menu.entry("Contact…", None, |_, _| {})
-                        .entry("Passwords…", None, |_, _| {})
+                        .entry(localization::localized_str!("Passwords…"), None, |_, _| {})
                 })
                 .submenu_with_icon("Predict", IconName::ZedPredict, |menu, _, _| {
-                    menu.entry("Everywhere", None, |_, _| {})
-                        .entry("At Cursor", None, |_, _| {})
+                    menu.entry(localization::localized_str!("Everywhere"), None, |_, _| {})
+                        .entry(localization::localized_str!("At Cursor"), None, |_, _| {})
                         .entry("Over Here", None, |_, _| {})
                         .entry("Over There", None, |_, _| {})
                 })

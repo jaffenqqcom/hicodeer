@@ -1969,7 +1969,7 @@ async fn resolve_auth_required(
         return ContextServerState::Error {
             configuration,
             server,
-            error: "Server returned 401 Unauthorized. Check your configured Authorization header."
+            error: localization::localized_str!("Server returned 401 Unauthorized. Check your configured Authorization header.")
                 .into(),
         };
     }
@@ -1981,7 +1981,7 @@ async fn resolve_auth_required(
             return ContextServerState::Error {
                 configuration,
                 server,
-                error: "Server returned 401 Unauthorized on a non-HTTP transport".into(),
+                error: localization::localized_str!("Server returned 401 Unauthorized on a non-HTTP transport").into(),
             };
         }
     };

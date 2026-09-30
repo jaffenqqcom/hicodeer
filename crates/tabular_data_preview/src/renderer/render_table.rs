@@ -165,10 +165,24 @@ impl TabularDataPreviewPane {
                                     let so = pos.start.offset;
                                     let elv = pos.end.timestamp().value;
                                     let eo = pos.end.offset;
-                                    format!("Pos {so}(L{slv})-{eo}(L{elv})")
+                                    {
+        let __zed_i18n_arg_0 = format!("{}", so);
+        let __zed_i18n_arg_1 = format!("{}", slv);
+        let __zed_i18n_arg_2 = format!("{}", eo);
+        let __zed_i18n_arg_3 = format!("{}", elv);
+        localization::format_message(
+            "Pos {so}(L{slv})-{eo}(L{elv})",
+            &[
+                ("so", __zed_i18n_arg_0),
+                ("slv", __zed_i18n_arg_1),
+                ("eo", __zed_i18n_arg_2),
+                ("elv", __zed_i18n_arg_3)
+            ],
+        )
+    }
                                 }
-                                TableCell::Virtual => "Virtual cell".into(),
-                                TableCell::Generated(_) => "Generated cell".into(),
+                                TableCell::Virtual => localization::localized_str!("Virtual cell").into(),
+                                TableCell::Generated(_) => localization::localized_str!("Generated cell").into(),
                             },
                         ))
                     })

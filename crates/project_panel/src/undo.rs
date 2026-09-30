@@ -433,8 +433,8 @@ impl UndoMessage {
             UndoMessage::Changed(_) => {
                 "this is a bug in the manage_undo_and_redo task please report"
             }
-            UndoMessage::Undo => "Undo Failed",
-            UndoMessage::Redo => "Redo Failed",
+            UndoMessage::Undo => localization::localized_str!("Undo Failed"),
+            UndoMessage::Redo => localization::localized_str!("Redo Failed"),
         }
     }
 }
@@ -649,9 +649,9 @@ impl Inner {
         // share the parent folder, then it was a simple rename, otherwise it
         // was a move.
         let operation = if from.path.parent() == to.path.parent() {
-            "rename"
+            localization::localized_str!("rename")
         } else {
-            "move"
+            localization::localized_str!("move")
         };
 
         let res: Result<Task<Result<CreatedEntry>>> = workspace.update(cx, |workspace, cx| {
@@ -660,7 +660,17 @@ impl Inner {
                     .entry_for_path(from, cx)
                     .map(|entry| entry.id)
                     .with_context(|| {
-                        format!("Failed to {operation} `{from_name}`. It no longer exists.")
+                        {
+        let __zed_i18n_arg_0 = format!("{}", operation);
+        let __zed_i18n_arg_1 = format!("{}", from_name);
+        localization::format_message(
+            "Failed to {operation} `{from_name}`. It no longer exists.",
+            &[
+                ("operation", __zed_i18n_arg_0),
+                ("from_name", __zed_i18n_arg_1)
+            ],
+        )
+    }
                     })?;
 
                 Ok(project.rename_entry(entry_id, to.clone(), cx))
@@ -678,9 +688,19 @@ impl Inner {
             }) || format!("{err:#}").contains("already exists");
 
             if already_exists {
-                anyhow!(
-                    "Failed to {operation} `{from_name}` to `{to_name}`. A file or folder already exists there."
-                )
+                anyhow!("{}", {
+        let __zed_i18n_arg_0 = format!("{}", operation);
+        let __zed_i18n_arg_1 = format!("{}", from_name);
+        let __zed_i18n_arg_2 = format!("{}", to_name);
+        localization::format_message(
+            "Failed to {operation} `{from_name}` to `{to_name}`. A file or folder already exists there.",
+            &[
+                ("operation", __zed_i18n_arg_0),
+                ("from_name", __zed_i18n_arg_1),
+                ("to_name", __zed_i18n_arg_2)
+            ],
+        )
+    })
             } else {
                 err
             }
@@ -796,17 +816,41 @@ impl Inner {
                 let entry_id = project
                     .entry_for_path(project_path, cx)
                     .map(|entry| entry.id)
-                    .with_context(|| format!("Failed to trash `{name}`. It no longer exists."))?;
+                    .with_context(|| {
+        let __zed_i18n_arg_0 = format!("{}", name);
+        localization::format_message(
+            "Failed to trash `{name}`. It no longer exists.",
+            &[
+                ("name", __zed_i18n_arg_0)
+            ],
+        )
+    })?;
 
                 project
                     .trash_entry(entry_id, cx)
-                    .with_context(|| format!("Failed to trash `{name}`."))
+                    .with_context(|| {
+        let __zed_i18n_arg_0 = format!("{}", name);
+        localization::format_message(
+            "Failed to trash `{name}`.",
+            &[
+                ("name", __zed_i18n_arg_0)
+            ],
+        )
+    })
             })
         })?;
 
         match task.await {
             Ok(trash_id) => Ok(trash_id),
-            Err(err) => Err(err).context(format!("Failed to trash `{name}`.")),
+            Err(err) => Err(err).context({
+        let __zed_i18n_arg_0 = format!("{}", name);
+        localization::format_message(
+            "Failed to trash `{name}`.",
+            &[
+                ("name", __zed_i18n_arg_0)
+            ],
+        )
+    }),
         }
     }
 
@@ -847,7 +891,7 @@ impl Inner {
                     project_path_display(project, &project_path, path_style, cx)
                 }))
             })
-            .unwrap_or_else(|| "item".to_string());
+            .unwrap_or_else(|| localization::localized_str!("item").to_string());
 
         workspace
             .update(cx, |workspace, cx| {
@@ -857,10 +901,24 @@ impl Inner {
             })
             .await
             .map_err(|err| match err.downcast_ref::<TrashRestoreError>() {
-                Some(TrashRestoreError::Collision { .. }) => anyhow!(
-                    "Failed to restore `{name}`. Something already exists at its original location."
-                ),
-                _ => anyhow!("Failed to restore `{name}`. It may have been permanently deleted."),
+                Some(TrashRestoreError::Collision { .. }) => anyhow!("{}", {
+        let __zed_i18n_arg_0 = format!("{}", name);
+        localization::format_message(
+            "Failed to restore `{name}`. Something already exists at its original location.",
+            &[
+                ("name", __zed_i18n_arg_0)
+            ],
+        )
+    }),
+                _ => anyhow!("{}", {
+        let __zed_i18n_arg_0 = format!("{}", name);
+        localization::format_message(
+            "Failed to restore `{name}`. It may have been permanently deleted.",
+            &[
+                ("name", __zed_i18n_arg_0)
+            ],
+        )
+    }),
             })
     }
 
@@ -992,7 +1050,7 @@ impl Inner {
                     PromptLevel::Info,
                     &prompt.message,
                     prompt.detail,
-                    &[prompt.confirmation_label, "Cancel"],
+                    &[prompt.confirmation_label, localization::localized_str!("Cancel")],
                     cx,
                 )
             })?

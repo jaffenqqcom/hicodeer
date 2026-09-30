@@ -167,7 +167,7 @@ impl RenderOnce for SandboxStatusTooltip {
         let content = match self {
             SandboxStatusTooltip::DisabledInSettings => v_flex()
                 .child(
-                    Label::new("You have sandboxing disabled in settings.")
+                    Label::new(localization::localized_str!("You have sandboxing disabled in settings."))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -176,7 +176,7 @@ impl RenderOnce for SandboxStatusTooltip {
                 .gap_1()
                 .child(div().opacity(0.5).child(settings.render(cx)))
                 .child(Divider::horizontal())
-                .child(Label::new("Sandboxing is disabled for this thread").size(LabelSize::Small))
+                .child(Label::new(localization::localized_str!("Sandboxing is disabled for this thread")).size(LabelSize::Small))
                 .into_any_element(),
             SandboxStatusTooltip::Enabled { settings, thread } => v_flex()
                 .gap_2()
@@ -193,7 +193,7 @@ impl RenderOnce for SandboxStatusTooltip {
         v_flex()
             .w(rems_from_px(280_f32))
             .gap_1()
-            .child(Label::new("Sandboxing"))
+            .child(Label::new(localization::localized_str!("Sandboxing")))
             .child(content)
     }
 }
@@ -214,29 +214,29 @@ impl Component for SandboxStatusTooltip {
     }
 
     fn preview(_window: &mut Window, cx: &mut App) -> AnyElement {
-        let settings_section = SandboxSection::new("Defined in your settings:")
-            .group(SandboxGroup::new("Write Access").rows([
+        let settings_section = SandboxSection::new(localization::localized_str!("Defined in your settings:"))
+            .group(SandboxGroup::new(localization::localized_str!("Write Access")).rows([
                 SandboxRow::path("/Users/you/project"),
                 SandboxRow::path("/tmp (isolated)"),
             ]))
-            .group(SandboxGroup::new("Network Access").rows([
+            .group(SandboxGroup::new(localization::localized_str!("Network Access")).rows([
                 SandboxRow::domain("github.com"),
                 SandboxRow::domain("*.npmjs.org"),
             ]));
 
-        let thread_section = SandboxSection::new("Allowed for this thread:")
+        let thread_section = SandboxSection::new(localization::localized_str!("Allowed for this thread:"))
             .group(
-                SandboxGroup::new("Write Access").row(SandboxRow::path("/Users/you/project/build")),
+                SandboxGroup::new(localization::localized_str!("Write Access")).row(SandboxRow::path("/Users/you/project/build")),
             )
-            .group(SandboxGroup::new("Network Access").row(SandboxRow::message("None")));
+            .group(SandboxGroup::new(localization::localized_str!("Network Access")).row(SandboxRow::message(localization::localized_str!("None"))));
 
-        let unrestricted_section = SandboxSection::new("Defined in your settings:")
-            .group(SandboxGroup::new("Write Access").row(SandboxRow::message(
-                "All paths except protected Git metadata",
+        let unrestricted_section = SandboxSection::new(localization::localized_str!("Defined in your settings:"))
+            .group(SandboxGroup::new(localization::localized_str!("Write Access")).row(SandboxRow::message(
+                localization::localized_str!("All paths except protected Git metadata"),
             )))
             .group(
-                SandboxGroup::new("Network Access")
-                    .row(SandboxRow::message("All domains (unrestricted)")),
+                SandboxGroup::new(localization::localized_str!("Network Access"))
+                    .row(SandboxRow::message(localization::localized_str!("All domains (unrestricted)"))),
             );
 
         let container = || div().p_2().elevation_2(cx).max_w_112();

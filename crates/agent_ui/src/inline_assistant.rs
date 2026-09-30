@@ -278,7 +278,7 @@ impl InlineAssistant {
                             gpui::PromptLevel::Warning,
                             &error.to_string(),
                             None,
-                            &["Configure", "Cancel"],
+                            &[localization::localized_str!("Configure"), localization::localized_str!("Cancel")],
                         )
                         .await
                         .ok();

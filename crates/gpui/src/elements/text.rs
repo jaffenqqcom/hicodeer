@@ -18,6 +18,25 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(debug_assertions)]
+static TEXT_OBSERVER: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Installs a debug-only observer for text entering GPUI layout.
+pub fn set_text_observer(observer: fn(&str)) {
+    #[cfg(debug_assertions)]
+    let _ = TEXT_OBSERVER.set(observer);
+    #[cfg(not(debug_assertions))]
+    let _ = observer;
+}
+
+#[inline]
+fn observe_text(text: &str) {
+    #[cfg(debug_assertions)]
+    if let Some(observer) = TEXT_OBSERVER.get() {
+        observer(text);
+    }
+}
+
 /// An [`Element`] that renders text.
 ///
 /// In general, [`Text`] objects should be created via the [`text`] macro:
@@ -270,6 +289,7 @@ impl Element for &'static str {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        observe_text(*self);
         let mut state = TextLayout::default();
         let layout_id = state.layout(SharedString::from(*self), None, window, cx);
         (layout_id, state)
@@ -344,6 +364,7 @@ impl Element for SharedString {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        observe_text(self.as_ref());
         let mut state = TextLayout::default();
         let layout_id = state.layout(self.clone(), None, window, cx);
         (layout_id, state)

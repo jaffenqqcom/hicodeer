@@ -15,8 +15,11 @@ use std::sync::Arc;
 use ui::{ConfiguredApiCard, prelude::*};
 use x_ai_subscribed::{PROVIDER_ID, PROVIDER_NAME, State, SuperGrokModel, language_model};
 
-const SUBSCRIPTION_DESCRIPTION: &str =
-    "Sign in with your SuperGrok subscription to use Grok models in Zed's agent.";
+fn subscription_description() -> &'static str {
+    localization::localized_str!(
+        "Sign in with your SuperGrok subscription to use Grok models in Zed's agent."
+    )
+}
 
 pub struct XAiSubscribedProvider {
     state: Entity<State>,
@@ -122,12 +125,12 @@ impl LanguageModelProvider for XAiSubscribedProvider {
         let title = if is_authenticated {
             None
         } else {
-            Some("Configure SuperGrok".into())
+            Some(localization::localized_str!("Configure SuperGrok").into())
         };
         let description = if is_authenticated {
             None
         } else {
-            Some(InlineDescription::Text(SUBSCRIPTION_DESCRIPTION.into()))
+            Some(InlineDescription::Text(subscription_description().into()))
         };
 
         Some(ProviderSettingsView::Inline(
@@ -149,14 +152,14 @@ impl LanguageModelProvider for XAiSubscribedProvider {
     }
 
     fn authentication_error_message(&self) -> SharedString {
-        "Your SuperGrok session is invalid or has expired. \
-        Sign in again via Settings > AI > LLM Providers to continue."
+        localization::localized_str!("Your SuperGrok session is invalid or has expired. \
+        Sign in again via Settings > AI > LLM Providers to continue.")
             .into()
     }
 
     fn missing_credentials_error_message(&self) -> SharedString {
-        "You are not signed in to SuperGrok. \
-        Sign in via Settings > AI > LLM Providers to continue."
+        localization::localized_str!("You are not signed in to SuperGrok. \
+        Sign in via Settings > AI > LLM Providers to continue.")
             .into()
     }
 }
@@ -192,15 +195,23 @@ impl Render for ConfigurationView {
         if state.is_authenticated() {
             let label = state
                 .email()
-                .map(|email| format!("Signed in as {email}"))
-                .unwrap_or_else(|| "Signed in".to_string());
+                .map(|email| {
+        let __zed_i18n_arg_0 = format!("{}", email);
+        localization::format_message(
+            "Signed in as {email}",
+            &[
+                ("email", __zed_i18n_arg_0)
+            ],
+        )
+    })
+                .unwrap_or_else(|| localization::localized_str!("Signed in").to_string());
             let state_entity = self.state.clone();
 
             return v_flex()
                 .gap_2()
                 .child(
                     ConfiguredApiCard::new("x-ai-subscribed-sign-out", SharedString::from(label))
-                        .button_label("Sign Out")
+                        .button_label(localization::localized_str!("Sign Out"))
                         .on_click(cx.listener(move |_this, _, _window, cx| {
                             state_entity
                                 .update(cx, |state, cx| state.sign_out(cx))
@@ -214,15 +225,15 @@ impl Render for ConfigurationView {
         let provider_state = self.state.clone();
         let is_signing_in = state.is_signing_in();
         let button_label = if is_signing_in {
-            "Signing in…"
+            localization::localized_str!("Signing in…")
         } else {
-            "Sign In"
+            localization::localized_str!("Sign In")
         };
 
         v_flex()
             .gap_2()
             .when(!self.compact, |this| {
-                this.child(Label::new(SUBSCRIPTION_DESCRIPTION))
+                this.child(Label::new(subscription_description()))
             })
             .child(
                 Button::new("sign-in", button_label)

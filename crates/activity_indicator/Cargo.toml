@@ -17,6 +17,7 @@ test = false
 test-support = []
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 auto_update.workspace = true
 editor.workspace = true

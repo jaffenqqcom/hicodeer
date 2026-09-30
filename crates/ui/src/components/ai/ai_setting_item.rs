@@ -315,7 +315,7 @@ impl Component for AiSettingItem {
                     .into_any_element(),
             ),
             single_example(
-                "MCP server (stopped)",
+                localization::localized_str!("MCP server (stopped)"),
                 container()
                     .child(AiSettingItem::new(
                         "custom-mcp",
@@ -365,7 +365,7 @@ impl Component for AiSettingItem {
                     .into_any_element(),
             ),
             single_example(
-                "Registry agent (starting, animated)",
+                localization::localized_str!("Registry agent (starting, animated)"),
                 container()
                     .child(
                         AiSettingItem::new(
@@ -399,7 +399,7 @@ impl Component for AiSettingItem {
                                 "Failed to connect: connection refused",
                             )
                             .child(
-                                Button::new("logout", "Log Out")
+                                Button::new("logout", localization::localized_str!("Log Out"))
                                     .style(ButtonStyle::Outlined)
                                     .label_size(LabelSize::Small),
                             ),

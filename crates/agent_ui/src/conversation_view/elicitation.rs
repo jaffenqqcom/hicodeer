@@ -238,7 +238,15 @@ impl ElicitationFormSubmission {
                 ) => {
                     if value.is_empty() {
                         if is_required {
-                            Err(format!("{} is required", property_title(name, property)).into())
+                            Err({
+        let __zed_i18n_arg_0 = format!("{}", property_title(name, property));
+        localization::format_message(
+            "{} is required",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into())
                         } else {
                             Ok(None)
                         }
@@ -258,7 +266,15 @@ impl ElicitationFormSubmission {
                             })
                             .map(|()| Some(value.clone().into()))
                     } else if is_required {
-                        Err(format!("{} is required", property_title(name, property)).into())
+                        Err({
+        let __zed_i18n_arg_0 = format!("{}", property_title(name, property));
+        localization::format_message(
+            "{} is required",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into())
                     } else {
                         Ok(None)
                     }
@@ -270,7 +286,15 @@ impl ElicitationFormSubmission {
                     let value = value.trim();
                     if value.is_empty() {
                         if is_required {
-                            Err(format!("{} is required", property_title(name, property)).into())
+                            Err({
+        let __zed_i18n_arg_0 = format!("{}", property_title(name, property));
+        localization::format_message(
+            "{} is required",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into())
                         } else {
                             Ok(None)
                         }
@@ -286,7 +310,15 @@ impl ElicitationFormSubmission {
                     let value = value.trim();
                     if value.is_empty() {
                         if is_required {
-                            Err(format!("{} is required", property_title(name, property)).into())
+                            Err({
+        let __zed_i18n_arg_0 = format!("{}", property_title(name, property));
+        localization::format_message(
+            "{} is required",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into())
                         } else {
                             Ok(None)
                         }
@@ -323,7 +355,15 @@ impl ElicitationFormSubmission {
                         .is_some_and(|min_items| values.len() < min_items as usize)
                     {
                         Err(
-                            format!("{} needs more selections", property_title(name, property))
+                            {
+        let __zed_i18n_arg_0 = format!("{}", property_title(name, property));
+        localization::format_message(
+            "{} needs more selections",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                                 .into(),
                         )
                     } else if schema
@@ -331,7 +371,15 @@ impl ElicitationFormSubmission {
                         .is_some_and(|max_items| values.len() > max_items as usize)
                     {
                         Err(
-                            format!("{} has too many selections", property_title(name, property))
+                            {
+        let __zed_i18n_arg_0 = format!("{}", property_title(name, property));
+        localization::format_message(
+            "{} has too many selections",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                                 .into(),
                         )
                     } else {
@@ -1452,19 +1500,55 @@ fn validate_number_value(
 ) -> Result<f64, SharedString> {
     let parsed = value
         .parse::<f64>()
-        .map_err(|_| SharedString::from(format!("{title} must be a number")))?;
+        .map_err(|_| SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} must be a number",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }))?;
     if !parsed.is_finite() {
-        return Err(format!("{title} must be a finite number").into());
+        return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} must be a finite number",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into());
     }
     if let Some(minimum) = schema.minimum
         && parsed < minimum
     {
-        return Err(format!("{title} must be at least {minimum}").into());
+        return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        let __zed_i18n_arg_1 = format!("{}", minimum);
+        localization::format_message(
+            "{title} must be at least {minimum}",
+            &[
+                ("title", __zed_i18n_arg_0),
+                ("minimum", __zed_i18n_arg_1)
+            ],
+        )
+    }.into());
     }
     if let Some(maximum) = schema.maximum
         && parsed > maximum
     {
-        return Err(format!("{title} must be at most {maximum}").into());
+        return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        let __zed_i18n_arg_1 = format!("{}", maximum);
+        localization::format_message(
+            "{title} must be at most {maximum}",
+            &[
+                ("title", __zed_i18n_arg_0),
+                ("maximum", __zed_i18n_arg_1)
+            ],
+        )
+    }.into());
     }
 
     Ok(parsed)
@@ -1477,16 +1561,44 @@ fn validate_integer_value(
 ) -> Result<i64, SharedString> {
     let parsed = value
         .parse::<i64>()
-        .map_err(|_| SharedString::from(format!("{title} must be an integer")))?;
+        .map_err(|_| SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} must be an integer",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }))?;
     if let Some(minimum) = schema.minimum
         && parsed < minimum
     {
-        return Err(format!("{title} must be at least {minimum}").into());
+        return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        let __zed_i18n_arg_1 = format!("{}", minimum);
+        localization::format_message(
+            "{title} must be at least {minimum}",
+            &[
+                ("title", __zed_i18n_arg_0),
+                ("minimum", __zed_i18n_arg_1)
+            ],
+        )
+    }.into());
     }
     if let Some(maximum) = schema.maximum
         && parsed > maximum
     {
-        return Err(format!("{title} must be at most {maximum}").into());
+        return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        let __zed_i18n_arg_1 = format!("{}", maximum);
+        localization::format_message(
+            "{title} must be at most {maximum}",
+            &[
+                ("title", __zed_i18n_arg_0),
+                ("maximum", __zed_i18n_arg_1)
+            ],
+        )
+    }.into());
     }
 
     Ok(parsed)
@@ -1502,13 +1614,29 @@ fn validate_string_value(
         .min_length
         .is_some_and(|min_length| length < min_length as usize)
     {
-        return Err(format!("{title} is too short").into());
+        return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} is too short",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into());
     }
     if schema
         .max_length
         .is_some_and(|max_length| length > max_length as usize)
     {
-        return Err(format!("{title} is too long").into());
+        return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} is too long",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into());
     }
 
     validate_string_pattern_and_format(title, schema, value)
@@ -1523,7 +1651,15 @@ fn validate_single_select_value(
     if options.iter().any(|option| option.value.as_str() == value) {
         Ok(())
     } else {
-        Err(format!("{title} must be one of the provided options").into())
+        Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} must be one of the provided options",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into())
     }
 }
 
@@ -1546,10 +1682,26 @@ fn validate_string_pattern_and_format(
         .as_ref()
         .is_some_and(|pattern| pattern.len() > MAX_ELICITATION_PATTERN_BYTES)
     {
-        return Err(format!("{title} has an invalid validation pattern").into());
+        return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} has an invalid validation pattern",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into());
     }
     if schema.pattern.is_some() && value.len() > MAX_ELICITATION_PATTERN_INPUT_BYTES {
-        return Err(format!("{title} is too long to validate safely").into());
+        return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} is too long to validate safely",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into());
     }
 
     let mut validation_schema = serde_json::Map::new();
@@ -1582,9 +1734,25 @@ fn validate_string_pattern_and_format(
         .build(&validation_schema)
         .map_err(|_| {
             if schema.pattern.is_some() {
-                format!("{title} has an invalid validation pattern")
+                {
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} has an invalid validation pattern",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }
             } else {
-                format!("{title} has an invalid validation format")
+                {
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} has an invalid validation format",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }
             }
         })?;
     let value = serde_json::Value::String(value.to_string());
@@ -1593,7 +1761,15 @@ fn validate_string_pattern_and_format(
             error.kind(),
             jsonschema::error::ValidationErrorKind::BacktrackLimitExceeded { .. }
         ) {
-            return Err(format!("{title} has a validation pattern that is too complex").into());
+            return Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} has a validation pattern that is too complex",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into());
         }
     } else {
         return Ok(());
@@ -1603,9 +1779,35 @@ fn validate_string_pattern_and_format(
         schema.pattern.is_some(),
         schema.format.and_then(string_format_label),
     ) {
-        (true, Some(_)) => Err(format!("{title} does not match the requested constraints").into()),
-        (true, None) => Err(format!("{title} does not match the requested pattern").into()),
-        (false, Some(format)) => Err(format!("{title} must be {format}").into()),
+        (true, Some(_)) => Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} does not match the requested constraints",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()),
+        (true, None) => Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} does not match the requested pattern",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()),
+        (false, Some(format)) => Err({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        let __zed_i18n_arg_1 = format!("{}", format);
+        localization::format_message(
+            "{title} must be {format}",
+            &[
+                ("title", __zed_i18n_arg_0),
+                ("format", __zed_i18n_arg_1)
+            ],
+        )
+    }.into()),
         (false, None) => Ok(()),
     }
 }
@@ -1809,14 +2011,14 @@ impl<'a> ElicitationCard<'a> {
             (ElicitationStatus::Accepted, acp::ElicitationMode::Url(_))
         );
         let (status_label, status_icon, status_color) = match &self.elicitation.status {
-            ElicitationStatus::Pending { .. } => ("Waiting for input", IconName::Info, Color::Info),
+            ElicitationStatus::Pending { .. } => (localization::localized_str!("Waiting for input"), IconName::Info, Color::Info),
             ElicitationStatus::Accepted if is_accepted_url => {
-                ("Waiting for completion", IconName::Info, Color::Info)
+                (localization::localized_str!("Waiting for completion"), IconName::Info, Color::Info)
             }
-            ElicitationStatus::Accepted => ("Submitted", IconName::Check, Color::Success),
-            ElicitationStatus::Declined => ("Declined", IconName::Close, Color::Muted),
-            ElicitationStatus::Canceled => ("Canceled", IconName::Circle, Color::Muted),
-            ElicitationStatus::Completed => ("Completed", IconName::Check, Color::Success),
+            ElicitationStatus::Accepted => (localization::localized_str!("Submitted"), IconName::Check, Color::Success),
+            ElicitationStatus::Declined => (localization::localized_str!("Declined"), IconName::Close, Color::Muted),
+            ElicitationStatus::Canceled => (localization::localized_str!("Canceled"), IconName::Circle, Color::Muted),
+            ElicitationStatus::Completed => (localization::localized_str!("Completed"), IconName::Check, Color::Success),
         };
 
         let body = v_flex()
@@ -1862,7 +2064,15 @@ impl<'a> ElicitationCard<'a> {
                                     .color(status_color),
                             )
                             .child(
-                                Label::new(format!("Input Requested by {}", self.requester_name))
+                                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", self.requester_name);
+        localization::format_message(
+            "Input Requested by {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                                     .size(LabelSize::Custom(tool_name_font_size))
                                     .truncate(),
                             ),
@@ -2253,7 +2463,7 @@ impl<'a> ElicitationCard<'a> {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Destination")
+                                    Label::new(localization::localized_str!("Destination"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -2272,9 +2482,15 @@ impl<'a> ElicitationCard<'a> {
                                                 .color(Color::Warning),
                                         )
                                         .child(
-                                            Label::new(format!(
-                                                "This internationalized address displays as {decoded_host}. Verify it carefully."
-                                            ))
+                                            Label::new({
+        let __zed_i18n_arg_0 = format!("{}", decoded_host);
+        localization::format_message(
+            "This internationalized address displays as {decoded_host}. Verify it carefully.",
+            &[
+                ("decoded_host", __zed_i18n_arg_0)
+            ],
+        )
+    })
                                             .size(LabelSize::Small)
                                             .color(Color::Warning),
                                         ),
@@ -2319,11 +2535,11 @@ impl<'a> ElicitationCard<'a> {
             open_url.is_some() && matches!(self.elicitation.status, ElicitationStatus::Accepted);
         let is_submitting = self.form_state.is_some_and(|state| state.is_submitting);
         let (accept_label, accept_icon, accept_icon_color) = if is_accepted_url {
-            ("Open Again", IconName::ArrowUpRight, Color::Muted)
+            (localization::localized_str!("Open Again"), IconName::ArrowUpRight, Color::Muted)
         } else if open_url.is_some() {
-            ("Open", IconName::ArrowUpRight, Color::Muted)
+            (localization::localized_str!("Open"), IconName::ArrowUpRight, Color::Muted)
         } else {
-            ("Submit", IconName::Check, Color::Success)
+            (localization::localized_str!("Submit"), IconName::Check, Color::Success)
         };
         let border_color = cx.theme().colors().border.opacity(0.8);
         let on_submit = self.handlers.on_submit.clone();
@@ -2366,7 +2582,7 @@ impl<'a> ElicitationCard<'a> {
             )
             .when(!is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-decline", self.entry_ix), "Decline")
+                    Button::new(("elicitation-decline", self.entry_ix), localization::localized_str!("Decline"))
                         .tab_index(0_isize)
                         .start_icon(
                             Icon::new(IconName::Close)
@@ -2379,7 +2595,7 @@ impl<'a> ElicitationCard<'a> {
                         }),
                 )
                 .child(
-                    Button::new(("elicitation-cancel", self.entry_ix), "Cancel")
+                    Button::new(("elicitation-cancel", self.entry_ix), localization::localized_str!("Cancel"))
                         .tab_index(0_isize)
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {
@@ -2389,7 +2605,7 @@ impl<'a> ElicitationCard<'a> {
             })
             .when(is_accepted_url, |this| {
                 this.child(
-                    Button::new(("elicitation-dismiss-url", self.entry_ix), "Cancel")
+                    Button::new(("elicitation-dismiss-url", self.entry_ix), localization::localized_str!("Cancel"))
                         .tab_index(0_isize)
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {

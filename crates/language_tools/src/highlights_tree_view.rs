@@ -846,24 +846,24 @@ impl Render for HighlightsTreeView {
                             if self.editor.is_some() {
                                 let has_any = !self.cached_entries.is_empty();
                                 if has_any {
-                                    this.child(Label::new("All highlights are filtered out"))
+                                    this.child(Label::new(localization::localized_str!("All highlights are filtered out")))
                                         .child(
                                             Label::new(
-                                                "Enable text, syntax, or semantic highlights in the toolbar",
+                                                localization::localized_str!("Enable text, syntax, or semantic highlights in the toolbar"),
                                             )
                                             .size(LabelSize::Small),
                                         )
                                 } else {
-                                    this.child(Label::new("No highlights found")).child(
+                                    this.child(Label::new(localization::localized_str!("No highlights found"))).child(
                                         Label::new(
-                                            "The editor has no text, syntax, or semantic token highlights",
+                                            localization::localized_str!("The editor has no text, syntax, or semantic token highlights"),
                                         )
                                         .size(LabelSize::Small),
                                     )
                                 }
                             } else {
-                                this.child(Label::new("Not attached to an editor")).child(
-                                    Label::new("Focus an editor to show highlights")
+                                this.child(Label::new(localization::localized_str!("Not attached to an editor"))).child(
+                                    Label::new(localization::localized_str!("Focus an editor to show highlights"))
                                         .size(LabelSize::Small),
                                 )
                             }
@@ -893,7 +893,7 @@ impl Item for HighlightsTreeView {
     fn to_item_events(_: &Self::Event, _: &mut dyn FnMut(workspace::item::ItemEvent)) {}
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "Highlights".into()
+        localization::localized_str!("Highlights").into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -956,9 +956,27 @@ impl HighlightsTreeToolbarItemView {
         let filtered = tree_view.entry_count();
 
         let label = if filtered == total {
-            format!("{} highlights", total)
+            {
+        let __zed_i18n_arg_0 = format!("{}", total);
+        localization::format_message(
+            "{} highlights",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
         } else {
-            format!("{} / {} highlights", filtered, total)
+            {
+        let __zed_i18n_arg_0 = format!("{}", filtered);
+        let __zed_i18n_arg_1 = format!("{}", total);
+        localization::format_message(
+            "{} / {} highlights",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    }
         };
 
         Some(ButtonLike::new("highlights header").child(Label::new(label)))
@@ -985,7 +1003,7 @@ impl HighlightsTreeToolbarItemView {
                 IconButton::new("toggle-highlights-settings-icon", IconName::Filter)
                     .icon_size(IconSize::Small)
                     .toggle_state(self.toggle_settings_handle.is_deployed()),
-                Tooltip::text("Highlights Settings"),
+                Tooltip::text(localization::localized_str!("Highlights Settings")),
             )
             .anchor(gpui::Anchor::TopRight)
             .with_handle(self.toggle_settings_handle.clone())
@@ -996,7 +1014,7 @@ impl HighlightsTreeToolbarItemView {
 
                 let menu = ContextMenu::build(window, cx, move |menu, _, _| {
                     menu.toggleable_entry(
-                        "Text Highlights",
+                        localization::localized_str!("Text Highlights"),
                         show_text,
                         IconPosition::Start,
                         Some(ToggleTextHighlights.boxed_clone()),
@@ -1020,7 +1038,7 @@ impl HighlightsTreeToolbarItemView {
                         },
                     )
                     .toggleable_entry(
-                        "Syntax Tokens",
+                        localization::localized_str!("Syntax Tokens"),
                         show_syntax,
                         IconPosition::Start,
                         Some(ToggleSyntaxTokens.boxed_clone()),
@@ -1044,7 +1062,7 @@ impl HighlightsTreeToolbarItemView {
                         },
                     )
                     .toggleable_entry(
-                        "Semantic Tokens",
+                        localization::localized_str!("Semantic Tokens"),
                         show_semantic,
                         IconPosition::Start,
                         Some(ToggleSemanticTokens.boxed_clone()),
@@ -1313,7 +1331,7 @@ fn render_style_preview(style: HighlightStyle, selected: bool, cx: &App) -> Div 
     }
 
     let label_text = if parts.is_empty() {
-        "none".to_string()
+        localization::localized_str!("none").to_string()
     } else {
         parts.join(" ")
     };

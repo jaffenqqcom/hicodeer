@@ -129,7 +129,7 @@ impl<T: 'static> Render for PromptEditor<T> {
             .icon_color(Color::Muted)
             .when(!menu_visible, |this| {
                 this.tooltip(move |_window, cx| {
-                    Tooltip::with_meta("Add Context", None, "Or type @ to include context", cx)
+                    Tooltip::with_meta(localization::localized_str!("Add Context"), None, localization::localized_str!("Or type @ to include context"), cx)
                 })
             })
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -357,7 +357,7 @@ impl<T: 'static> PromptEditor<T> {
         self.editor = cx.new(|cx| {
             let mut editor = Editor::auto_height(1, Self::MAX_LINES as usize, window, cx);
             editor.set_soft_wrap_mode(language::language_settings::SoftWrap::EditorWidth, cx);
-            editor.set_placeholder_text("Add a prompt…", window, cx);
+            editor.set_placeholder_text(localization::localized_str!("Add a prompt…"), window, cx);
             editor.set_text(prompt, window, cx);
             creases = insert_message_creases(&mut editor, &existing_creases, window, cx);
 
@@ -390,20 +390,38 @@ impl<T: 'static> PromptEditor<T> {
         let action = match mode {
             PromptEditorMode::Buffer { codegen, .. } => {
                 if codegen.read(cx).is_insertion {
-                    "Generate"
+                    localization::localized_str!("Generate")
                 } else {
-                    "Transform"
+                    localization::localized_str!("Transform")
                 }
             }
-            PromptEditorMode::Terminal { .. } => "Generate",
+            PromptEditorMode::Terminal { .. } => localization::localized_str!("Generate"),
         };
 
         let agent_panel_keybinding =
             ui::text_for_action(&zed_actions::assistant::ToggleFocus, window, cx)
-                .map(|keybinding| format!("{keybinding} to chat"))
+                .map(|keybinding| {
+        let __zed_i18n_arg_0 = format!("{}", keybinding);
+        localization::format_message(
+            "{keybinding} to chat",
+            &[
+                ("keybinding", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 .unwrap_or_default();
 
-        format!("{action}… ({agent_panel_keybinding} ― ↓↑ for history — @ to include context)")
+        {
+        let __zed_i18n_arg_0 = format!("{}", action);
+        let __zed_i18n_arg_1 = format!("{}", agent_panel_keybinding);
+        localization::format_message(
+            "{action}… ({agent_panel_keybinding} ― ↓↑ for history — @ to include context)",
+            &[
+                ("action", __zed_i18n_arg_0),
+                ("agent_panel_keybinding", __zed_i18n_arg_1)
+            ],
+        )
+    }
     }
 
     pub fn prompt(&self, cx: &App) -> String {
@@ -818,7 +836,7 @@ impl<T: 'static> PromptEditor<T> {
                         Tooltip::with_meta(
                             mode.tooltip_interrupt(),
                             Some(&menu::Cancel),
-                            "Changes won't be discarded",
+                            localization::localized_str!("Changes won't be discarded"),
                             cx,
                         )
                     })
@@ -836,7 +854,7 @@ impl<T: 'static> PromptEditor<T> {
                                 Tooltip::with_meta(
                                     mode.tooltip_restart(),
                                     Some(&menu::Confirm),
-                                    "Changes will be discarded",
+                                    localization::localized_str!("Changes will be discarded"),
                                     cx,
                                 )
                             })
@@ -877,9 +895,9 @@ impl<T: 'static> PromptEditor<T> {
                                                     .icon_color(Color::Disabled)
                                                     .tooltip(move |_, cx| {
                                                         Tooltip::with_meta(
-                                                            "Good Result",
+                                                            localization::localized_str!("Good Result"),
                                                             None,
-                                                            "You already rated this result",
+                                                            localization::localized_str!("You already rated this result"),
                                                             cx,
                                                         )
                                                     })
@@ -887,7 +905,7 @@ impl<T: 'static> PromptEditor<T> {
                                                 this.icon_color(Color::Muted).tooltip(
                                                     move |_, cx| {
                                                         Tooltip::for_action(
-                                                            "Good Result",
+                                                            localization::localized_str!("Good Result"),
                                                             &ThumbsUpResult,
                                                             cx,
                                                         )
@@ -908,9 +926,9 @@ impl<T: 'static> PromptEditor<T> {
                                                     .icon_color(Color::Disabled)
                                                     .tooltip(move |_, cx| {
                                                         Tooltip::with_meta(
-                                                            "Bad Result",
+                                                            localization::localized_str!("Bad Result"),
                                                             None,
-                                                            "You already rated this result",
+                                                            localization::localized_str!("You already rated this result"),
                                                             cx,
                                                         )
                                                     })
@@ -918,7 +936,7 @@ impl<T: 'static> PromptEditor<T> {
                                                 this.icon_color(Color::Muted).tooltip(
                                                     move |_, cx| {
                                                         Tooltip::for_action(
-                                                            "Bad Result",
+                                                            localization::localized_str!("Bad Result"),
                                                             &ThumbsDownResult,
                                                             cx,
                                                         )
@@ -944,7 +962,7 @@ impl<T: 'static> PromptEditor<T> {
                                     .shape(IconButtonShape::Square)
                                     .tooltip(|_window, cx| {
                                         Tooltip::for_action(
-                                            "Execute Generated Command",
+                                            localization::localized_str!("Execute Generated Command"),
                                             &menu::SecondaryConfirm,
                                             cx,
                                         )
@@ -1001,7 +1019,7 @@ impl<T: 'static> PromptEditor<T> {
             .tooltip({
                 move |_window, cx| {
                     Tooltip::for_action_in(
-                        "Close Assistant",
+                        localization::localized_str!("Close Assistant"),
                         &editor::actions::Cancel,
                         &focus_handle,
                         cx,
@@ -1054,7 +1072,7 @@ impl<T: 'static> PromptEditor<T> {
                         let focus_handle = self.editor.focus_handle(cx);
                         move |_window, cx| {
                             cx.new(|cx| {
-                                let mut tooltip = Tooltip::new("Previous Alternative").key_binding(
+                                let mut tooltip = Tooltip::new(localization::localized_str!("Previous Alternative")).key_binding(
                                     KeyBinding::for_action_in(
                                         &CyclePreviousInlineAssist,
                                         &focus_handle,
@@ -1095,7 +1113,7 @@ impl<T: 'static> PromptEditor<T> {
                         let focus_handle = self.editor.focus_handle(cx);
                         move |_window, cx| {
                             cx.new(|cx| {
-                                let mut tooltip = Tooltip::new("Next Alternative").key_binding(
+                                let mut tooltip = Tooltip::new(localization::localized_str!("Next Alternative")).key_binding(
                                     KeyBinding::for_action_in(
                                         &CycleNextInlineAssist,
                                         &focus_handle,
@@ -1542,22 +1560,22 @@ impl GenerationMode {
     }
     fn tooltip_interrupt(self) -> &'static str {
         match self {
-            GenerationMode::Generate => "Interrupt Generation",
-            GenerationMode::Transform => "Interrupt Transform",
+            GenerationMode::Generate => localization::localized_str!("Interrupt Generation"),
+            GenerationMode::Transform => localization::localized_str!("Interrupt Transform"),
         }
     }
 
     fn tooltip_restart(self) -> &'static str {
         match self {
-            GenerationMode::Generate => "Restart Generation",
-            GenerationMode::Transform => "Restart Transform",
+            GenerationMode::Generate => localization::localized_str!("Restart Generation"),
+            GenerationMode::Transform => localization::localized_str!("Restart Transform"),
         }
     }
 
     fn tooltip_accept(self) -> &'static str {
         match self {
-            GenerationMode::Generate => "Accept Generation",
-            GenerationMode::Transform => "Accept Transform",
+            GenerationMode::Generate => localization::localized_str!("Accept Generation"),
+            GenerationMode::Transform => localization::localized_str!("Accept Transform"),
         }
     }
 }

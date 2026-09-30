@@ -217,7 +217,15 @@ impl EditPredictionContextView {
                 let blocks = excerpt_anchors_with_orders
                     .into_iter()
                     .map(|(anchor, order)| {
-                        let label = SharedString::from(format!("order: {order}"));
+                        let label = SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", order);
+        localization::format_message(
+            "order: {order}",
+            &[
+                ("order", __zed_i18n_arg_0)
+            ],
+        )
+    });
                         BlockProperties {
                             placement: BlockPlacement::Above(anchor),
                             height: Some(1),
@@ -309,7 +317,7 @@ impl EditPredictionContextView {
                             IconButton::new("go-back", IconName::ChevronLeft)
                                 .disabled(self.current_ix == 0 || self.runs.len() < 2)
                                 .tooltip(ui::Tooltip::for_action_title(
-                                    "Go to previous run",
+                                    localization::localized_str!("Go to previous run"),
                                     &EditPredictionContextGoBack,
                                 ))
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -338,7 +346,7 @@ impl EditPredictionContextView {
                             IconButton::new("go-forward", IconName::ChevronRight)
                                 .disabled(self.current_ix + 1 == self.runs.len())
                                 .tooltip(ui::Tooltip::for_action_title(
-                                    "Go to next run",
+                                    localization::localized_str!("Go to next run"),
                                     &EditPredictionContextGoBack,
                                 ))
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -369,7 +377,7 @@ impl Item for EditPredictionContextView {
     type Event = ();
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "Edit Prediction Context".into()
+        localization::localized_str!("Edit Prediction Context").into()
     }
 
     fn buffer_kind(&self, _cx: &App) -> workspace::item::ItemBufferKind {
@@ -406,7 +414,7 @@ impl gpui::Render for EditPredictionContextView {
                             .size_full()
                             .justify_center()
                             .items_center()
-                            .child("No retrieval runs yet"),
+                            .child(localization::localized_str!("No retrieval runs yet")),
                     )
                 } else {
                     this.child(self.runs[self.current_ix].editor.clone())

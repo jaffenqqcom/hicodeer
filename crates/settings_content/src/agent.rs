@@ -1099,9 +1099,30 @@ pub enum ToolPermissionMode {
 impl std::fmt::Display for ToolPermissionMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ToolPermissionMode::Allow => write!(f, "Allow"),
-            ToolPermissionMode::Deny => write!(f, "Deny"),
-            ToolPermissionMode::Confirm => write!(f, "Confirm"),
+            ToolPermissionMode::Allow => write!(f, "{}", {
+        localization::format_message(
+            "Allow",
+            &[
+                
+            ],
+        )
+    }),
+            ToolPermissionMode::Deny => write!(f, "{}", {
+        localization::format_message(
+            "Deny",
+            &[
+                
+            ],
+        )
+    }),
+            ToolPermissionMode::Confirm => write!(f, "{}", {
+        localization::format_message(
+            "Confirm",
+            &[
+                
+            ],
+        )
+    }),
         }
     }
 }

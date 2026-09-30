@@ -914,7 +914,7 @@ impl Component for ButtonLike {
                     single_example(
                         "Default",
                         ButtonLike::new("default")
-                            .child(Label::new("Default"))
+                            .child(Label::new(localization::localized_str!("Default")))
                             .into_any_element(),
                     ),
                     single_example(
@@ -928,7 +928,7 @@ impl Component for ButtonLike {
                         "Subtle",
                         ButtonLike::new("outline")
                             .style(ButtonStyle::Subtle)
-                            .child(Label::new("Subtle"))
+                            .child(Label::new(localization::localized_str!("Subtle")))
                             .into_any_element(),
                     ),
                     single_example(
@@ -942,7 +942,7 @@ impl Component for ButtonLike {
                         "Transparent",
                         ButtonLike::new("transparent")
                             .style(ButtonStyle::Transparent)
-                            .child(Label::new("Transparent"))
+                            .child(Label::new(localization::localized_str!("Transparent")))
                             .into_any_element(),
                     ),
                 ]),
@@ -969,12 +969,12 @@ impl Component for ButtonLike {
                                 .gap_px()
                                 .child(
                                     ButtonLike::new_rounded_left("bg_left")
-                                        .child(Label::new("Left"))
+                                        .child(Label::new(localization::localized_str!("Left")))
                                         .style(ButtonStyle::Filled),
                                 )
                                 .child(
                                     ButtonLike::new_rounded_right("bg_right")
-                                        .child(Label::new("Right"))
+                                        .child(Label::new(localization::localized_str!("Right")))
                                         .style(ButtonStyle::Filled),
                                 )
                                 .into_any_element(),

@@ -17,6 +17,7 @@ test-support = ["gpui/test-support", "fs/test-support"]
 
 [dependencies]
 anyhow.workspace = true
+localization.workspace = true
 collections.workspace = true
 ec4rs.workspace = true
 fs.workspace = true

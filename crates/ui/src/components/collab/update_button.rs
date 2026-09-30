@@ -100,43 +100,51 @@ impl UpdateButton {
     }
 
     pub fn checking() -> Self {
-        Self::new(IconName::LoadCircle, "Checking for Zed Updates…")
+        Self::new(IconName::LoadCircle, localization::localized_str!("Checking for Zed Updates…"))
             .icon_animate(true)
             .disabled(true)
     }
 
     pub fn downloading(progress: Option<f32>) -> Self {
-        Self::new(IconName::Download, "Downloading Zed Update…")
+        Self::new(IconName::Download, localization::localized_str!("Downloading Zed Update…"))
             .progress(progress)
             .disabled(true)
     }
 
     pub fn installing(version: impl Into<SharedString>) -> Self {
-        Self::new(IconName::LoadCircle, "Installing Zed Update…")
+        Self::new(IconName::LoadCircle, localization::localized_str!("Installing Zed Update…"))
             .icon_animate(true)
             .tooltip(version)
             .disabled(true)
     }
 
     pub fn up_to_date() -> Self {
-        Self::new(IconName::Check, "Up to Date").disabled(true)
+        Self::new(IconName::Check, localization::localized_str!("Up to Date")).disabled(true)
     }
 
     pub fn updated(version: impl Into<SharedString>) -> Self {
-        Self::new(IconName::Download, "Restart to Update")
+        Self::new(IconName::Download, localization::localized_str!("Restart to Update"))
             .tooltip(version)
             .with_dismiss()
     }
 
     pub fn errored(error: impl Into<SharedString>) -> Self {
-        Self::new(IconName::Warning, "Failed to Update")
+        Self::new(IconName::Warning, localization::localized_str!("Failed to Update"))
             .icon_color(Color::Warning)
             .tooltip(error)
             .with_dismiss()
     }
 
     pub fn version_tooltip_message(version: impl std::fmt::Display) -> String {
-        format!("Update to Version: {version}")
+        {
+        let __zed_i18n_arg_0 = format!("{}", version);
+        localization::format_message(
+            "Update to Version: {version}",
+            &[
+                ("version", __zed_i18n_arg_0)
+            ],
+        )
+    }
     }
 
     pub fn downloading_tooltip_message(
@@ -145,10 +153,17 @@ impl UpdateButton {
     ) -> String {
         let message = Self::version_tooltip_message(version);
         match progress {
-            Some(progress) => format!(
-                "{message} ({:.0}% downloaded)",
-                progress.clamp(0.0, 1.0) * 100.0
-            ),
+            Some(progress) => {
+        let __zed_i18n_arg_0 = format!("{:.0}", progress.clamp(0.0, 1.0) * 100.0);
+        let __zed_i18n_arg_1 = format!("{}", message);
+        localization::format_message(
+            "{message} ({:.0}% downloaded)",
+            &[
+                ("message", __zed_i18n_arg_1),
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
             None => message,
         }
     }
@@ -214,7 +229,7 @@ impl RenderOnce for UpdateButton {
                         IconButton::new(dismiss_button_id, IconName::Close)
                             .icon_size(IconSize::Indicator)
                             .when_some(self.on_dismiss, |this, handler| this.on_click(handler))
-                            .tooltip(Tooltip::text("Dismiss")),
+                            .tooltip(Tooltip::text(localization::localized_str!("Dismiss"))),
                     ),
                 )
             })

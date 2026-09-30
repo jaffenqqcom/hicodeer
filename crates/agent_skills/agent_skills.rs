@@ -63,9 +63,17 @@ impl SkillLoadWarning {
             Self::DescriptionTooLong {
                 actual_len,
                 max_len,
-            } => format!(
-                "Skill description is {actual_len} characters, exceeding the {max_len}-character limit. The skill was loaded, but long descriptions may consume more model-context tokens."
-            ),
+            } => {
+        let __zed_i18n_arg_0 = format!("{}", actual_len);
+        let __zed_i18n_arg_1 = format!("{}", max_len);
+        localization::format_message(
+            "Skill description is {actual_len} characters, exceeding the {max_len}-character limit. The skill was loaded, but long descriptions may consume more model-context tokens.",
+            &[
+                ("actual_len", __zed_i18n_arg_0),
+                ("max_len", __zed_i18n_arg_1)
+            ],
+        )
+    },
         }
     }
 }
@@ -531,7 +539,7 @@ pub fn validate_description(description: &str) -> Result<(), &'static str> {
     }
     if description.chars().count() > MAX_SKILL_DESCRIPTION_LEN {
         return Err(formatcp!(
-            "Skill description must be at most {MAX_SKILL_DESCRIPTION_LEN} characters"
+            localization::localized_str!("Skill description must be at most {MAX_SKILL_DESCRIPTION_LEN} characters")
         ));
     }
     Ok(())
@@ -634,17 +642,30 @@ pub async fn load_skill_frontmatter(
         .await
         .map_err(|e| SkillLoadError {
             path: skill_file_path.clone(),
-            message: format!("Failed to read SKILL.md metadata: {}", e),
+            message: {
+        let __zed_i18n_arg_0 = format!("{}", e);
+        localization::format_message(
+            "Failed to read SKILL.md metadata: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
         })?;
     if let Some(metadata) = metadata
         && metadata.len > MAX_SKILL_FILE_SIZE as u64
     {
         return Err(SkillLoadError {
             path: skill_file_path.clone(),
-            message: format!(
-                "SKILL.md file exceeds maximum size of {}KB",
-                MAX_SKILL_FILE_SIZE / 1024
-            ),
+            message: {
+        let __zed_i18n_arg_0 = format!("{}", MAX_SKILL_FILE_SIZE / 1024);
+        localization::format_message(
+            "SKILL.md file exceeds maximum size of {}KB",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
         });
     }
 
@@ -653,7 +674,15 @@ pub async fn load_skill_frontmatter(
         .await
         .map_err(|e| SkillLoadError {
             path: skill_file_path.clone(),
-            message: format!("Failed to read file: {}", e),
+            message: {
+        let __zed_i18n_arg_0 = format!("{}", e);
+        localization::format_message(
+            "Failed to read file: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
         })?;
 
     parse_skill_frontmatter(&skill_file_path, &content, source).map_err(|e| SkillLoadError {
@@ -672,7 +701,15 @@ pub async fn read_skill_body(
 ) -> Result<String, SkillLoadError> {
     let content = fs.load(skill_file_path).await.map_err(|e| SkillLoadError {
         path: skill_file_path.to_path_buf(),
-        message: format!("Failed to read file: {}", e),
+        message: {
+        let __zed_i18n_arg_0 = format!("{}", e);
+        localization::format_message(
+            "Failed to read file: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
     })?;
 
     read_skill_body_from_content(skill_file_path, &content)
@@ -828,23 +865,23 @@ pub fn encode_skill_share_link(skill_file_content: &str) -> String {
 /// produced by [`encode_skill_share_link`].
 pub fn decode_skill_share_link(link: &str) -> Result<String> {
     use base64::Engine as _;
-    let url = Url::parse(link).context("skill share link is not a valid URL")?;
+    let url = Url::parse(link).context(localization::localized_str!("skill share link is not a valid URL"))?;
     anyhow::ensure!(
         url.scheme() == SKILL_SHARE_LINK_SCHEME && url.host_str() == Some(SKILL_SHARE_LINK_HOST),
-        "not a skill share link"
+        localization::localized_str!("not a skill share link")
     );
     let data = url
         .query_pairs()
         .find_map(|(key, value)| (key == SKILL_SHARE_LINK_DATA_PARAM).then_some(value))
-        .context("skill share link is missing the `data` parameter")?;
+        .context(localization::localized_str!("skill share link is missing the `data` parameter"))?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(data.as_bytes())
-        .context("skill share link `data` is not valid base64")?;
+        .context(localization::localized_str!("skill share link `data` is not valid base64"))?;
     anyhow::ensure!(
         bytes.len() <= MAX_SKILL_FILE_SIZE,
-        "shared skill exceeds the maximum size of {MAX_SKILL_FILE_SIZE} bytes"
+        localization::localized_str!("shared skill exceeds the maximum size of {MAX_SKILL_FILE_SIZE} bytes")
     );
-    let content = String::from_utf8(bytes).context("skill share link `data` is not valid UTF-8")?;
+    let content = String::from_utf8(bytes).context(localization::localized_str!("skill share link `data` is not valid UTF-8"))?;
     Ok(content)
 }
 

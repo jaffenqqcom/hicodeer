@@ -529,9 +529,9 @@ impl Render for DapLogToolbarItemView {
                             sub_item.adapter_name,
                             sub_item.session_label,
                             match sub_item.selected_entry {
-                                View::AdapterLogs => ADAPTER_LOGS,
-                                View::RpcMessages => RPC_MESSAGES,
-                                View::InitializationSequence => INITIALIZATION_SEQUENCE,
+                                View::AdapterLogs => adapter_logs_label(),
+                                View::RpcMessages => rpc_messages_label(),
+                                View::InitializationSequence => initialization_sequence_label(),
                             }
                         ))
                     })
@@ -563,7 +563,7 @@ impl Render for DapLogToolbarItemView {
                                     div()
                                         .w_full()
                                         .pl_4()
-                                        .child(Label::new(ADAPTER_LOGS))
+                                        .child(Label::new(adapter_logs_label()))
                                         .into_any_element()
                                 },
                                 window.handler_for(&log_view, {
@@ -585,7 +585,7 @@ impl Render for DapLogToolbarItemView {
                                     div()
                                         .w_full()
                                         .pl_4()
-                                        .child(Label::new(RPC_MESSAGES))
+                                        .child(Label::new(rpc_messages_label()))
                                         .into_any_element()
                                 },
                                 window.handler_for(&log_view, {
@@ -604,7 +604,7 @@ impl Render for DapLogToolbarItemView {
                                     div()
                                         .w_full()
                                         .pl_4()
-                                        .child(Label::new(INITIALIZATION_SEQUENCE))
+                                        .child(Label::new(initialization_sequence_label()))
                                         .into_any_element()
                                 },
                                 window.handler_for(&log_view, {
@@ -633,7 +633,7 @@ impl Render for DapLogToolbarItemView {
             .child(
                 div()
                     .child(
-                        Button::new("clear_log_button", "Clear").on_click(cx.listener(
+                        Button::new("clear_log_button", localization::localized_str!("Clear")).on_click(cx.listener(
                             |this, _, window, cx| {
                                 if let Some(log_view) = this.log_view.as_ref() {
                                     log_view.update(cx, |log_view, cx| {
@@ -936,9 +936,17 @@ struct DapMenuItem {
     selected_entry: View,
 }
 
-const ADAPTER_LOGS: &str = "Adapter Logs";
-const RPC_MESSAGES: &str = "RPC Messages";
-const INITIALIZATION_SEQUENCE: &str = "Initialization Sequence";
+fn adapter_logs_label() -> &'static str {
+    localization::localized_str!("Adapter Logs")
+}
+
+fn rpc_messages_label() -> &'static str {
+    localization::localized_str!("RPC Messages")
+}
+
+fn initialization_sequence_label() -> &'static str {
+    localization::localized_str!("Initialization Sequence")
+}
 
 impl Render for DapLogView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -993,7 +1001,7 @@ impl Item for DapLogView {
     }
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "DAP Logs".into()
+        localization::localized_str!("DAP Logs").into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {

@@ -290,7 +290,7 @@ impl AcpTools {
         self.selected_connection
             .as_ref()
             .map(|agent_id| agent_id.0.clone())
-            .unwrap_or_else(|| SharedString::from("No connection selected"))
+            .unwrap_or_else(|| SharedString::from(localization::localized_str!("No connection selected")))
     }
 
     fn connection_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ContextMenu> {
@@ -300,7 +300,7 @@ impl AcpTools {
 
         ContextMenu::build(window, cx, move |mut menu, _window, _cx| {
             if entries.is_empty() {
-                return menu.entry("No active connections", None, |_, _| {});
+                return menu.entry(localization::localized_str!("No active connections"), None, |_, _| {});
             }
 
             for entry in &entries {
@@ -674,11 +674,16 @@ impl Item for AcpTools {
     type Event = AcpToolsEvent;
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> ui::SharedString {
-        format!(
+        {
+        let __zed_i18n_arg_0 = format!("{}", self.selected_watched_connection()
+                .map_or(localization::localized_str!("Disconnected"), |connection| connection.agent_id.0.as_ref()));
+        localization::format_message(
             "ACP: {}",
-            self.selected_watched_connection()
-                .map_or("Disconnected", |connection| connection.agent_id.0.as_ref())
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
         )
+    }
         .into()
     }
 
@@ -733,7 +738,7 @@ impl Render for AcpTools {
                             .child(
                                 IconButton::new("restart_connection", IconName::RotateCw)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Restart Connection"))
+                                    .tooltip(Tooltip::text(localization::localized_str!("Restart Connection")))
                                     .disabled(!can_restart)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.restart_selected_connection(cx);
@@ -741,13 +746,13 @@ impl Render for AcpTools {
                             )
                             .child(
                                 CopyButton::new("copy-all-messages", copied_messages)
-                                    .tooltip_label("Copy All Messages")
+                                    .tooltip_label(localization::localized_str!("Copy All Messages"))
                                     .disabled(!has_messages),
                             )
                             .child(
                                 IconButton::new("clear_messages", IconName::Trash)
                                     .icon_size(IconSize::Small)
-                                    .tooltip(Tooltip::text("Clear Messages"))
+                                    .tooltip(Tooltip::text(localization::localized_str!("Clear Messages")))
                                     .disabled(!has_messages)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.clear_messages(cx);
@@ -762,7 +767,7 @@ impl Render for AcpTools {
                             .size_full()
                             .justify_center()
                             .items_center()
-                            .child("No messages recorded yet")
+                            .child(localization::localized_str!("No messages recorded yet"))
                             .into_any()
                     } else {
                         div()
@@ -785,16 +790,21 @@ impl Render for AcpTools {
                         .size_full()
                         .justify_center()
                         .items_center()
-                        .child(format!(
-                            "Reconnecting to {}",
-                            self.selected_connection_label()
-                        ))
+                        .child({
+        let __zed_i18n_arg_0 = format!("{}", self.selected_connection_label());
+        localization::format_message(
+            "Reconnecting to {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                         .into_any(),
                     _ => h_flex()
                         .size_full()
                         .justify_center()
                         .items_center()
-                        .child("No active connection")
+                        .child(localization::localized_str!("No active connection"))
                         .into_any(),
                 },
             })

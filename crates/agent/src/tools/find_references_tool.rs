@@ -46,9 +46,17 @@ impl AgentTool for FindReferencesTool {
         _cx: &mut App,
     ) -> SharedString {
         if let Ok(input) = input {
-            format!("Find references to `{}`", input.symbol.symbol_name).into()
+            {
+        let __zed_i18n_arg_0 = format!("{}", input.symbol.symbol_name);
+        localization::format_message(
+            "Find references to `{}`",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
         } else {
-            "Find references".into()
+            localization::localized_str!("Find references").into()
         }
     }
 

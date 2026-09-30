@@ -1362,7 +1362,15 @@ pub fn completion_error_from_anthropic(
             status,
             retry_after,
         } => {
-            let message = format!("{provider}'s API rate limit exceeded");
+            let message = {
+        let __zed_i18n_arg_0 = format!("{}", provider);
+        localization::format_message(
+            "{provider}'s API rate limit exceeded",
+            &[
+                ("provider", __zed_i18n_arg_0)
+            ],
+        )
+    };
             Error::from_provider_response(
                 provider,
                 Some(status),
@@ -1376,7 +1384,15 @@ pub fn completion_error_from_anthropic(
             status,
             retry_after,
         } => {
-            let message = format!("{provider}'s API servers are overloaded right now");
+            let message = {
+        let __zed_i18n_arg_0 = format!("{}", provider);
+        localization::format_message(
+            "{provider}'s API servers are overloaded right now",
+            &[
+                ("provider", __zed_i18n_arg_0)
+            ],
+        )
+    };
             Error::from_provider_response(
                 provider,
                 Some(status),

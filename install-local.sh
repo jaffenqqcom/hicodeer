@@ -115,7 +115,7 @@ try:
 except Exception:
     pass
 
-candidates += [45661, 37581, 45675, 5543, 18710, 8710, 5555]
+candidates += [42785, 45661, 37581, 45675, 5543, 18710, 8710, 5555]
 
 seen = set()
 for port in candidates:

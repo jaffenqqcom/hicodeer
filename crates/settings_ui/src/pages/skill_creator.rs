@@ -183,7 +183,7 @@ impl SkillCreatorPage {
 
         let name_editor = cx.new(|cx| {
             InputField::new(window, cx, "my-new-skill")
-                .label("Name")
+                .label(localization::localized_str!("Name"))
                 .tab_index(NAME_FIELD_TAB_INDEX)
                 .tab_stop(true)
         });
@@ -194,9 +194,9 @@ impl SkillCreatorPage {
             InputField::new(
                 window,
                 cx,
-                "e.g., Fill the PR description following this template.",
+                localization::localized_str!("e.g., Fill the PR description following this template."),
             )
-            .label("Description")
+            .label(localization::localized_str!("Description"))
             .tab_index(DESCRIPTION_FIELD_TAB_INDEX)
             .tab_stop(true)
         });
@@ -208,7 +208,7 @@ impl SkillCreatorPage {
                 buffer
             });
             let mut editor = Editor::for_buffer(buffer, None, window, cx);
-            editor.set_placeholder_text("Add skill content…", window, cx);
+            editor.set_placeholder_text(localization::localized_str!("Add skill content…"), window, cx);
             editor.set_soft_wrap_mode(SoftWrap::EditorWidth, cx);
             editor.set_show_gutter(false, cx);
             editor.set_show_wrap_guides(false, cx);
@@ -412,7 +412,7 @@ impl SkillCreatorPage {
     fn recompute_body_error(&mut self, cx: &App) {
         let body = self.current_body(cx);
         self.body_error = if body.trim().is_empty() {
-            Some("Body is required.")
+            Some(localization::localized_str!("Body is required."))
         } else {
             None
         };
@@ -457,9 +457,15 @@ impl SkillCreatorPage {
         match parse_imported_skill(&content, "") {
             Ok(imported) => self.apply_imported_skill(imported, window, cx),
             Err(err) => {
-                self.save_error = Some(SharedString::from(format!(
-                    "Couldn't read shared skill: {err}"
-                )));
+                self.save_error = Some(SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", err);
+        localization::format_message(
+            "Couldn't read shared skill: {err}",
+            &[
+                ("err", __zed_i18n_arg_0)
+            ],
+        )
+    }));
                 cx.notify();
             }
         }
@@ -703,20 +709,20 @@ impl SkillCreatorPage {
             .child(
                 h_flex()
                     .gap_1()
-                    .child(Label::new("Import from URL"))
-                    .child(Label::new("(optional)").color(Color::Muted)),
+                    .child(Label::new(localization::localized_str!("Import from URL")))
+                    .child(Label::new(localization::localized_str!("(optional)")).color(Color::Muted)),
             )
             .child(self.url_editor.clone())
             .child(match &self.url_import_status {
                 UrlImportStatus::Idle => Label::new(
-                    "Paste a GitHub .md URL to fetch it and fill out the form. \
-                     For private files, Zed retries using GITHUB_TOKEN, if set.",
+                    localization::localized_str!("Paste a GitHub .md URL to fetch it and fill out the form. \
+                     For private files, Zed retries using GITHUB_TOKEN, if set."),
                 )
                 .size(LabelSize::Small)
                 .color(Color::Muted)
                 .into_any_element(),
                 UrlImportStatus::Fetching => {
-                    LoadingLabel::new("Fetching and parsing…").into_any_element()
+                    LoadingLabel::new(localization::localized_str!("Fetching and parsing…")).into_any_element()
                 }
                 UrlImportStatus::Error(error) => h_flex()
                     .gap_1()
@@ -743,7 +749,7 @@ impl SkillCreatorPage {
             .child(
                 v_flex()
                     .gap_2()
-                    .child(Label::new("Front-matter"))
+                    .child(Label::new(localization::localized_str!("Front-matter")))
                     .child(self.name_editor.clone())
                     .child(self.description_editor.clone()),
             )
@@ -754,7 +760,7 @@ impl SkillCreatorPage {
                     .flex_grow_1()
                     .flex_shrink_0()
                     .gap_2()
-                    .child(Label::new("Skill Content"))
+                    .child(Label::new(localization::localized_str!("Skill Content")))
                     .child(self.render_body_field(window, cx))
                     .when_some(self.body_error, |this, error| {
                         this.child(Label::new(error).size(LabelSize::Small).color(Color::Error))
@@ -767,9 +773,9 @@ impl SkillCreatorPage {
 
         SwitchField::new(
             "disable-model-invocation",
-            Some("Disable model invocation"),
+            Some(localization::localized_str!("Disable model invocation")),
             Some(
-                "Hide this skill from the model's catalog. It can still be invoked via slash command."
+                localization::localized_str!("Hide this skill from the model's catalog. It can still be invoked via slash command.")
                     .into(),
             ),
             toggle_state,
@@ -835,7 +841,7 @@ impl SkillCreatorPage {
 
     fn render_footer(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let saving = self.saving;
-        let main_action = if saving { "Saving…" } else { "Save Skill" };
+        let main_action = if saving { localization::localized_str!("Saving…") } else { localization::localized_str!("Save Skill") };
 
         v_flex()
             .w_full()
@@ -986,13 +992,18 @@ async fn fetch_imported_skill_from_url_with_github_token(
     }
 
     if body.len() > MAX_SKILL_FILE_SIZE {
-        anyhow::bail!(
+        anyhow::bail!("{}", {
+        let __zed_i18n_arg_0 = format!("{}", MAX_SKILL_FILE_SIZE / 1024);
+        localization::format_message(
             "SKILL.md file exceeds maximum size of {}KB",
-            MAX_SKILL_FILE_SIZE / 1024
-        );
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    });
     }
 
-    let content = String::from_utf8(body).context("GitHub response was not valid UTF-8")?;
+    let content = String::from_utf8(body).context(localization::localized_str!("GitHub response was not valid UTF-8"))?;
     parse_imported_skill(&content, raw_url.as_str())
 }
 
@@ -1022,14 +1033,29 @@ async fn fetch_skill_url(
     let mut response = http_client
         .send(request)
         .await
-        .with_context(|| format!("failed to fetch {raw_url}"))?;
+        .with_context(|| {
+        let __zed_i18n_arg_0 = format!("{}", raw_url);
+        localization::format_message(
+            "failed to fetch {raw_url}",
+            &[
+                ("raw_url", __zed_i18n_arg_0)
+            ],
+        )
+    })?;
 
     let status = response.status();
     if github_token.is_some() && status.is_redirection() {
-        anyhow::bail!(
+        anyhow::bail!("{}", {
+        let __zed_i18n_arg_0 = format!("{}", status.as_u16());
+        let __zed_i18n_arg_1 = format!("{}", raw_url);
+        localization::format_message(
             "GitHub returned an unexpected redirect ({}) for the authenticated request to {raw_url}",
-            status.as_u16()
-        );
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("raw_url", __zed_i18n_arg_1)
+            ],
+        )
+    });
     }
     let mut body = Vec::new();
     response
@@ -1037,20 +1063,25 @@ async fn fetch_skill_url(
         .take(MAX_SKILL_FILE_SIZE as u64 + 1)
         .read_to_end(&mut body)
         .await
-        .context("failed to read response body")?;
+        .context(localization::localized_str!("failed to read response body"))?;
 
     Ok((status, body))
 }
 
 fn github_fetch_error(status: StatusCode, body: &[u8]) -> anyhow::Error {
     let mut message = if status == StatusCode::NOT_FOUND {
-        "GitHub returned 404 while fetching the skill; no repository exists at this URL, or it is private"
+        localization::localized_str!("GitHub returned 404 while fetching the skill; no repository exists at this URL, or it is private")
             .to_string()
     } else {
-        format!(
+        {
+        let __zed_i18n_arg_0 = format!("{}", status.as_u16());
+        localization::format_message(
             "GitHub returned {} while fetching the skill",
-            status.as_u16()
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
         )
+    }
     };
 
     let response_text = truncated_response_body_for_error(body);
@@ -1067,17 +1098,17 @@ pub(crate) fn is_supported_skill_url(input: &str) -> bool {
 }
 
 fn github_raw_url(input: &str) -> Result<String> {
-    let url = Url::parse(input.trim()).context("Enter a valid GitHub URL")?;
+    let url = Url::parse(input.trim()).context(localization::localized_str!("Enter a valid GitHub URL"))?;
     if url.scheme() != "https" {
-        anyhow::bail!("GitHub skill URLs must use https://");
+        anyhow::bail!(localization::localized_str!("GitHub skill URLs must use https://"));
     }
 
     let host = url
         .host_str()
-        .ok_or_else(|| anyhow!("Enter a valid GitHub URL"))?;
+        .ok_or_else(|| anyhow!(localization::localized_str!("Enter a valid GitHub URL")))?;
     let path_segments = url
         .path_segments()
-        .ok_or_else(|| anyhow!("Enter a valid GitHub URL"))?
+        .ok_or_else(|| anyhow!(localization::localized_str!("Enter a valid GitHub URL")))?
         .collect::<Vec<_>>();
 
     match host {
@@ -1086,17 +1117,17 @@ fn github_raw_url(input: &str) -> Result<String> {
             ensure_markdown_path(&path_segments)?;
             Ok(url.into())
         }
-        _ => anyhow::bail!("Paste a GitHub .md URL"),
+        _ => anyhow::bail!(localization::localized_str!("Paste a GitHub .md URL")),
     }
 }
 
 fn github_blob_raw_url(path_segments: &[&str]) -> Result<String> {
     let [owner, repo, kind, reference, file_path @ ..] = path_segments else {
-        anyhow::bail!("Paste a GitHub blob URL that points to a .md file");
+        anyhow::bail!(localization::localized_str!("Paste a GitHub blob URL that points to a .md file"));
     };
 
     if *kind != "blob" {
-        anyhow::bail!("Paste a GitHub blob URL that points to a .md file");
+        anyhow::bail!(localization::localized_str!("Paste a GitHub blob URL that points to a .md file"));
     }
 
     ensure_markdown_path(file_path)?;
@@ -1108,11 +1139,11 @@ fn github_blob_raw_url(path_segments: &[&str]) -> Result<String> {
 
 fn ensure_markdown_path(path_segments: &[&str]) -> Result<()> {
     let Some(file_name) = path_segments.last() else {
-        anyhow::bail!("Paste a GitHub .md URL");
+        anyhow::bail!(localization::localized_str!("Paste a GitHub .md URL"));
     };
 
     if !file_name.to_ascii_lowercase().ends_with(".md") {
-        anyhow::bail!("Paste a GitHub URL that points to a .md file");
+        anyhow::bail!(localization::localized_str!("Paste a GitHub URL that points to a .md file"));
     }
 
     Ok(())
@@ -1199,10 +1230,17 @@ async fn write_skill_to_disk(
     let skill_dir = skills_dir.join(name);
     match fs.metadata(&skill_dir).await {
         Ok(Some(metadata)) if metadata.is_dir => {
-            anyhow::bail!(
-                "A skill named \"{name}\" already exists at {}. Pick a different name.",
-                skill_dir.display()
-            );
+            anyhow::bail!("{}", {
+        let __zed_i18n_arg_0 = format!("{}", skill_dir.display());
+        let __zed_i18n_arg_1 = format!("{}", name);
+        localization::format_message(
+            "A skill named \"{name}\" already exists at {}. Pick a different name.",
+            &[
+                ("name", __zed_i18n_arg_1),
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    });
         }
         Ok(Some(_)) => {
             // Something exists at this path, but it isn't a directory — e.g.
@@ -1210,19 +1248,28 @@ async fn write_skill_to_disk(
             // this branch we'd fall through to `create_dir`, which on the
             // real fs returns a generic "File exists" IO error that gives
             // the user no idea what's wrong or how to recover.
-            anyhow::bail!(
-                "A file (not a skill directory) already exists at {}. \
-                 Delete it or pick a different skill name.",
-                skill_dir.display()
-            );
+            anyhow::bail!("{}", {
+        let __zed_i18n_arg_0 = format!("{}", skill_dir.display());
+        localization::format_message(
+            "A file (not a skill directory) already exists at {}. Delete it or pick a different skill name.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    });
         }
         Ok(None) => {}
         Err(err) => {
             return Err(err).with_context(|| {
-                format!(
-                    "failed to check whether {} already exists",
-                    skill_dir.display()
-                )
+                {
+        let __zed_i18n_arg_0 = format!("{}", skill_dir.display());
+        localization::format_message(
+            "failed to check whether {} already exists",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             });
         }
     }
@@ -1231,11 +1278,27 @@ async fn write_skill_to_disk(
 
     fs.create_dir(&skill_dir)
         .await
-        .with_context(|| format!("failed to create skill directory {}", skill_dir.display()))?;
+        .with_context(|| {
+        let __zed_i18n_arg_0 = format!("{}", skill_dir.display());
+        localization::format_message(
+            "failed to create skill directory {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })?;
     let skill_file_path = skill_dir.join(SKILL_FILE_NAME);
     fs.write(&skill_file_path, content.as_bytes())
         .await
-        .with_context(|| format!("failed to write {}", skill_file_path.display()))?;
+        .with_context(|| {
+        let __zed_i18n_arg_0 = format!("{}", skill_file_path.display());
+        localization::format_message(
+            "failed to write {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })?;
 
     Ok(skill_file_path)
 }
@@ -1252,7 +1315,7 @@ fn format_skill_file(
         disable_model_invocation,
     };
     let frontmatter = serde_yaml_ng::to_string(&metadata)
-        .context("failed to serialize skill frontmatter as YAML")?;
+        .context(localization::localized_str!("failed to serialize skill frontmatter as YAML"))?;
 
     let mut content = String::with_capacity(frontmatter.len() + body.len() + 16);
     content.push_str("---\n");
@@ -1645,7 +1708,7 @@ mod tests {
             "error should report the skill size limit, got: {message}"
         );
         assert!(
-            !message.contains("failed to read response body"),
+            !message.contains(localization::localized_str!("failed to read response body")),
             "reader should not be polled past the limit, got: {message}"
         );
     }

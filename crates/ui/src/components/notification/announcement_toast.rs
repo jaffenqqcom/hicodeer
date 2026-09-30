@@ -23,9 +23,9 @@ impl AnnouncementToast {
             heading: None,
             description: None,
             bullet_items: SmallVec::new(),
-            primary_action_label: "Try Now".into(),
+            primary_action_label: localization::localized_str!("Try Now").into(),
             primary_on_click: Box::new(|_, _, _| {}),
-            secondary_action_label: "Learn More".into(),
+            secondary_action_label: localization::localized_str!("Learn More").into(),
             secondary_on_click: Box::new(|_, _, _| {}),
             dismiss_on_click: Box::new(|_, _, _| {}),
         }
@@ -171,7 +171,7 @@ impl Component for AnnouncementToast {
                 .w_80()
                 .child(
                     AnnouncementToast::new()
-                        .heading("Introducing Parallel Agents")
+                        .heading(localization::localized_str!("Introducing Parallel Agents"))
                         .description("Run multiple agent threads simultaneously across projects.")
                         .bullet_item(ListBulletItem::new(
                             "Mix and match Zed's agent with any ACP-compatible agent",

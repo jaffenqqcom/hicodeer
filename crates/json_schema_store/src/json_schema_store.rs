@@ -231,7 +231,7 @@ async fn resolve_dynamic_schema(
     let (schema_name, rest) = path.split_once('/').unzip();
     let schema_name = schema_name.unwrap_or(path);
 
-    let schema = match schema_name {
+    let mut schema = match schema_name {
         "settings" if rest.is_some_and(|r| r.starts_with("lsp/")) => {
             let lsp_path = rest
                 .and_then(|r| {
@@ -402,6 +402,10 @@ async fn resolve_dynamic_schema(
             anyhow::bail!("Unrecognized schema: {schema_name}");
         }
     };
+    if matches!(schema_name, "settings" | "project_settings" | "keymap" | "action") {
+        inject_ui_locale_schema(&mut schema);
+        localize_schema_metadata(&mut schema);
+    }
     Ok(schema)
 }
 
@@ -507,6 +511,49 @@ pub fn all_schema_file_associations(
         }));
 
     file_associations
+}
+
+fn inject_ui_locale_schema(schema: &mut serde_json::Value) {
+    use schemars::JsonSchema as _;
+
+    let Some(defs) = schema.get_mut("$defs").and_then(|defs| defs.as_object_mut()) else {
+        return;
+    };
+    let mut variants = vec![serde_json::Value::String("system".into())];
+    variants.extend(
+        localization::available_locales()
+            .iter()
+            .map(|locale| serde_json::Value::String(locale.id.clone())),
+    );
+    defs.insert(
+        settings::UiLocale::schema_name().into_owned(),
+        serde_json::json!({ "type": "string", "enum": variants }),
+    );
+}
+
+fn localize_schema_metadata(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if matches!(
+                    key.as_str(),
+                    "title" | "description" | "markdownDescription" | "deprecationMessage"
+                ) && let Some(source) = value.as_str()
+                    && let Some(translation) = localization::lookup(source)
+                {
+                    *value = serde_json::Value::String(translation.to_owned());
+                } else {
+                    localize_schema_metadata(value);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                localize_schema_metadata(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Swaps the placeholder [`settings::FeatureFlagsMap`] subschema produced by

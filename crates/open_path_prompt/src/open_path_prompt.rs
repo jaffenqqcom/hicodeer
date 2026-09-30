@@ -717,11 +717,19 @@ impl PickerDelegate for OpenPathDelegate {
                         self.should_dismiss = false;
                         let answer = window.prompt(
                             gpui::PromptLevel::Critical,
-                            &format!("{prompted_path:?} already exists. Do you want to replace it?"),
+                            &{
+        let __zed_i18n_arg_0 = format!("{:?}", prompted_path);
+        localization::format_message(
+            "{prompted_path:?} already exists. Do you want to replace it?",
+            &[
+                ("prompted_path", __zed_i18n_arg_0)
+            ],
+        )
+    },
                             Some(
-                                "A file or folder with the same name already exists. Replacing it will overwrite its current contents.",
+                                localization::localized_str!("A file or folder with the same name already exists. Replacing it will overwrite its current contents."),
                             ),
-                            &["Replace", "Cancel"],
+                            &[localization::localized_str!("Replace"), localization::localized_str!("Cancel")],
                             cx
                         );
                         self.replace_prompt = cx.spawn_in(window, async move |picker, cx| {
@@ -922,12 +930,12 @@ impl PickerDelegate for OpenPathDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         Some(match &self.directory_state {
-            DirectoryState::Create { .. } => SharedString::from("Type a path…"),
+            DirectoryState::Create { .. } => SharedString::from(localization::localized_str!("Type a path…")),
             DirectoryState::List {
                 error: Some(error), ..
             } => error.clone(),
             DirectoryState::List { .. } | DirectoryState::None { .. } => {
-                SharedString::from("No such file or directory")
+                SharedString::from(localization::localized_str!("No such file or directory"))
             }
         })
     }

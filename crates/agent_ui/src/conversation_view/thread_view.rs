@@ -187,7 +187,7 @@ impl ThreadFeedbackState {
                 cx,
             );
             editor.set_placeholder_text(
-                "What went wrong? Share your feedback so we can improve.",
+                localization::localized_str!("What went wrong? Share your feedback so we can improve."),
                 window,
                 cx,
             );
@@ -429,7 +429,7 @@ fn render_cat_numbered_code_block(
                 .right_0()
                 .justify_end()
                 .visible_on_hover("read-file-code-block")
-                .child(CopyButton::new(copy_button_id, code).tooltip_label("Copy Code")),
+                .child(CopyButton::new(copy_button_id, code).tooltip_label(localization::localized_str!("Copy Code"))),
         )
         .into_any_element()
 }
@@ -1157,7 +1157,7 @@ impl ThreadView {
         match command {
             PromptLocalCommand::ThumbsUp => {
                 self.handle_feedback_click(ThreadFeedback::Positive, window, cx);
-                self.show_local_command_toast("Thanks for your feedback!", cx);
+                self.show_local_command_toast(localization::localized_str!("Thanks for your feedback!"), cx);
             }
             PromptLocalCommand::ThumbsDown => {
                 self.handle_feedback_click(ThreadFeedback::Negative, window, cx);
@@ -1878,10 +1878,15 @@ impl ThreadView {
                     ("refusal", None, message.into())
                 }
                 ThreadError::DataRetentionConsentRequired => {
-                    let message = format!(
-                        "{} is not available with Zero Data Retention.",
-                        self.current_model_name(cx)
-                    );
+                    let message = {
+        let __zed_i18n_arg_0 = format!("{}", self.current_model_name(cx));
+        localization::format_message(
+            "{} is not available with Zero Data Retention.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    };
                     ("data_retention_consent_required", None, message.into())
                 }
                 ThreadError::AuthenticationRequired(message) => {
@@ -3024,11 +3029,19 @@ impl ThreadView {
                     .icon(IconName::Warning)
                     .severity(Severity::Warning)
                     .title(state.last_error.clone())
-                    .description(format!("Retrying with {fallback_model}"))
+                    .description({
+        let __zed_i18n_arg_0 = format!("{}", fallback_model);
+        localization::format_message(
+            "Retrying with {fallback_model}",
+            &[
+                ("fallback_model", __zed_i18n_arg_0)
+            ],
+        )
+    })
                     .dismiss_action(
                         IconButton::new("dismiss-refusal-fallback", IconName::Close)
                             .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Dismiss"))
+                            .tooltip(Tooltip::text(localization::localized_str!("Dismiss")))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.thread_retry_status = None;
                                 cx.notify();
@@ -3053,15 +3066,31 @@ impl ThreadView {
                 format!("Retrying. Next attempt in {next_attempt_in_secs} seconds.")
             }
         } else if next_attempt_in_secs == 1 {
-            format!(
-                "Retrying. Next attempt in 1 second (Attempt {} of {}).",
-                state.attempt, state.max_attempts,
-            )
+            {
+        let __zed_i18n_arg_0 = format!("{}", state.attempt);
+        let __zed_i18n_arg_1 = format!("{}", state.max_attempts);
+        localization::format_message(
+            "Retrying. Next attempt in 1 second (Attempt {} of {}).",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    }
         } else {
-            format!(
-                "Retrying. Next attempt in {next_attempt_in_secs} seconds (Attempt {} of {}).",
-                state.attempt, state.max_attempts,
-            )
+            {
+        let __zed_i18n_arg_0 = format!("{}", state.attempt);
+        let __zed_i18n_arg_1 = format!("{}", state.max_attempts);
+        let __zed_i18n_arg_2 = format!("{}", next_attempt_in_secs);
+        localization::format_message(
+            "Retrying. Next attempt in {next_attempt_in_secs} seconds (Attempt {} of {}).",
+            &[
+                ("next_attempt_in_secs", __zed_i18n_arg_2),
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    }
         };
 
         Some(
@@ -3317,7 +3346,7 @@ impl ThreadView {
                                     .tooltip({
                                         move |_, cx| {
                                             Tooltip::with_meta(
-                                                "Go to File",
+                                                localization::localized_str!("Go to File"),
                                                 None,
                                                 full_path.clone(),
                                                 cx,
@@ -3367,7 +3396,7 @@ impl ThreadView {
                 cx.notify();
             }))
             .child(
-                Button::new("review", "Review")
+                Button::new("review", localization::localized_str!("Review"))
                     .label_size(LabelSize::Small)
                     .on_click({
                         let buffer = buffer.clone();
@@ -3377,7 +3406,7 @@ impl ThreadView {
                     }),
             )
             .child(
-                Button::new(("reject-file", index), "Reject")
+                Button::new(("reject-file", index), localization::localized_str!("Reject"))
                     .label_size(LabelSize::Small)
                     .disabled(pending_edits)
                     .on_click({
@@ -3402,7 +3431,7 @@ impl ThreadView {
                     }),
             )
             .child(
-                Button::new(("keep-file", index), "Keep")
+                Button::new(("keep-file", index), localization::localized_str!("Keep"))
                     .label_size(LabelSize::Small)
                     .disabled(pending_edits)
                     .on_click({
@@ -3438,7 +3467,7 @@ impl ThreadView {
                 let info = tool_call.subagent_session_info.as_ref()?;
                 let summary_text = tool_call.label.read(cx).source().to_string();
                 let subagent_summary = if summary_text.is_empty() {
-                    SharedString::from("Subagent")
+                    SharedString::from(localization::localized_str!("Subagent"))
                 } else {
                     SharedString::from(summary_text)
                 };
@@ -3486,7 +3515,7 @@ impl ThreadView {
                         .border_b_1()
                         .border_color(cx.theme().colors().border)
                         .child(
-                            Label::new("Subagents Awaiting Permission:")
+                            Label::new(localization::localized_str!("Subagents Awaiting Permission:"))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         )
@@ -3530,7 +3559,7 @@ impl ThreadView {
                                 )
                                 .child(
                                     div().visible_on_hover(&group).child(
-                                        Label::new("Scroll to Subagent")
+                                        Label::new(localization::localized_str!("Scroll to Subagent"))
                                             .size(LabelSize::Small)
                                             .color(Color::Muted)
                                             .truncate(),
@@ -3588,9 +3617,17 @@ impl ThreadView {
         );
 
         let label: SharedString = if pending_count > 1 {
-            format!("Awaiting Confirmation ({pending_count})").into()
+            {
+        let __zed_i18n_arg_0 = format!("{}", pending_count);
+        localization::format_message(
+            "Awaiting Confirmation ({pending_count})",
+            &[
+                ("pending_count", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
         } else {
-            "Awaiting Confirmation".into()
+            localization::localized_str!("Awaiting Confirmation").into()
         };
 
         let header = h_flex()
@@ -3613,7 +3650,7 @@ impl ThreadView {
                     .child(Label::new(label).size(LabelSize::Small).color(Color::Muted)),
             )
             .child(
-                Button::new("main-agent-permission-scroll-to", "Scroll")
+                Button::new("main-agent-permission-scroll-to", localization::localized_str!("Scroll"))
                     .label_size(LabelSize::Small)
                     .end_icon(
                         Icon::new(scroll_icon)
@@ -3639,9 +3676,17 @@ impl ThreadView {
     ) -> impl IntoElement {
         let queue_count = self.message_queue.len();
         let title: SharedString = if queue_count == 1 {
-            "1 Queued Message".into()
+            localization::localized_str!("1 Queued Message").into()
         } else {
-            format!("{} Queued Messages", queue_count).into()
+            {
+        let __zed_i18n_arg_0 = format!("{}", queue_count);
+        localization::format_message(
+            "{} Queued Messages",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
         };
 
         h_flex()
@@ -3664,7 +3709,7 @@ impl ThreadView {
                     })),
             )
             .child(
-                Button::new("clear_queue", "Clear All")
+                Button::new("clear_queue", localization::localized_str!("Clear All"))
                     .label_size(LabelSize::Small)
                     .key_binding(
                         KeyBinding::for_action(&ClearMessageQueue, cx)
@@ -3702,7 +3747,7 @@ impl ThreadView {
                 .gap_1()
                 .truncate()
                 .child(
-                    Label::new("Current:")
+                    Label::new(localization::localized_str!("Current:"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -3730,7 +3775,15 @@ impl ThreadView {
                             )))
                             .child(
                                 div().pr_0p5().bg(self.activity_bar_bg(cx)).child(
-                                    Label::new(format!("{} left", stats.pending))
+                                    Label::new({
+        let __zed_i18n_arg_0 = format!("{}", stats.pending);
+        localization::format_message(
+            "{} left",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 ),
@@ -3739,9 +3792,17 @@ impl ThreadView {
                 })
         } else {
             let status_label = if stats.pending == 0 {
-                "All Done".to_string()
+                localization::localized_str!("All Done").to_string()
             } else if stats.completed == 0 {
-                format!("{} Tasks", plan.entries.len())
+                {
+        let __zed_i18n_arg_0 = format!("{}", plan.entries.len());
+        localization::format_message(
+            "{} Tasks",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             } else {
                 format!("{}/{}", stats.completed, plan.entries.len())
             };
@@ -3751,7 +3812,7 @@ impl ThreadView {
                 .gap_1()
                 .justify_between()
                 .child(
-                    Label::new("Plan")
+                    Label::new(localization::localized_str!("Plan"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -3777,7 +3838,7 @@ impl ThreadView {
                 IconButton::new("dismiss-plan", IconName::Close)
                     .icon_size(IconSize::XSmall)
                     .shape(ui::IconButtonShape::Square)
-                    .tooltip(Tooltip::text("Clear Plan"))
+                    .tooltip(Tooltip::text(localization::localized_str!("Clear Plan")))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.thread.update(cx, |thread, cx| thread.clear_plan(cx));
                         cx.stop_propagation();
@@ -3885,11 +3946,11 @@ impl ThreadView {
 
         let id = format!("context-compaction-{entry_ix}");
         let header_label = match &compaction.status {
-            acp_thread::ContextCompactionStatus::InProgress => "Compacting Context…",
-            acp_thread::ContextCompactionStatus::Completed => "Context Compacted",
-            acp_thread::ContextCompactionStatus::Failed => "Compaction Failed",
-            acp_thread::ContextCompactionStatus::Canceled => "Compaction Canceled",
-            acp_thread::ContextCompactionStatus::Other(_) => "Context Compaction",
+            acp_thread::ContextCompactionStatus::InProgress => localization::localized_str!("Compacting Context…"),
+            acp_thread::ContextCompactionStatus::Completed => localization::localized_str!("Context Compacted"),
+            acp_thread::ContextCompactionStatus::Failed => localization::localized_str!("Compaction Failed"),
+            acp_thread::ContextCompactionStatus::Canceled => localization::localized_str!("Compaction Canceled"),
+            acp_thread::ContextCompactionStatus::Other(_) => localization::localized_str!("Context Compaction"),
         };
         let chevron_end = if is_expanded {
             IconName::ChevronUp
@@ -4059,15 +4120,21 @@ impl ThreadView {
                     .map(|this| {
                         if pending_edits {
                             this.child(
-                                Label::new(format!(
-                                    "Editing {} {}…",
-                                    changed_buffers.len(),
-                                    if changed_buffers.len() == 1 {
+                                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", changed_buffers.len());
+        let __zed_i18n_arg_1 = format!("{}", if changed_buffers.len() == 1 {
                                         "file"
                                     } else {
                                         "files"
-                                    }
-                                ))
+                                    });
+        localization::format_message(
+            "Editing {} {}…",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    })
                                 .color(Color::Muted)
                                 .size(LabelSize::Small)
                                 .with_animation(
@@ -4087,7 +4154,7 @@ impl ThreadView {
                             };
 
                             this.child(
-                                Label::new("Edits")
+                                Label::new(localization::localized_str!("Edits"))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -4128,7 +4195,7 @@ impl ThreadView {
                                 let focus_handle = focus_handle.clone();
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "Review Changes",
+                                        localization::localized_str!("Review Changes"),
                                         &OpenAgentDiff,
                                         &focus_handle,
                                         cx,
@@ -4141,7 +4208,7 @@ impl ThreadView {
                     )
                     .child(Divider::vertical().color(DividerColor::Border))
                     .child(
-                        Button::new("reject-all-changes", "Reject All")
+                        Button::new("reject-all-changes", localization::localized_str!("Reject All"))
                             .label_size(LabelSize::Small)
                             .disabled(pending_edits)
                             .when(pending_edits, |this| {
@@ -4156,7 +4223,7 @@ impl ThreadView {
                             })),
                     )
                     .child(
-                        Button::new("keep-all-changes", "Keep All")
+                        Button::new("keep-all-changes", localization::localized_str!("Keep All"))
                             .label_size(LabelSize::Small)
                             .disabled(pending_edits)
                             .when(pending_edits, |this| {
@@ -4257,7 +4324,7 @@ impl ThreadView {
                                         IconButton::new("stop_subagent", IconName::Stop)
                                             .icon_size(IconSize::Small)
                                             .icon_color(Color::Error)
-                                            .tooltip(Tooltip::text("Stop Subagent"))
+                                            .tooltip(Tooltip::text(localization::localized_str!("Stop Subagent")))
                                             .on_click(move |_, _, cx| {
                                                 thread.update(cx, |thread, cx| {
                                                     thread.cancel(cx).detach();
@@ -4268,7 +4335,7 @@ impl ThreadView {
                                 .child(
                                     IconButton::new("minimize_subagent", IconName::Dash)
                                         .icon_size(IconSize::Small)
-                                        .tooltip(Tooltip::text("Minimize Subagent"))
+                                        .tooltip(Tooltip::text(localization::localized_str!("Minimize Subagent")))
                                         .on_click(move |_, window, cx| {
                                             let _ = server_view.update(cx, |server_view, cx| {
                                                 server_view.navigate_to_thread(
@@ -4298,9 +4365,9 @@ impl ThreadView {
 
         let editor_expanded = self.editor_expanded;
         let (expand_icon, expand_tooltip) = if editor_expanded {
-            (IconName::Minimize, "Minimize Message Editor")
+            (IconName::Minimize, localization::localized_str!("Minimize Message Editor"))
         } else {
-            (IconName::Maximize, "Expand Message Editor")
+            (IconName::Maximize, localization::localized_str!("Expand Message Editor"))
         };
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
@@ -4422,7 +4489,7 @@ impl ThreadView {
     ) -> impl IntoElement {
         let focus_handle = self.message_editor.focus_handle(cx);
 
-        Button::new(("steer", index), "Steer")
+        Button::new(("steer", index), localization::localized_str!("Steer"))
             .label_size(LabelSize::Small)
             .toggle_state(steer_on)
             .selected_style(ButtonStyle::Tinted(TintColor::Accent))
@@ -4434,10 +4501,10 @@ impl ThreadView {
             })
             .tooltip(move |_window, cx| {
                 Tooltip::with_meta(
-                    "Steer",
+                    localization::localized_str!("Steer"),
                     None,
-                    "Interrupt the agent at its next step to send this message. \
-                     When off, queued messages wait for the agent to finish.",
+                    localization::localized_str!("Interrupt the agent at its next step to send this message. \
+                     When off, queued messages wait for the agent to finish."),
                     cx,
                 )
             })
@@ -4467,9 +4534,9 @@ impl ThreadView {
                 let editor = &entry.editor;
                 let is_next = index == 0;
                 let (icon_color, tooltip_text) = if is_next {
-                    (Color::Accent, "Next in Queue")
+                    (Color::Accent, localization::localized_str!("Next in Queue"))
                 } else {
-                    (Color::Muted, "In Queue")
+                    (Color::Muted, localization::localized_str!("In Queue"))
                 };
 
                 let editor_focused = editor.focus_handle(cx).is_focused(_window);
@@ -4509,9 +4576,9 @@ impl ThreadView {
                                     .icon_size(IconSize::Small)
                                     .tooltip(|_window, cx| {
                                         Tooltip::with_meta(
-                                            "Edit Queued Message",
+                                            localization::localized_str!("Edit Queued Message"),
                                             None,
-                                            "Type anything to edit",
+                                            localization::localized_str!("Type anything to edit"),
                                             cx,
                                         )
                                     })
@@ -4527,7 +4594,7 @@ impl ThreadView {
                                 ))
                             })
                             .child(
-                                Button::new(("send_now_focused", index), "Send Now")
+                                Button::new(("send_now_focused", index), localization::localized_str!("Send Now"))
                                     .label_size(LabelSize::Small)
                                     .style(ButtonStyle::Outlined)
                                     .key_binding(
@@ -4556,13 +4623,13 @@ impl ThreadView {
                                         move |_window, cx| {
                                             if is_next {
                                                 Tooltip::for_action_in(
-                                                    "Remove Message from Queue",
+                                                    localization::localized_str!("Remove Message from Queue"),
                                                     &RemoveFirstQueuedMessage,
                                                     &focus_handle,
                                                     cx,
                                                 )
                                             } else {
-                                                Tooltip::simple("Remove Message from Queue", cx)
+                                                Tooltip::simple(localization::localized_str!("Remove Message from Queue"), cx)
                                             }
                                         }
                                     })
@@ -4579,13 +4646,13 @@ impl ThreadView {
                                         move |_window, cx| {
                                             if is_next {
                                                 Tooltip::for_action_in(
-                                                    "Edit",
+                                                    localization::localized_str!("Edit"),
                                                     &EditFirstQueuedMessage,
                                                     &focus_handle,
                                                     cx,
                                                 )
                                             } else {
-                                                Tooltip::simple("Edit", cx)
+                                                Tooltip::simple(localization::localized_str!("Edit"), cx)
                                             }
                                         }
                                     })
@@ -4601,7 +4668,7 @@ impl ThreadView {
                                 ))
                             })
                             .child(
-                                Button::new(("send_now", index), "Send Now")
+                                Button::new(("send_now", index), localization::localized_str!("Send Now"))
                                     .label_size(LabelSize::Small)
                                     .when(is_next, |this| this.style(ButtonStyle::Outlined))
                                     .when(is_next && message_editor.is_empty(cx), |this| {
@@ -4962,14 +5029,14 @@ impl ThreadView {
 
         let (tooltip_label, color, icon, new_speed) = if is_fast {
             (
-                "Disable Fast Mode",
+                localization::localized_str!("Disable Fast Mode"),
                 Color::Accent,
                 IconName::FastForward,
                 Speed::Standard,
             )
         } else {
             (
-                "Enable Fast Mode",
+                localization::localized_str!("Enable Fast Mode"),
                 Color::Custom(cx.theme().colors().icon_disabled.opacity(0.8)),
                 IconName::FastForwardOff,
                 Speed::Fast,
@@ -5012,7 +5079,7 @@ impl ThreadView {
                                     .into_any_element()
                             })
                             .separator()
-                            .item(ContextMenuEntry::new("Enable Now").handler({
+                            .item(ContextMenuEntry::new(localization::localized_str!("Enable Now")).handler({
                                 let weak_self = weak_self.clone();
                                 move |_window, cx| {
                                     weak_self
@@ -5023,7 +5090,7 @@ impl ThreadView {
                                 }
                             }))
                             .item(
-                                ContextMenuEntry::new("Enable and Don't Show Again").handler({
+                                ContextMenuEntry::new(localization::localized_str!("Enable and Don't Show Again")).handler({
                                     let weak_self = weak_self.clone();
                                     let provider_id = provider_id.clone();
                                     let model_id = model_id;
@@ -5118,13 +5185,13 @@ impl ThreadView {
 
         let (tooltip_label, icon, color) = if thinking {
             (
-                "Disable Thinking Mode",
+                localization::localized_str!("Disable Thinking Mode"),
                 IconName::ThinkingMode,
                 Color::Accent,
             )
         } else {
             (
-                "Enable Thinking Mode",
+                localization::localized_str!("Enable Thinking Mode"),
                 IconName::ThinkingModeOff,
                 Color::Custom(cx.theme().colors().icon_disabled.opacity(0.8)),
             )
@@ -5230,7 +5297,7 @@ impl ThreadView {
                     h_flex()
                         .gap_2()
                         .justify_between()
-                        .child(Label::new("Change Thinking Effort"))
+                        .child(Label::new(localization::localized_str!("Change Thinking Effort")))
                         .child(KeyBinding::for_action_in(
                             &ToggleThinkingEffortMenu,
                             &focus_handle,
@@ -5246,7 +5313,7 @@ impl ThreadView {
                             .justify_between()
                             .border_t_1()
                             .border_color(cx.theme().colors().border_variant)
-                            .child(Label::new("Cycle Thinking Effort"))
+                            .child(Label::new(localization::localized_str!("Cycle Thinking Effort")))
                             .child(KeyBinding::for_action_in(
                                 &CycleThinkingEffort,
                                 &focus_handle,
@@ -5284,7 +5351,7 @@ impl ThreadView {
             )
             .menu(move |window, cx| {
                 Some(ContextMenu::build(window, cx, |mut menu, _window, _cx| {
-                    menu = menu.header("Change Thinking Effort");
+                    menu = menu.header(localization::localized_str!("Change Thinking Effort"));
 
                     for effort_level in supported_effort_levels.clone() {
                         let is_selected = selected
@@ -5366,7 +5433,7 @@ impl ThreadView {
             div()
                 .id("loading-message-content")
                 .px_1()
-                .tooltip(Tooltip::text("Loading Added Context…"))
+                .tooltip(Tooltip::text(localization::localized_str!("Loading Added Context…")))
                 .child(loading_contents_spinner(IconSize::default()))
                 .into_any_element()
         } else if is_generating && is_editor_empty {
@@ -5374,7 +5441,7 @@ impl ThreadView {
                 .icon_color(Color::Error)
                 .style(ButtonStyle::Tinted(TintColor::Error))
                 .tooltip(move |_window, cx| {
-                    Tooltip::for_action("Stop Generation", &editor::actions::Cancel, cx)
+                    Tooltip::for_action(localization::localized_str!("Stop Generation"), &editor::actions::Cancel, cx)
                 })
                 .on_click(cx.listener(|this, _event, _, cx| this.cancel_generation(cx)))
                 .into_any_element()
@@ -5395,7 +5462,7 @@ impl ThreadView {
                 })
                 .tooltip(move |_window, cx| {
                     if is_editor_empty && !is_generating {
-                        Tooltip::for_action("Type to Send", &Chat, cx)
+                        Tooltip::for_action(localization::localized_str!("Type to Send"), &Chat, cx)
                     } else if is_generating {
                         let focus_handle = focus_handle.clone();
 
@@ -5406,7 +5473,7 @@ impl ThreadView {
                                     h_flex()
                                         .gap_2()
                                         .justify_between()
-                                        .child(Label::new("Queue and Send"))
+                                        .child(Label::new(localization::localized_str!("Queue and Send")))
                                         .child(KeyBinding::for_action_in(&Chat, &focus_handle, cx)),
                                 )
                                 .child(
@@ -5416,7 +5483,7 @@ impl ThreadView {
                                         .justify_between()
                                         .border_t_1()
                                         .border_color(cx.theme().colors().border_variant)
-                                        .child(Label::new("Send Immediately"))
+                                        .child(Label::new(localization::localized_str!("Send Immediately")))
                                         .child(KeyBinding::for_action_in(
                                             &SendImmediately,
                                             &focus_handle,
@@ -5426,7 +5493,7 @@ impl ThreadView {
                                 .into_any_element()
                         })(_window, cx)
                     } else {
-                        Tooltip::for_action("Send Message", &Chat, cx)
+                        Tooltip::for_action(localization::localized_str!("Send Message"), &Chat, cx)
                     }
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -5448,7 +5515,7 @@ impl ThreadView {
                 {
                     move |_window, cx| {
                         Tooltip::for_action_in(
-                            "Add Context",
+                            localization::localized_str!("Add Context"),
                             &OpenAddContextMenu,
                             &focus_handle,
                             cx,
@@ -5505,7 +5572,7 @@ impl ThreadView {
         ContextMenu::build(window, cx, move |menu, _window, _cx| {
             menu.key_context("AddContextMenu")
                 .item(
-                    ContextMenuEntry::new("Files & Directories")
+                    ContextMenuEntry::new(localization::localized_str!("Files & Directories"))
                         .icon(IconName::File)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5520,7 +5587,7 @@ impl ThreadView {
                         }),
                 )
                 .item(
-                    ContextMenuEntry::new("Symbols")
+                    ContextMenuEntry::new(localization::localized_str!("Symbols"))
                         .icon(IconName::Code)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5535,7 +5602,7 @@ impl ThreadView {
                         }),
                 )
                 .item(
-                    ContextMenuEntry::new("Threads")
+                    ContextMenuEntry::new(localization::localized_str!("Threads"))
                         .icon(IconName::Thread)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5550,7 +5617,7 @@ impl ThreadView {
                         }),
                 )
                 .when(!available_skills.is_empty(), |this| {
-                    this.submenu_with_colored_icon("Skills", IconName::Sparkle, Color::Muted, {
+                    this.submenu_with_colored_icon(localization::localized_str!("Skills"), IconName::Sparkle, Color::Muted, {
                         let message_editor = message_editor.clone();
                         let available_skills = available_skills.clone();
                         move |mut menu, _window, _cx| {
@@ -5563,7 +5630,7 @@ impl ThreadView {
                     })
                 })
                 .item(
-                    ContextMenuEntry::new("Image")
+                    ContextMenuEntry::new(localization::localized_str!("Image"))
                         .icon(IconName::Image)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5579,7 +5646,7 @@ impl ThreadView {
                         }),
                 )
                 .item(
-                    ContextMenuEntry::new("Selection")
+                    ContextMenuEntry::new(localization::localized_str!("Selection"))
                         .icon(IconName::CursorIBeam)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5594,7 +5661,7 @@ impl ThreadView {
                         }),
                 )
                 .item(
-                    ContextMenuEntry::new("Branch Diff")
+                    ContextMenuEntry::new(localization::localized_str!("Branch Diff"))
                         .icon(IconName::GitBranch)
                         .icon_color(Color::Muted)
                         .icon_size(IconSize::XSmall)
@@ -5634,15 +5701,47 @@ impl ThreadView {
 
         let tooltip_label = if following {
             if self.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-                format!("Stop Following the {}", self.agent_id)
+                {
+        let __zed_i18n_arg_0 = format!("{}", self.agent_id);
+        localization::format_message(
+            "Stop Following the {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             } else {
-                format!("Stop Following {}", self.agent_id)
+                {
+        let __zed_i18n_arg_0 = format!("{}", self.agent_id);
+        localization::format_message(
+            "Stop Following {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             }
         } else {
             if self.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-                format!("Follow the {}", self.agent_id)
+                {
+        let __zed_i18n_arg_0 = format!("{}", self.agent_id);
+        localization::format_message(
+            "Follow the {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             } else {
-                format!("Follow {}", self.agent_id)
+                {
+        let __zed_i18n_arg_0 = format!("{}", self.agent_id);
+        localization::format_message(
+            "Follow {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             }
         };
 
@@ -5658,7 +5757,7 @@ impl ThreadView {
                     Tooltip::with_meta(
                         tooltip_label.clone(),
                         Some(&Follow),
-                        "Track the agent's location as it reads and edits files.",
+                        localization::localized_str!("Track the agent's location as it reads and edits files."),
                         cx,
                     )
                 }
@@ -5707,7 +5806,7 @@ impl Render for TokenUsageTooltip {
             container
                 .min_w_40()
                 .child(
-                    Label::new("Context")
+                    Label::new(localization::localized_str!("Context"))
                         .color(Color::Muted)
                         .size(LabelSize::Small),
                 )
@@ -5729,7 +5828,7 @@ impl Render for TokenUsageTooltip {
                             .child(
                                 h_flex()
                                     .gap_0p5()
-                                    .child(Label::new("Input:").color(Color::Muted).mr_0p5())
+                                    .child(Label::new(localization::localized_str!("Input:")).color(Color::Muted).mr_0p5())
                                     .child(Label::new(input_tokens))
                                     .child(Label::new("/").color(separator_color))
                                     .child(Label::new(input_max).color(Color::Muted)),
@@ -5737,7 +5836,7 @@ impl Render for TokenUsageTooltip {
                             .child(
                                 h_flex()
                                     .gap_0p5()
-                                    .child(Label::new("Output:").color(Color::Muted).mr_0p5())
+                                    .child(Label::new(localization::localized_str!("Output:")).color(Color::Muted).mr_0p5())
                                     .child(Label::new(output_tokens))
                                     .child(Label::new("/").color(separator_color))
                                     .child(Label::new(output_max).color(Color::Muted)),
@@ -5753,7 +5852,7 @@ impl Render for TokenUsageTooltip {
                             .border_t_1()
                             .border_color(cx.theme().colors().border_variant)
                             .child(
-                                Label::new("Cost")
+                                Label::new(localization::localized_str!("Cost"))
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             )
@@ -5772,7 +5871,7 @@ impl Render for TokenUsageTooltip {
                                 .border_t_1()
                                 .border_color(cx.theme().colors().border_variant)
                                 .child(
-                                    Label::new("Rules")
+                                    Label::new(localization::localized_str!("Rules"))
                                         .color(Color::Muted)
                                         .size(LabelSize::Small),
                                 )
@@ -5785,7 +5884,7 @@ impl Render for TokenUsageTooltip {
                                                 this.child(
                                                     Button::new(
                                                         "open-global-agents-md",
-                                                        "1 global rule",
+                                                        localization::localized_str!("1 global rule"),
                                                     )
                                                     .end_icon(
                                                         Icon::new(IconName::ArrowUpRight)
@@ -5819,14 +5918,20 @@ impl Render for TokenUsageTooltip {
                                             this.child(
                                                 Button::new(
                                                     "open-project-rules",
-                                                    format!(
-                                                        "{} {}",
-                                                        project_rules_count,
-                                                        pluralize(
+                                                    {
+        let __zed_i18n_arg_0 = format!("{}", project_rules_count);
+        let __zed_i18n_arg_1 = format!("{}", pluralize(
                                                             "project rule",
                                                             project_rules_count
-                                                        )
-                                                    ),
+                                                        ));
+        localization::format_message(
+            "{} {}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    },
                                                 )
                                                 .end_icon(
                                                     Icon::new(IconName::ArrowUpRight)
@@ -5975,12 +6080,12 @@ fn sandbox_section(title: &str, policy: &SandboxPolicyDisplay, show_empty: bool)
 
     if show_empty || !write_empty {
         section =
-            section.group(SandboxGroup::new("Write Access").rows(sandbox_fs_rows(&policy.fs)));
+            section.group(SandboxGroup::new(localization::localized_str!("Write Access")).rows(sandbox_fs_rows(&policy.fs)));
     }
 
     if show_empty || !network_empty {
         section = section
-            .group(SandboxGroup::new("Network Access").rows(sandbox_network_rows(&policy.network)));
+            .group(SandboxGroup::new(localization::localized_str!("Network Access")).rows(sandbox_network_rows(&policy.network)));
     }
 
     section
@@ -6032,7 +6137,7 @@ fn sandbox_fs_rows(fs: &SandboxFsDisplay) -> Vec<SandboxRow> {
 /// one row per allowed domain.
 fn sandbox_network_rows(network: &SandboxNetPolicy) -> Vec<SandboxRow> {
     match network {
-        SandboxNetPolicy::Unrestricted => vec![SandboxRow::message("All domains (unrestricted)")],
+        SandboxNetPolicy::Unrestricted => vec![SandboxRow::message(localization::localized_str!("All domains (unrestricted)"))],
         SandboxNetPolicy::Blocked => vec![SandboxRow::message("None")],
         SandboxNetPolicy::Restricted { allowed_domains } if allowed_domains.is_empty() => {
             vec![SandboxRow::message("None")]
@@ -6124,7 +6229,7 @@ impl ThreadView {
                 let can_rewind = self.thread.read(cx).supports_truncate(cx);
                 let is_editable = can_rewind && message.client_id.is_some() && !is_subagent;
                 let agent_name = if is_subagent {
-                    "subagents".into()
+                    localization::localized_str!("subagents").into()
                 } else {
                     self.agent_id.clone()
                 };
@@ -6149,11 +6254,11 @@ impl ThreadView {
                                 .gap_2()
                                 .child(Divider::horizontal())
                                 .child(
-                                    Button::new("restore-checkpoint", "Restore Checkpoint")
+                                    Button::new("restore-checkpoint", localization::localized_str!("Restore Checkpoint"))
                                         .start_icon(Icon::new(IconName::Undo).size(IconSize::XSmall).color(Color::Muted))
                                         .label_size(LabelSize::XSmall)
                                         .color(Color::Muted)
-                                        .tooltip(Tooltip::text("Restores all files in the project to the content they had at this point in the conversation."))
+                                        .tooltip(Tooltip::text(localization::localized_str!("Restores all files in the project to the content they had at this point in the conversation.")))
                                         .on_click(cx.listener(move |this, _, _window, cx| {
                                             this.restore_checkpoint(&client_id, cx);
                                         }))
@@ -6225,7 +6330,7 @@ impl ThreadView {
                                                 if is_loading_contents {
                                                     div()
                                                         .id("loading-edited-message-content")
-                                                        .tooltip(Tooltip::text("Loading Added Context…"))
+                                                        .tooltip(Tooltip::text(localization::localized_str!("Loading Added Context…")))
                                                         .child(loading_contents_spinner(IconSize::XSmall))
                                                         .into_any_element()
                                                 } else {
@@ -6233,7 +6338,7 @@ impl ThreadView {
                                                         .icon_color(Color::Muted)
                                                         .icon_size(IconSize::XSmall)
                                                         .tooltip(Tooltip::text(
-                                                            "Editing will restart the thread from this point."
+                                                            localization::localized_str!("Editing will restart the thread from this point.")
                                                         ))
                                                         .on_click(cx.listener({
                                                             let editor = editor.clone();
@@ -6259,13 +6364,18 @@ impl ThreadView {
                                                     move |_, _| {
                                                         v_flex()
                                                             .gap_1()
-                                                            .child(Label::new("Unavailable Editing"))
+                                                            .child(Label::new(localization::localized_str!("Unavailable Editing")))
                                                             .child(
                                                                 div().max_w_64().child(
-                                                                    Label::new(format!(
-                                                                        "Editing previous messages is not available for {} yet.",
-                                                                        agent_name
-                                                                    ))
+                                                                    Label::new({
+        let __zed_i18n_arg_0 = format!("{}", agent_name);
+        localization::format_message(
+            "Editing previous messages is not available for {} yet.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                                                                     .size(LabelSize::Small)
                                                                     .color(Color::Muted),
                                                                 ),
@@ -6424,13 +6534,13 @@ impl ThreadView {
                                         .size(IconSize::Small),
                                 )
                                 .child(
-                                    Label::new("Subagent Output")
+                                    Label::new(localization::localized_str!("Subagent Output"))
                                         .size(LabelSize::Custom(self.tool_name_font_size()))
                                         .color(Color::Muted),
                                 ),
                         )
                         .child(Divider::horizontal())
-                        .tooltip(Tooltip::text("Everything below this line was sent as output from this subagent to the main agent.")),
+                        .tooltip(Tooltip::text(localization::localized_str!("Everything below this line was sent as output from this subagent to the main agent."))),
                 )
                 .child(primary)
                 .into_any_element()
@@ -6734,7 +6844,7 @@ impl ThreadView {
             IconButton::new(("copy_agent_response", entry_ix), IconName::Copy)
                 .icon_size(IconSize::Small)
                 .icon_color(Color::Muted)
-                .tooltip(Tooltip::text("Copy This Agent Response"))
+                .tooltip(Tooltip::text(localization::localized_str!("Copy This Agent Response")))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let entries = this.thread.read(cx).entries();
                     if let Some(text) = Self::get_agent_message_content(entries, response_index, cx)
@@ -6750,7 +6860,7 @@ impl ThreadView {
         )
         .icon_size(IconSize::Small)
         .icon_color(Color::Muted)
-        .tooltip(Tooltip::text("Scroll to User Message"))
+        .tooltip(Tooltip::text(localization::localized_str!("Scroll to User Message")))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.scroll_to_user_message_index(user_message_index, cx);
         }));
@@ -6759,7 +6869,7 @@ impl ThreadView {
             IconButton::new(("scroll_to_top", entry_ix), IconName::ArrowUp)
                 .icon_size(IconSize::Small)
                 .icon_color(Color::Muted)
-                .tooltip(Tooltip::text("Scroll to Top"))
+                .tooltip(Tooltip::text(localization::localized_str!("Scroll to Top")))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.scroll_to_top(cx);
                 }))
@@ -6787,7 +6897,15 @@ impl ThreadView {
                     .last_turn_tokens
                     .filter(|&tokens| tokens > TOKEN_THRESHOLD)
                     .map(|tokens| {
-                        Label::new(format!("{} tokens", crate::humanize_token_count(tokens)))
+                        Label::new({
+        let __zed_i18n_arg_0 = format!("{}", crate::humanize_token_count(tokens));
+        localization::format_message(
+            "{} tokens",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                             .size(LabelSize::Small)
                             .color(Color::Muted)
                     })
@@ -6799,7 +6917,7 @@ impl ThreadView {
                 (self.is_subagent() && self.is_thread_feedback_enabled(cx)).then(|| {
                     let feedback = self.thread_feedback.feedback;
                     let tooltip_meta =
-                        "Rating the thread sends all of your current conversation to the Zed team.";
+                        localization::localized_str!("Rating the thread sends all of your current conversation to the Zed team.");
 
                     h_flex()
                         .child(
@@ -6811,10 +6929,10 @@ impl ThreadView {
                                 })
                                 .tooltip(move |window, cx| match feedback {
                                     Some(ThreadFeedback::Positive) => {
-                                        Tooltip::text("Thanks for your feedback!")(window, cx)
+                                        Tooltip::text(localization::localized_str!("Thanks for your feedback!"))(window, cx)
                                     }
                                     _ => Tooltip::with_meta(
-                                        "Helpful Response",
+                                        localization::localized_str!("Helpful Response"),
                                         None,
                                         tooltip_meta,
                                         cx,
@@ -6833,12 +6951,12 @@ impl ThreadView {
                                 })
                                 .tooltip(move |window, cx| match feedback {
                                     Some(ThreadFeedback::Negative) => Tooltip::text(
-                                        "We appreciate your feedback and will use it to improve in the future.",
+                                        localization::localized_str!("We appreciate your feedback and will use it to improve in the future."),
                                     )(
                                         window, cx
                                     ),
                                     _ => Tooltip::with_meta(
-                                        "Not Helpful Response",
+                                        localization::localized_str!("Not Helpful Response"),
                                         None,
                                         tooltip_meta,
                                         cx,
@@ -7302,7 +7420,7 @@ impl ThreadView {
                     )
                     .child(
                         div().min_w(rems(8.)).child(
-                            LoadingLabel::new("Awaiting Confirmation")
+                            LoadingLabel::new(localization::localized_str!("Awaiting Confirmation"))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         ),
@@ -7335,7 +7453,15 @@ impl ThreadView {
                                 .color(Color::Muted),
                         )
                         .child(
-                            Label::new(format!("{} tokens", tokens))
+                            Label::new({
+        let __zed_i18n_arg_0 = format!("{}", tokens);
+        localization::format_message(
+            "{} tokens",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         ),
@@ -7462,7 +7588,7 @@ impl ThreadView {
                                 div()
                                     .text_size(self.tool_name_font_size())
                                     .text_color(cx.theme().colors().text_muted)
-                                    .child("Thinking"),
+                                    .child(localization::localized_str!("Thinking")),
                             ),
                     )
                     .child(
@@ -7552,7 +7678,7 @@ impl ThreadView {
                         .and_then(|markdown| markdown.context_menu_selected_markdown().cloned());
 
                     let copy_this_agent_response =
-                        ContextMenuEntry::new("Copy This Agent Response").handler({
+                        ContextMenuEntry::new(localization::localized_str!("Copy This Agent Response")).handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -7567,7 +7693,7 @@ impl ThreadView {
                         });
 
                     let scroll_item = if is_at_top {
-                        ContextMenuEntry::new("Scroll to Bottom").handler({
+                        ContextMenuEntry::new(localization::localized_str!("Scroll to Bottom")).handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -7576,7 +7702,7 @@ impl ThreadView {
                             }
                         })
                     } else {
-                        ContextMenuEntry::new("Scroll to Top").handler({
+                        ContextMenuEntry::new(localization::localized_str!("Scroll to Top")).handler({
                             let entity = entity.clone();
                             move |_, cx| {
                                 entity.update(cx, |this, cx| {
@@ -7586,7 +7712,7 @@ impl ThreadView {
                         })
                     };
 
-                    let open_thread_as_markdown = ContextMenuEntry::new("Open Thread as Markdown")
+                    let open_thread_as_markdown = ContextMenuEntry::new(localization::localized_str!("Open Thread as Markdown"))
                         .handler({
                             let entity = entity.clone();
                             let workspace = workspace.clone();
@@ -7603,13 +7729,13 @@ impl ThreadView {
 
                     menu.when_some(focus, |menu, focus| menu.context(focus))
                         .when_some(context_menu_link, |menu, url| {
-                            menu.entry("Copy Link", None, move |_, cx| {
+                            menu.entry(localization::localized_str!("Copy Link"), None, move |_, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(url.to_string()));
                             })
                             .separator()
                         })
                         .when_some(selected_text, |menu, selected_text| {
-                            menu.entry("Copy", Some(Box::new(markdown::Copy)), move |_, cx| {
+                            menu.entry(localization::localized_str!("Copy"), Some(Box::new(markdown::Copy)), move |_, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                     selected_text.to_string(),
                                 ));
@@ -7617,7 +7743,7 @@ impl ThreadView {
                         })
                         .when_some(selected_markdown, |menu, selected_markdown| {
                             menu.entry(
-                                "Copy as Markdown",
+                                localization::localized_str!("Copy as Markdown"),
                                 Some(Box::new(markdown::CopyAsMarkdown)),
                                 move |_, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(
@@ -7754,7 +7880,7 @@ impl ThreadView {
         let run_command_label = if is_preview {
             Some(
                 h_flex().h_6().child(
-                    Label::new("Run Command")
+                    Label::new(localization::localized_str!("Run Command"))
                         .buffer_font(cx)
                         .size(LabelSize::XSmall)
                         .color(Color::Muted),
@@ -7775,7 +7901,7 @@ impl ThreadView {
             });
         let copy_button_id = SharedString::from(format!("{group}-copy-command"));
         let copy_button = CopyButton::new(copy_button_id, command_text)
-            .tooltip_label("Copy Command")
+            .tooltip_label(localization::localized_str!("Copy Command"))
             .visible_on_hover(group.clone());
 
         v_flex()
@@ -7866,21 +7992,30 @@ impl ThreadView {
         let truncated_tooltip = truncated_output.then(|| {
             if let Some(output) = output {
                 if output_line_count + 10 > terminal::MAX_SCROLL_HISTORY_LINES {
-                    format!(
-                        "Output exceeded terminal max lines and was \
-                         truncated, the model received the first {}.",
-                        format_file_size(output.content.len() as u64, true)
-                    )
+                    {
+        let __zed_i18n_arg_0 = format!("{}", format_file_size(output.content.len() as u64, true));
+        localization::format_message(
+            "Output exceeded terminal max lines and was truncated, the model received the first {}.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                 } else {
-                    format!(
-                        "Output is {} long, and to avoid unexpected token usage, \
-                         only {} was sent back to the agent.",
-                        format_file_size(output.original_content_len as u64, true),
-                        format_file_size(output.content.len() as u64, true)
-                    )
+                    {
+        let __zed_i18n_arg_0 = format!("{}", format_file_size(output.original_content_len as u64, true));
+        let __zed_i18n_arg_1 = format!("{}", format_file_size(output.content.len() as u64, true));
+        localization::format_message(
+            "Output is {} long, and to avoid unexpected token usage, only {} was sent back to the agent.",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    }
                 }
             } else {
-                "Output was truncated".to_string()
+                localization::localized_str!("Output was truncated").to_string()
             }
         });
 
@@ -8012,16 +8147,21 @@ impl ThreadView {
                     let detail = thread_error
                         .as_ref()
                         .map(|error| {
-                            SharedString::from(format!(
-                                "Allowed for this thread after the sandbox failed: {}",
-                                error.user_facing_message()
-                            ))
+                            SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", error.user_facing_message());
+        localization::format_message(
+            "Allowed for this thread after the sandbox failed: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                         })
                         .unwrap_or_else(|| {
-                            "Unsandboxed execution is allowed for the rest of this thread.".into()
+                            localization::localized_str!("Unsandboxed execution is allowed for the rest of this thread.").into()
                         });
                     let docs_section = thread_error.as_ref().map(|error| error.docs_section());
-                    ("Ran without sandbox".into(), detail, docs_section)
+                    (localization::localized_str!("Ran without sandbox").into(), detail, docs_section)
                 }
             };
 
@@ -8245,9 +8385,9 @@ impl ThreadView {
                                 self.expanded_tool_call_raw_inputs.contains(&tool_call.id);
 
                             let input_header = if is_raw_input_expanded {
-                                "Raw Input:"
+                                localization::localized_str!("Raw Input:")
                             } else {
-                                "View Raw Input"
+                                localization::localized_str!("View Raw Input")
                             };
 
                             this.child(
@@ -8332,7 +8472,7 @@ impl ThreadView {
                                 .gap_1()
                                 .border_l_1()
                                 .border_color(self.tool_card_border_color(cx))
-                                .child(input_output_header("Raw Input:".into()))
+                                .child(input_output_header(localization::localized_str!("Raw Input:").into()))
                                 .children(tool_call.raw_input_markdown.clone().map(|input| {
                                     div().id(("tool-call-raw-input-markdown", entry_ix)).child(
                                         self.render_markdown(
@@ -8342,7 +8482,7 @@ impl ThreadView {
                                         ),
                                     )
                                 }))
-                                .child(input_output_header("Output:".into())),
+                                .child(input_output_header(localization::localized_str!("Output:").into())),
                         )
                     })
                     .children(tool_call.content().iter().enumerate().map(
@@ -8506,7 +8646,7 @@ impl ThreadView {
                                                             div()
                                                                 .id(entry_ix)
                                                                 .tooltip(Tooltip::text(
-                                                                    "Interrupted Edit",
+                                                                    localization::localized_str!("Interrupted Edit"),
                                                                 ))
                                                                 .child(
                                                                     Icon::new(IconName::XCircle)
@@ -8539,9 +8679,9 @@ impl ThreadView {
                                                             .icon_size(IconSize::Small)
                                                             .tooltip(move |_, cx| {
                                                                 Tooltip::with_meta(
-                                                                    "Discard Interrupted Edit",
+                                                                    localization::localized_str!("Discard Interrupted Edit"),
                                                                     None,
-                                                                    "You can discard this interrupted partial edit and restore the original file content.",
+                                                                    localization::localized_str!("You can discard this interrupted partial edit and restore the original file content."),
                                                                     cx,
                                                                 )
                                                             })
@@ -8578,7 +8718,7 @@ impl ThreadView {
                                     })
                                     .when(tool_call_output_focus, |this| {
                                         this.child(
-                                            Button::new("open-file-button", "Open File")
+                                            Button::new("open-file-button", localization::localized_str!("Open File"))
                                                 .style(ButtonStyle::Outlined)
                                                 .label_size(LabelSize::Small)
                                                 .key_binding(
@@ -8654,7 +8794,7 @@ impl ThreadView {
     ) -> AnyElement {
         let url = zed_urls::sandboxing_docs(section, cx);
 
-        Button::new(id, "View Sandboxing Docs")
+        Button::new(id, localization::localized_str!("View Sandboxing Docs"))
             .label_size(LabelSize::Small)
             .color(Color::Muted)
             .end_icon(
@@ -8664,7 +8804,7 @@ impl ThreadView {
             )
             .tooltip({
                 let url = url.clone();
-                move |_, cx| Tooltip::with_meta("Open Docs", None, url.clone(), cx)
+                move |_, cx| Tooltip::with_meta(localization::localized_str!("Open Docs"), None, url.clone(), cx)
             })
             .on_click(move |_, _, cx| cx.open_url(&url))
             .into_any_element()
@@ -8702,7 +8842,7 @@ impl ThreadView {
 
         let network_section = has_network.then(|| {
             let summary = if details.network_all_hosts {
-                "any host".to_string()
+                localization::localized_str!("any host").to_string()
             } else {
                 format!(
                     "{} {}",
@@ -8754,7 +8894,7 @@ impl ThreadView {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Network access")
+                                    Label::new(localization::localized_str!("Network access"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -8800,7 +8940,7 @@ impl ThreadView {
 
         let write_section = has_write.then(|| {
             let summary = if details.allow_fs_write_all {
-                "unrestricted except Git metadata".to_string()
+                localization::localized_str!("unrestricted except Git metadata").to_string()
             } else {
                 format!(
                     "{} {}",
@@ -8852,7 +8992,7 @@ impl ThreadView {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Label::new("Write Access")
+                                    Label::new(localization::localized_str!("Write Access"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
@@ -8898,7 +9038,7 @@ impl ThreadView {
                         .size(IconSize::Small),
                 )
                 .child(
-                    Label::new("Runs without the OS sandbox")
+                    Label::new(localization::localized_str!("Runs without the OS sandbox"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -8910,7 +9050,7 @@ impl ThreadView {
                 .py_1()
                 .gap_0p5()
                 .child(
-                    Label::new("Reason")
+                    Label::new(localization::localized_str!("Reason"))
                         .size(LabelSize::XSmall)
                         .color(Color::Muted),
                 )
@@ -9061,9 +9201,15 @@ impl ThreadView {
                                     .min_w_0()
                                     .gap_0p5()
                                     .child(
-                                        Label::new(format!(
-                                            "“{value}” contains potentially surprising Unicode characters"
-                                        ))
+                                        Label::new({
+        let __zed_i18n_arg_0 = format!("{}", value);
+        localization::format_message(
+            "“{value}” contains potentially surprising Unicode characters",
+            &[
+                ("value", __zed_i18n_arg_0)
+            ],
+        )
+    })
                                         .size(LabelSize::Small)
                                         .color(Color::Error),
                                     )
@@ -9082,7 +9228,7 @@ impl ThreadView {
                         IconButton::new("configure-confusable-warning", IconName::Settings)
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Muted)
-                            .tooltip(Tooltip::text("Configure unicode confusables warning"))
+                            .tooltip(Tooltip::text(localization::localized_str!("Configure unicode confusables warning")))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(
                                     Box::new(zed_actions::OpenSettingsAt {
@@ -9103,7 +9249,7 @@ impl ThreadView {
                         ToggleState::Unselected
                     },
                 )
-                .label("I understand and wish to proceed")
+                .label(localization::localized_str!("I understand and wish to proceed"))
                 .label_size(LabelSize::Small)
                 .on_click(cx.listener({
                     let tool_call_id = tool_call_id.clone();
@@ -9160,14 +9306,14 @@ impl ThreadView {
                             .flex_1()
                             .gap_0p5()
                             .child(
-                                Label::new("This command can write to a file on a Windows drive")
+                                Label::new(localization::localized_str!("This command can write to a file on a Windows drive"))
                                     .size(LabelSize::Small)
                                     .color(Color::Warning),
                             )
                             .child(
                                 Label::new(
-                                    "Sandboxes with write access to a location on a Windows \
-                                     drive may not provide full filesystem isolation.",
+                                    localization::localized_str!("Sandboxes with write access to a location on a Windows \
+                                     drive may not provide full filesystem isolation."),
                                 )
                                 .size(LabelSize::XSmall)
                                 .color(Color::Muted),
@@ -9182,7 +9328,7 @@ impl ThreadView {
                         IconButton::new("configure-ntfs-warning", IconName::Settings)
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Muted)
-                            .tooltip(Tooltip::text("Configure Windows-drive warning"))
+                            .tooltip(Tooltip::text(localization::localized_str!("Configure Windows-drive warning")))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(
                                     Box::new(zed_actions::OpenSettingsAt {
@@ -9203,7 +9349,7 @@ impl ThreadView {
                         ToggleState::Selected
                     },
                 )
-                .label("Don't show this warning again")
+                .label(localization::localized_str!("Don't show this warning again"))
                 .label_size(LabelSize::Small)
                 .on_click(cx.listener(|this, state: &ToggleState, _window, cx| {
                     let disable = *state == ToggleState::Selected;
@@ -9250,7 +9396,7 @@ impl ThreadView {
                     .min_w_0()
                     .gap_0p5()
                     .child(
-                        Label::new("Couldn't create a sandbox")
+                        Label::new(localization::localized_str!("Couldn't create a sandbox"))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
@@ -9311,17 +9457,17 @@ impl ThreadView {
             .bg(cx.theme().colors().editor_background)
             .map(|this| {
                 if is_redirected {
-                    this.child(captioned_path("Source".into(), requested_display, cx))
+                    this.child(captioned_path(localization::localized_str!("Source").into(), requested_display, cx))
                         .child(
                             Icon::new(IconName::ArrowDown)
                                 .color(Color::Muted)
                                 .size(IconSize::Small),
                         )
-                        .child(captioned_path("Target".into(), granted_display, cx))
+                        .child(captioned_path(localization::localized_str!("Target").into(), granted_display, cx))
                 } else {
                     // Not a genuine redirect: show what the user asked for (e.g.
                     // the `C:\...` path), not the internal Linux canonical.
-                    this.child(captioned_path("Write Path".into(), requested_display, cx))
+                    this.child(captioned_path(localization::localized_str!("Write Path").into(), requested_display, cx))
                 }
             })
             .child(Divider::horizontal())
@@ -9443,7 +9589,7 @@ impl ThreadView {
                 h_flex()
                     .gap_0p5()
                     .child(
-                        Button::new(("allow-btn", entry_ix), "Allow")
+                        Button::new(("allow-btn", entry_ix), localization::localized_str!("Allow"))
                             .disabled(allow_disabled)
                             .start_icon(
                                 Icon::new(IconName::Check)
@@ -9476,7 +9622,7 @@ impl ThreadView {
                             })),
                     )
                     .child(
-                        Button::new(("deny-btn", entry_ix), "Deny")
+                        Button::new(("deny-btn", entry_ix), localization::localized_str!("Deny"))
                             .start_icon(
                                 Icon::new(IconName::Close)
                                     .size(IconSize::XSmall)
@@ -9606,7 +9752,15 @@ impl ThreadView {
             .map(|(i, cp)| {
                 (
                     i,
-                    SharedString::from(format!("Always for `{}` commands", cp.display_name)),
+                    SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", cp.display_name);
+        localization::format_message(
+            "Always for `{}` commands",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }),
                 )
             })
             .collect();
@@ -9690,7 +9844,7 @@ impl ThreadView {
                             );
                         }
 
-                        menu = menu.separator().header("Select Options…");
+                        menu = menu.separator().header(localization::localized_str!("Select Options…"));
 
                         for (pattern_index, label) in patterns.iter() {
                             let label = label.clone();
@@ -9747,7 +9901,7 @@ impl ThreadView {
                                 .py_1()
                                 .w_full()
                                 .child(
-                                    Button::new("apply-patterns", "Apply")
+                                    Button::new("apply-patterns", localization::localized_str!("Apply"))
                                         .full_width()
                                         .style(ButtonStyle::Outlined)
                                         .label_size(LabelSize::Small)
@@ -9933,9 +10087,25 @@ impl ThreadView {
     ) -> Option<SharedString> {
         let tool_name = tool_name.filter(|name| !name.trim().is_empty());
         match (tool_name, interrupted_edit) {
-            (Some(name), true) => Some(format!("Interrupted Edit\nTool: {name}").into()),
-            (Some(name), false) => Some(format!("Tool: {name}").into()),
-            (None, true) => Some("Interrupted Edit".into()),
+            (Some(name), true) => Some({
+        let __zed_i18n_arg_0 = format!("{}", name);
+        localization::format_message(
+            "Interrupted Edit\nTool: {name}",
+            &[
+                ("name", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()),
+            (Some(name), false) => Some({
+        let __zed_i18n_arg_0 = format!("{}", name);
+        localization::format_message(
+            "Tool: {name}",
+            &[
+                ("name", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()),
+            (None, true) => Some(localization::localized_str!("Interrupted Edit").into()),
             (None, false) => None,
         }
     }
@@ -10082,7 +10252,7 @@ impl ThreadView {
                             cx,
                         ),
                     )
-                    .tooltip(Tooltip::text("Go to File"))
+                    .tooltip(Tooltip::text(localization::localized_str!("Go to File")))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_tool_call_location(entry_ix, 0, window, cx);
                     }))
@@ -10508,7 +10678,7 @@ impl ThreadView {
             .when_some(location, |this, _loc| {
                 this.child(
                     h_flex().w_full().justify_end().child(
-                        Button::new(("go-to-file", entry_ix), "Go to File")
+                        Button::new(("go-to-file", entry_ix), localization::localized_str!("Go to File"))
                             .label_size(LabelSize::Small)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_tool_call_location(entry_ix, 0, window, cx);
@@ -10633,11 +10803,11 @@ impl ThreadView {
         } else if !tool_call_label.is_empty() {
             tool_call_label.into()
         } else if is_cancelled {
-            "Subagent Canceled".into()
+            localization::localized_str!("Subagent Canceled").into()
         } else if is_failed {
-            "Subagent Failed".into()
+            localization::localized_str!("Subagent Failed").into()
         } else {
-            "Spawning Agent…".into()
+            localization::localized_str!("Spawning Agent…").into()
         };
 
         let card_header_id = format!("subagent-header-{}", entry_ix);
@@ -10658,7 +10828,7 @@ impl ThreadView {
                             cx.theme().colors().icon_disabled.opacity(0.5),
                         )),
                 )
-                .tooltip(Tooltip::text("Subagent Cancelled"))
+                .tooltip(Tooltip::text(localization::localized_str!("Subagent Cancelled")))
                 .into_any_element()
         } else if is_failed {
             div()
@@ -10668,7 +10838,7 @@ impl ThreadView {
                         .size(IconSize::Small)
                         .color(Color::Error),
                 )
-                .tooltip(Tooltip::text("Subagent Failed"))
+                .tooltip(Tooltip::text(localization::localized_str!("Subagent Failed")))
                 .into_any_element()
         } else {
             Icon::new(IconName::Check)
@@ -10682,9 +10852,9 @@ impl ThreadView {
             .map_or(false, |thread| !thread.read(cx).entries().is_empty());
 
         let tooltip_meta_description = if is_expanded {
-            "Click to Collapse"
+            localization::localized_str!("Click to Collapse")
         } else {
-            "Click to Preview"
+            localization::localized_str!("Click to Preview")
         };
 
         let error_message = self.subagent_error_message(&tool_call.status, tool_call, cx);
@@ -10753,15 +10923,21 @@ impl ThreadView {
                                                 .flex_none()
                                                 .gap_1p5()
                                                 .child(
-                                                    Label::new(format!(
-                                                        "— {} {} changed",
-                                                        files_changed,
-                                                        if files_changed == 1 {
+                                                    Label::new({
+        let __zed_i18n_arg_0 = format!("{}", files_changed);
+        let __zed_i18n_arg_1 = format!("{}", if files_changed == 1 {
                                                             "file"
                                                         } else {
                                                             "files"
-                                                        }
-                                                    ))
+                                                        });
+        localization::format_message(
+            "— {} {} changed",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    })
                                                     .size(LabelSize::Custom(
                                                         self.tool_name_font_size(),
                                                     ))
@@ -10824,7 +11000,7 @@ impl ThreadView {
                             IconButton::new(format!("stop-subagent-{}", entry_ix), IconName::Stop)
                                 .icon_size(IconSize::Small)
                                 .icon_color(Color::Error)
-                                .tooltip(Tooltip::text("Stop Subagent"))
+                                .tooltip(Tooltip::text(localization::localized_str!("Stop Subagent")))
                                 .when_some(
                                     thread_view
                                         .as_ref()
@@ -10868,7 +11044,7 @@ impl ThreadView {
                             .color(Color::Muted)
                             .size(IconSize::Small),
                     )
-                    .tooltip(Tooltip::text("Make Subagent Full Screen"))
+                    .tooltip(Tooltip::text(localization::localized_str!("Make Subagent Full Screen")))
                     .on_click(cx.listener(move |this, _event, window, cx| {
                         telemetry::event!("Subagent Maximized");
                         this.server_view
@@ -11077,22 +11253,32 @@ impl ThreadView {
             }
             ThreadError::ZedPaymentRequired => self.render_zed_payment_required_error(cx),
             ThreadError::RateLimitExceeded { provider } => self.render_error_callout(
-                "Rate Limit Reached",
-                format!(
-                    "{provider}'s rate limit was reached. Zed will retry automatically. \
-                    You can also wait a moment and try again."
-                )
+                localization::localized_str!("Rate Limit Reached"),
+                {
+        let __zed_i18n_arg_0 = format!("{}", provider);
+        localization::format_message(
+            "{provider}'s rate limit was reached. Zed will retry automatically. You can also wait a moment and try again.",
+            &[
+                ("provider", __zed_i18n_arg_0)
+            ],
+        )
+    }
                 .into(),
                 true,
                 true,
                 cx,
             ),
             ThreadError::ServerOverloaded { provider } => self.render_error_callout(
-                "Provider Unavailable",
-                format!(
-                    "{provider}'s servers are temporarily unavailable. Zed will retry \
-                    automatically. If the problem persists, check the provider's status page."
-                )
+                localization::localized_str!("Provider Unavailable"),
+                {
+        let __zed_i18n_arg_0 = format!("{}", provider);
+        localization::format_message(
+            "{provider}'s servers are temporarily unavailable. Zed will retry automatically. If the problem persists, check the provider's status page.",
+            &[
+                ("provider", __zed_i18n_arg_0)
+            ],
+        )
+    }
                 .into(),
                 true,
                 true,
@@ -11103,16 +11289,29 @@ impl ThreadView {
                 let message = Self::provider_by_name(provider, cx)
                     .map(|provider| provider.missing_credentials_error_message())
                     .unwrap_or_else(|| {
-                        format!("No credentials are configured for {provider}.").into()
+                        {
+        let __zed_i18n_arg_0 = format!("{}", provider);
+        localization::format_message(
+            "No credentials are configured for {provider}.",
+            &[
+                ("provider", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
                     });
-                self.render_error_callout("Credentials Missing", message, false, true, cx)
+                self.render_error_callout(localization::localized_str!("Credentials Missing"), message, false, true, cx)
             }
             ThreadError::StreamError { provider } => self.render_error_callout(
-                "Connection Interrupted",
-                format!(
-                    "The connection to {provider}'s API was interrupted. Zed will retry \
-                    automatically. If the problem persists, check your network connection."
-                )
+                localization::localized_str!("Connection Interrupted"),
+                {
+        let __zed_i18n_arg_0 = format!("{}", provider);
+        localization::format_message(
+            "The connection to {provider}'s API was interrupted. Zed will retry automatically. If the problem persists, check your network connection.",
+            &[
+                ("provider", __zed_i18n_arg_0)
+            ],
+        )
+    }
                 .into(),
                 true,
                 true,
@@ -11121,24 +11320,40 @@ impl ThreadView {
             ThreadError::AuthenticationFailed { provider } => {
                 let message = Self::provider_by_name(provider, cx)
                     .map(|provider| provider.authentication_error_message())
-                    .unwrap_or_else(|| format!("Could not authenticate with {provider}.").into());
-                self.render_error_callout("Authentication Failed", message, false, false, cx)
+                    .unwrap_or_else(|| {
+        let __zed_i18n_arg_0 = format!("{}", provider);
+        localization::format_message(
+            "Could not authenticate with {provider}.",
+            &[
+                ("provider", __zed_i18n_arg_0)
+            ],
+        )
+    }.into());
+                self.render_error_callout(localization::localized_str!("Authentication Failed"), message, false, false, cx)
             }
             ThreadError::PermissionDenied { provider, message } => {
                 let message: SharedString = message.clone().unwrap_or_else(|| {
-                    format!("{provider} rejected the request due to insufficient permissions.")
+                    {
+        let __zed_i18n_arg_0 = format!("{}", provider);
+        localization::format_message(
+            "{provider} rejected the request due to insufficient permissions.",
+            &[
+                ("provider", __zed_i18n_arg_0)
+            ],
+        )
+    }
                         .into()
                 });
 
-                self.render_error_callout("Permission Denied", message, false, false, cx)
+                self.render_error_callout(localization::localized_str!("Permission Denied"), message, false, false, cx)
             }
             ThreadError::ProviderRejection { message } => {
-                self.render_error_callout("Request Failed", message.clone(), true, false, cx)
+                self.render_error_callout(localization::localized_str!("Request Failed"), message.clone(), true, false, cx)
             }
             ThreadError::MaxOutputTokens => self.render_error_callout(
-                "Output Limit Reached",
-                "The model stopped because it reached its maximum output length. \
-                You can ask it to continue where it left off."
+                localization::localized_str!("Output Limit Reached"),
+                localization::localized_str!("The model stopped because it reached its maximum output length. \
+                You can ask it to continue where it left off.")
                     .into(),
                 false,
                 false,
@@ -11148,19 +11363,24 @@ impl ThreadView {
                 .render_model_not_available_error(cx)
                 .unwrap_or_else(|| {
                     self.render_error_callout(
-                        "No Model Selected",
-                        "Select a model from the model picker below to get started.".into(),
+                        localization::localized_str!("No Model Selected"),
+                        localization::localized_str!("Select a model from the model picker below to get started.").into(),
                         false,
                         false,
                         cx,
                     )
                 }),
             ThreadError::ApiError { provider } => self.render_error_callout(
-                "API Error",
-                format!(
-                    "{provider}'s API returned an unexpected error. \
-                    If the problem persists, try switching models or restarting Zed."
-                )
+                localization::localized_str!("API Error"),
+                {
+        let __zed_i18n_arg_0 = format!("{}", provider);
+        localization::format_message(
+            "{provider}'s API returned an unexpected error. If the problem persists, try switching models or restarting Zed.",
+            &[
+                ("provider", __zed_i18n_arg_0)
+            ],
+        )
+    }
                 .into(),
                 true,
                 true,
@@ -11173,16 +11393,19 @@ impl ThreadView {
 
     fn render_refusal_error(&self, cx: &mut Context<'_, Self>) -> Callout {
         let model_or_agent_name = self.current_model_name(cx);
-        let refusal_message = format!(
-            "{} refused to respond to this prompt. \
-            This can happen when a model believes the prompt violates its content policy \
-            or safety guidelines, so rephrasing it can sometimes address the issue.",
-            model_or_agent_name
-        );
+        let refusal_message = {
+        let __zed_i18n_arg_0 = format!("{}", model_or_agent_name);
+        localization::format_message(
+            "{} refused to respond to this prompt. This can happen when a model believes the prompt violates its content policy or safety guidelines, so rephrasing it can sometimes address the issue.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    };
 
         Callout::new()
             .severity(Severity::Error)
-            .title("Request Refused")
+            .title(localization::localized_str!("Request Refused"))
             .icon(IconName::XCircle)
             .description(refusal_message.clone())
             .actions_slot(self.create_copy_button(&refusal_message))
@@ -11196,7 +11419,7 @@ impl ThreadView {
     ) -> Callout {
         Callout::new()
             .severity(Severity::Error)
-            .title("Authentication Required")
+            .title(localization::localized_str!("Authentication Required"))
             .icon(IconName::XCircle)
             .description(error.clone())
             .actions_slot(
@@ -11215,7 +11438,7 @@ impl ThreadView {
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title("Free Usage Exceeded")
+            .title(localization::localized_str!("Free Usage Exceeded"))
             .description(ERROR_MESSAGE)
             .actions_slot(
                 h_flex()
@@ -11271,35 +11494,59 @@ impl ThreadView {
                     {
                         if !provider.is_authenticated(cx) {
                             (
-                                format!("Failed to authenticate with {} provider", provider.name())
+                                {
+        let __zed_i18n_arg_0 = format!("{}", provider.name());
+        localization::format_message(
+            "Failed to authenticate with {} provider",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                                     .into(),
-                                "Open the settings to configure the selected provider".into(),
+                                localization::localized_str!("Open the settings to configure the selected provider").into(),
                             )
                         } else {
                             (
-                                format!("Model {} was not found", selected_model.model.0).into(),
-                                "You may need to reconfigure authentication for this provider"
+                                {
+        let __zed_i18n_arg_0 = format!("{}", selected_model.model.0);
+        localization::format_message(
+            "Model {} was not found",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into(),
+                                localization::localized_str!("You may need to reconfigure authentication for this provider")
                                     .into(),
                             )
                         }
                     } else {
                         (
-                            format!("Provider {} was not found", selected_model.provider).into(),
-                            "Open the settings to configure providers".into(),
+                            {
+        let __zed_i18n_arg_0 = format!("{}", selected_model.provider);
+        localization::format_message(
+            "Provider {} was not found",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into(),
+                            localization::localized_str!("Open the settings to configure providers").into(),
                         )
                     }
                 }
                 agent::ThreadModel::Unset => {
                     if has_authenticated_provider {
                         (
-                            "No model selected".into(),
-                            "Choose a different model or configure other providers to get started"
+                            localization::localized_str!("No model selected").into(),
+                            localization::localized_str!("Choose a different model or configure other providers to get started")
                                 .into(),
                         )
                     } else {
                         (
-                            "No model selected".into(),
-                            "Configure a provider to get started".into(),
+                            localization::localized_str!("No model selected").into(),
+                            localization::localized_str!("Configure a provider to get started").into(),
                         )
                     }
                 }
@@ -11324,7 +11571,7 @@ impl ThreadView {
     }
 
     fn open_llm_providers_settings_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("configure-llm-provider", "Configure Provider")
+        Button::new("configure-llm-provider", localization::localized_str!("Configure Provider"))
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Filled)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -11340,7 +11587,7 @@ impl ThreadView {
     }
 
     fn open_model_selector_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("open-model-selector", "Select Model")
+        Button::new("open-model-selector", localization::localized_str!("Select Model"))
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Filled)
             .key_binding(KeyBinding::for_action(&ToggleModelSelector, cx))
@@ -11357,7 +11604,7 @@ impl ThreadView {
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title("Context Too Large")
+            .title(localization::localized_str!("Context Too Large"))
             .description(MESSAGE)
             .actions_slot(
                 h_flex()
@@ -11369,7 +11616,7 @@ impl ThreadView {
     }
 
     fn retry_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("retry", "Retry")
+        Button::new("retry", localization::localized_str!("Retry"))
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Filled)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -11378,7 +11625,7 @@ impl ThreadView {
     }
 
     fn new_thread_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("new_thread", "New Thread")
+        Button::new("new_thread", localization::localized_str!("New Thread"))
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Filled)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -11388,7 +11635,7 @@ impl ThreadView {
     }
 
     fn upgrade_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("upgrade", "Upgrade")
+        Button::new("upgrade", localization::localized_str!("Upgrade"))
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Tinted(ui::TintColor::Accent))
             .on_click(cx.listener({
@@ -11400,7 +11647,7 @@ impl ThreadView {
     }
 
     fn authenticate_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("authenticate", "Authenticate")
+        Button::new("authenticate", localization::localized_str!("Authenticate"))
             .label_size(LabelSize::Small)
             .style(ButtonStyle::Filled)
             .on_click(cx.listener({
@@ -11436,7 +11683,7 @@ impl ThreadView {
                 .clone()
                 .and_then(|selector| selector.read(cx).active_model(cx))
                 .map(|model| model.name.clone())
-                .unwrap_or_else(|| SharedString::from("The model"))
+                .unwrap_or_else(|| SharedString::from(localization::localized_str!("The model")))
         } else {
             // ACP agent - use the agent name (e.g., "Claude Agent", "Gemini CLI")
             self.agent_id.0.clone()
@@ -11468,7 +11715,7 @@ impl ThreadView {
         Callout::new()
             .severity(Severity::Error)
             .icon(IconName::XCircle)
-            .title("An Error Happened")
+            .title(localization::localized_str!("An Error Happened"))
             .description_slot(description)
             .actions_slot(
                 h_flex()
@@ -11477,7 +11724,7 @@ impl ThreadView {
                         this.child(
                             IconButton::new("retry", IconName::RotateCw)
                                 .icon_size(IconSize::Small)
-                                .tooltip(Tooltip::text("Retry Generation"))
+                                .tooltip(Tooltip::text(localization::localized_str!("Retry Generation")))
                                 .on_click(cx.listener(|this, _, _window, cx| {
                                     this.retry_generation(cx);
                                 })),
@@ -11513,13 +11760,13 @@ impl ThreadView {
     fn create_copy_button(&self, message: impl Into<String>) -> impl IntoElement {
         let message = message.into();
 
-        CopyButton::new("copy-error-message", message).tooltip_label("Copy Error Message")
+        CopyButton::new("copy-error-message", message).tooltip_label(localization::localized_str!("Copy Error Message"))
     }
 
     fn dismiss_error_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         IconButton::new("dismiss", IconName::Close)
             .icon_size(IconSize::Small)
-            .tooltip(Tooltip::text("Dismiss"))
+            .tooltip(Tooltip::text(localization::localized_str!("Dismiss")))
             .on_click(cx.listener({
                 move |this, _, _, cx| {
                     this.clear_thread_error(cx);
@@ -11529,13 +11776,13 @@ impl ThreadView {
     }
 
     fn render_resume_notice(_cx: &Context<Self>) -> AnyElement {
-        let description = "This agent does not support viewing previous messages. However, your session will still continue from where you last left off.";
+        let description = localization::localized_str!("This agent does not support viewing previous messages. However, your session will still continue from where you last left off.");
 
         Callout::new()
             .border_position(CalloutBorderPosition::Bottom)
             .severity(Severity::Info)
             .icon(IconName::Info)
-            .title("Resumed Session")
+            .title(localization::localized_str!("Resumed Session"))
             .description(description)
             .into_any_element()
     }
@@ -11545,10 +11792,10 @@ impl ThreadView {
             .border_position(self.callout_border_position())
             .icon(IconName::Warning)
             .severity(Severity::Warning)
-            .title("Codex on Windows")
-            .description("For best performance, run Codex in Windows Subsystem for Linux (WSL2)")
+            .title(localization::localized_str!("Codex on Windows"))
+            .description(localization::localized_str!("For best performance, run Codex in Windows Subsystem for Linux (WSL2)"))
             .actions_slot(
-                Button::new("open-wsl-modal", "Open in WSL").on_click(cx.listener({
+                Button::new("open-wsl-modal", localization::localized_str!("Open in WSL")).on_click(cx.listener({
                     move |_, _, _window, cx| {
                         #[cfg(windows)]
                         _window.dispatch_action(
@@ -11563,7 +11810,7 @@ impl ThreadView {
                 IconButton::new("dismiss", IconName::Close)
                     .icon_size(IconSize::Small)
                     .icon_color(Color::Muted)
-                    .tooltip(Tooltip::text("Dismiss Warning"))
+                    .tooltip(Tooltip::text(localization::localized_str!("Dismiss Warning")))
                     .on_click(cx.listener({
                         move |this, _, _, cx| {
                             this.show_codex_windows_warning = false;
@@ -11628,10 +11875,10 @@ impl ThreadView {
                 let target = issue.clone();
 
                 let title = match issue.kind {
-                    SkillLoadingIssueKind::LoadFailed => "Skill Failed to Load",
+                    SkillLoadingIssueKind::LoadFailed => localization::localized_str!("Skill Failed to Load"),
                     SkillLoadingIssueKind::DescriptionTooLong => unreachable!(),
                     SkillLoadingIssueKind::CatalogBudgetExceeded => {
-                        "Skill Omitted from Model Catalog"
+                        localization::localized_str!("Skill Omitted from Model Catalog")
                     }
                 };
 
@@ -11641,7 +11888,7 @@ impl ThreadView {
                     .title(title)
                     .description(format!("{}\n{path_label}", issue.message))
                     .actions_slot(
-                        Button::new(("open-skill-file", index), "Open Skill")
+                        Button::new(("open-skill-file", index), localization::localized_str!("Open Skill"))
                             .style(ButtonStyle::Outlined)
                             .label_size(LabelSize::Small)
                             .on_click(cx.listener(move |_, _, window, cx| {
@@ -11663,7 +11910,7 @@ impl ThreadView {
                     .dismiss_action(
                         IconButton::new(("dismiss-skill-issue", index), IconName::Close)
                             .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Dismiss"))
+                            .tooltip(Tooltip::text(localization::localized_str!("Dismiss")))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.skill_loading_issues.retain(|issue| *issue != target);
                                 this.dismissed_skill_loading_issues.insert(target.clone());
@@ -11691,9 +11938,17 @@ impl ThreadView {
 
         let warning_count = description_warnings.len();
         let title = if warning_count == 1 {
-            "1 Skill Loaded with a Long Description".to_string()
+            localization::localized_str!("1 Skill Loaded with a Long Description").to_string()
         } else {
-            format!("{warning_count} Skills Loaded with Long Descriptions")
+            {
+        let __zed_i18n_arg_0 = format!("{}", warning_count);
+        localization::format_message(
+            "{warning_count} Skills Loaded with Long Descriptions",
+            &[
+                ("warning_count", __zed_i18n_arg_0)
+            ],
+        )
+    }
         };
 
         let rows = description_warnings
@@ -11719,7 +11974,7 @@ impl ThreadView {
                             .child(Label::new(file_label).size(LabelSize::Small)),
                     )
                     .tooltip(move |_, cx| {
-                        Tooltip::with_meta("Open Skill", None, full_path.clone(), cx)
+                        Tooltip::with_meta(localization::localized_str!("Open Skill"), None, full_path.clone(), cx)
                     })
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let abs_path = abs_path.clone();
@@ -11748,9 +12003,15 @@ impl ThreadView {
                 v_flex()
                     .gap_1()
                     .child(
-                        Label::new(format!(
-                            "Ensure skill descriptions are at most {MAX_SKILL_DESCRIPTION_LEN} characters; longer ones may consume more model-context tokens."
-                        ))
+                        Label::new({
+        let __zed_i18n_arg_0 = format!("{}", MAX_SKILL_DESCRIPTION_LEN);
+        localization::format_message(
+            "Ensure skill descriptions are at most {MAX_SKILL_DESCRIPTION_LEN} characters; longer ones may consume more model-context tokens.",
+            &[
+                ("MAX_SKILL_DESCRIPTION_LEN", __zed_i18n_arg_0)
+            ],
+        )
+    })
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                     )
@@ -11763,7 +12024,7 @@ impl ThreadView {
             callout.dismiss_action(
                 IconButton::new("dismiss-skill-description-warnings", IconName::Close)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("Dismiss"))
+                    .tooltip(Tooltip::text(localization::localized_str!("Dismiss")))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.skill_loading_issues
                             .retain(|issue| !targets.contains(issue));
@@ -11781,12 +12042,12 @@ impl ThreadView {
             .border_position(self.callout_border_position())
             .icon(IconName::Warning)
             .severity(Severity::Warning)
-            .title("Review Before Sending")
-            .description("This prompt was pre-filled by an external link. Read it carefully before you submit it to the model.")
+            .title(localization::localized_str!("Review Before Sending"))
+            .description(localization::localized_str!("This prompt was pre-filled by an external link. Read it carefully before you submit it to the model."))
             .dismiss_action(
                 IconButton::new("dismiss-external-source-prompt-warning", IconName::Close)
                     .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text("Dismiss Warning"))
+                    .tooltip(Tooltip::text(localization::localized_str!("Dismiss Warning")))
                     .on_click(cx.listener({
                         move |this, _, _, cx| {
                             this.show_external_source_prompt_warning = false;
@@ -11832,16 +12093,21 @@ impl ThreadView {
             Callout::new()
                 .severity(Severity::Warning)
                 .icon(IconName::Warning)
-                .title("This agent doesn't currently support multi-root workspaces")
-                .description(format!(
-                    "It currently only operates by default on \"{}\".",
-                    active_dir
-                ))
+                .title(localization::localized_str!("This agent doesn't currently support multi-root workspaces"))
+                .description({
+        let __zed_i18n_arg_0 = format!("{}", active_dir);
+        localization::format_message(
+            "It currently only operates by default on \"{}\".",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 .border_position(self.callout_border_position())
                 .dismiss_action(
                     IconButton::new("dismiss-multi-root-callout", IconName::Close)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Dismiss"))
+                        .tooltip(Tooltip::text(localization::localized_str!("Dismiss")))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.multi_root_callout_dismissed = true;
                             cx.notify();
@@ -11854,14 +12120,22 @@ impl ThreadView {
         let server_view = self.server_view.clone();
         let has_version = !version.is_empty();
         let title = if has_version {
-            "New Version Available"
+            localization::localized_str!("New Version Available")
         } else {
-            "Agent Update Available"
+            localization::localized_str!("Agent Update Available")
         };
         let button_label = if has_version {
-            format!("Update to v{}", version)
+            {
+        let __zed_i18n_arg_0 = format!("{}", version);
+        localization::format_message(
+            "Update to v{}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
         } else {
-            "Reconnect".to_string()
+            localization::localized_str!("Reconnect").to_string()
         };
 
         v_flex().w_full().justify_end().child(
@@ -11920,16 +12194,16 @@ impl ThreadView {
             acp_thread::TokenUsageRatio::Warning => (
                 Severity::Warning,
                 IconName::Warning,
-                "Thread reaching the token limit soon",
+                localization::localized_str!("Thread reaching the token limit soon"),
             ),
             acp_thread::TokenUsageRatio::Exceeded => (
                 Severity::Error,
                 IconName::XCircle,
-                "Thread reached the token limit",
+                localization::localized_str!("Thread reached the token limit"),
             ),
         };
 
-        let description = "To continue, run /compact or start a new thread and @-mention this one";
+        let description = localization::localized_str!("To continue, run /compact or start a new thread and @-mention this one");
 
         Some(
             Callout::new()
@@ -11940,7 +12214,7 @@ impl ThreadView {
                 .description(description)
                 .actions_slot(
                     h_flex().gap_0p5().child(
-                        Button::new("start-new-thread", "Start New Thread")
+                        Button::new("start-new-thread", localization::localized_str!("Start New Thread"))
                             .label_size(LabelSize::Small)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let session_id = this.thread.read(cx).session_id().clone();
@@ -11978,20 +12252,25 @@ impl ThreadView {
         Callout::new()
             .severity(Severity::Warning)
             .icon(IconName::Warning)
-            .title(format!(
-                "Note: {} cannot be offered with Zero Data Retention.",
-                self.current_model_name(cx)
-            ))
+            .title({
+        let __zed_i18n_arg_0 = format!("{}", self.current_model_name(cx));
+        localization::format_message(
+            "Note: {} cannot be offered with Zero Data Retention.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
             .description_slot(
                 h_flex()
                     .gap_1()
                     .child(
-                        Label::new("Anthropic will retain inference logs.")
+                        Label::new(localization::localized_str!("Anthropic will retain inference logs."))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
                     .child(
-                        Button::new("data-retention-learn-more", "Learn More")
+                        Button::new("data-retention-learn-more", localization::localized_str!("Learn More"))
                             .label_size(LabelSize::Small)
                             .on_click(|_, _, cx| {
                                 cx.open_url(DATA_RETENTION_LEARN_MORE_URL);
@@ -12005,7 +12284,15 @@ impl ThreadView {
                         this.child(
                             Button::new(
                                 "switch-data-retention-fallback",
-                                format!("Switch to {}", fallback.name().0),
+                                {
+        let __zed_i18n_arg_0 = format!("{}", fallback.name().0);
+        localization::format_message(
+            "Switch to {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                             )
                             .label_size(LabelSize::Small)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -12014,7 +12301,7 @@ impl ThreadView {
                         )
                     })
                     .child(
-                        Button::new("accept-data-retention", "Accept")
+                        Button::new("accept-data-retention", localization::localized_str!("Accept"))
                             .label_size(LabelSize::Small)
                             .style(ButtonStyle::Tinted(TintColor::Warning))
                             .on_click(cx.listener(|this, _, _, cx| {

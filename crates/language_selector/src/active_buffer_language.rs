@@ -47,16 +47,26 @@ impl Render for ActiveBufferLanguage {
 
         div().when_some(self.active_language.as_ref(), |el, active_language| {
             let active_language_text = if let Some(active_language_text) = active_language {
-                active_language_text.to_string()
+                crate::localized_language_name::localized_language_name(
+                    active_language_text.as_ref(),
+                )
             } else {
-                "Unknown".to_string()
+                localization::localized_str!("Unknown").to_string()
             };
 
             el.child(
                 Button::new("change-language", active_language_text.clone())
                     .label_size(LabelSize::Small)
                     .tab_index(0isize)
-                    .aria_label(format!("Language: {active_language_text}"))
+                    .aria_label({
+        let __zed_i18n_arg_0 = format!("{}", active_language_text);
+        localization::format_message(
+            "Language: {active_language_text}",
+            &[
+                ("active_language_text", __zed_i18n_arg_0)
+            ],
+        )
+    })
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Some(workspace) = this.workspace.upgrade() {
                             workspace.update(cx, |workspace, cx| {
@@ -64,7 +74,7 @@ impl Render for ActiveBufferLanguage {
                             });
                         }
                     }))
-                    .tooltip(|_window, cx| Tooltip::for_action("Select Language", &Toggle, cx)),
+                    .tooltip(|_window, cx| Tooltip::for_action(localization::localized_str!("Select Language"), &Toggle, cx)),
             )
         })
     }

@@ -365,23 +365,23 @@ impl Render for LanguageServerPrompt {
                                             "copy-description",
                                             request.message.clone(),
                                         )
-                                        .tooltip_label("Copy Description"),
+                                        .tooltip_label(localization::localized_str!("Copy Description")),
                                     )
                                     .child(
                                         IconButton::new(close_id, close_icon)
                                             .tooltip(move |_window, cx| {
                                                 if suppress {
                                                     Tooltip::with_meta(
-                                                        "Suppress",
+                                                        localization::localized_str!("Suppress"),
                                                         Some(&SuppressNotification),
-                                                        "Click to close",
+                                                        localization::localized_str!("Click to close"),
                                                         cx,
                                                     )
                                                 } else {
                                                     Tooltip::with_meta(
-                                                        "Close",
+                                                        localization::localized_str!("Close"),
                                                         Some(&menu::Cancel),
-                                                        "Suppress with shift-click",
+                                                        localization::localized_str!("Suppress with shift-click"),
                                                         cx,
                                                     )
                                                 }
@@ -1000,7 +1000,7 @@ pub mod simple_message_notification {
                 .when_some(copy_text, |el, text| {
                     el.child(
                         CopyButton::new("copy-notification-message", text)
-                            .tooltip_label("Copy Message"),
+                            .tooltip_label(localization::localized_str!("Copy Message")),
                     )
                 })
                 .when(show_close_button, |el| {
@@ -1009,20 +1009,20 @@ pub mod simple_message_notification {
                             .tooltip(move |_window, cx| {
                                 if suppress {
                                     Tooltip::with_meta(
-                                        "Suppress",
+                                        localization::localized_str!("Suppress"),
                                         Some(&SuppressNotification),
-                                        "Click to Close",
+                                        localization::localized_str!("Click to Close"),
                                         cx,
                                     )
                                 } else if show_suppress_button {
                                     Tooltip::with_meta(
-                                        "Close",
+                                        localization::localized_str!("Close"),
                                         Some(&menu::Cancel),
-                                        "Shift-click to Suppress",
+                                        localization::localized_str!("Shift-click to Suppress"),
                                         cx,
                                     )
                                 } else {
-                                    Tooltip::for_action("Close", &menu::Cancel, cx)
+                                    Tooltip::for_action(localization::localized_str!("Close"), &menu::Cancel, cx)
                                 }
                             })
                             .on_click(cx.listener(move |_, _, _, cx| {
@@ -1233,14 +1233,14 @@ pub mod simple_message_notification {
                     found [\"editor::Apply\"].\n\
                     • In binding \"ctrl-shift-r\", action \"editor::Reload\" is not registered.";
                 MessageNotification::new(long_message, cx)
-                    .primary_message("Open Keymap File")
+                    .primary_message(localization::localized_str!("Open Keymap File"))
                     .primary_icon(IconName::Settings)
             });
 
             struct PreviewError;
             impl WorkspaceError for PreviewError {
                 fn primary_message(&self) -> SharedString {
-                    "Something went wrong while loading your project.".into()
+                    localization::localized_str!("Something went wrong while loading your project.").into()
                 }
 
                 fn primary_action(&self) -> ErrorAction {
@@ -1248,7 +1248,7 @@ pub mod simple_message_notification {
                 }
 
                 fn secondary_message(&self) -> Option<SharedString> {
-                    Some("Check your network connection and try again.".into())
+                    Some(localization::localized_str!("Check your network connection and try again.").into())
                 }
                 fn severity(&self) -> ErrorSeverity {
                     ErrorSeverity::Error
@@ -1278,7 +1278,7 @@ pub mod simple_message_notification {
             struct BasicError;
             impl WorkspaceError for BasicError {
                 fn primary_message(&self) -> SharedString {
-                    "Failed to save the file.".into()
+                    localization::localized_str!("Failed to save the file.").into()
                 }
                 fn primary_action(&self) -> ErrorAction {
                     ErrorAction::dismiss()
@@ -1310,17 +1310,17 @@ pub mod simple_message_notification {
             struct PortalSetupError;
             impl WorkspaceError for PortalSetupError {
                 fn primary_message(&self) -> SharedString {
-                    "Linux desktop portal initialization failed.".into()
+                    localization::localized_str!("Linux desktop portal initialization failed.").into()
                 }
                 fn secondary_message(&self) -> Option<SharedString> {
-                    Some("Zed needs an xdg-desktop-portal implementation to open files.".into())
+                    Some(localization::localized_str!("Zed needs an xdg-desktop-portal implementation to open files.").into())
                 }
                 fn severity(&self) -> ErrorSeverity {
                     ErrorSeverity::Critical
                 }
                 fn primary_action(&self) -> ErrorAction {
                     ErrorAction::link(
-                        "See Docs",
+                        localization::localized_str!("See Docs"),
                         "https://zed.dev/docs/linux#i-cant-open-any-files",
                     )
                 }
@@ -1331,13 +1331,13 @@ pub mod simple_message_notification {
             struct UpdateRequiredError;
             impl WorkspaceError for UpdateRequiredError {
                 fn primary_message(&self) -> SharedString {
-                    "An update is required to continue using Zed AI.".into()
+                    localization::localized_str!("An update is required to continue using Zed AI.").into()
                 }
                 fn severity(&self) -> ErrorSeverity {
                     ErrorSeverity::Critical
                 }
                 fn primary_action(&self) -> ErrorAction {
-                    ErrorAction::link("Update Zed", "https://zed.dev/releases")
+                    ErrorAction::link(localization::localized_str!("Update Zed"), "https://zed.dev/releases")
                 }
                 fn secondary_action(&self) -> Option<ErrorAction> {
                     Some(ErrorAction::dismiss())
@@ -1569,7 +1569,15 @@ where
             Ok(value) => Some(value),
             Err(err) => {
                 log::error!("Showing error notification in workspace: {err:?}");
-                workspace.show_error(format!("Error: {err}"), cx);
+                workspace.show_error({
+        let __zed_i18n_arg_0 = format!("{}", err);
+        localization::format_message(
+            "Error: {err}",
+            &[
+                ("err", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx);
                 None
             }
         }
@@ -1584,7 +1592,15 @@ where
             Ok(value) => Some(value),
             Err(err) => {
                 log::error!("{err:?}");
-                let message = format!("Error: {err}");
+                let message = {
+        let __zed_i18n_arg_0 = format!("{}", err);
+        localization::format_message(
+            "Error: {err}",
+            &[
+                ("err", __zed_i18n_arg_0)
+            ],
+        )
+    };
                 workspace
                     .update(cx, |workspace, cx| workspace.show_error(message, cx))
                     .ok();
@@ -1684,7 +1700,7 @@ where
                         display.push('.');
                     }
                     let detail = f(err, window, cx).unwrap_or(display);
-                    window.prompt(PromptLevel::Critical, &msg, Some(&detail), &["OK"], cx)
+                    window.prompt(PromptLevel::Critical, &msg, Some(&detail), &[localization::localized_str!("OK")], cx)
                 }) {
                     prompt.await.ok();
                 }

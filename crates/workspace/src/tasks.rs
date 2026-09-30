@@ -152,7 +152,15 @@ impl Workspace {
                             log::error!("Task spawn failed: {e:#}");
                             _ = workspace.update(cx, |w, cx| {
                                 let id = NotificationId::unique::<ResolvedTask>();
-                                w.show_toast(Toast::new(id, format!("Task spawn failed: {e}")), cx);
+                                w.show_toast(Toast::new(id, {
+        let __zed_i18n_arg_0 = format!("{}", e);
+        localization::format_message(
+            "Task spawn failed: {e}",
+            &[
+                ("e", __zed_i18n_arg_0)
+            ],
+        )
+    }), cx);
                             });
                             ScheduledTaskResult::SpawnFailed
                         }

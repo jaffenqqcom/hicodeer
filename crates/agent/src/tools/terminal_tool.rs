@@ -597,7 +597,7 @@ async fn run_terminal_tool(
     #[cfg(target_os = "windows")]
     let write_paths: Vec<settings::GrantedWritePath> = {
         let Some(release) = wsl_zed_release.clone() else {
-            return Err("Could not select a Linux Zed release for WSL sandboxing".to_string());
+            return Err(localization::localized_str!("Could not select a Linux Zed release for WSL sandboxing").to_string());
         };
         let mut resolved_paths = Vec::with_capacity(write_paths.len());
         for requested in write_paths {
@@ -668,9 +668,15 @@ async fn run_terminal_tool(
         {
             // Carry the underlying error so a prompt-delivery failure is
             // distinguishable from a genuine user abort.
-            return Ok(format!(
-                "Command cancelled: the user declined to run a command whose sandbox writes to a Windows drive ({error})."
-            ));
+            return Ok({
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Command cancelled: the user declined to run a command whose sandbox writes to a Windows drive ({error}).",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    });
         }
     }
 
@@ -691,13 +697,25 @@ async fn run_terminal_tool(
             cx.update(|cx| event_stream.authorize_sandbox(request.clone(), reason.to_string(), cx));
         if let Err(error) = approve.await {
             if want_unsandboxed {
-                return Ok(format!(
-                    "Command cancelled: user denied permission to run outside the sandbox ({error})."
-                ));
+                return Ok({
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Command cancelled: user denied permission to run outside the sandbox ({error}).",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    });
             }
-            return Ok(format!(
-                "Command cancelled: user denied the requested sandbox permissions ({error})."
-            ));
+            return Ok({
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Command cancelled: user denied the requested sandbox permissions ({error}).",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    });
         }
     }
 
@@ -829,10 +847,15 @@ async fn run_terminal_tool(
                         log::warn!(
                             "Failed to create a sandbox for an agent terminal command: {error:?}"
                         );
-                        return Err(format!(
-                            "Cannot create a sandbox for this command: {}",
-                            error.user_facing_message()
-                        ));
+                        return Err({
+        let __zed_i18n_arg_0 = format!("{}", error.user_facing_message());
+        localization::format_message(
+            "Cannot create a sandbox for this command: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    });
                     }
                 }
             }

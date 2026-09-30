@@ -2016,7 +2016,12 @@ impl ContextMenu {
                             .w_full()
                             .justify_between()
                             .child(label_element)
-                            .debug_selector(|| format!("MENU_ITEM-{}", label))
+                            .debug_selector(|| {
+                                action
+                                    .as_ref()
+                                    .map(|action| format!("MENU_ITEM-ACTION-{}", action.name()))
+                                    .unwrap_or_else(|| format!("MENU_ITEM-INDEX-{ix}"))
+                            })
                             .children(action.as_ref().map(|action| {
                                 let binding = self
                                     .action_context
@@ -2476,7 +2481,7 @@ mod tests {
                 cx.open_window(Default::default(), |window, cx| {
                     let build_menu =
                         |menu: ContextMenu, _: &mut Window, _: &mut Context<ContextMenu>| {
-                            menu.header("Options")
+                            menu.header(localization::localized_str!("Options"))
                                 .entry("First", None, |_, _| {})
                                 .separator()
                                 .item(

@@ -30,12 +30,12 @@ impl RenderOnce for PlanChip {
             .blend(cx.theme().colors().text_accent.opacity(0.2));
 
         let (plan_name, label_color, bg_color) = match self.plan {
-            Plan::ZedFree => ("Free", Color::Default, free_chip_bg),
-            Plan::ZedProTrial => ("Pro Trial", Color::Accent, pro_chip_bg),
-            Plan::ZedPro => ("Pro", Color::Accent, pro_chip_bg),
-            Plan::ZedBusiness => ("Business", Color::Accent, pro_chip_bg),
-            Plan::ZedVip => ("VIP", Color::Accent, pro_chip_bg),
-            Plan::ZedStudent => ("Student", Color::Accent, pro_chip_bg),
+            Plan::ZedFree => (localization::localized_str!("Free"), Color::Default, free_chip_bg),
+            Plan::ZedProTrial => (localization::localized_str!("Pro Trial"), Color::Accent, pro_chip_bg),
+            Plan::ZedPro => (localization::localized_str!("Pro"), Color::Accent, pro_chip_bg),
+            Plan::ZedBusiness => (localization::localized_str!("Business"), Color::Accent, pro_chip_bg),
+            Plan::ZedVip => (localization::localized_str!("VIP"), Color::Accent, pro_chip_bg),
+            Plan::ZedStudent => (localization::localized_str!("Student"), Color::Accent, pro_chip_bg),
         };
 
         Chip::new(plan_name.to_string())

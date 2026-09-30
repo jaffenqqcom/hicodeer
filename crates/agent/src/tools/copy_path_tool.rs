@@ -76,9 +76,19 @@ impl AgentTool for CopyPathTool {
         if let Ok(input) = input {
             let src = MarkdownInlineCode(&input.source_path);
             let dest = MarkdownInlineCode(&input.destination_path);
-            format!("Copy {src} to {dest}").into()
+            {
+        let __zed_i18n_arg_0 = format!("{}", src);
+        let __zed_i18n_arg_1 = format!("{}", dest);
+        localization::format_message(
+            "Copy {src} to {dest}",
+            &[
+                ("src", __zed_i18n_arg_0),
+                ("dest", __zed_i18n_arg_1)
+            ],
+        )
+    }.into()
         } else {
-            "Copy path".into()
+            localization::localized_str!("Copy path").into()
         }
     }
 

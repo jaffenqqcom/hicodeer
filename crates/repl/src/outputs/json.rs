@@ -94,7 +94,15 @@ impl JsonView {
                                     .gap_1()
                                     .when_some(key, |this, k| {
                                         this.child(
-                                            Label::new(format!("{}: ", k)).color(Color::Accent),
+                                            Label::new({
+        let __zed_i18n_arg_0 = format!("{}", k);
+        localization::format_message(
+            "{}: ",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }).color(Color::Accent),
                                         )
                                     })
                                     .when(!is_expanded, |this| {
@@ -154,7 +162,15 @@ impl JsonView {
                                     .gap_1()
                                     .when_some(key, |this, k| {
                                         this.child(
-                                            Label::new(format!("{}: ", k)).color(Color::Accent),
+                                            Label::new({
+        let __zed_i18n_arg_0 = format!("{}", k);
+        localization::format_message(
+            "{}: ",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }).color(Color::Accent),
                                         )
                                     })
                                     .when(!is_expanded, |this| {
@@ -212,7 +228,15 @@ impl JsonView {
             .pl(px(indent as f32))
             .gap_1()
             .when_some(key, |this, k| {
-                this.child(Label::new(format!("{}: ", k)).color(Color::Accent))
+                this.child(Label::new({
+        let __zed_i18n_arg_0 = format!("{}", k);
+        localization::format_message(
+            "{}: ",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }).color(Color::Accent))
             })
             .child(Label::new(value.to_string()).color(color))
             .into_any_element()

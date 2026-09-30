@@ -769,7 +769,7 @@ impl LanguageModelProvider for BedrockLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "To use Zed's agent with Bedrock, set a custom authentication strategy in your settings or use static credentials. Mantle-only models (e.g. GPT-5.5, GPT-5.4, Grok 4.3) additionally require IAM permissions for the `bedrock-mantle` endpoint.".into(),
+                localization::localized_str!("To use Zed's agent with Bedrock, set a custom authentication strategy in your settings or use static credentials. Mantle-only models (e.g. GPT-5.5, GPT-5.4, Grok 4.3) additionally require IAM permissions for the `bedrock-mantle` endpoint.").into(),
             )),
         ))
     }
@@ -967,17 +967,17 @@ fn converse_language_model(model: &ConverseModel) -> LanguageModel {
         supported_effort_levels: if model.supports_adaptive_thinking() {
             vec![
                 language_model::LanguageModelEffortLevel {
-                    name: "Low".into(),
+                    name: localization::localized_str!("Low").into(),
                     value: "low".into(),
                     is_default: false,
                 },
                 language_model::LanguageModelEffortLevel {
-                    name: "Medium".into(),
+                    name: localization::localized_str!("Medium").into(),
                     value: "medium".into(),
                     is_default: false,
                 },
                 language_model::LanguageModelEffortLevel {
-                    name: "High".into(),
+                    name: localization::localized_str!("High").into(),
                     value: "high".into(),
                     is_default: true,
                 },
@@ -987,7 +987,7 @@ fn converse_language_model(model: &ConverseModel) -> LanguageModel {
                     is_default: false,
                 },
                 language_model::LanguageModelEffortLevel {
-                    name: "Max".into(),
+                    name: localization::localized_str!("Max").into(),
                     value: "max".into(),
                     is_default: false,
                 },
@@ -1076,10 +1076,17 @@ impl BedrockLanguageModelProvider {
                             PROVIDER_NAME,
                             None,
                             Some("ValidationException".to_string()),
-                            format!(
-                                "{display_name} is not available in {region}. \
-                                 Try switching to a region where this model is supported."
-                            ),
+                            {
+        let __zed_i18n_arg_0 = format!("{}", display_name);
+        let __zed_i18n_arg_1 = format!("{}", region);
+        localization::format_message(
+            "{display_name} is not available in {region}. Try switching to a region where this model is supported.",
+            &[
+                ("display_name", __zed_i18n_arg_0),
+                ("region", __zed_i18n_arg_1)
+            ],
+        )
+    },
                             None,
                             ProviderErrorCategory::InvalidRequest,
                         )
@@ -1098,7 +1105,7 @@ impl BedrockLanguageModelProvider {
                     PROVIDER_NAME,
                     None,
                     Some("ThrottlingException".to_string()),
-                    "Bedrock request was throttled".to_string(),
+                    localization::localized_str!("Bedrock request was throttled").to_string(),
                     None,
                     ProviderErrorCategory::RateLimit,
                 ),
@@ -1107,7 +1114,7 @@ impl BedrockLanguageModelProvider {
                         PROVIDER_NAME,
                         None,
                         Some("ServiceUnavailableException".to_string()),
-                        "Bedrock service is temporarily unavailable".to_string(),
+                        localization::localized_str!("Bedrock service is temporarily unavailable").to_string(),
                         None,
                         ProviderErrorCategory::Overloaded,
                     )
@@ -1208,13 +1215,15 @@ fn map_mantle_error(model: &MantleModel, error: RequestError) -> LanguageModelCo
             PROVIDER_NAME,
             Some(http_client::http::StatusCode::FORBIDDEN),
             None,
-            format!(
-                "Bedrock Mantle denied this request for {}. Mantle-only models require IAM \
-                 permissions for the `bedrock-mantle` endpoint (for example via the \
-                 `AmazonBedrockMantleInferenceAccess` managed policy) in addition to whatever \
-                 permissions your existing Bedrock credentials already have.",
-                model.display_name()
-            ),
+            {
+        let __zed_i18n_arg_0 = format!("{}", model.display_name());
+        localization::format_message(
+            "Bedrock Mantle denied this request for {}. Mantle-only models require IAM permissions for the `bedrock-mantle` endpoint (for example via the `AmazonBedrockMantleInferenceAccess` managed policy) in addition to whatever permissions your existing Bedrock credentials already have.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
             None,
             ProviderErrorCategory::Permission,
         );
@@ -1936,10 +1945,19 @@ impl BedrockLanguageModelProvider {
         if !MANTLE_SUPPORTED_REGIONS.contains(&region.as_str()) {
             let display_name = config.display_name().to_string();
             let supported = MANTLE_SUPPORTED_REGIONS.join(", ");
-            return futures::future::ready(Err(LanguageModelCompletionError::Other(anyhow!(
-                "{display_name} is not available in {region} because Bedrock Mantle isn't offered \
-                 there. Try switching to one of the following regions: {supported}."
-            ))))
+            return futures::future::ready(Err(LanguageModelCompletionError::Other(anyhow!("{}", {
+        let __zed_i18n_arg_0 = format!("{}", display_name);
+        let __zed_i18n_arg_1 = format!("{}", region);
+        let __zed_i18n_arg_2 = format!("{}", supported);
+        localization::format_message(
+            "{display_name} is not available in {region} because Bedrock Mantle isn't offered there. Try switching to one of the following regions: {supported}.",
+            &[
+                ("display_name", __zed_i18n_arg_0),
+                ("region", __zed_i18n_arg_1),
+                ("supported", __zed_i18n_arg_2)
+            ],
+        )
+    }))))
             .boxed();
         }
 
@@ -2575,28 +2593,28 @@ impl ConfigurationView {
 
         let access_key_id_editor = cx.new(|cx| {
             InputField::new(window, cx, Self::PLACEHOLDER_ACCESS_KEY_ID_TEXT)
-                .label("Access Key ID")
+                .label(localization::localized_str!("Access Key ID"))
                 .tab_index(0)
                 .tab_stop(true)
         });
 
         let secret_access_key_editor = cx.new(|cx| {
             InputField::new(window, cx, Self::PLACEHOLDER_SECRET_ACCESS_KEY_TEXT)
-                .label("Secret Access Key")
+                .label(localization::localized_str!("Secret Access Key"))
                 .tab_index(1)
                 .tab_stop(true)
         });
 
         let session_token_editor = cx.new(|cx| {
             InputField::new(window, cx, Self::PLACEHOLDER_SESSION_TOKEN_TEXT)
-                .label("Session Token (Optional)")
+                .label(localization::localized_str!("Session Token (Optional)"))
                 .tab_index(2)
                 .tab_stop(true)
         });
 
         let bearer_token_editor = cx.new(|cx| {
             InputField::new(window, cx, Self::PLACEHOLDER_BEARER_TOKEN_TEXT)
-                .label("Bedrock API Key")
+                .label(localization::localized_str!("Bedrock API Key"))
                 .tab_index(3)
                 .tab_stop(true)
         });
@@ -2726,34 +2744,62 @@ impl Render for ConfigurationView {
             .and_then(|s| s.authentication_method.clone());
 
         if self.load_credentials_task.is_some() {
-            return div().child(Label::new("Loading credentials...")).into_any();
+            return div().child(Label::new(localization::localized_str!("Loading credentials..."))).into_any();
         }
 
         let configured_label = match &auth {
             Some(BedrockAuth::Automatic) => {
-                "Using automatic credentials (AWS default chain)".into()
+                localization::localized_str!("Using automatic credentials (AWS default chain)").into()
             }
             Some(BedrockAuth::NamedProfile { profile_name }) => {
-                format!("Using AWS profile: {profile_name}")
+                {
+        let __zed_i18n_arg_0 = format!("{}", profile_name);
+        localization::format_message(
+            "Using AWS profile: {profile_name}",
+            &[
+                ("profile_name", __zed_i18n_arg_0)
+            ],
+        )
+    }
             }
             Some(BedrockAuth::SingleSignOn { profile_name }) => {
-                format!("Using AWS SSO profile: {profile_name}")
+                {
+        let __zed_i18n_arg_0 = format!("{}", profile_name);
+        localization::format_message(
+            "Using AWS SSO profile: {profile_name}",
+            &[
+                ("profile_name", __zed_i18n_arg_0)
+            ],
+        )
+    }
             }
             Some(BedrockAuth::IamCredentials { .. }) if env_var_set => {
-                format!(
-                    "Using IAM credentials from {} and {} environment variables",
-                    ZED_BEDROCK_ACCESS_KEY_ID_VAR.name, ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name
-                )
+                {
+        let __zed_i18n_arg_0 = format!("{}", ZED_BEDROCK_ACCESS_KEY_ID_VAR.name);
+        let __zed_i18n_arg_1 = format!("{}", ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name);
+        localization::format_message(
+            "Using IAM credentials from {} and {} environment variables",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    }
             }
-            Some(BedrockAuth::IamCredentials { .. }) => "Using IAM credentials".into(),
+            Some(BedrockAuth::IamCredentials { .. }) => localization::localized_str!("Using IAM credentials").into(),
             Some(BedrockAuth::ApiKey { .. }) if env_var_set => {
-                format!(
-                    "Using Bedrock API Key from {} environment variable",
-                    ZED_BEDROCK_BEARER_TOKEN_VAR.name
-                )
+                {
+        let __zed_i18n_arg_0 = format!("{}", ZED_BEDROCK_BEARER_TOKEN_VAR.name);
+        localization::format_message(
+            "Using Bedrock API Key from {} environment variable",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             }
-            Some(BedrockAuth::ApiKey { .. }) => "Using Bedrock API Key".into(),
-            None => "Not authenticated".into(),
+            Some(BedrockAuth::ApiKey { .. }) => localization::localized_str!("Using Bedrock API Key").into(),
+            None => localization::localized_str!("Not authenticated").into(),
         };
 
         // Determine if credentials can be reset
@@ -2800,15 +2846,15 @@ impl Render for ConfigurationView {
             .on_action(cx.listener(Self::on_tab_prev))
             .on_action(cx.listener(ConfigurationView::save_credentials))
             .gap_1()
-            .child(Headline::new("Amazon Bedrock").size(HeadlineSize::Small))
+            .child(Headline::new(localization::localized_str!("Amazon Bedrock")).size(HeadlineSize::Small))
             .child(
                 Label::new(
-                    "To use Zed's agent with Bedrock, you can set a custom authentication strategy through your settings file or use static credentials.",
+                    localization::localized_str!("To use Zed's agent with Bedrock, you can set a custom authentication strategy through your settings file or use static credentials."),
                 )
                 .color(Color::Muted),
             )
             .child(
-                Label::new("But first, to access models on AWS, you need to:")
+                Label::new(localization::localized_str!("But first, to access models on AWS, you need to:"))
                     .mt_1()
                     .color(Color::Muted),
             )
@@ -2818,23 +2864,23 @@ impl Render for ConfigurationView {
                         ListBulletItem::new("")
                             .child(
                                 Label::new(
-                                    "Grant permissions to the strategy you'll use according to the:",
+                                    localization::localized_str!("Grant permissions to the strategy you'll use according to the:"),
                                 )
                                 .color(Color::Muted),
                             )
                             .child(ButtonLink::new(
-                                "Prerequisites",
+                                localization::localized_str!("Prerequisites"),
                                 "https://docs.aws.amazon.com/bedrock/latest/userguide/inference-prereq.html",
                             )),
                     )
                     .child(
                         ListBulletItem::new("")
                             .child(
-                                Label::new("Select the models you would like access to:")
+                                Label::new(localization::localized_str!("Select the models you would like access to:"))
                                     .color(Color::Muted),
                             )
                             .child(ButtonLink::new(
-                                "Bedrock Model Catalog",
+                                localization::localized_str!("Bedrock Model Catalog"),
                                 "https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/model-catalog",
                             )),
                     ),
@@ -2851,40 +2897,40 @@ impl ConfigurationView {
                 ListBulletItem::new("")
                     .child(
                         Label::new(
-                            "For access keys: Create an IAM user in the AWS console with programmatic access",
+                            localization::localized_str!("For access keys: Create an IAM user in the AWS console with programmatic access"),
                         )
                         .color(Color::Muted),
                     )
                     .child(ButtonLink::new(
-                        "IAM Console",
+                        localization::localized_str!("IAM Console"),
                         "https://us-east-1.console.aws.amazon.com/iam/home?region=us-east-1#/users",
                     )),
             )
             .child(
                 ListBulletItem::new("")
                     .child(
-                        Label::new("For Bedrock API Keys: Generate an API key from the")
+                        Label::new(localization::localized_str!("For Bedrock API Keys: Generate an API key from the"))
                             .color(Color::Muted),
                     )
                     .child(ButtonLink::new(
-                        "Bedrock Console",
+                        localization::localized_str!("Bedrock Console"),
                         "https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-use.html",
                     )),
             )
             .child(
                 ListBulletItem::new("")
                     .child(
-                        Label::new("Attach the necessary Bedrock permissions to")
+                        Label::new(localization::localized_str!("Attach the necessary Bedrock permissions to"))
                             .color(Color::Muted),
                     )
                     .child(ButtonLink::new(
-                        "this user",
+                        localization::localized_str!("this user"),
                         "https://docs.aws.amazon.com/bedrock/latest/userguide/inference-prereq.html",
                     )),
             )
             .child(
                 ListBulletItem::new(
-                    "Enter either access keys OR a Bedrock API Key below (not both)",
+                    localization::localized_str!("Enter either access keys OR a Bedrock API Key below (not both)"),
                 )
                 .label_color(Color::Muted),
             );
@@ -2894,10 +2940,10 @@ impl ConfigurationView {
             .tab_group()
             .gap_1p5()
             .child(Divider::horizontal())
-            .child(Label::new("Static Credentials").mt_2())
+            .child(Label::new(localization::localized_str!("Static Credentials")).mt_2())
             .child(
                 Label::new(
-                    "This method uses your AWS access key ID and secret access key, or a Bedrock API Key.",
+                    localization::localized_str!("This method uses your AWS access key ID and secret access key, or a Bedrock API Key."),
                 )
                 .color(Color::Muted),
             )
@@ -2910,36 +2956,56 @@ impl ConfigurationView {
                     .child(self.session_token_editor.clone()),
             )
             .child(
-                Label::new(format!(
-                    "You can also set the {}, {} and {} environment variables (or {} for Bedrock API Key authentication) and restart Zed.",
-                    ZED_BEDROCK_ACCESS_KEY_ID_VAR.name,
-                    ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name,
-                    ZED_BEDROCK_REGION_VAR.name,
-                    ZED_BEDROCK_BEARER_TOKEN_VAR.name
-                ))
+                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", ZED_BEDROCK_ACCESS_KEY_ID_VAR.name);
+        let __zed_i18n_arg_1 = format!("{}", ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name);
+        let __zed_i18n_arg_2 = format!("{}", ZED_BEDROCK_REGION_VAR.name);
+        let __zed_i18n_arg_3 = format!("{}", ZED_BEDROCK_BEARER_TOKEN_VAR.name);
+        localization::format_message(
+            "You can also set the {}, {} and {} environment variables (or {} for Bedrock API Key authentication) and restart Zed.",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1),
+                ("2", __zed_i18n_arg_2),
+                ("3", __zed_i18n_arg_3)
+            ],
+        )
+    })
                 .size(LabelSize::Small)
                 .color(Color::Muted),
             )
             .child(
-                Label::new(format!(
-                    "Optionally, if your environment uses AWS CLI profiles, you can set {}; if it requires a custom endpoint, you can set {}; and if it requires a Session Token, you can set {}.",
-                    ZED_AWS_PROFILE_VAR.name,
-                    ZED_AWS_ENDPOINT_VAR.name,
-                    ZED_BEDROCK_SESSION_TOKEN_VAR.name
-                ))
+                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", ZED_AWS_PROFILE_VAR.name);
+        let __zed_i18n_arg_1 = format!("{}", ZED_AWS_ENDPOINT_VAR.name);
+        let __zed_i18n_arg_2 = format!("{}", ZED_BEDROCK_SESSION_TOKEN_VAR.name);
+        localization::format_message(
+            "Optionally, if your environment uses AWS CLI profiles, you can set {}; if it requires a custom endpoint, you can set {}; and if it requires a Session Token, you can set {}.",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1),
+                ("2", __zed_i18n_arg_2)
+            ],
+        )
+    })
                 .size(LabelSize::Small)
                 .color(Color::Muted)
                 .mt_1()
                 .mb_2p5(),
             )
             .child(Divider::horizontal())
-            .child(Label::new("Using the API key").mt_2().mb_1())
+            .child(Label::new(localization::localized_str!("Using the API key")).mt_2().mb_1())
             .child(self.bearer_token_editor.clone())
             .child(
-                Label::new(format!(
-                    "Region is configured via {} environment variable or settings.json (defaults to us-east-1).",
-                    ZED_BEDROCK_REGION_VAR.name
-                ))
+                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", ZED_BEDROCK_REGION_VAR.name);
+        localization::format_message(
+            "Region is configured via {} environment variable or settings.json (defaults to us-east-1).",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 .size(LabelSize::Small)
                 .color(Color::Muted)
             )

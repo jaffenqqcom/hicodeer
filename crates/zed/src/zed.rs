@@ -1,4 +1,6 @@
 mod app_menus;
+mod ui_locale;
+pub use ui_locale::initialize_localization;
 pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
 pub(crate) mod mac_only_instance;
@@ -240,7 +242,7 @@ pub fn init(cx: &mut App) {
             open_bundled_file(
                 workspace,
                 asset_str::<Assets>("licenses.md"),
-                "Open Source License Attribution",
+                localization::localized_str!("Open Source License Attribution"),
                 "Markdown",
                 window,
                 cx,
@@ -297,7 +299,7 @@ pub fn init(cx: &mut App) {
             open_bundled_file(
                 workspace,
                 settings::default_semantic_token_rules(),
-                "Default Semantic Token Rules",
+                localization::localized_str!("Default Semantic Token Rules"),
                 "JSONC",
                 window,
                 cx,
@@ -309,7 +311,7 @@ pub fn init(cx: &mut App) {
             open_bundled_file(
                 workspace,
                 settings::default_settings(),
-                "Default Settings",
+                localization::localized_str!("Default Settings"),
                 "JSON",
                 window,
                 cx,
@@ -321,7 +323,7 @@ pub fn init(cx: &mut App) {
             open_bundled_file(
                 workspace,
                 settings::default_keymap(),
-                "Default Key Bindings",
+                localization::localized_str!("Default Key Bindings"),
                 "JSON",
                 window,
                 cx,
@@ -677,9 +679,9 @@ fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Wo
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Could not start inotify",
+            localization::localized_str!("Could not start inotify"),
             Some(&message),
-            &["Troubleshoot and Quit"],
+            &[localization::localized_str!("Troubleshoot and Quit")],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -708,9 +710,9 @@ fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Wo
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Could not start ReadDirectoryChangesW",
+            localization::localized_str!("Could not start ReadDirectoryChangesW"),
             Some(&message),
-            &["Troubleshoot and Quit"],
+            &[localization::localized_str!("Troubleshoot and Quit")],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -758,9 +760,9 @@ fn show_software_emulation_warning_if_needed(
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
-            "Unsupported GPU",
+            localization::localized_str!("Unsupported GPU"),
             Some(&message),
-            &["Skip", "Troubleshoot and Quit"],
+            &[localization::localized_str!("Skip"), localization::localized_str!("Troubleshoot and Quit")],
             cx,
         );
         cx.spawn(async move |_, cx| {
@@ -987,7 +989,7 @@ fn register_actions(
                         buffer.set_text(json, cx);
                     });
                     workspace.update_in(cx, |workspace, window, cx| {
-                        let title = "Accessibility Tree".to_string();
+                        let title = localization::localized_str!("Accessibility Tree").to_string();
                         let buffer = cx.new(|cx| {
                             MultiBuffer::singleton(buffer, cx).with_title(title.clone())
                         });
@@ -1068,10 +1070,17 @@ fn register_actions(
                 }
                 Err(e) => {
                     workspace.show_error(
-                        format!(
-                            "Opening this URL in a browser failed because the URL is invalid: {}\n\nError was: {e}",
-                            action.url
-                        ),
+                        {
+        let __zed_i18n_arg_0 = format!("{}", action.url);
+        let __zed_i18n_arg_1 = format!("{}", e);
+        localization::format_message(
+            "Opening this URL in a browser failed because the URL is invalid: {}\n\nError was: {e}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("e", __zed_i18n_arg_1)
+            ],
+        )
+    },
                         cx,
                     );
                 }
@@ -1279,10 +1288,15 @@ fn register_actions(
                     workspace.show_toast(
                         Toast::new(
                             NotificationId::unique::<RegisterZedScheme>(),
-                            format!(
-                                "zed:// links will now open in {}.",
-                                ReleaseChannel::global(cx).display_name()
-                            ),
+                            {
+        let __zed_i18n_arg_0 = format!("{}", ReleaseChannel::global(cx).display_name());
+        localization::format_message(
+            "zed:// links will now open in {}.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                         ),
                         cx,
                     )
@@ -1290,7 +1304,7 @@ fn register_actions(
                 Ok(())
             })
             .detach_and_prompt_err(
-                "Error registering zed:// scheme",
+                localization::localized_str!("Error registering zed:// scheme"),
                 window,
                 cx,
                 |_, _, _| None,
@@ -1626,14 +1640,14 @@ fn open_about_window(cx: &mut App) {
                             .child(Headline::new(self.message.clone()))
                             .when_some(self.commit.clone(), |this, commit| {
                                 this.child(
-                                    Label::new("Commit")
+                                    Label::new(localization::localized_str!("Commit"))
                                         .color(Color::Muted)
                                         .size(LabelSize::XSmall),
                                 )
                                 .child(Label::new(commit).size(LabelSize::Small))
                             })
                             .child(
-                                Label::new("Version")
+                                Label::new(localization::localized_str!("Version"))
                                     .color(Color::Muted)
                                     .size(LabelSize::XSmall),
                             )
@@ -1651,7 +1665,7 @@ fn open_about_window(cx: &mut App) {
                                         window.remove_window();
                                     }))
                                     .child(
-                                        Button::new("ok", "OK")
+                                        Button::new("ok", localization::localized_str!("OK"))
                                             .full_width()
                                             .style(ButtonStyle::OutlinedGhost)
                                             .toggle_state(ok_is_focused)
@@ -1671,7 +1685,7 @@ fn open_about_window(cx: &mut App) {
                                         },
                                     ))
                                     .child(
-                                        Button::new("copy", "Copy")
+                                        Button::new("copy", localization::localized_str!("Copy"))
                                             .full_width()
                                             .style(ButtonStyle::Tinted(TintColor::Accent))
                                             .toggle_state(copy_is_focused)
@@ -1776,9 +1790,9 @@ fn quit(_: &Quit, cx: &mut App) {
                 .update(cx, |_, window, cx| {
                     window.prompt(
                         PromptLevel::Info,
-                        "Are you sure you want to quit?",
+                        localization::localized_str!("Are you sure you want to quit?"),
                         None,
-                        &["Quit", "Cancel"],
+                        &[localization::localized_str!("Quit"), localization::localized_str!("Cancel")],
                         cx,
                     )
                 })
@@ -1854,11 +1868,17 @@ fn open_log_file(workspace: &mut Workspace, window: &mut Window, cx: &mut Contex
                             |cx| {
                                 cx.new(|cx| {
                                     MessageNotification::new(
-                                        format!(
-                                            "Unable to access/open log file at path \
-                                                    {}: {e:#}",
-                                            paths::log_file().display()
-                                        ),
+                                        {
+        let __zed_i18n_arg_0 = format!("{}", paths::log_file().display());
+        let __zed_i18n_arg_1 = format!("{:#}", e);
+        localization::format_message(
+            "Unable to access/open log file at path {}: {e:#}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("e", __zed_i18n_arg_1)
+            ],
+        )
+    },
                                         cx,
                                     )
                                 })
@@ -1937,8 +1957,16 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
             } else {
                 show_app_notification(id, cx, move |cx| {
                     cx.new(|cx| {
-                        MessageNotification::new(format!("Invalid user settings file\n{error}"), cx)
-                            .primary_message("Open Settings File")
+                        MessageNotification::new({
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Invalid user settings file\n{error}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx)
+                            .primary_message(localization::localized_str!("Open Settings File"))
                             .primary_icon(IconName::Settings)
                             .primary_on_click(|window, cx| {
                                 window.dispatch_action(
@@ -1968,13 +1996,18 @@ fn notify_settings_errors(result: settings::SettingsParseResult, is_user: bool, 
                 show_app_notification(id, cx, move |cx| {
                     cx.new(|cx| {
                         MessageNotification::new(
-                            format!(
-                                "Failed to migrate settings\n\
-                                {err}"
-                            ),
+                            {
+        let __zed_i18n_arg_0 = format!("{}", err);
+        localization::format_message(
+            "Failed to migrate settings\n{err}",
+            &[
+                ("err", __zed_i18n_arg_0)
+            ],
+        )
+    },
                             cx,
                         )
-                        .primary_message("Open Settings File")
+                        .primary_message(localization::localized_str!("Open Settings File"))
                         .primary_icon(IconName::Settings)
                         .primary_on_click(|window, cx| {
                             window.dispatch_action(zed_actions::OpenSettingsFile.boxed_clone(), cx);
@@ -2007,11 +2040,21 @@ fn init_global_config_error_notifications(cx: &mut App) {
             match result {
                 Ok(_) => dismiss_app_notification(&id, cx),
                 Err(error) => {
-                    let message = format!("Invalid global {file_kind} file\n{error}");
+                    let message = {
+        let __zed_i18n_arg_0 = format!("{}", file_kind);
+        let __zed_i18n_arg_1 = format!("{}", error);
+        localization::format_message(
+            "Invalid global {file_kind} file\n{error}",
+            &[
+                ("file_kind", __zed_i18n_arg_0),
+                ("error", __zed_i18n_arg_1)
+            ],
+        )
+    };
                     show_app_notification(id, cx, move |cx| {
                         cx.new(|cx| {
                             MessageNotification::new(message.clone(), cx)
-                                .primary_message("Open File")
+                                .primary_message(localization::localized_str!("Open File"))
                                 .primary_icon(IconName::Settings)
                                 .primary_on_click(move |window, cx| {
                                     on_click(window, cx);
@@ -2098,7 +2141,17 @@ pub fn watch_user_agents_md(fs: Arc<dyn fs::Fs>, cx: &mut App) {
         UserAgentsMdState::Error(message) => {
             let path = paths::agents_file().display().to_string();
             log::error!("Failed to load user AGENTS.md from {path}: {message}");
-            let body = format!("Failed to load {path}\n{message}");
+            let body = {
+        let __zed_i18n_arg_0 = format!("{}", path);
+        let __zed_i18n_arg_1 = format!("{}", message);
+        localization::format_message(
+            "Failed to load {path}\n{message}",
+            &[
+                ("path", __zed_i18n_arg_0),
+                ("message", __zed_i18n_arg_1)
+            ],
+        )
+    };
             let notification_id = notification_id.clone();
             show_app_notification(notification_id, cx, move |cx| {
                 let body = body.clone();
@@ -2257,11 +2310,19 @@ fn show_keymap_file_json_error(
     cx: &mut App,
 ) {
     let message: SharedString =
-        format!("JSON parse error in keymap file. Bindings not reloaded.\n\n{error}").into();
+        {
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "JSON parse error in keymap file. Bindings not reloaded.\n\n{error}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    }.into();
     show_app_notification(notification_id, cx, move |cx| {
         cx.new(|cx| {
             MessageNotification::new(message.clone(), cx)
-                .primary_message("Open Keymap File")
+                .primary_message(localization::localized_str!("Open Keymap File"))
                 .primary_icon(IconName::Settings)
                 .primary_on_click(|window, cx| {
                     window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx);
@@ -2338,7 +2399,7 @@ fn reload_keymaps(cx: &mut App, mut user_key_bindings: Vec<KeyBinding>) {
     // On Windows, this is set in the `update_jump_list` method of the `HistoryManager`.
     #[cfg(not(target_os = "windows"))]
     cx.set_dock_menu(vec![gpui::MenuItem::action(
-        "New Window",
+        localization::localized_str!("New Window"),
         workspace::NewWindow,
     )]);
     // todo: nicer api here?
@@ -2647,7 +2708,7 @@ fn open_local_file(
         struct NoOpenFolders;
 
         workspace.show_notification(NotificationId::unique::<NoOpenFolders>(), cx, |cx| {
-            cx.new(|cx| MessageNotification::new("This project has no folders open.", cx))
+            cx.new(|cx| MessageNotification::new(localization::localized_str!("This project has no folders open."), cx))
         });
         None
     }

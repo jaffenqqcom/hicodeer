@@ -91,7 +91,7 @@ impl Render for AgentModelSelector {
         let model_name = model
             .as_ref()
             .map(|model| model.name().0)
-            .unwrap_or_else(|| SharedString::from("Select a Model"));
+            .unwrap_or_else(|| SharedString::from(localization::localized_str!("Select a Model")));
 
         let provider_icon = model.as_ref().and_then(|model| {
             LanguageModelRegistry::read_global(cx)

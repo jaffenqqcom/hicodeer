@@ -21,6 +21,7 @@ test-support = [
 ]
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 copilot.workspace = true
 copilot_chat.workspace = true

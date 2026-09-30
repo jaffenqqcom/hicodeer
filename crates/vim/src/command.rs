@@ -340,9 +340,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     Vim::action(editor, cx, |_, _: &ArgumentRequired, window, cx| {
         let _ = window.prompt(
             gpui::PromptLevel::Critical,
-            "Argument required",
+            localization::localized_str!("Argument required"),
             None,
-            &["Cancel"],
+            &[localization::localized_str!("Cancel")],
             cx,
         );
     });
@@ -377,9 +377,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     else {
                         let _ = window.prompt(
                             gpui::PromptLevel::Warning,
-                            "No file name",
-                            Some("Partial buffer write requires file name."),
-                            &["Cancel"],
+                            localization::localized_str!("No file name"),
+                            Some(localization::localized_str!("Partial buffer write requires file name.")),
+                            &[localization::localized_str!("Cancel")],
                             cx,
                         );
                         return;
@@ -399,7 +399,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                                         window,
                                         cx,
                                     )
-                                    .detach_and_prompt_err("Failed to save", window, cx, |_, _, _| None);
+                                    .detach_and_prompt_err(localization::localized_str!("Failed to save"), window, cx, |_, _, _| None);
                             });
                         }
                         return;
@@ -407,9 +407,9 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     if Some(SaveIntent::Overwrite) != action.save_intent {
                         let _ = window.prompt(
                             gpui::PromptLevel::Warning,
-                            "Use ! to write partial buffer",
-                            Some("Overwriting the current file with selected buffer content requires '!'."),
-                            &["Cancel"],
+                            localization::localized_str!("Use ! to write partial buffer"),
+                            Some(localization::localized_str!("Overwriting the current file with selected buffer content requires '!'.")),
+                            &[localization::localized_str!("Cancel")],
                             cx,
                         );
                         return;
@@ -433,11 +433,19 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                         let rx = (worktree.entry_for_path(&path).is_some() && Some(SaveIntent::Overwrite) != action.save_intent).then(|| {
                             window.prompt(
                                 gpui::PromptLevel::Warning,
-                                &format!("{path:?} already exists. Do you want to replace it?"),
+                                &{
+        let __zed_i18n_arg_0 = format!("{:?}", path);
+        localization::format_message(
+            "{path:?} already exists. Do you want to replace it?",
+            &[
+                ("path", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                 Some(
-                                    "A file or folder with the same name already exists. Replacing it will overwrite its current contents.",
+                                    localization::localized_str!("A file or folder with the same name already exists. Replacing it will overwrite its current contents."),
                                 ),
-                                &["Replace", "Cancel"],
+                                &[localization::localized_str!("Replace"), localization::localized_str!("Cancel")],
                                 cx
                             )
                         });
@@ -455,7 +463,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                                 };
                                 worktree
                                     .write_file(path.into_arc(), text.clone(), line_ending, encoding, has_bom, cx)
-                                    .detach_and_prompt_err("Failed to write lines", window, cx, |_, _, _| None);
+                                    .detach_and_prompt_err(localization::localized_str!("Failed to write lines"), window, cx, |_, _, _| None);
                             });
                         })
                         .detach();
@@ -473,7 +481,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                             window,
                             cx,
                         )
-                        .detach_and_prompt_err("Failed to save", window, cx, |_, _, _| None);
+                        .detach_and_prompt_err(localization::localized_str!("Failed to save"), window, cx, |_, _, _| None);
                 });
             }
             return;
@@ -497,7 +505,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     "Cannot save buffer with absolute path"
                 )))
                 .detach_and_prompt_err(
-                    "Failed to save",
+                    localization::localized_str!("Failed to save"),
                     window,
                     cx,
                     |_, _, _| None,
@@ -510,15 +518,20 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
             {
                 let answer = window.prompt(
                     gpui::PromptLevel::Critical,
-                    &format!(
-                        "{} already exists. Do you want to replace it?",
-                        project_path.path.display(path_style)
-                    ),
+                    &{
+        let __zed_i18n_arg_0 = format!("{}", project_path.path.display(path_style));
+        localization::format_message(
+            "{} already exists. Do you want to replace it?",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     Some(
-                        "A file or folder with the same name already exists. \
-                        Replacing it will overwrite its current contents.",
+                        localization::localized_str!("A file or folder with the same name already exists. \
+                        Replacing it will overwrite its current contents."),
                     ),
-                    &["Replace", "Cancel"],
+                    &[localization::localized_str!("Replace"), localization::localized_str!("Cancel")],
                     cx,
                 );
                 cx.spawn_in(window, async move |editor, cx| {
@@ -529,14 +542,14 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
                     let _ = editor.update_in(cx, |editor, window, cx| {
                         editor
                             .save_as(project, project_path, window, cx)
-                            .detach_and_prompt_err("Failed to :w", window, cx, |_, _, _| None);
+                            .detach_and_prompt_err(localization::localized_str!("Failed to :w"), window, cx, |_, _, _| None);
                     });
                 })
                 .detach();
             } else {
                 editor
                     .save_as(project, project_path, window, cx)
-                    .detach_and_prompt_err("Failed to :w", window, cx, |_, _, _| None);
+                    .detach_and_prompt_err(localization::localized_str!("Failed to :w"), window, cx, |_, _, _| None);
             }
         });
     });
@@ -576,9 +589,17 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
         fn err(s: String, window: &mut Window, cx: &mut Context<Editor>) {
             let _ = window.prompt(
                 gpui::PromptLevel::Critical,
-                &format!("Invalid argument: {}", s),
+                &{
+        let __zed_i18n_arg_0 = format!("{}", s);
+        localization::format_message(
+            "Invalid argument: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 None,
-                &["Cancel"],
+                &[localization::localized_str!("Cancel")],
                 cx,
             );
         }

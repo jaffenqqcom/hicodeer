@@ -1,4 +1,5 @@
 mod active_buffer_language;
+mod localized_language_name;
 
 pub use active_buffer_language::ActiveBufferLanguage;
 use anyhow::Context as _;
@@ -157,14 +158,14 @@ impl LanguageSelectorDelegate {
     }
 
     fn language_data_for_match(&self, mat: &StringMatch, cx: &App) -> (String, Option<Icon>) {
-        let mut label = mat.string.clone();
+        let mut label = crate::localized_language_name::localized_language_name(&mat.string);
         let buffer_language = self.buffer.read(cx).language();
         let need_icon = FileFinderSettings::get_global(cx).file_icons;
 
         if let Some(buffer_language) = buffer_language
             .filter(|buffer_language| buffer_language.name().as_ref() == mat.string.as_str())
         {
-            label.push_str(" (current)");
+            label.push_str(localization::localized_str!(" (current)"));
             let icon = need_icon
                 .then(|| self.language_icon(&buffer_language.config().matcher, cx))
                 .flatten();
@@ -202,7 +203,7 @@ impl PickerDelegate for LanguageSelectorDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Select a language…".into()
+        localization::localized_str!("Select a language…").into()
     }
 
     fn match_count(&self) -> usize {
@@ -320,13 +321,14 @@ impl PickerDelegate for LanguageSelectorDelegate {
     ) -> Option<Self::ListItem> {
         let mat = &self.matches.get(ix)?;
         let (label, language_icon) = self.language_data_for_match(mat, cx);
+        let positions = crate::localized_language_name::localized_match_positions(&label, mat);
         Some(
             ListItem::new(ix)
                 .inset(true)
                 .spacing(ListItemSpacing::Sparse)
                 .toggle_state(selected)
                 .start_slot::<Icon>(language_icon)
-                .child(HighlightedLabel::new(label, mat.positions.clone())),
+                .child(HighlightedLabel::new(label, positions)),
         )
     }
 }

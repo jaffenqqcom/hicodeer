@@ -1587,7 +1587,7 @@ impl ConversationView {
             ServerState::Loading { .. } => self
                 .loading_status
                 .clone()
-                .unwrap_or_else(|| "Loading…".into()),
+                .unwrap_or_else(|| localization::localized_str!("Loading…").into()),
             ServerState::LoadError { error, .. } => match error {
                 LoadError::Unsupported { .. } => {
                     format!("Upgrade {}", self.agent.agent_id()).into()
@@ -1695,11 +1695,11 @@ impl ConversationView {
                 self.load_subagent_session(subagent_session_id.clone(), session_id, window, cx)
             }
             AcpThreadEvent::ToolAuthorizationRequested(_) => {
-                self.notify_with_sound("Waiting for tool confirmation", IconName::Info, window, cx);
+                self.notify_with_sound(localization::localized_str!("Waiting for tool confirmation"), IconName::Info, window, cx);
             }
             AcpThreadEvent::ToolAuthorizationReceived(_) => {}
             AcpThreadEvent::ElicitationRequested(_) => {
-                self.notify_with_sound("Waiting for input", IconName::Info, window, cx);
+                self.notify_with_sound(localization::localized_str!("Waiting for input"), IconName::Info, window, cx);
             }
             AcpThreadEvent::ElicitationResponded(_) => {}
             AcpThreadEvent::Retry(retry) => {
@@ -1761,9 +1761,9 @@ impl ConversationView {
                     let used_tools = thread.read(cx).used_tools_since_last_user_message();
                     self.notify_with_sound(
                         if used_tools {
-                            "Finished running tools"
+                            localization::localized_str!("Finished running tools")
                         } else {
-                            "New message"
+                            localization::localized_str!("New message")
                         },
                         IconName::ZedAssistant,
                         window,
@@ -1782,7 +1782,15 @@ impl ConversationView {
                 if !is_subagent {
                     let model_or_agent_name = self.current_model_name(cx);
                     let notification_message =
-                        format!("{} refused to respond to this request", model_or_agent_name);
+                        {
+        let __zed_i18n_arg_0 = format!("{}", model_or_agent_name);
+        localization::format_message(
+            "{} refused to respond to this request",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    };
                     self.notify_with_sound(&notification_message, IconName::Warning, window, cx);
                 }
             }
@@ -1802,7 +1810,7 @@ impl ConversationView {
                 }
                 if !is_subagent {
                     self.notify_with_sound(
-                        "Agent stopped due to an error",
+                        localization::localized_str!("Agent stopped due to an error"),
                         IconName::Warning,
                         window,
                         cx,
@@ -2366,7 +2374,15 @@ impl ConversationView {
         if pending_auth_method.is_some() {
             return Callout::new()
                 .icon(IconName::Info)
-                .title(format!("Authenticating to {}…", agent_display_name))
+                .title({
+        let __zed_i18n_arg_0 = format!("{}", agent_display_name);
+        localization::format_message(
+            "Authenticating to {}…",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 .actions_slot(
                     Icon::new(IconName::ArrowCircle)
                         .size(IconSize::Small)
@@ -2379,7 +2395,15 @@ impl ConversationView {
 
         Callout::new()
             .icon(IconName::Info)
-            .title(format!("Authenticate to {}", agent_display_name))
+            .title({
+        let __zed_i18n_arg_0 = format!("{}", agent_display_name);
+        localization::format_message(
+            "Authenticate to {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
             .when(auth_methods.len() == 1, |this| {
                 this.actions_slot(auth_buttons())
             })
@@ -2389,7 +2413,7 @@ impl ConversationView {
                     .map(|this| {
                         if show_fallback_description {
                             this.child(
-                                Label::new("Choose one of the following authentication options:")
+                                Label::new(localization::localized_str!("Choose one of the following authentication options:"))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
@@ -2784,23 +2808,31 @@ impl ConversationView {
             } => {
                 return self.render_unsupported(path, current_version, minimum_version, window, cx);
             }
-            LoadError::FailedToInstall(msg) => ("Failed to Install", msg.to_string()),
+            LoadError::FailedToInstall(msg) => (localization::localized_str!("Failed to Install"), msg.to_string()),
             LoadError::Exited { status, stderr } => {
-                let mut message = format!("Server exited with status {status}");
+                let mut message = {
+        let __zed_i18n_arg_0 = format!("{}", status);
+        localization::format_message(
+            "Server exited with status {status}",
+            &[
+                ("status", __zed_i18n_arg_0)
+            ],
+        )
+    };
                 if let Some(stderr) = stderr {
                     message.push_str("\n");
                     message.push_str(stderr);
                 };
-                ("Failed to Launch", message)
+                (localization::localized_str!("Failed to Launch"), message)
             }
-            LoadError::Other(msg) => ("Failed to Launch", msg.to_string()),
+            LoadError::Other(msg) => (localization::localized_str!("Failed to Launch"), msg.to_string()),
         };
 
         let action_slot = h_flex()
             .gap_1()
             .child(
-                Button::new("retry-agent-launch", "Retry")
-                    .tooltip(Tooltip::text("Try to restart the agent"))
+                Button::new("retry-agent-launch", localization::localized_str!("Retry"))
+                    .tooltip(Tooltip::text(localization::localized_str!("Try to restart the agent")))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.retry_connection(window, cx);
                     })),
@@ -2826,17 +2858,39 @@ impl ConversationView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (heading_label, description_label) = (
-            format!("Upgrade {} to work with Zed", self.agent.agent_id()),
+            {
+        let __zed_i18n_arg_0 = format!("{}", self.agent.agent_id());
+        localization::format_message(
+            "Upgrade {} to work with Zed",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
             if version.is_empty() {
-                format!(
-                    "Currently using {}, which does not report a valid --version",
-                    path,
-                )
+                {
+        let __zed_i18n_arg_0 = format!("{}", path);
+        localization::format_message(
+            "Currently using {}, which does not report a valid --version",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             } else {
-                format!(
-                    "Currently using {}, which is only version {} (need at least {minimum_version})",
-                    path, version
-                )
+                {
+        let __zed_i18n_arg_0 = format!("{}", path);
+        let __zed_i18n_arg_1 = format!("{}", version);
+        let __zed_i18n_arg_2 = format!("{}", minimum_version);
+        localization::format_message(
+            "Currently using {}, which is only version {} (need at least {minimum_version})",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1),
+                ("minimum_version", __zed_i18n_arg_2)
+            ],
+        )
+    }
             },
         );
 
@@ -3277,7 +3331,7 @@ impl ConversationView {
                 .and_then(|active| active.read(cx).model_selector.clone())
                 .and_then(|selector| selector.read(cx).active_model(cx))
                 .map(|model| model.name.clone())
-                .unwrap_or_else(|| SharedString::from("The model"))
+                .unwrap_or_else(|| SharedString::from(localization::localized_str!("The model")))
         } else {
             // ACP agent - use the agent name (e.g., "Claude Agent", "Gemini CLI")
             self.agent.agent_id().0
@@ -3287,7 +3341,7 @@ impl ConversationView {
     fn create_copy_button(&self, message: impl Into<String>) -> impl IntoElement {
         let message = message.into();
 
-        CopyButton::new("copy-error-message", message).tooltip_label("Copy Error Message")
+        CopyButton::new("copy-error-message", message).tooltip_label(localization::localized_str!("Copy Error Message"))
     }
 
     pub(crate) fn reauthenticate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3384,17 +3438,35 @@ fn native_available_skills(
 
 fn placeholder_text(agent_name: &str, has_commands: bool) -> String {
     if agent_name == agent::ZED_AGENT_ID.as_ref() {
-        format!(
+        {
+        let __zed_i18n_arg_0 = format!("{}", agent_name);
+        localization::format_message(
             "Message the {}, @ to include context, / for commands",
-            agent_name
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
         )
+    }
     } else if has_commands {
-        format!(
+        {
+        let __zed_i18n_arg_0 = format!("{}", agent_name);
+        localization::format_message(
             "Message {} — @ to include context, / for commands",
-            agent_name
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
         )
+    }
     } else {
-        format!("Message {} — @ to include context", agent_name)
+        {
+        let __zed_i18n_arg_0 = format!("{}", agent_name);
+        localization::format_message(
+            "Message {} — @ to include context",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
     }
 }
 
@@ -3453,7 +3525,7 @@ impl Render for ConversationView {
                 let label_text = self
                     .loading_status
                     .clone()
-                    .unwrap_or_else(|| "Loading…".into());
+                    .unwrap_or_else(|| localization::localized_str!("Loading…").into());
                 v_flex()
                     .flex_1()
                     .size_full()
@@ -6224,7 +6296,7 @@ pub(crate) mod tests {
         }
 
         fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-            "Test".into()
+            localization::localized_str!("Test").into()
         }
     }
 

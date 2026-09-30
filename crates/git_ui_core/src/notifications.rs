@@ -50,13 +50,21 @@ pub fn show_error_toast(
         cx.defer(move |cx| {
             workspace.update(cx, |workspace, cx| {
                 let workspace_weak = cx.weak_entity();
-                let toast = StatusToast::new(format!("git {} failed", action), cx, |this, _cx| {
+                let toast = StatusToast::new({
+        let __zed_i18n_arg_0 = format!("{}", action);
+        localization::format_message(
+            "git {} failed",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx, |this, _cx| {
                     this.icon(
                         Icon::new(IconName::XCircle)
                             .size(IconSize::Small)
                             .color(Color::Error),
                     )
-                    .action("View Log", move |window, cx| {
+                    .action(localization::localized_str!("View Log"), move |window, cx| {
                         let message = message.clone();
                         let action = action.clone();
                         workspace_weak

@@ -210,7 +210,7 @@ impl<TP: CloudLlmTokenProvider> CloudModelProvider<TP> {
                 PROVIDER_NAME,
                 Some(status),
                 None,
-                "payment required to use this language model; please upgrade your account"
+                localization::localized_str!("payment required to use this language model; please upgrade your account")
                     .to_string(),
                 None,
                 ProviderErrorCategory::PaymentRequired,

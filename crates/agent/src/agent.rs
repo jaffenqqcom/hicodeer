@@ -1157,7 +1157,15 @@ impl NativeAgent {
                     if let Err(error) = expand_project_skills_directories(&worktree, cx).await {
                         project_skills_results.push(vec![Err(SkillLoadError {
                             path: PathBuf::from(project_skills_relative_path()),
-                            message: format!("Failed to scan project skills: {}", error),
+                            message: {
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Failed to scan project skills: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                         })]);
                         continue;
                     }
@@ -1175,10 +1183,15 @@ impl NativeAgent {
                         if skill_file.size > MAX_SKILL_FILE_SIZE as u64 {
                             worktree_results.push(Err(SkillLoadError {
                                 path: skill_file.display_path.clone(),
-                                message: format!(
-                                    "SKILL.md file exceeds maximum size of {}KB",
-                                    MAX_SKILL_FILE_SIZE / 1024
-                                ),
+                                message: {
+        let __zed_i18n_arg_0 = format!("{}", MAX_SKILL_FILE_SIZE / 1024);
+        localization::format_message(
+            "SKILL.md file exceeds maximum size of {}KB",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                             }));
                             continue;
                         }
@@ -1196,7 +1209,15 @@ impl NativeAgent {
                             Err(error) => {
                                 worktree_results.push(Err(SkillLoadError {
                                     path: skill_file.display_path.clone(),
-                                    message: format!("Failed to read file: {}", error),
+                                    message: {
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Failed to read file: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                 }));
                                 continue;
                             }

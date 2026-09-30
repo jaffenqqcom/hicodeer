@@ -29,6 +29,7 @@ test-support = [
 ]
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 call.workspace = true
 channel.workspace = true

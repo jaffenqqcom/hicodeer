@@ -226,10 +226,17 @@ impl Render for CursorPosition {
                 Button::new("go-to-line-column", text)
                     .label_size(LabelSize::Small)
                     .tab_index(0isize)
-                    .aria_label(format!(
-                        "Line {}, column {}",
-                        position.line, position.character
-                    ))
+                    .aria_label({
+        let __zed_i18n_arg_0 = format!("{}", position.line);
+        let __zed_i18n_arg_1 = format!("{}", position.character);
+        localization::format_message(
+            "Line {}, column {}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    })
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Some(workspace) = this.workspace.upgrade() {
                             workspace.update(cx, |workspace, cx| {
@@ -247,13 +254,13 @@ impl Render for CursorPosition {
                     }))
                     .tooltip(move |_window, cx| match context.as_ref() {
                         Some(context) => Tooltip::for_action_in(
-                            "Go to Line/Column",
+                            localization::localized_str!("Go to Line/Column"),
                             &editor::actions::ToggleGoToLine,
                             context,
                             cx,
                         ),
                         None => Tooltip::for_action(
-                            "Go to Line/Column",
+                            localization::localized_str!("Go to Line/Column"),
                             &editor::actions::ToggleGoToLine,
                             cx,
                         ),

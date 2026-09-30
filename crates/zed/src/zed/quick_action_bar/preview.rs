@@ -40,17 +40,17 @@ impl QuickActionBar {
         let (button_id, tooltip_text, open_action_for_tooltip) = match &preview_target {
             PreviewTarget::Markdown(_) => (
                 "toggle-markdown-preview",
-                "Preview Markdown",
+                localization::localized_str!("Preview Markdown"),
                 &markdown_preview::OpenPreview as &dyn gpui::Action,
             ),
             PreviewTarget::Svg(_) => (
                 "toggle-svg-preview",
-                "Preview SVG",
+                localization::localized_str!("Preview SVG"),
                 &svg_preview::OpenPreview as &dyn gpui::Action,
             ),
             PreviewTarget::TabularData(_) => (
                 "toggle-tabular-preview",
-                "Preview Tabular Data",
+                localization::localized_str!("Preview Tabular Data"),
                 &tabular_data_preview::OpenPreview as &dyn gpui::Action,
             ),
         };
@@ -68,10 +68,15 @@ impl QuickActionBar {
                 Tooltip::with_meta(
                     tooltip_text,
                     Some(open_action_for_tooltip),
-                    format!(
-                        "{} to open in a split",
-                        text_for_keystroke(&alt_click.modifiers, &alt_click.key, cx)
-                    ),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", text_for_keystroke(&alt_click.modifiers, &alt_click.key, cx));
+        localization::format_message(
+            "{} to open in a split",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                     cx,
                 )
             })

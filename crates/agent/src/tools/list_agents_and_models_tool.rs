@@ -63,7 +63,7 @@ impl AgentTool for ListAgentsAndModelsTool {
         _input: Result<Self::Input, serde_json::Value>,
         _cx: &mut App,
     ) -> SharedString {
-        "List agents and models".into()
+        localization::localized_str!("List agents and models").into()
     }
 
     fn run(

@@ -78,7 +78,15 @@ impl Item for SharedScreen {
     }
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        format!("{}'s screen", self.user.username).into()
+        {
+        let __zed_i18n_arg_0 = format!("{}", self.user.username);
+        localization::format_message(
+            "{}'s screen",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {

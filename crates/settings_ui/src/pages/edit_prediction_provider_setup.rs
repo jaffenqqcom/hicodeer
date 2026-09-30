@@ -155,7 +155,7 @@ fn render_provider_dropdown(window: &mut Window, cx: &mut App) -> AnyElement {
         .id("provider-selector")
         .min_w_0()
         .gap_1p5()
-        .child(SettingsSectionHeader::new("Active Provider").no_padding(true))
+        .child(SettingsSectionHeader::new(localization::localized_str!("Active Provider")).no_padding(true))
         .child(
             h_flex()
                 .pt_2p5()
@@ -167,9 +167,9 @@ fn render_provider_dropdown(window: &mut Window, cx: &mut App) -> AnyElement {
                         .w_full()
                         .min_w_0()
                         .max_w_1_2()
-                        .child(Label::new("Provider"))
+                        .child(Label::new(localization::localized_str!("Provider")))
                         .child(
-                            Label::new("Select which provider to use for edit predictions.")
+                            Label::new(localization::localized_str!("Select which provider to use for edit predictions."))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         ),
@@ -261,41 +261,54 @@ fn render_api_key_provider(
             .flex_wrap()
             .gap_0p5()
             .child(
-                Label::new("Visit the")
+                Label::new(localization::localized_str!("Visit the"))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
             .child(
-                ButtonLink::new(format!("{title} dashboard"), dashboard_url)
+                ButtonLink::new({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{title} dashboard",
+            &[
+                ("title", __zed_i18n_arg_0)
+            ],
+        )
+    }, dashboard_url)
                     .no_icon(true)
                     .label_size(LabelSize::Small)
                     .label_color(Color::Muted),
             )
             .child(
-                Label::new("to generate an API key.")
+                Label::new(localization::localized_str!("to generate an API key."))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             ),
     };
 
     let configured_card_label = if is_from_env_var {
-        "API Key Set in Environment Variable"
+        localization::localized_str!("API Key Set in Environment Variable")
     } else {
-        "API Key Configured"
+        localization::localized_str!("API Key Configured")
     };
 
     let container = if has_key {
         base_container.child(header).child(
             ConfiguredApiCard::new(format!("{title}-reset-key"), configured_card_label)
-                .button_label("Reset Key")
+                .button_label(localization::localized_str!("Reset Key"))
                 .button_tab_index(0)
                 .disabled(is_from_env_var)
                 .when_some(env_var_name, |this, env_var_name| {
                     this.when(is_from_env_var, |this| {
-                        this.tooltip_label(format!(
-                            "To reset your API key, unset the {} environment variable.",
-                            env_var_name
-                        ))
+                        this.tooltip_label({
+        let __zed_i18n_arg_0 = format!("{}", env_var_name);
+        localization::format_message(
+            "To reset your API key, unset the {} environment variable.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                     })
                 })
                 .on_click(move |_, _, cx| {
@@ -315,14 +328,19 @@ fn render_api_key_provider(
                         .min_w_0()
                         .max_w_1_2()
                         .gap_0p5()
-                        .child(Label::new("API Key"))
+                        .child(Label::new(localization::localized_str!("API Key")))
                         .child(description)
                         .when_some(env_var_name, |this, env_var_name| {
                             this.child({
-                                let label = format!(
-                                    "Or set the {} env var and restart Zed.",
-                                    env_var_name.as_ref()
-                                );
+                                let label = {
+        let __zed_i18n_arg_0 = format!("{}", env_var_name.as_ref());
+        localization::format_message(
+            "Or set the {} env var and restart Zed.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    };
                                 Label::new(label).size(LabelSize::Small).color(Color::Muted)
                             })
                         }),
@@ -331,7 +349,15 @@ fn render_api_key_provider(
                     SettingsInputField::new(format!("{}-api-key-input", title))
                         .tab_index(0)
                         .with_placeholder("xxxxxxxxxxxxxxxxxxxx")
-                        .aria_label(format!("{} API Key", title))
+                        .aria_label({
+        let __zed_i18n_arg_0 = format!("{}", title);
+        localization::format_message(
+            "{} API Key",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                         .on_confirm(move |api_key, _window, cx| {
                             write_key(api_key.filter(|key| !key.is_empty()), cx);
                         }),
@@ -367,7 +393,7 @@ fn render_ollama_provider(
         .pt_8()
         .gap_1p5()
         .child(
-            SettingsSectionHeader::new("Ollama")
+            SettingsSectionHeader::new(localization::localized_str!("Ollama"))
                 .icon(IconName::AiOllama)
                 .no_padding(true),
         )
@@ -377,8 +403,8 @@ fn render_ollama_provider(
 fn ollama_settings() -> Box<[SettingsPageItem]> {
     Box::new([
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API URL",
-            description: "The base URL of your Ollama server.",
+            title: localization::localized_str!("API URL"),
+            description: localization::localized_str!("The base URL of your Ollama server."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -411,8 +437,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Model",
-            description: "The Ollama model to use for edit predictions.",
+            title: localization::localized_str!("Model"),
+            description: localization::localized_str!("The Ollama model to use for edit predictions."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -445,8 +471,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Prompt Format",
-            description: "The prompt format to use when requesting predictions. Set to Infer to have the format inferred based on the model name.",
+            title: localization::localized_str!("Prompt Format"),
+            description: localization::localized_str!("The prompt format to use when requesting predictions. Set to Infer to have the format inferred based on the model name."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -476,8 +502,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Max Output Tokens",
-            description: "The maximum number of tokens to generate.",
+            title: localization::localized_str!("Max Output Tokens"),
+            description: localization::localized_str!("The maximum number of tokens to generate."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -507,8 +533,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Prediction Debounce",
-            description: "Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately.",
+            title: localization::localized_str!("Prediction Debounce"),
+            description: localization::localized_str!("Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -543,8 +569,8 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
 fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
     Box::new([
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API URL",
-            description: "The URL of your OpenAI-compatible server's completions API.",
+            title: localization::localized_str!("API URL"),
+            description: localization::localized_str!("The URL of your OpenAI-compatible server's completions API."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -577,8 +603,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Model",
-            description: "The model string to pass to the OpenAI-compatible server.",
+            title: localization::localized_str!("Model"),
+            description: localization::localized_str!("The model string to pass to the OpenAI-compatible server."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -611,8 +637,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Prompt Format",
-            description: "The prompt format to use when requesting predictions. Set to Infer to have the format inferred based on the model name.",
+            title: localization::localized_str!("Prompt Format"),
+            description: localization::localized_str!("The prompt format to use when requesting predictions. Set to Infer to have the format inferred based on the model name."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -642,8 +668,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             metadata: None,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Max Output Tokens",
-            description: "The maximum number of tokens to generate.",
+            title: localization::localized_str!("Max Output Tokens"),
+            description: localization::localized_str!("The maximum number of tokens to generate."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -673,8 +699,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Prediction Debounce",
-            description: "Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately.",
+            title: localization::localized_str!("Prediction Debounce"),
+            description: localization::localized_str!("Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -709,8 +735,8 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
 fn codestral_settings() -> Box<[SettingsPageItem]> {
     Box::new([
         SettingsPageItem::SettingItem(SettingItem {
-            title: "API URL",
-            description: "The API URL to use for Codestral.",
+            title: localization::localized_str!("API URL"),
+            description: localization::localized_str!("The API URL to use for Codestral."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -743,8 +769,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Max Tokens",
-            description: "The maximum number of tokens to generate.",
+            title: localization::localized_str!("Max Tokens"),
+            description: localization::localized_str!("The maximum number of tokens to generate."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -774,8 +800,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Model",
-            description: "The Codestral model id to use.",
+            title: localization::localized_str!("Model"),
+            description: localization::localized_str!("The Codestral model id to use."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -808,8 +834,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
             files: USER,
         }),
         SettingsPageItem::SettingItem(SettingItem {
-            title: "Prediction Debounce",
-            description: "Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately.",
+            title: localization::localized_str!("Prediction Debounce"),
+            description: localization::localized_str!("Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately."),
             field: Box::new(SettingField {
                 organization_override: None,
                 pick: |settings| {
@@ -843,8 +869,8 @@ fn codestral_settings() -> Box<[SettingsPageItem]> {
 
 fn mercury_settings() -> Box<[SettingsPageItem]> {
     Box::new([SettingsPageItem::SettingItem(SettingItem {
-        title: "Prediction Debounce",
-        description: "Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately.",
+        title: localization::localized_str!("Prediction Debounce"),
+        description: localization::localized_str!("Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately."),
         field: Box::new(SettingField {
             organization_override: None,
             pick: |settings| {
@@ -877,8 +903,8 @@ fn mercury_settings() -> Box<[SettingsPageItem]> {
 
 fn zed_settings() -> Box<[SettingsPageItem]> {
     Box::new([SettingsPageItem::SettingItem(SettingItem {
-        title: "Prediction Debounce",
-        description: "Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately.",
+        title: localization::localized_str!("Prediction Debounce"),
+        description: localization::localized_str!("Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately."),
         field: Box::new(SettingField {
             organization_override: None,
             pick: |settings| {
@@ -925,7 +951,7 @@ fn render_zed_provider(
         .pt_8()
         .gap_1p5()
         .child(
-            SettingsSectionHeader::new("Zed Predictions")
+            SettingsSectionHeader::new(localization::localized_str!("Zed Predictions"))
                 .icon(IconName::ZedPredict)
                 .no_padding(true),
         )
@@ -934,8 +960,8 @@ fn render_zed_provider(
 
 fn copilot_settings() -> Box<[SettingsPageItem]> {
     Box::new([SettingsPageItem::SettingItem(SettingItem {
-        title: "Prediction Debounce",
-        description: "Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately.",
+        title: localization::localized_str!("Prediction Debounce"),
+        description: localization::localized_str!("Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately."),
         field: Box::new(SettingField {
             organization_override: None,
             pick: |settings| {
@@ -994,7 +1020,7 @@ fn render_github_copilot_provider(
             .pt_8()
             .gap_1p5()
             .child(
-                SettingsSectionHeader::new("GitHub Copilot")
+                SettingsSectionHeader::new(localization::localized_str!("GitHub Copilot"))
                     .icon(IconName::Copilot)
                     .no_padding(true),
             )

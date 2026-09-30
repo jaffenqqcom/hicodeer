@@ -247,58 +247,58 @@ pub fn deploy_context_menu(
             let builder = menu
                 .on_blur_subscription(Subscription::new(|| {}))
                 .when(run_to_cursor, |builder| {
-                    builder.action("Run to Cursor", Box::new(RunToCursor))
+                    builder.action(localization::localized_str!("Run to Cursor"), Box::new(RunToCursor))
                 })
                 .when(evaluate_selection && has_selections, |builder| {
-                    builder.action("Evaluate Selection", Box::new(EvaluateSelectedText))
+                    builder.action(localization::localized_str!("Evaluate Selection"), Box::new(EvaluateSelectedText))
                 })
                 .when(
                     run_to_cursor || (evaluate_selection && has_selections),
                     |builder| builder.separator(),
                 )
-                .action("Go to Definition", Box::new(GoToDefinition::default()))
-                .action("Go to Declaration", Box::new(GoToDeclaration::default()))
+                .action(localization::localized_str!("Go to Definition"), Box::new(GoToDefinition::default()))
+                .action(localization::localized_str!("Go to Declaration"), Box::new(GoToDeclaration::default()))
                 .action(
-                    "Go to Type Definition",
+                    localization::localized_str!("Go to Type Definition"),
                     Box::new(GoToTypeDefinition::default()),
                 )
                 .action(
-                    "Go to Implementation",
+                    localization::localized_str!("Go to Implementation"),
                     Box::new(GoToImplementation::default()),
                 )
                 .action(
-                    "Find All References",
+                    localization::localized_str!("Find All References"),
                     Box::new(FindAllReferences::default()),
                 )
                 .action(
-                    "Show Incoming Calls",
+                    localization::localized_str!("Show Incoming Calls"),
                     Box::new(zed_actions::ShowIncomingCalls),
                 )
                 .action(
-                    "Show Outgoing Calls",
+                    localization::localized_str!("Show Outgoing Calls"),
                     Box::new(zed_actions::ShowOutgoingCalls),
                 )
                 .separator()
-                .action("Rename Symbol", Box::new(Rename))
-                .action("Format Buffer", Box::new(Format))
+                .action(localization::localized_str!("Rename Symbol"), Box::new(Rename))
+                .action(localization::localized_str!("Format Buffer"), Box::new(Format))
                 .when(format_selections, |cx| {
-                    cx.action("Format Selections", Box::new(FormatSelections))
+                    cx.action(localization::localized_str!("Format Selections"), Box::new(FormatSelections))
                 })
                 .action(
-                    "Show Code Actions",
+                    localization::localized_str!("Show Code Actions"),
                     Box::new(ToggleCodeActions {
                         deployed_from: None,
                         quick_launch: false,
                     }),
                 )
                 .when(!disable_ai && has_selections, |this| {
-                    this.action("Add to Agent Thread", Box::new(AddSelectionToThread))
+                    this.action(localization::localized_str!("Add to Agent Thread"), Box::new(AddSelectionToThread))
                 })
                 .separator()
-                .action("Cut", Box::new(Cut))
-                .action("Copy", Box::new(Copy))
-                .action("Copy and Trim", Box::new(CopyAndTrim))
-                .action("Paste", Box::new(Paste))
+                .action(localization::localized_str!("Cut"), Box::new(Cut))
+                .action(localization::localized_str!("Copy"), Box::new(Copy))
+                .action(localization::localized_str!("Copy and Trim"), Box::new(CopyAndTrim))
+                .action(localization::localized_str!("Paste"), Box::new(Paste))
                 .separator()
                 .action_disabled_when(
                     !has_reveal_target,
@@ -306,24 +306,24 @@ pub fn deploy_context_menu(
                     Box::new(RevealInFileManager),
                 )
                 .when(is_markdown, |builder| {
-                    builder.action("Open Markdown Preview", Box::new(OpenMarkdownPreview))
+                    builder.action(localization::localized_str!("Open Markdown Preview"), Box::new(OpenMarkdownPreview))
                 })
                 .when(is_svg, |builder| {
-                    builder.action("Open SVG Preview", Box::new(OpenSvgPreview))
+                    builder.action(localization::localized_str!("Open SVG Preview"), Box::new(OpenSvgPreview))
                 })
                 .action_disabled_when(
                     !has_reveal_target,
-                    "Open in Terminal",
+                    localization::localized_str!("Open in Terminal"),
                     Box::new(OpenInTerminal),
                 )
                 .action_disabled_when(
                     !has_git_repo,
-                    "Copy Permalink to Line",
+                    localization::localized_str!("Copy Permalink to Line"),
                     Box::new(CopyPermalinkToLine),
                 )
                 .action_disabled_when(
                     !has_git_repo,
-                    "View File History",
+                    localization::localized_str!("View File History"),
                     Box::new(git::FileHistory),
                 );
             match focus {
@@ -458,6 +458,6 @@ mod tests {
         });
         cx.run_until_parked();
 
-        assert!(cx.debug_bounds("MENU_ITEM-Copy").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-ACTION-editor::Copy").is_some());
     }
 }

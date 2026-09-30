@@ -124,14 +124,18 @@ impl BaseKeymap {
     }
 
     pub fn names() -> impl Iterator<Item = &'static str> {
-        Self::OPTIONS.iter().map(|(name, _)| *name)
+        Self::OPTIONS
+            .iter()
+            .map(|(name, _)| localization::translate_static(name))
     }
 
     pub fn from_names(option: &str) -> BaseKeymap {
         Self::OPTIONS
             .iter()
             .copied()
-            .find_map(|(name, value)| (name == option).then_some(value))
+            .find_map(|(name, value)| {
+                (name == option || localization::translate_static(name) == option).then_some(value)
+            })
             .unwrap_or_default()
     }
 }

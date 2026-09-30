@@ -380,11 +380,11 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
             None
         } else {
             match state.user_store.read(cx).plan() {
-                Some(Plan::ZedPro) => Some("Subscribed to Pro".into()),
-                Some(Plan::ZedProTrial) => Some("Subscribed to Pro Trial".into()),
-                Some(Plan::ZedStudent) => Some("Subscribed to Student".into()),
-                Some(Plan::ZedBusiness) => Some("Subscribed to Business".into()),
-                Some(Plan::ZedVip) => Some("Subscribed to VIP".into()),
+                Some(Plan::ZedPro) => Some(localization::localized_str!("Subscribed to Pro").into()),
+                Some(Plan::ZedProTrial) => Some(localization::localized_str!("Subscribed to Pro Trial").into()),
+                Some(Plan::ZedStudent) => Some(localization::localized_str!("Subscribed to Student").into()),
+                Some(Plan::ZedBusiness) => Some(localization::localized_str!("Subscribed to Business").into()),
+                Some(Plan::ZedVip) => Some(localization::localized_str!("Subscribed to VIP").into()),
                 Some(Plan::ZedFree) | None => None,
             }
         };
@@ -405,21 +405,21 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
     }
 
     fn authentication_error_message(&self) -> SharedString {
-        "Failed to sign in with your Zed account (401).".into()
+        localization::localized_str!("Failed to sign in with your Zed account (401).").into()
     }
 
     fn missing_credentials_error_message(&self) -> SharedString {
-        "You are not signed in to your Zed account. \
-        Sign in to continue."
+        localization::localized_str!("You are not signed in to your Zed account. \
+        Sign in to continue.")
             .into()
     }
 
     fn fast_mode_confirmation(&self, _cx: &App) -> Option<FastModeConfirmation> {
         Some(FastModeConfirmation {
-            title: "Enable Fast Mode for Zed?".into(),
-            message: "Fast mode routes requests through the upstream provider's fast mode or priority tier. The \
+            title: localization::localized_str!("Enable Fast Mode for Zed?").into(),
+            message: localization::localized_str!("Fast mode routes requests through the upstream provider's fast mode or priority tier. The \
                 upstream provider's premium per-token pricing applies and is passed through to \
-                your Zed billing."
+                your Zed billing.")
                 .into(),
         })
     }
@@ -509,34 +509,34 @@ fn zed_ai_description(
     eligible_for_trial: bool,
 ) -> &'static str {
     if !is_connected {
-        return "Sign in to have access to Zed's complete agentic experience with hosted models.";
+        return localization::localized_str!("Sign in to have access to Zed's complete agentic experience with hosted models.");
     }
 
     match plan {
         Some(Plan::ZedPro) => {
-            "You have access to Zed's hosted models through your Pro subscription."
+            localization::localized_str!("You have access to Zed's hosted models through your Pro subscription.")
         }
         Some(Plan::ZedProTrial) => {
-            "Your Pro trial includes $5 of GPT Luna and unlimited edit predictions for 14 days from trial start."
+            localization::localized_str!("Your Pro trial includes $5 of GPT Luna and unlimited edit predictions for 14 days from trial start.")
         }
         Some(Plan::ZedStudent) => {
-            "You have access to Zed's hosted models through your Student subscription."
+            localization::localized_str!("You have access to Zed's hosted models through your Student subscription.")
         }
         Some(Plan::ZedBusiness) => {
             if is_zed_model_provider_enabled {
-                "You have access to Zed's hosted models through your organization."
+                localization::localized_str!("You have access to Zed's hosted models through your organization.")
             } else {
-                "Zed's hosted models are disabled by your organization's configuration."
+                localization::localized_str!("Zed's hosted models are disabled by your organization's configuration.")
             }
         }
         Some(Plan::ZedVip) => {
-            "You have access to Zed's hosted models through your VIP subscription."
+            localization::localized_str!("You have access to Zed's hosted models through your VIP subscription.")
         }
         Some(Plan::ZedFree) | None => {
             if eligible_for_trial {
-                "Start a free trial with $5 of GPT Luna and unlimited edit predictions for 14 days from trial start."
+                localization::localized_str!("Start a free trial with $5 of GPT Luna and unlimited edit predictions for 14 days from trial start.")
             } else {
-                "Subscribe for access to Zed's hosted models."
+                localization::localized_str!("Subscribe for access to Zed's hosted models.")
             }
         }
     }
@@ -557,7 +557,7 @@ impl RenderOnce for ZedAiConfiguration {
         );
 
         let manage_subscription_buttons = if has_paid_plan {
-            Button::new("manage_settings", "Manage Subscription")
+            Button::new("manage_settings", localization::localized_str!("Manage Subscription"))
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -566,7 +566,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .on_click(|_, _, cx| cx.open_url(&zed_urls::account_url(cx)))
                 .into_any_element()
         } else if self.plan.is_none() || self.eligible_for_trial {
-            Button::new("start_trial", "Start Free Trial")
+            Button::new("start_trial", localization::localized_str!("Start Free Trial"))
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -575,7 +575,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .on_click(|_, _, cx| cx.open_url(&zed_urls::start_trial_url(cx)))
                 .into_any_element()
         } else {
-            Button::new("upgrade", "Upgrade to Pro")
+            Button::new("upgrade", localization::localized_str!("Upgrade to Pro"))
                 .when(!self.compact, |this| {
                     this.full_width().label_size(LabelSize::Small)
                 })
@@ -590,7 +590,7 @@ impl RenderOnce for ZedAiConfiguration {
                 .gap_2()
                 .when(!self.compact, |this| this.child(Label::new(description)))
                 .child(
-                    Button::new("sign_in", "Sign In to use Zed AI")
+                    Button::new("sign_in", localization::localized_str!("Sign In to use Zed AI"))
                         .start_icon(
                             Icon::new(IconName::Github)
                                 .size(IconSize::Small)
@@ -613,7 +613,7 @@ impl RenderOnce for ZedAiConfiguration {
             .map(|this| {
                 if self.account_too_young {
                     this.child(YoungAccountBanner).child(
-                        Button::new("upgrade", "Upgrade to Pro")
+                        Button::new("upgrade", localization::localized_str!("Upgrade to Pro"))
                             .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
                             .when(!self.compact, |this| this.full_width())
                             .on_click(|_, _, cx| {

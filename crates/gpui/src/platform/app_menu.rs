@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_menu() {
-        let menu = Menu::new("App")
+        let menu = Menu::new(localization::localized_str!("App"))
             .items(vec![
                 crate::MenuItem::action("Action 1", gpui::NoAction),
                 crate::MenuItem::separator(),

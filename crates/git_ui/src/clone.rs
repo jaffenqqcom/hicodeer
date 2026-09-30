@@ -71,9 +71,17 @@ pub fn clone_and_open(
                 cx.update(|window, cx| {
                     window.prompt(
                         gpui::PromptLevel::Info,
-                        &format!("Git Clone: {}", repo_name),
+                        &{
+        let __zed_i18n_arg_0 = format!("{}", repo_name);
+        localization::format_message(
+            "Git Clone: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                         None,
-                        &["Add repo to project", "Open repo in new project"],
+                        &[localization::localized_str!("Add repo to project"), localization::localized_str!("Open repo in new project")],
                         cx,
                     )
                 })

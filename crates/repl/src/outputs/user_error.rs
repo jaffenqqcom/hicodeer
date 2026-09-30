@@ -24,7 +24,15 @@ impl ErrorView {
                     h_flex()
                         .font_buffer(cx)
                         .child(
-                            Label::new(format!("{}: ", self.ename.clone()))
+                            Label::new({
+        let __zed_i18n_arg_0 = format!("{}", self.ename.clone());
+        localization::format_message(
+            "{}: ",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                                 .color(Color::Error)
                                 .weight(FontWeight::BOLD),
                         )

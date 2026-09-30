@@ -355,11 +355,11 @@ impl LanguageModelProvider for AnthropicLanguageModelProvider {
 
     fn fast_mode_confirmation(&self, _cx: &App) -> Option<FastModeConfirmation> {
         Some(FastModeConfirmation {
-            title: "Enable Fast Mode for Anthropic?".into(),
-            message: "Fast mode lets requests use your Anthropic Priority Tier capacity, which \
+            title: localization::localized_str!("Enable Fast Mode for Anthropic?").into(),
+            message: localization::localized_str!("Fast mode lets requests use your Anthropic Priority Tier capacity, which \
                 Anthropic prioritizes over standard requests during peak load. Requires a \
                 Priority Tier commitment with Anthropic; without one, requests behave the same \
-                as the standard tier."
+                as the standard tier.")
                 .into(),
         })
     }

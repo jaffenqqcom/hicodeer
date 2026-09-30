@@ -128,14 +128,14 @@ impl PickerDelegate for OllamaModelPickerDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search models…".into()
+        localization::localized_str!("Search models…").into()
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         Some(if self.loading {
-            "Loading models…".into()
+            localization::localized_str!("Loading models…").into()
         } else {
-            "No models found. Check your Ollama server URL.".into()
+            localization::localized_str!("No models found. Check your Ollama server URL.").into()
         })
     }
 

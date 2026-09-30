@@ -314,9 +314,9 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     {
         drop(window.prompt(
             gpui::PromptLevel::Info,
-            "Zed was installed via a package manager.",
+            localization::localized_str!("Zed was installed via a package manager."),
             Some(&message),
-            &["OK"],
+            &[localization::localized_str!("OK")],
             cx,
         ));
         return;
@@ -334,9 +334,9 @@ pub fn check(_: &Check, window: &mut Window, cx: &mut App) {
     } else {
         drop(window.prompt(
             gpui::PromptLevel::Info,
-            "Could not check for updates",
-            Some("Auto-updates disabled for non-bundled app."),
-            &["OK"],
+            localization::localized_str!("Could not check for updates"),
+            Some(localization::localized_str!("Auto-updates disabled for non-bundled app.")),
+            &[localization::localized_str!("OK")],
             cx,
         ));
     }

@@ -59,7 +59,7 @@ impl Render for TabularDataPreviewPane {
                                         h_flex()
                                             .gap_2()
                                             .child(SpinnerLabel::new())
-                                            .child("Loading…"),
+                                            .child(localization::localized_str!("Loading…")),
                                     )
                                 })
                                 .when(!is_parsing, |div| {
@@ -68,7 +68,7 @@ impl Render for TabularDataPreviewPane {
                                             .text_color(cx.theme().status().error)
                                             .child(error.clone())
                                     } else {
-                                        div.child("No data to display")
+                                        div.child(localization::localized_str!("No data to display"))
                                     }
                                 }),
                         )

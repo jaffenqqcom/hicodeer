@@ -97,18 +97,40 @@ impl AgentTool for GrepTool {
                 let page = input.page();
                 let regex_str = MarkdownInlineCode(&input.regex);
                 let case_info = if input.case_sensitive {
-                    " (case-sensitive)"
+                    localization::localized_str!(" (case-sensitive)")
                 } else {
                     ""
                 };
 
                 if page > 1 {
-                    format!("Get page {page} of search results for regex {regex_str}{case_info}")
+                    {
+        let __zed_i18n_arg_0 = format!("{}", page);
+        let __zed_i18n_arg_1 = format!("{}", regex_str);
+        let __zed_i18n_arg_2 = format!("{}", case_info);
+        localization::format_message(
+            "Get page {page} of search results for regex {regex_str}{case_info}",
+            &[
+                ("page", __zed_i18n_arg_0),
+                ("regex_str", __zed_i18n_arg_1),
+                ("case_info", __zed_i18n_arg_2)
+            ],
+        )
+    }
                 } else {
-                    format!("Search files for regex {regex_str}{case_info}")
+                    {
+        let __zed_i18n_arg_0 = format!("{}", regex_str);
+        let __zed_i18n_arg_1 = format!("{}", case_info);
+        localization::format_message(
+            "Search files for regex {regex_str}{case_info}",
+            &[
+                ("regex_str", __zed_i18n_arg_0),
+                ("case_info", __zed_i18n_arg_1)
+            ],
+        )
+    }
                 }
             }
-            Err(_) => "Search with regex".into(),
+            Err(_) => localization::localized_str!("Search with regex").into(),
         }
         .into()
     }

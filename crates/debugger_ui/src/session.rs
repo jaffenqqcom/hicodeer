@@ -101,7 +101,7 @@ impl Focusable for DebugSession {
 impl Item for DebugSession {
     type Event = ();
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "Debugger".into()
+        localization::localized_str!("Debugger").into()
     }
 }
 

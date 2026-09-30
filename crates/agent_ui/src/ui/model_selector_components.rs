@@ -164,14 +164,38 @@ impl RenderOnce for ModelSelectorListItem {
                             .when(is_disabled, |this| this.color(Color::Disabled))
                             .truncate(),
                     )
-                    .when(self.is_latest, |parent| parent.child(Chip::new("Latest")))
+                    .when(self.is_latest, |parent| parent.child(Chip::new(localization::localized_str!("Latest"))))
                     .when_some(self.cost_info, |this, cost_info| {
                         let tooltip_text = if cost_info.ends_with('×') {
-                            format!("Cost Multiplier: {}", cost_info)
+                            {
+        let __zed_i18n_arg_0 = format!("{}", cost_info);
+        localization::format_message(
+            "Cost Multiplier: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                         } else if cost_info.contains('$') {
-                            format!("Cost per Million Tokens: {}", cost_info)
+                            {
+        let __zed_i18n_arg_0 = format!("{}", cost_info);
+        localization::format_message(
+            "Cost per Million Tokens: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                         } else {
-                            format!("Cost: {}", cost_info)
+                            {
+        let __zed_i18n_arg_0 = format!("{}", cost_info);
+        localization::format_message(
+            "Cost: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                         };
 
                         this.child(Chip::new(cost_info).tooltip(Tooltip::text(tooltip_text)))
@@ -192,9 +216,9 @@ impl RenderOnce for ModelSelectorListItem {
                 this.end_slot_on_hover(div().pr_1p5().when_some(self.on_toggle_favorite, {
                     |this, handle_click| {
                         let (icon, color, tooltip) = if is_favorite {
-                            (IconName::StarFilled, Color::Accent, "Unfavorite Model")
+                            (IconName::StarFilled, Color::Accent, localization::localized_str!("Unfavorite Model"))
                         } else {
-                            (IconName::Star, Color::Default, "Favorite Model")
+                            (IconName::Star, Color::Default, localization::localized_str!("Favorite Model"))
                         };
                         this.child(
                             IconButton::new(("toggle-favorite", self.index), icon)
@@ -238,7 +262,7 @@ impl RenderOnce for ModelSelectorFooter {
             .border_t_1()
             .border_color(cx.theme().colors().border_variant)
             .child(
-                Button::new("configure", "Configure")
+                Button::new("configure", localization::localized_str!("Configure"))
                     .full_width()
                     .style(ButtonStyle::Outlined)
                     .key_binding(
@@ -278,7 +302,7 @@ impl RenderOnce for ModelSelectorTooltip {
                 h_flex()
                     .gap_2()
                     .justify_between()
-                    .child(Label::new("Change Model"))
+                    .child(Label::new(localization::localized_str!("Change Model")))
                     .child(KeyBinding::for_action(&ToggleModelSelector, cx)),
             )
             .when(self.show_cycle_row, |this| {
@@ -289,7 +313,7 @@ impl RenderOnce for ModelSelectorTooltip {
                         .border_t_1()
                         .border_color(cx.theme().colors().border_variant)
                         .justify_between()
-                        .child(Label::new("Cycle Favorite Models"))
+                        .child(Label::new(localization::localized_str!("Cycle Favorite Models")))
                         .child(KeyBinding::for_action(&CycleFavoriteModels, cx)),
                 )
             })

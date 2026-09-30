@@ -138,6 +138,7 @@ members = [
     "crates/livekit_client",
     "crates/llama_cpp",
     "crates/lmstudio",
+    "crates/localization",
     "crates/lsp",
     "crates/lsp_command_selector",
     "crates/lsp_locations",
@@ -411,6 +412,7 @@ livekit_api = { path = "crates/livekit_api" }
 livekit_client = { path = "crates/livekit_client" }
 llama_cpp = { path = "crates/llama_cpp" }
 lmstudio = { path = "crates/lmstudio" }
+localization = { path = "crates/localization" }
 lsp = { path = "crates/lsp" }
 lsp_command_selector = { path = "crates/lsp_command_selector" }
 lsp_locations = { path = "crates/lsp_locations" }

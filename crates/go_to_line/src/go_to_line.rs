@@ -313,7 +313,17 @@ impl Render for GoToLine {
             } else {
                 self.current_line.saturating_sub(offset.unsigned_abs())
             };
-            format!("Go to line {target_line} ({offset:+} from current)").into()
+            {
+        let __zed_i18n_arg_0 = format!("{}", target_line);
+        let __zed_i18n_arg_1 = format!("{:+}", offset);
+        localization::format_message(
+            "Go to line {target_line} ({offset:+} from current)",
+            &[
+                ("target_line", __zed_i18n_arg_0),
+                ("offset", __zed_i18n_arg_1)
+            ],
+        )
+    }.into()
         } else {
             match self.line_and_char_from_query(cx) {
                 Some((line, Some(character))) => {

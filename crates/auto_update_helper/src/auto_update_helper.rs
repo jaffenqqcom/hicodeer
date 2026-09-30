@@ -56,6 +56,7 @@ mod windows_impl {
             .parent()
             .context("No parent directory")?
             .to_path_buf();
+        initialize_localization(&app_dir);
 
         log::info!("======= Starting Zed update =======");
         let (tx, rx) = std::sync::mpsc::channel();
@@ -92,6 +93,42 @@ mod windows_impl {
         Ok(())
     }
 
+    #[derive(Default, serde::Deserialize)]
+    struct LocaleSettings {
+        ui_locale: Option<String>,
+    }
+
+    // Mirrors `paths::config_dir` for Windows (%APPDATA%/Zed) without pulling
+    // the heavy paths/settings_json dependency trees into this small helper.
+    fn zed_settings_path() -> Option<std::path::PathBuf> {
+        let appdata = std::env::var_os("APPDATA")?;
+        Some(
+            std::path::Path::new(&appdata)
+                .join("Zed")
+                .join("settings.json"),
+        )
+    }
+
+    fn initialize_localization(app_dir: &Path) {
+        let user_preference = zed_settings_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|source| {
+                serde_json_lenient::from_str::<LocaleSettings>(&source)
+                    .ok()
+                    .and_then(|settings| settings.ui_locale)
+            });
+        let legacy_locale = std::fs::read_to_string(
+            app_dir.join("locales").join("legacy-locale"),
+        )
+        .ok()
+        .map(|locale| locale.trim().to_owned())
+        .filter(|locale| !locale.is_empty());
+        localization::initialize(localization::InitRequest {
+            user_preference: user_preference.as_deref(),
+            legacy_locale: legacy_locale.as_deref(),
+        });
+    }
+
     fn parse_args(input: impl IntoIterator<Item = OsString>) -> Args {
         let mut args = Args {
             launch: true,
@@ -119,11 +156,14 @@ mod windows_impl {
             content.truncate(600);
             content.push_str("...\n");
         }
+        let caption = HSTRING::from(localization::localized_str!(
+            "Error: Zed update failed."
+        ));
         let _ = unsafe {
             MessageBoxW(
                 None,
                 &HSTRING::from(content),
-                windows::core::w!("Error: Zed update failed."),
+                &caption,
                 MB_ICONERROR | MB_SYSTEMMODAL,
             )
         };

@@ -469,9 +469,9 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
         self.foreground_executor()
             .spawn(async move {
                 let title = if options.directories {
-                    "Open Folder"
+                    localization::localized_str!("Open Folder")
                 } else {
-                    "Open File"
+                    localization::localized_str!("Open File")
                 };
 
                 let request = match ashpd::desktop::file_chooser::OpenFileRequest::default()

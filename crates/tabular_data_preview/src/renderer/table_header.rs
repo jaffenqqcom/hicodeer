@@ -173,7 +173,7 @@ impl ColumnFilterDelegate {
         for (row_index, positions) in matches {
             if rows[row_index].hidden_by.is_some() && !header_inserted {
                 entries.push(ColumnFilterListEntry::Header(
-                    "Hidden by other filters".into(),
+                    localization::localized_str!("Hidden by other filters").into(),
                 ));
                 header_inserted = true;
             }
@@ -307,7 +307,15 @@ impl PickerDelegate for ColumnFilterDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        format!("Search {} unique values…", self.available_count).into()
+        {
+        let __zed_i18n_arg_0 = format!("{}", self.available_count);
+        localization::format_message(
+            "Search {} unique values…",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
     }
 
     fn update_matches(
@@ -413,7 +421,7 @@ impl PickerDelegate for ColumnFilterDelegate {
                 let row = &self.rows[*row_index];
                 let value_text: SharedString = match &row.entry.content {
                     Some(s) => s.clone(),
-                    None => "<null>".into(),
+                    None => localization::localized_str!("<null>").into(),
                 };
                 let count_text = SharedString::from(row.entry.occurred_times().to_string());
                 let label = HighlightedLabel::new(value_text.clone(), positions.clone())
@@ -491,7 +499,17 @@ impl PickerDelegate for ColumnFilterDelegate {
                 .justify_between()
                 .items_center()
                 .child(
-                    Label::new(format!("{selected_rows} / {total_rows} rows selected"))
+                    Label::new({
+        let __zed_i18n_arg_0 = format!("{}", selected_rows);
+        let __zed_i18n_arg_1 = format!("{}", total_rows);
+        localization::format_message(
+            "{selected_rows} / {total_rows} rows selected",
+            &[
+                ("selected_rows", __zed_i18n_arg_0),
+                ("total_rows", __zed_i18n_arg_1)
+            ],
+        )
+    })
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -500,7 +518,7 @@ impl PickerDelegate for ColumnFilterDelegate {
                         .id("table-filter-clear-all")
                         .cursor_pointer()
                         .child(
-                            Label::new("Clear all")
+                            Label::new(localization::localized_str!("Clear all"))
                                 .size(LabelSize::Small)
                                 .color(Color::Accent),
                         )
@@ -571,7 +589,7 @@ impl TabularDataPreviewPane {
                 with_copy_on_right_click(
                     header_text_cell,
                     header_text,
-                    "Right click to copy column name",
+                    localization::localized_str!("Right click to copy column name"),
                 )
                 .child(displayed_header)
             })
@@ -629,10 +647,10 @@ impl TabularDataPreviewPane {
         )
         .tooltip(Tooltip::text(match self.engine.applied_sorting {
             Some(ordering) if ordering.col_idx == col_idx => match ordering.direction {
-                SortDirection::Asc => "Sorted A-Z. Click to sort Z-A",
-                SortDirection::Desc => "Sorted Z-A. Click to disable sorting",
+                SortDirection::Asc => localization::localized_str!("Sorted A-Z. Click to sort Z-A"),
+                SortDirection::Desc => localization::localized_str!("Sorted Z-A. Click to disable sorting"),
             },
-            _ => "Not sorted. Click to sort A-Z",
+            _ => localization::localized_str!("Not sorted. Click to sort A-Z"),
         }))
         .on_click(cx.listener(move |this, _event, _window, cx| {
             let new_sorting = match this.engine.applied_sorting {
@@ -679,9 +697,9 @@ impl TabularDataPreviewPane {
             })
             .toggle_state(has_active_filters),
             Tooltip::text(if has_active_filters {
-                "Column has active filters. Click to manage"
+                localization::localized_str!("Column has active filters. Click to manage")
             } else {
-                "No filters applied. Click to add filters"
+                localization::localized_str!("No filters applied. Click to add filters")
             }),
         )
         .menu({

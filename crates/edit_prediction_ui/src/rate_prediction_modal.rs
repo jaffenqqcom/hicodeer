@@ -87,8 +87,8 @@ enum RatePredictionView {
 impl RatePredictionView {
     pub fn name(&self) -> &'static str {
         match self {
-            Self::SuggestedEdits => "Suggested Edits",
-            Self::RawInput => "Recorded Events & Input",
+            Self::SuggestedEdits => localization::localized_str!("Suggested Edits"),
+            Self::RawInput => localization::localized_str!("Recorded Events & Input"),
         }
     }
 }
@@ -362,7 +362,7 @@ impl RatePredictionsModal {
                         start_anchor,
                         &InlayHint {
                             position: start_hint_position,
-                            label: InlayHintLabel::String("╭─ editable region start\n".into()),
+                            label: InlayHintLabel::String(localization::localized_str!("╭─ editable region start\n").into()),
                             kind: Some(InlayHintKind::Parameter),
                             padding_left: false,
                             padding_right: false,
@@ -375,7 +375,7 @@ impl RatePredictionsModal {
                         end_anchor,
                         &InlayHint {
                             position: end_hint_position,
-                            label: InlayHintLabel::String("\n╰─ editable region end".into()),
+                            label: InlayHintLabel::String(localization::localized_str!("\n╰─ editable region end").into()),
                             kind: Some(InlayHintKind::Parameter),
                             padding_left: false,
                             padding_right: false,
@@ -436,7 +436,14 @@ impl RatePredictionsModal {
     }
 
     fn write_events(formatted_inputs: &mut String, events: &[Arc<zeta_prompt::Event>]) {
-        write!(formatted_inputs, "## Events\n\n").unwrap();
+        write!(formatted_inputs, "{}", {
+        localization::format_message(
+            "## Events\n\n",
+            &[
+                
+            ],
+        )
+    }).unwrap();
 
         for event in events {
             formatted_inputs.push_str("```diff\n");
@@ -446,7 +453,14 @@ impl RatePredictionsModal {
     }
 
     fn write_related_files(formatted_inputs: &mut String, included_files: &[RelatedFile]) {
-        write!(formatted_inputs, "## Related files\n\n").unwrap();
+        write!(formatted_inputs, "{}", {
+        localization::format_message(
+            "## Related files\n\n",
+            &[
+                
+            ],
+        )
+    }).unwrap();
 
         for included_file in included_files {
             write!(formatted_inputs, "### {}\n\n", included_file.path.display()).unwrap();
@@ -488,7 +502,14 @@ impl RatePredictionsModal {
                 cursor_offset,
             );
         } else {
-            write!(formatted_inputs, "## Cursor Excerpt\n\n").unwrap();
+            write!(formatted_inputs, "{}", {
+        localization::format_message(
+            "## Cursor Excerpt\n\n",
+            &[
+                
+            ],
+        )
+    }).unwrap();
             writeln!(
                 formatted_inputs,
                 "No current-file excerpt found for `{}` at row {}, column {}.",
@@ -506,7 +527,14 @@ impl RatePredictionsModal {
         cursor_excerpt: &str,
         cursor_offset: usize,
     ) {
-        write!(formatted_inputs, "## Cursor Excerpt\n\n").unwrap();
+        write!(formatted_inputs, "{}", {
+        localization::format_message(
+            "## Cursor Excerpt\n\n",
+            &[
+                
+            ],
+        )
+    }).unwrap();
 
         let mut cursor_offset = cursor_offset.min(cursor_excerpt.len());
         while !cursor_excerpt.is_char_boundary(cursor_offset) {
@@ -797,7 +825,7 @@ impl RatePredictionsModal {
                     editor.set_show_wrap_guides(false, cx);
                     editor.set_show_indent_guides(false, cx);
                     editor.set_show_edit_predictions(Some(false), window, cx);
-                    editor.set_placeholder_text("Add your feedback…", window, cx);
+                    editor.set_placeholder_text(localization::localized_str!("Add your feedback…"), window, cx);
                     editor.set_completion_provider(Some(Rc::new(FeedbackCompletionProvider)));
                     if focus {
                         cx.focus_self(window);
@@ -880,7 +908,7 @@ impl RatePredictionsModal {
                                 .px_2()
                                 .border_b_1()
                                 .border_color(border_color)
-                                .child(Label::new("Predicted Patch").size(LabelSize::Small)),
+                                .child(Label::new(localization::localized_str!("Predicted Patch")).size(LabelSize::Small)),
                         )
                         .child(
                             div()
@@ -906,7 +934,7 @@ impl RatePredictionsModal {
                                 .gap_2()
                                 .border_b_1()
                                 .border_color(border_color)
-                                .child(Label::new("Expected Patch").size(LabelSize::Small)),
+                                .child(Label::new(localization::localized_str!("Expected Patch")).size(LabelSize::Small)),
                         )
                         .child(
                             div()
@@ -996,7 +1024,7 @@ impl RatePredictionsModal {
                             .into_any_element()
                         } else {
                             div()
-                                .child("No active completion".to_string())
+                                .child(localization::localized_str!("No active completion").to_string())
                                 .into_any_element()
                         }),
                 )
@@ -1090,7 +1118,7 @@ impl RatePredictionsModal {
                             .child(
                                 DropdownMenu::new(
                                         "failure-mode-dropdown",
-                                        "Issue",
+                                        localization::localized_str!("Issue"),
                                         failure_mode_menu,
                                     )
                                     .handle(self.failure_mode_menu_handle.clone())
@@ -1144,7 +1172,7 @@ impl RatePredictionsModal {
                                             .size(IconSize::Small)
                                             .color(Color::Success),
                                     )
-                                    .child(Label::new("Rated completion.").color(Color::Muted)),
+                                    .child(Label::new(localization::localized_str!("Rated completion.")).color(Color::Muted)),
                             )
                         } else if active_prediction.prediction.edits.is_empty() {
                             Some(
@@ -1154,7 +1182,7 @@ impl RatePredictionsModal {
                                             .size(IconSize::Small)
                                             .color(Color::Warning),
                                     )
-                                    .child(Label::new("No edits produced.").color(Color::Muted)),
+                                    .child(Label::new(localization::localized_str!("No edits produced.")).color(Color::Muted)),
                             )
                         } else {
                             Some(label_container)
@@ -1163,12 +1191,12 @@ impl RatePredictionsModal {
                             h_flex()
                                 .gap_1()
                                 .child(
-                                    Button::new("bad", "Bad Prediction")
+                                    Button::new("bad", localization::localized_str!("Bad Prediction"))
                                         .start_icon(Icon::new(IconName::ThumbsDown).size(IconSize::Small))
                                         .disabled(rated || feedback_empty)
                                         .when(feedback_empty, |this| {
                                             this.tooltip(Tooltip::text(
-                                                "Explain what's bad about it before reporting it",
+                                                localization::localized_str!("Explain what's bad about it before reporting it"),
                                             ))
                                         })
                                         .key_binding(KeyBinding::for_action_in(
@@ -1187,7 +1215,7 @@ impl RatePredictionsModal {
                                         })),
                                 )
                                 .child(
-                                    Button::new("good", "Good Prediction")
+                                    Button::new("good", localization::localized_str!("Good Prediction"))
                                         .start_icon(Icon::new(IconName::ThumbsUp).size(IconSize::Small))
                                         .disabled(rated)
                                         .key_binding(KeyBinding::for_action_in(
@@ -1225,44 +1253,44 @@ impl RatePredictionsModal {
 
                 let (icon_name, icon_color, tooltip_text) =
                     match (rated, completion.edits.is_empty()) {
-                        (true, _) => (IconName::Check, Color::Success, "Rated Prediction"),
-                        (false, true) => (IconName::File, Color::Muted, "No Edits Produced"),
-                        (false, false) => (IconName::FileDiff, Color::Accent, "Edits Available"),
+                        (true, _) => (IconName::Check, Color::Success, localization::localized_str!("Rated Prediction")),
+                        (false, true) => (IconName::File, Color::Muted, localization::localized_str!("No Edits Produced")),
+                        (false, false) => (IconName::FileDiff, Color::Accent, localization::localized_str!("Edits Available")),
                     };
                 let (trigger_icon, trigger_tooltip) = match completion.trigger {
-                    PredictEditsRequestTrigger::Testing => (IconName::Debug, "Testing"),
+                    PredictEditsRequestTrigger::Testing => (IconName::Debug, localization::localized_str!("Testing")),
                     PredictEditsRequestTrigger::Diagnostics => {
-                        (IconName::ToolDiagnostics, "Diagnostics")
+                        (IconName::ToolDiagnostics, localization::localized_str!("Diagnostics"))
                     }
                     PredictEditsRequestTrigger::DiagnosticNavigation => {
-                        (IconName::ArrowRight, "Diagnostic Navigation")
+                        (IconName::ArrowRight, localization::localized_str!("Diagnostic Navigation"))
                     }
-                    PredictEditsRequestTrigger::Cli => (IconName::Terminal, "CLI"),
-                    PredictEditsRequestTrigger::Explicit => (IconName::Person, "Explicit"),
-                    PredictEditsRequestTrigger::BufferEdit => (IconName::Pencil, "Buffer Edit"),
+                    PredictEditsRequestTrigger::Cli => (IconName::Terminal, localization::localized_str!("CLI")),
+                    PredictEditsRequestTrigger::Explicit => (IconName::Person, localization::localized_str!("Explicit")),
+                    PredictEditsRequestTrigger::BufferEdit => (IconName::Pencil, localization::localized_str!("Buffer Edit")),
                     PredictEditsRequestTrigger::LSPCompletionAccepted => {
-                        (IconName::Code, "LSP Completion Accepted")
+                        (IconName::Code, localization::localized_str!("LSP Completion Accepted"))
                     }
                     PredictEditsRequestTrigger::PredictionAccepted => {
-                        (IconName::ZedPredict, "Prediction Accepted")
+                        (IconName::ZedPredict, localization::localized_str!("Prediction Accepted"))
                     }
                     PredictEditsRequestTrigger::PredictionPartiallyAccepted => {
-                        (IconName::CheckDouble, "Prediction Partially Accepted")
+                        (IconName::CheckDouble, localization::localized_str!("Prediction Partially Accepted"))
                     }
-                    PredictEditsRequestTrigger::EditorCreated => (IconName::File, "Editor Created"),
+                    PredictEditsRequestTrigger::EditorCreated => (IconName::File, localization::localized_str!("Editor Created")),
                     PredictEditsRequestTrigger::ProviderChanged => {
-                        (IconName::Settings, "Provider Changed")
+                        (IconName::Settings, localization::localized_str!("Provider Changed"))
                     }
                     PredictEditsRequestTrigger::UserInfoChanged => {
-                        (IconName::Person, "User Info Changed")
+                        (IconName::Person, localization::localized_str!("User Info Changed"))
                     }
                     PredictEditsRequestTrigger::VimModeChanged => {
-                        (IconName::Keyboard, "Vim Mode Changed")
+                        (IconName::Keyboard, localization::localized_str!("Vim Mode Changed"))
                     }
                     PredictEditsRequestTrigger::SettingsChanged => {
-                        (IconName::Settings, "Settings Changed")
+                        (IconName::Settings, localization::localized_str!("Settings Changed"))
                     }
-                    PredictEditsRequestTrigger::Other => (IconName::CircleHelp, "Other"),
+                    PredictEditsRequestTrigger::Other => (IconName::CircleHelp, localization::localized_str!("Other")),
                 };
 
                 let file = completion.buffer.read(cx).file();
@@ -1302,9 +1330,17 @@ impl RatePredictionsModal {
                                 ),
                             ),
                     )
-                    .tooltip(Tooltip::text(format!(
-                        "{tooltip_text} • Trigger: {trigger_tooltip}"
-                    )))
+                    .tooltip(Tooltip::text({
+        let __zed_i18n_arg_0 = format!("{}", tooltip_text);
+        let __zed_i18n_arg_1 = format!("{}", trigger_tooltip);
+        localization::format_message(
+            "{tooltip_text} • Trigger: {trigger_tooltip}",
+            &[
+                ("tooltip_text", __zed_i18n_arg_0),
+                ("trigger_tooltip", __zed_i18n_arg_1)
+            ],
+        )
+    }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.select_completion(Some(completion.clone()), true, window, cx);
                     }))
@@ -1356,7 +1392,7 @@ impl Render for RatePredictionsModal {
                             .border_color(border_color)
                             .child(Icon::new(icons.base).size(IconSize::Small))
                             .child(
-                                Label::new("From most recent to oldest")
+                                Label::new(localization::localized_str!("From most recent to oldest"))
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             )

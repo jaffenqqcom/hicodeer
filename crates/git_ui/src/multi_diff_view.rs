@@ -220,11 +220,27 @@ impl MultiDiffView {
 
     fn title(&self) -> SharedString {
         let suffix = if self.file_count == 1 {
-            "1 file".to_string()
+            localization::localized_str!("1 file").to_string()
         } else {
-            format!("{} files", self.file_count)
+            {
+        let __zed_i18n_arg_0 = format!("{}", self.file_count);
+        localization::format_message(
+            "{} files",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
         };
-        format!("Diff ({suffix})").into()
+        {
+        let __zed_i18n_arg_0 = format!("{}", suffix);
+        localization::format_message(
+            "Diff ({suffix})",
+            &[
+                ("suffix", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
     }
 }
 

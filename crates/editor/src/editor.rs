@@ -1705,8 +1705,8 @@ enum GutterButtonIntent {
 impl GutterButtonIntent {
     fn as_str(&self) -> &'static str {
         match self {
-            Self::SetBookmark => "Set Bookmark",
-            Self::SetBreakpoint => "Set Breakpoint",
+            Self::SetBookmark => localization::localized_str!("Set Bookmark"),
+            Self::SetBreakpoint => localization::localized_str!("Set Breakpoint"),
         }
     }
 
@@ -1750,7 +1750,8 @@ impl GutterButtonTooltip {
     }
 
     fn meta_text(&self) -> String {
-        const RIGHT_CLICK_HINT: &str = "right-click for more options";
+        #[allow(non_snake_case)]
+        let RIGHT_CLICK_HINT = localization::localized_str!("right-click for more options");
 
         if self.primary == self.secondary {
             return RIGHT_CLICK_HINT.to_string();
@@ -1760,10 +1761,22 @@ impl GutterButtonTooltip {
             ..Default::default()
         };
         let secondary = match self.secondary {
-            GutterButtonIntent::SetBookmark => "bookmark",
-            GutterButtonIntent::SetBreakpoint => "breakpoint",
+            GutterButtonIntent::SetBookmark => localization::localized_str!("bookmark"),
+            GutterButtonIntent::SetBreakpoint => localization::localized_str!("breakpoint"),
         };
-        format!("{modifier_as_text}-click to add a {secondary}\n{RIGHT_CLICK_HINT}")
+        {
+        let __zed_i18n_arg_0 = format!("{}", modifier_as_text);
+        let __zed_i18n_arg_1 = format!("{}", secondary);
+        let __zed_i18n_arg_2 = format!("{}", RIGHT_CLICK_HINT);
+        localization::format_message(
+            "{modifier_as_text}-click to add a {secondary}\n{RIGHT_CLICK_HINT}",
+            &[
+                ("modifier_as_text", __zed_i18n_arg_0),
+                ("secondary", __zed_i18n_arg_1),
+                ("RIGHT_CLICK_HINT", __zed_i18n_arg_2)
+            ],
+        )
+    }
     }
 }
 
@@ -2972,14 +2985,19 @@ impl Editor {
         cx: &mut Context<Workspace>,
     ) {
         Self::new_in_workspace(workspace, window, cx).detach_and_prompt_err(
-            "Failed to create buffer",
+            localization::localized_str!("Failed to create buffer"),
             window,
             cx,
             |e, _, _| match e.error_code() {
-                ErrorCode::RemoteUpgradeRequired => Some(format!(
-                "The remote instance of Zed does not support this yet. It must be upgraded to {}",
-                e.error_tag("required").unwrap_or("the latest version")
-            )),
+                ErrorCode::RemoteUpgradeRequired => Some({
+        let __zed_i18n_arg_0 = format!("{}", e.error_tag("required").unwrap_or("the latest version"));
+        localization::format_message(
+            "The remote instance of Zed does not support this yet. It must be upgraded to {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }),
                 _ => None,
             },
         );
@@ -3060,12 +3078,17 @@ impl Editor {
             })?;
             anyhow::Ok(())
         })
-        .detach_and_prompt_err("Failed to create buffer", window, cx, |e, _, _| {
+        .detach_and_prompt_err(localization::localized_str!("Failed to create buffer"), window, cx, |e, _, _| {
             match e.error_code() {
-                ErrorCode::RemoteUpgradeRequired => Some(format!(
-                "The remote instance of Zed does not support this yet. It must be upgraded to {}",
-                e.error_tag("required").unwrap_or("the latest version")
-            )),
+                ErrorCode::RemoteUpgradeRequired => Some({
+        let __zed_i18n_arg_0 = format!("{}", e.error_tag("required").unwrap_or("the latest version"));
+        localization::format_message(
+            "The remote instance of Zed does not support this yet. It must be upgraded to {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }),
                 _ => None,
             }
         });
@@ -4356,9 +4379,9 @@ impl Editor {
             }))
             .tooltip(move |_window, cx| {
                 Tooltip::with_meta_in(
-                    "Remove Bookmark",
+                    localization::localized_str!("Remove Bookmark"),
                     Some(&ToggleBookmark),
-                    SharedString::from("Right-click for more options"),
+                    SharedString::from(localization::localized_str!("Right-click for more options")),
                     &focus_handle,
                     cx,
                 )
@@ -4446,47 +4469,47 @@ impl Editor {
             .map(|(anchor, bp)| (anchor, Arc::from(bp)));
 
         let log_breakpoint_msg = if breakpoint.as_ref().is_some_and(|bp| bp.1.message.is_some()) {
-            "Edit Log Breakpoint"
+            localization::localized_str!("Edit Log Breakpoint")
         } else {
-            "Set Log Breakpoint"
+            localization::localized_str!("Set Log Breakpoint")
         };
 
         let condition_breakpoint_msg = if breakpoint
             .as_ref()
             .is_some_and(|bp| bp.1.condition.is_some())
         {
-            "Edit Condition Breakpoint"
+            localization::localized_str!("Edit Condition Breakpoint")
         } else {
-            "Set Condition Breakpoint"
+            localization::localized_str!("Set Condition Breakpoint")
         };
 
         let hit_condition_breakpoint_msg = if breakpoint
             .as_ref()
             .is_some_and(|bp| bp.1.hit_condition.is_some())
         {
-            "Edit Hit Condition Breakpoint"
+            localization::localized_str!("Edit Hit Condition Breakpoint")
         } else {
-            "Set Hit Condition Breakpoint"
+            localization::localized_str!("Set Hit Condition Breakpoint")
         };
 
         let set_breakpoint_msg = if breakpoint.as_ref().is_some() {
-            "Unset Breakpoint"
+            localization::localized_str!("Unset Breakpoint")
         } else {
-            "Set Breakpoint"
+            localization::localized_str!("Set Breakpoint")
         };
 
         let git_blame_msg = if self.show_git_blame_gutter {
-            "Close Git Blame"
+            localization::localized_str!("Close Git Blame")
         } else {
-            "Open Git Blame"
+            localization::localized_str!("Open Git Blame")
         };
 
         let bookmark = self.bookmark_at_row(row, window, cx);
 
         let set_bookmark_msg = if bookmark.as_ref().is_some() {
-            "Remove Bookmark"
+            localization::localized_str!("Remove Bookmark")
         } else {
-            "Add Bookmark"
+            localization::localized_str!("Add Bookmark")
         };
         let has_bookmark = bookmark.as_ref().is_some();
 
@@ -4520,7 +4543,7 @@ impl Editor {
                 .when_some(
                     clear_runnable_task_status,
                     |this, (buffer_id, buffer_row)| {
-                        this.entry("Clear Run Status", None, {
+                        this.entry(localization::localized_str!("Clear Run Status"), None, {
                             let weak_editor = weak_editor.clone();
                             move |_window, cx| {
                                 weak_editor
@@ -4536,7 +4559,7 @@ impl Editor {
                 .when(run_to_cursor, |this| {
                     let weak_editor = weak_editor.clone();
                     this.entry(
-                        "Run to Cursor",
+                        localization::localized_str!("Run to Cursor"),
                         Some(RunToCursor.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -4676,7 +4699,7 @@ impl Editor {
                 })
                 .when(has_bookmark, |this| {
                     this.entry(
-                        "Edit Bookmark",
+                        localization::localized_str!("Edit Bookmark"),
                         Some(EditBookmark.boxed_clone()),
                         move |window, cx| {
                             weak_editor
@@ -4723,18 +4746,24 @@ impl Editor {
             modifiers: Modifiers::secondary_key(),
             ..Default::default()
         };
-        let primary_action_text = "Unset breakpoint";
+        let primary_action_text = localization::localized_str!("Unset breakpoint");
         let focus_handle = self.focus_handle.clone();
         let has_context_menu = self.has_mouse_context_menu();
 
         let meta = if is_rejected {
-            SharedString::from("No executable code is associated with this line.")
+            SharedString::from(localization::localized_str!("No executable code is associated with this line."))
         } else if !breakpoint.is_disabled() {
-            SharedString::from(format!(
-                "{alt_as_text}-click to disable\nright-click for more options"
-            ))
+            SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", alt_as_text);
+        localization::format_message(
+            "{alt_as_text}-click to disable\nright-click for more options",
+            &[
+                ("alt_as_text", __zed_i18n_arg_0)
+            ],
+        )
+    })
         } else {
-            SharedString::from("Right-click for more options")
+            SharedString::from(localization::localized_str!("Right-click for more options"))
         };
         IconButton::new(("breakpoint_indicator", row.0 as usize), icon)
             .icon_size(IconSize::XSmall)
@@ -6256,12 +6285,12 @@ impl Editor {
 
         let placeholder_text = match edit_action {
             BreakpointPromptEditAction::Log => {
-                "Message to log when a breakpoint is hit. Expressions within {} are interpolated."
+                localization::localized_str!("Message to log when a breakpoint is hit. Expressions within {} are interpolated.")
             }
             BreakpointPromptEditAction::Condition => {
-                "Condition when a breakpoint is hit. Expressions within {} are interpolated."
+                localization::localized_str!("Condition when a breakpoint is hit. Expressions within {} are interpolated.")
             }
-            BreakpointPromptEditAction::HitCondition => "How many breakpoint hits to ignore",
+            BreakpointPromptEditAction::HitCondition => localization::localized_str!("How many breakpoint hits to ignore"),
         };
 
         let breakpoint = breakpoint.clone();
@@ -13052,7 +13081,7 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Cancel", &menu::Cancel, &focus_handle, cx)
+                Tooltip::for_action_in(localization::localized_str!("Cancel"), &menu::Cancel, &focus_handle, cx)
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.cancel(&menu::Cancel, window, cx);
@@ -13065,7 +13094,7 @@ impl PromptEditor {
             .icon_color(Color::Muted)
             .shape(IconButtonShape::Square)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Confirm", &menu::Confirm, &focus_handle, cx)
+                Tooltip::for_action_in(localization::localized_str!("Confirm"), &menu::Confirm, &focus_handle, cx)
             })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.confirm(&menu::Confirm, window, cx);

@@ -13,6 +13,7 @@ path = "src/tasks_ui.rs"
 doctest = false
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 collections.workspace = true
 editor.workspace = true

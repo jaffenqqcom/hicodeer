@@ -154,7 +154,15 @@ impl State {
                             |error| {
                                 ollama::Model::new_disabled(
                                     name,
-                                    format!("Failed to fetch model from API: {error}",),
+                                    {
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Failed to fetch model from API: {error}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                 )
                             },
                             |model| {
@@ -497,7 +505,7 @@ impl LanguageModelProvider for OllamaLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "Run local models on your machine with Ollama.".into(),
+                localization::localized_str!("Run local models on your machine with Ollama.").into(),
             )),
         ))
     }
@@ -666,16 +674,16 @@ struct ConfigurationView {
 
 impl ConfigurationView {
     pub fn new(state: Entity<State>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key_editor = cx.new(|cx| InputField::new(window, cx, "63e02e...").label("API key"));
+        let api_key_editor = cx.new(|cx| InputField::new(window, cx, "63e02e...").label(localization::localized_str!("API key")));
 
         let api_url_editor = cx.new(|cx| {
-            let input = InputField::new(window, cx, OLLAMA_API_URL).label("API URL");
+            let input = InputField::new(window, cx, OLLAMA_API_URL).label(localization::localized_str!("API URL"));
             input.set_text(&OllamaLanguageModelProvider::api_url(cx), window, cx);
             input
         });
 
         let context_window_editor = cx.new(|cx| {
-            let input = InputField::new(window, cx, "8192").label("Context Window");
+            let input = InputField::new(window, cx, "8192").label(localization::localized_str!("Context Window"));
             if let Some(context_window) = OllamaLanguageModelProvider::settings(cx).context_window {
                 input.set_text(&context_window.to_string(), window, cx);
             }
@@ -833,38 +841,38 @@ impl ConfigurationView {
             .gap_2()
             .child(
                 Label::new(
-                    "Run LLMs locally on your machine with Ollama, or connect to an Ollama server. \
-                Can provide access to Llama, Mistral, Gemma, and hundreds of other models.",
+                    localization::localized_str!("Run LLMs locally on your machine with Ollama, or connect to an Ollama server. \
+                Can provide access to Llama, Mistral, Gemma, and hundreds of other models."),
                 )
                 .color(Color::Muted),
             )
-            .child(Label::new("To use local Ollama:").color(Color::Muted))
+            .child(Label::new(localization::localized_str!("To use local Ollama:")).color(Color::Muted))
             .child(
                 List::new()
                     .child(
                         ListBulletItem::new("")
                             .child(
-                                Label::new("Download and install Ollama from").color(Color::Muted),
+                                Label::new(localization::localized_str!("Download and install Ollama from")).color(Color::Muted),
                             )
                             .child(ButtonLink::new("ollama.com", "https://ollama.com/download")),
                     )
                     .child(
                         ListBulletItem::new("")
                             .child(
-                                Label::new("Start Ollama and download a model:")
+                                Label::new(localization::localized_str!("Start Ollama and download a model:"))
                                     .color(Color::Muted),
                             )
                             .child(Label::new("ollama run gpt-oss:20b").inline_code(cx)),
                     )
                     .child(
-                        ListBulletItem::new("Click 'Connect' below to start using Ollama in Zed")
+                        ListBulletItem::new(localization::localized_str!("Click 'Connect' below to start using Ollama in Zed"))
                             .label_color(Color::Muted),
                     ),
             )
             .child(
                 Label::new(
-                    "Alternatively, you can connect to an Ollama server by specifying its \
-                URL and API key (may not be required):",
+                    localization::localized_str!("Alternatively, you can connect to an Ollama server by specifying its \
+                URL and API key (may not be required):"),
                 )
                 .color(Color::Muted),
             )
@@ -874,9 +882,17 @@ impl ConfigurationView {
         let state = self.state.read(cx);
         let env_var_set = state.api_key_state.is_from_env_var();
         let configured_card_label = if env_var_set {
-            format!("API key set in {API_KEY_ENV_VAR_NAME} environment variable.")
+            {
+        let __zed_i18n_arg_0 = format!("{}", API_KEY_ENV_VAR_NAME);
+        localization::format_message(
+            "API key set in {API_KEY_ENV_VAR_NAME} environment variable.",
+            &[
+                ("API_KEY_ENV_VAR_NAME", __zed_i18n_arg_0)
+            ],
+        )
+    }
         } else {
-            "API key configured".to_string()
+            localization::localized_str!("API key configured").to_string()
         };
 
         let api_key_control = if !state.api_key_state.has_key() {
@@ -886,7 +902,15 @@ impl ConfigurationView {
                 .disabled(env_var_set)
                 .on_click(cx.listener(|this, _, window, cx| this.reset_api_key(window, cx)))
                 .when(env_var_set, |this| {
-                    this.tooltip_label(format!("To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable."))
+                    this.tooltip_label({
+        let __zed_i18n_arg_0 = format!("{}", API_KEY_ENV_VAR_NAME);
+        localization::format_message(
+            "To reset your API key, unset the {API_KEY_ENV_VAR_NAME} environment variable.",
+            &[
+                ("API_KEY_ENV_VAR_NAME", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 })
                 .into_any_element()
         };
@@ -898,7 +922,15 @@ impl ConfigurationView {
           .mb_2()
           .child(
               Label::new(
-                  format!("You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed.")
+                  {
+        let __zed_i18n_arg_0 = format!("{}", API_KEY_ENV_VAR_NAME);
+        localization::format_message(
+            "You can also set the {API_KEY_ENV_VAR_NAME} environment variable and restart Zed.",
+            &[
+                ("API_KEY_ENV_VAR_NAME", __zed_i18n_arg_0)
+            ],
+        )
+    }
               )
               .size(LabelSize::Small)
               .color(Color::Muted),
@@ -921,13 +953,18 @@ impl ConfigurationView {
                     h_flex()
                         .gap_1()
                         .child(Icon::new(IconName::Check).color(Color::Success))
-                        .child(Label::new(format!(
-                            "Context Window: {}",
-                            settings.context_window.unwrap()
-                        ))),
+                        .child(Label::new({
+        let __zed_i18n_arg_0 = format!("{}", settings.context_window.unwrap());
+        localization::format_message(
+            "Context Window: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })),
                 )
                 .child(
-                    Button::new("reset-context-window", "Reset")
+                    Button::new("reset-context-window", localization::localized_str!("Reset"))
                         .style(ButtonStyle::Outlined)
                         .label_size(LabelSize::Small)
                         .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
@@ -947,7 +984,7 @@ impl ConfigurationView {
                 .child(self.context_window_editor.clone())
                 .gap_1p5()
                 .child(
-                    Label::new("Default: Model specific")
+                    Label::new(localization::localized_str!("Default: Model specific"))
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
@@ -973,7 +1010,7 @@ impl ConfigurationView {
                         .child(Label::new(api_url)),
                 )
                 .child(
-                    Button::new("reset-api-url", "Reset API URL")
+                    Button::new("reset-api-url", localization::localized_str!("Reset API URL"))
                         .style(ButtonStyle::Outlined)
                         .label_size(LabelSize::Small)
                         .start_icon(Icon::new(IconName::Undo).size(IconSize::Small))
@@ -999,7 +1036,7 @@ impl Render for ConfigurationView {
 
         v_flex()
             .gap_2()
-            .child(Headline::new("Ollama").size(HeadlineSize::Small))
+            .child(Headline::new(localization::localized_str!("Ollama")).size(HeadlineSize::Small))
             .child(Self::render_instructions(cx))
             .child(self.render_api_url_editor(cx))
             .child(self.render_context_window_editor(cx))
@@ -1018,7 +1055,7 @@ impl Render for ConfigurationView {
                             .map(|this| {
                                 if is_authenticated {
                                     this.child(
-                                        Button::new("ollama-site", "Ollama")
+                                        Button::new("ollama-site", localization::localized_str!("Ollama"))
                                             .style(ButtonStyle::OutlinedGhost)
                                             .size(ButtonSize::Medium)
                                             .end_icon(
@@ -1031,7 +1068,7 @@ impl Render for ConfigurationView {
                                     )
                                 } else {
                                     this.child(
-                                        Button::new("download_ollama_button", "Download Ollama")
+                                        Button::new("download_ollama_button", localization::localized_str!("Download Ollama"))
                                             .style(ButtonStyle::OutlinedGhost)
                                             .size(ButtonSize::Medium)
                                             .end_icon(
@@ -1047,7 +1084,7 @@ impl Render for ConfigurationView {
                                 }
                             })
                             .child(
-                                Button::new("view-models", "View All Models")
+                                Button::new("view-models", localization::localized_str!("View All Models"))
                                     .style(ButtonStyle::OutlinedGhost)
                                     .size(ButtonSize::Medium)
                                     .end_icon(
@@ -1067,12 +1104,12 @@ impl Render for ConfigurationView {
                                         h_flex()
                                             .gap_1()
                                             .child(Icon::new(IconName::Check).color(Color::Success))
-                                            .child(Label::new("Connected")),
+                                            .child(Label::new(localization::localized_str!("Connected"))),
                                     )
                                     .child(
                                         IconButton::new("refresh-models", IconName::RotateCcw)
                                             .icon_size(IconSize::Small)
-                                            .tooltip(Tooltip::text("Refresh Models"))
+                                            .tooltip(Tooltip::text(localization::localized_str!("Refresh Models")))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.state.update(cx, |state, _| {
                                                     state.fetched_models.clear();
@@ -1083,7 +1120,7 @@ impl Render for ConfigurationView {
                             )
                         } else {
                             this.child(
-                                Button::new("retry_ollama_models", "Connect")
+                                Button::new("retry_ollama_models", localization::localized_str!("Connect"))
                                     .style(ButtonStyle::Outlined)
                                     .size(ButtonSize::Medium)
                                     .start_icon(

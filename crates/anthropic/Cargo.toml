@@ -17,6 +17,7 @@ path = "src/anthropic.rs"
 doctest = false
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 collections.workspace = true

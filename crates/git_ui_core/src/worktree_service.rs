@@ -252,14 +252,27 @@ impl Render for WorktreeFetchFailedToast {
                     .size(IconSize::Small)
                     .color(Color::Error),
             )
-            .child(Label::new(format!(
-                "git fetch failed for {}",
-                self.remote_branch_name
-            )))
+            .child(Label::new({
+        let __zed_i18n_arg_0 = format!("{}", self.remote_branch_name);
+        localization::format_message(
+            "git fetch failed for {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }))
             .child(
                 Button::new(
                     "use-local-worktree-base",
-                    format!("Use local {}", self.remote_branch_name),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", self.remote_branch_name);
+        localization::format_message(
+            "Use local {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 )
                 .color(Color::Muted)
                 .on_click(cx.listener(move |_, _event, window, cx| {
@@ -285,7 +298,7 @@ impl Render for WorktreeFetchFailedToast {
                 })),
             )
             .child(
-                Button::new("view-worktree-fetch-log", "Show Error Logs")
+                Button::new("view-worktree-fetch-log", localization::localized_str!("Show Error Logs"))
                     .color(Color::Muted)
                     .on_click(cx.listener(move |_, _event, window, cx| {
                         cx.emit(DismissEvent);
@@ -1270,8 +1283,8 @@ async fn open_worktree_workspace(
                     workspace.show_toast(
                         workspace::Toast::new(
                             toast_id,
-                            "Some project folders are not git repositories. \
-                             They were included as-is without creating a worktree.",
+                            localization::localized_str!("Some project folders are not git repositories. \
+                             They were included as-is without creating a worktree."),
                         ),
                         cx,
                     );

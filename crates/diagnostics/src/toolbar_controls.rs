@@ -51,9 +51,9 @@ impl Render for ToolbarControls {
         let is_agent_enabled = AgentSettings::get_global(cx).enabled(cx);
 
         let (warning_tooltip, warning_color) = if include_warnings {
-            ("Exclude Warnings", Color::Warning)
+            (localization::localized_str!("Exclude Warnings"), Color::Warning)
         } else {
-            ("Include Warnings", Color::Disabled)
+            (localization::localized_str!("Include Warnings"), Color::Disabled)
         };
 
         h_flex()
@@ -62,7 +62,7 @@ impl Render for ToolbarControls {
                 IconButton::new("toggle_search", IconName::MagnifyingGlass)
                     .icon_size(IconSize::Small)
                     .tooltip(Tooltip::for_action_title(
-                        "Buffer Search",
+                        localization::localized_str!("Buffer Search"),
                         &buffer_search::Deploy::find(),
                     ))
                     .on_click(|_, window, cx| {
@@ -74,7 +74,7 @@ impl Render for ToolbarControls {
                     IconButton::new("inline_assist", IconName::ZedAssistant)
                         .icon_size(IconSize::Small)
                         .tooltip(Tooltip::for_action_title(
-                            "Inline Assist",
+                            localization::localized_str!("Inline Assist"),
                             &InlineAssist::default(),
                         ))
                         .on_click(|_, window, cx| {
@@ -89,7 +89,7 @@ impl Render for ToolbarControls {
                             .icon_color(Color::Error)
                             .icon_size(IconSize::Small)
                             .tooltip(Tooltip::for_action_title(
-                                "Stop Diagnostics Update",
+                                localization::localized_str!("Stop Diagnostics Update"),
                                 &ToggleDiagnosticsRefresh,
                             ))
                             .on_click(cx.listener(move |toolbar_controls, _, _, cx| {
@@ -104,7 +104,7 @@ impl Render for ToolbarControls {
                         IconButton::new("refresh-diagnostics", IconName::ArrowCircle)
                             .icon_size(IconSize::Small)
                             .tooltip(Tooltip::for_action_title(
-                                "Refresh Diagnostics",
+                                localization::localized_str!("Refresh Diagnostics"),
                                 &ToggleDiagnosticsRefresh,
                             ))
                             .on_click(cx.listener({

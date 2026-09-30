@@ -12,7 +12,7 @@ pub struct PythonLocator;
 #[async_trait]
 impl DapLocator for PythonLocator {
     fn name(&self) -> SharedString {
-        SharedString::new_static("Python")
+        SharedString::new_static(localization::localized_str!("Python"))
     }
 
     /// Determines whether this locator can generate debug target for given task.

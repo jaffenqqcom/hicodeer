@@ -339,7 +339,7 @@ impl State {
                             this.update(cx, |state, cx| {
                                 state.sign_in_state = SignInState::Idle;
                                 state.last_auth_error =
-                                    Some("Failed to save credentials. Please try again.".into());
+                                    Some(localization::localized_str!("Failed to save credentials. Please try again.").into());
                                 cx.notify();
                             })
                             .log_err();
@@ -350,7 +350,7 @@ impl State {
                     log::error!("ChatGPT subscription sign-in failed: {err:?}");
                     this.update(cx, |state, cx| {
                         state.sign_in_state = SignInState::Idle;
-                        state.last_auth_error = Some("Sign-in failed. Please try again.".into());
+                        state.last_auth_error = Some(localization::localized_str!("Sign-in failed. Please try again.").into());
                         cx.notify();
                     })
                     .log_err();
@@ -726,12 +726,12 @@ pub fn language_model(model: &ChatGptModel) -> LanguageModel {
         .filter_map(|effort| {
             let (name, value) = match effort {
                 ReasoningEffort::None => return None,
-                ReasoningEffort::Minimal => ("Minimal", "minimal"),
-                ReasoningEffort::Low => ("Low", "low"),
-                ReasoningEffort::Medium => ("Medium", "medium"),
-                ReasoningEffort::High => ("High", "high"),
-                ReasoningEffort::XHigh => ("Extra High", "xhigh"),
-                ReasoningEffort::Max => ("Max", "max"),
+                ReasoningEffort::Minimal => (localization::localized_str!("Minimal"), "minimal"),
+                ReasoningEffort::Low => (localization::localized_str!("Low"), "low"),
+                ReasoningEffort::Medium => (localization::localized_str!("Medium"), "medium"),
+                ReasoningEffort::High => (localization::localized_str!("High"), "high"),
+                ReasoningEffort::XHigh => (localization::localized_str!("Extra High"), "xhigh"),
+                ReasoningEffort::Max => (localization::localized_str!("Max"), "max"),
             };
 
             Some(LanguageModelEffortLevel {
@@ -982,7 +982,7 @@ async fn get_fresh_credentials(
                             s.refresh_task = None;
                             s.credentials = None;
                             s.last_auth_error =
-                                Some("Your session has expired. Please sign in again.".into());
+                                Some(localization::localized_str!("Your session has expired. Please sign in again.").into());
                             s.reset_model_catalog();
                             cx.notify();
                         })

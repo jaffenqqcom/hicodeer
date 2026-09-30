@@ -76,13 +76,13 @@ impl Render for ActiveBufferEncoding {
         }
 
         let (disabled, tooltip_text) = if self.is_dirty {
-            (true, "Save file to change encoding")
+            (true, localization::localized_str!("Save file to change encoding"))
         } else if self.is_shared {
-            (true, "Cannot change encoding during collaboration")
+            (true, localization::localized_str!("Cannot change encoding during collaboration"))
         } else if self.is_via_remote_server {
-            (true, "Cannot change encoding of remote server file")
+            (true, localization::localized_str!("Cannot change encoding of remote server file"))
         } else {
-            (false, "Reopen with Encoding")
+            (false, localization::localized_str!("Reopen with Encoding"))
         };
 
         div().child(

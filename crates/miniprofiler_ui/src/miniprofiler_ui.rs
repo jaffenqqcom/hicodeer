@@ -547,7 +547,7 @@ impl Render for ProfilerWindow {
                             .child(
                                 Button::new(
                                     "switch-mode",
-                                    if self.paused { "Resume" } else { "Pause" },
+                                    if self.paused { localization::localized_str!("Resume") } else { localization::localized_str!("Pause") },
                                 )
                                 .style(ButtonStyle::Filled)
                                 .on_click(cx.listener(
@@ -563,7 +563,7 @@ impl Render for ProfilerWindow {
                                 )),
                             )
                             .child(
-                                Button::new("export-data", "Save")
+                                Button::new("export-data", localization::localized_str!("Save"))
                                     .style(ButtonStyle::Filled)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         let Some(workspace) = this.workspace.as_ref() else {
@@ -620,7 +620,7 @@ impl Render for ProfilerWindow {
                     )
                     .child(
                         Checkbox::new("include-self", self.include_self_timings)
-                            .label("Include profiler timings")
+                            .label(localization::localized_str!("Include profiler timings"))
                             .on_click(cx.listener(|this, checked, _window, cx| {
                                 this.include_self_timings = *checked;
                                 cx.notify();

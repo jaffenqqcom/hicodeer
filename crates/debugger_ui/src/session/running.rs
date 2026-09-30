@@ -595,7 +595,7 @@ fn render_debugger_tab_bar(
                     .tooltip({
                         let focus_handle = focus_handle.clone();
                         move |_window, cx| {
-                            let zoomed_text = if zoomed { "Minimize" } else { "Expand" };
+                            let zoomed_text = if zoomed { localization::localized_str!("Minimize") } else { localization::localized_str!("Expand") };
                             Tooltip::for_action_in(
                                 zoomed_text,
                                 &ToggleExpandItem,

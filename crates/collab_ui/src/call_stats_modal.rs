@@ -155,10 +155,10 @@ fn call_diagnostics(cx: &App) -> Option<Entity<CallDiagnostics>> {
 
 fn quality_label(quality: Option<ConnectionQuality>) -> (&'static str, Color) {
     match quality {
-        Some(ConnectionQuality::Excellent) => ("Excellent", Color::Success),
-        Some(ConnectionQuality::Good) => ("Good", Color::Success),
-        Some(ConnectionQuality::Poor) => ("Poor", Color::Warning),
-        Some(ConnectionQuality::Lost) => ("Lost", Color::Error),
+        Some(ConnectionQuality::Excellent) => (localization::localized_str!("Excellent"), Color::Success),
+        Some(ConnectionQuality::Good) => (localization::localized_str!("Good"), Color::Success),
+        Some(ConnectionQuality::Poor) => (localization::localized_str!("Poor"), Color::Warning),
+        Some(ConnectionQuality::Lost) => (localization::localized_str!("Lost"), Color::Error),
         None => ("—", Color::Muted),
     }
 }
@@ -167,43 +167,43 @@ fn metric_rating(label: &str, value_ms: f64) -> (&'static str, Color) {
     match label {
         "Latency" => {
             if value_ms < 100.0 {
-                ("Normal", Color::Success)
+                (localization::localized_str!("Normal"), Color::Success)
             } else if value_ms < 300.0 {
-                ("High", Color::Warning)
+                (localization::localized_str!("High"), Color::Warning)
             } else {
-                ("Poor", Color::Error)
+                (localization::localized_str!("Poor"), Color::Error)
             }
         }
         "Jitter" => {
             if value_ms < 30.0 {
-                ("Normal", Color::Success)
+                (localization::localized_str!("Normal"), Color::Success)
             } else if value_ms < 75.0 {
-                ("High", Color::Warning)
+                (localization::localized_str!("High"), Color::Warning)
             } else {
-                ("Poor", Color::Error)
+                (localization::localized_str!("Poor"), Color::Error)
             }
         }
-        _ => ("Normal", Color::Success),
+        _ => (localization::localized_str!("Normal"), Color::Success),
     }
 }
 
 fn input_lag_rating(value_ms: u128) -> (&'static str, Color) {
     if value_ms < 20 {
-        ("Normal", Color::Success)
+        (localization::localized_str!("Normal"), Color::Success)
     } else if value_ms < 50 {
-        ("High", Color::Warning)
+        (localization::localized_str!("High"), Color::Warning)
     } else {
-        ("Poor", Color::Error)
+        (localization::localized_str!("Poor"), Color::Error)
     }
 }
 
 fn packet_loss_rating(loss_pct: f64) -> (&'static str, Color) {
     if loss_pct < 1.0 {
-        ("Normal", Color::Success)
+        (localization::localized_str!("Normal"), Color::Success)
     } else if loss_pct < 5.0 {
-        ("High", Color::Warning)
+        (localization::localized_str!("High"), Color::Warning)
     } else {
-        ("Poor", Color::Error)
+        (localization::localized_str!("Poor"), Color::Error)
     }
 }
 
@@ -296,7 +296,7 @@ impl Render for CallStatsModal {
             .child(
                 h_flex()
                     .justify_between()
-                    .child(Label::new("Call Diagnostics").size(LabelSize::Large))
+                    .child(Label::new(localization::localized_str!("Call Diagnostics")).size(LabelSize::Large))
                     .child(
                         Label::new(quality_text)
                             .size(LabelSize::Large)
@@ -307,7 +307,7 @@ impl Render for CallStatsModal {
                 this.child(
                     h_flex()
                         .justify_center()
-                        .child(Label::new("Showing diagnostics from the most recent call").color(Color::Muted)),
+                        .child(Label::new(localization::localized_str!("Showing diagnostics from the most recent call")).color(Color::Muted)),
                 )
             })
             .when(!has_diagnostics, |this| {
@@ -315,7 +315,7 @@ impl Render for CallStatsModal {
                     h_flex()
                         .justify_center()
                         .py_4()
-                        .child(Label::new("No call diagnostics available").color(Color::Muted)),
+                        .child(Label::new(localization::localized_str!("No call diagnostics available")).color(Color::Muted)),
                 )
             })
             .when(has_diagnostics, |this| {
@@ -326,41 +326,50 @@ impl Render for CallStatsModal {
                         .max_h(rems(32.))
                         .overflow_y_scroll()
                         .child(
-                            Label::new(format!(
-                                "{sample_count} samples · {:.0}s retained · {recent_issue_count} affected intervals in the last 60s",
-                                retained_duration.as_secs_f64()
-                            ))
+                            Label::new({
+        let __zed_i18n_arg_0 = format!("{:.0}", retained_duration.as_secs_f64());
+        let __zed_i18n_arg_1 = format!("{}", sample_count);
+        let __zed_i18n_arg_2 = format!("{}", recent_issue_count);
+        localization::format_message(
+            "{sample_count} samples · {:.0}s retained · {recent_issue_count} affected intervals in the last 60s",
+            &[
+                ("sample_count", __zed_i18n_arg_1),
+                ("0", __zed_i18n_arg_0),
+                ("recent_issue_count", __zed_i18n_arg_2)
+            ],
+        )
+    })
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                         )
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(Label::new("Network").weight(FontWeight::SEMIBOLD))
+                                .child(Label::new(localization::localized_str!("Network")).weight(FontWeight::SEMIBOLD))
                                 .child(self.render_metric_row(
-                                    "Latency",
-                                    "Time for data to travel to the server",
+                                    localization::localized_str!("Latency"),
+                                    localization::localized_str!("Time for data to travel to the server"),
                                     stats.latency_ms,
                                     |v| format!("{:.0}ms", v),
                                     |v| metric_rating("Latency", v),
                                 ))
                                 .child(self.render_metric_row(
-                                    "Jitter",
-                                    "Variance or fluctuation in latency",
+                                    localization::localized_str!("Jitter"),
+                                    localization::localized_str!("Variance or fluctuation in latency"),
                                     stats.jitter_ms,
                                     |v| format!("{:.0}ms", v),
                                     |v| metric_rating("Jitter", v),
                                 ))
                                 .child(self.render_metric_row(
-                                    "Packet loss",
-                                    "Amount of data lost during transfer",
+                                    localization::localized_str!("Packet loss"),
+                                    localization::localized_str!("Amount of data lost during transfer"),
                                     stats.packet_loss_pct,
                                     |v| format!("{:.1}%", v),
                                     packet_loss_rating,
                                 ))
                                 .child(self.render_metric_row(
-                                    "Input lag",
-                                    "Delay from audio capture to WebRTC",
+                                    localization::localized_str!("Input lag"),
+                                    localization::localized_str!("Delay from audio capture to WebRTC"),
                                     stats.input_lag.map(|d| d.0.as_millis()),
                                     |v| format!("{}ms", v),
                                     input_lag_rating,
@@ -369,10 +378,10 @@ impl Render for CallStatsModal {
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(Label::new("Inbound audio").weight(FontWeight::SEMIBOLD))
+                                .child(Label::new(localization::localized_str!("Inbound audio")).weight(FontWeight::SEMIBOLD))
                                 .when(remote_audio.is_empty(), |this| {
                                     this.child(
-                                        Label::new("Waiting for inbound audio statistics")
+                                        Label::new(localization::localized_str!("Waiting for inbound audio statistics"))
                                             .color(Color::Muted),
                                     )
                                 })
@@ -390,11 +399,11 @@ impl Render for CallStatsModal {
                         .justify_end()
                         .gap_2()
                         .child(
-                            Button::new("copy-call-diagnostics", "Copy Report")
+                            Button::new("copy-call-diagnostics", localization::localized_str!("Copy Report"))
                                 .on_click(cx.listener(|this, _, _, cx| this.copy_report(cx))),
                         )
                         .child(
-                            Button::new("save-call-diagnostics", "Save Report…")
+                            Button::new("save-call-diagnostics", localization::localized_str!("Save Report…"))
                                 .on_click(cx.listener(|this, _, _, cx| this.save_report(cx))),
                         ),
                 )
@@ -406,9 +415,9 @@ impl CallStatsModal {
     fn render_remote_audio(&self, audio: RemoteAudioDiagnostics) -> impl IntoElement {
         let issue_score = audio_issue_score(&audio);
         let (status, color) = if issue_score > 0 {
-            ("Affected", Color::Warning)
+            (localization::localized_str!("Affected"), Color::Warning)
         } else {
-            ("Healthy", Color::Success)
+            (localization::localized_str!("Healthy"), Color::Success)
         };
         let packet_loss = audio
             .packet_loss_pct
@@ -442,9 +451,9 @@ impl CallStatsModal {
                 .saturating_mul(PLAYBACK_FRAME_DURATION_MILLISECONDS) as f64,
         );
         let repair_event_label = if audio.concealment_events == 1 {
-            "event"
+            localization::localized_str!("event")
         } else {
-            "events"
+            localization::localized_str!("events")
         };
 
         v_flex()
@@ -471,25 +480,55 @@ impl CallStatsModal {
                     .child(Label::new(status).color(color)),
             )
             .child(
-                Label::new(format!(
-                    "Loss {packet_loss} · jitter {:.1}ms · jitter buffer {jitter_buffer_delay}",
-                    audio.jitter_ms
-                ))
+                Label::new({
+        let __zed_i18n_arg_0 = format!("{:.1}", audio.jitter_ms);
+        let __zed_i18n_arg_1 = format!("{}", packet_loss);
+        let __zed_i18n_arg_2 = format!("{}", jitter_buffer_delay);
+        localization::format_message(
+            "Loss {packet_loss} · jitter {:.1}ms · jitter buffer {jitter_buffer_delay}",
+            &[
+                ("packet_loss", __zed_i18n_arg_1),
+                ("0", __zed_i18n_arg_0),
+                ("jitter_buffer_delay", __zed_i18n_arg_2)
+            ],
+        )
+    })
                 .size(LabelSize::Small)
                 .color(Color::Muted),
             )
             .child(
-                Label::new(format!(
-                    "WebRTC repaired {repaired_audio_duration} in {} {repair_event_label}",
-                    audio.concealment_events,
-                ))
+                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", audio.concealment_events);
+        let __zed_i18n_arg_1 = format!("{}", repaired_audio_duration);
+        let __zed_i18n_arg_2 = format!("{}", repair_event_label);
+        localization::format_message(
+            "WebRTC repaired {repaired_audio_duration} in {} {repair_event_label}",
+            &[
+                ("repaired_audio_duration", __zed_i18n_arg_1),
+                ("0", __zed_i18n_arg_0),
+                ("repair_event_label", __zed_i18n_arg_2)
+            ],
+        )
+    })
                 .size(LabelSize::Small)
                 .color(Color::Muted),
             )
             .child(
-                Label::new(format!(
-                    "Local playback starved for {starved_audio_duration} · dropped {dropped_audio_duration} · buffered {buffered_audio_duration} (peak {peak_buffered_audio_duration})",
-                ))
+                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", starved_audio_duration);
+        let __zed_i18n_arg_1 = format!("{}", dropped_audio_duration);
+        let __zed_i18n_arg_2 = format!("{}", buffered_audio_duration);
+        let __zed_i18n_arg_3 = format!("{}", peak_buffered_audio_duration);
+        localization::format_message(
+            "Local playback starved for {starved_audio_duration} · dropped {dropped_audio_duration} · buffered {buffered_audio_duration} (peak {peak_buffered_audio_duration})",
+            &[
+                ("starved_audio_duration", __zed_i18n_arg_0),
+                ("dropped_audio_duration", __zed_i18n_arg_1),
+                ("buffered_audio_duration", __zed_i18n_arg_2),
+                ("peak_buffered_audio_duration", __zed_i18n_arg_3)
+            ],
+        )
+    })
                 .size(LabelSize::Small)
                 .color(Color::Muted),
             )

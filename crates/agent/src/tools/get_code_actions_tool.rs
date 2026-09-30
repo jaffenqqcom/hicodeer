@@ -53,9 +53,17 @@ impl AgentTool for GetCodeActionsTool {
         _cx: &mut App,
     ) -> SharedString {
         if let Ok(input) = input {
-            format!("Get code actions for `{}`", input.symbol.symbol_name).into()
+            {
+        let __zed_i18n_arg_0 = format!("{}", input.symbol.symbol_name);
+        localization::format_message(
+            "Get code actions for `{}`",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
         } else {
-            "Get code actions".into()
+            localization::localized_str!("Get code actions").into()
         }
     }
 

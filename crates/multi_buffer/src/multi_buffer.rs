@@ -2212,7 +2212,7 @@ impl MultiBuffer {
             }
         };
 
-        Self::DEFAULT_TITLE.into()
+        localization::localized_str!("untitled").into()
     }
 
     fn buffer_content_title(&self, buffer: &Buffer) -> Option<Cow<'_, str>> {

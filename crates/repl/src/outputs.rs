@@ -199,7 +199,7 @@ impl Output {
 
                     el.child(
                         CopyButton::new(("copy-output", v.entity_id()), "")
-                            .tooltip_label("Copy Output")
+                            .tooltip_label(localization::localized_str!("Copy Output"))
                             .custom_on_click(move |window, cx| {
                                 if let Some(clipboard_item) = v.clipboard_content(window, cx) {
                                     cx.write_to_clipboard(clipboard_item);
@@ -215,7 +215,7 @@ impl Output {
                             IconName::FileTextOutlined,
                         )
                         .style(ButtonStyle::Transparent)
-                        .tooltip(Tooltip::text("Open in Buffer"))
+                        .tooltip(Tooltip::text(localization::localized_str!("Open in Buffer")))
                         .on_click({
                             let workspace = workspace.clone();
                             move |_, window, cx| {
@@ -321,7 +321,7 @@ impl Output {
                             let full_error = format!("{}: {}\n{}", ename, evalue, traceback_text);
 
                             CopyButton::new("copy-full-error", full_error)
-                                .tooltip_label("Copy Full Error")
+                                .tooltip_label(localization::localized_str!("Copy Full Error"))
                         })
                         .child(
                             IconButton::new(
@@ -329,7 +329,7 @@ impl Output {
                                 IconName::FileTextOutlined,
                             )
                             .style(ButtonStyle::Transparent)
-                            .tooltip(Tooltip::text("Open Full Error in Buffer"))
+                            .tooltip(Tooltip::text(localization::localized_str!("Open Full Error in Buffer")))
                             .on_click({
                                 let ename = err.ename.clone();
                                 let evalue = err.evalue.clone();
@@ -534,7 +534,7 @@ impl ExecutionView {
 
             let editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
-                editor.set_placeholder_text("Type here and press Enter", window, cx);
+                editor.set_placeholder_text(localization::localized_str!("Type here and press Enter"), window, cx);
                 if password {
                     editor.set_masked(true, cx);
                 }
@@ -751,7 +751,7 @@ impl ExecutionView {
 impl Render for ExecutionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status = match &self.status {
-            ExecutionStatus::ConnectingToKernel => Label::new("Connecting to kernel...")
+            ExecutionStatus::ConnectingToKernel => Label::new(localization::localized_str!("Connecting to kernel..."))
                 .color(Color::Muted)
                 .into_any_element(),
             ExecutionStatus::Executing => h_flex()
@@ -762,34 +762,42 @@ impl Render for ExecutionView {
                         .color(Color::Muted)
                         .with_rotate_animation(3),
                 )
-                .child(Label::new("Executing...").color(Color::Muted))
+                .child(Label::new(localization::localized_str!("Executing...")).color(Color::Muted))
                 .into_any_element(),
             ExecutionStatus::Finished => Icon::new(IconName::Check)
                 .size(IconSize::Small)
                 .into_any_element(),
-            ExecutionStatus::Unknown => Label::new("Unknown status")
+            ExecutionStatus::Unknown => Label::new(localization::localized_str!("Unknown status"))
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::ShuttingDown => Label::new("Kernel shutting down...")
+            ExecutionStatus::ShuttingDown => Label::new(localization::localized_str!("Kernel shutting down..."))
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Restarting => Label::new("Kernel restarting...")
+            ExecutionStatus::Restarting => Label::new(localization::localized_str!("Kernel restarting..."))
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Shutdown => Label::new("Kernel shutdown")
+            ExecutionStatus::Shutdown => Label::new(localization::localized_str!("Kernel shutdown"))
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::Queued => Label::new("Queued...")
+            ExecutionStatus::Queued => Label::new(localization::localized_str!("Queued..."))
                 .color(Color::Muted)
                 .into_any_element(),
-            ExecutionStatus::KernelErrored(error) => Label::new(format!("Kernel error: {}", error))
+            ExecutionStatus::KernelErrored(error) => Label::new({
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Kernel error: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 .color(Color::Error)
                 .into_any_element(),
         };
 
         let pending_input_element = self.pending_input.as_ref().map(|pending_input| {
             let prompt_label = if pending_input.prompt.is_empty() {
-                "Input:".to_string()
+                localization::localized_str!("Input:").to_string()
             } else {
                 pending_input.prompt.clone()
             };

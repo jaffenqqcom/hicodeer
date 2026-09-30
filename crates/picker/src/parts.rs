@@ -16,7 +16,7 @@ pub fn project_scan_indicator(
     (has_query && is_project_scan_running).then(|| {
         h_flex()
             .id("project-scan-indicator")
-            .tooltip(Tooltip::text("Project Scan in Progress…"))
+            .tooltip(Tooltip::text(localization::localized_str!("Project Scan in Progress…")))
             .child(
                 Icon::new(IconName::LoadCircle)
                     .color(Color::Accent)

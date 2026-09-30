@@ -308,17 +308,17 @@ fn language_model(model: &deepseek::Model) -> LanguageModel {
         supported_effort_levels: if supports_thinking {
             Arc::new([
                 LanguageModelEffortLevel {
-                    name: "Low".into(),
+                    name: localization::localized_str!("Low").into(),
                     value: "low".into(),
                     is_default: false,
                 },
                 LanguageModelEffortLevel {
-                    name: "High".into(),
+                    name: localization::localized_str!("High").into(),
                     value: "high".into(),
                     is_default: true,
                 },
                 LanguageModelEffortLevel {
-                    name: "Max".into(),
+                    name: localization::localized_str!("Max").into(),
                     value: "max".into(),
                     is_default: false,
                 },

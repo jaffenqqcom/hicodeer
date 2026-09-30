@@ -93,11 +93,11 @@ impl TimeBucket {
 
     fn label(&self) -> &'static str {
         match self {
-            TimeBucket::Today => "Today",
-            TimeBucket::Yesterday => "Yesterday",
-            TimeBucket::ThisWeek => "This Week",
-            TimeBucket::PastWeek => "Past Week",
-            TimeBucket::Older => "Older",
+            TimeBucket::Today => localization::localized_str!("Today"),
+            TimeBucket::Yesterday => localization::localized_str!("Yesterday"),
+            TimeBucket::ThisWeek => localization::localized_str!("This Week"),
+            TimeBucket::PastWeek => localization::localized_str!("Past Week"),
+            TimeBucket::Older => localization::localized_str!("Older"),
         }
     }
 }
@@ -171,7 +171,7 @@ impl ThreadsArchiveView {
 
         let filter_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Search all threads…", window, cx);
+            editor.set_placeholder_text(localization::localized_str!("Search all threads…"), window, cx);
             editor
         });
 
@@ -694,7 +694,7 @@ impl ThreadsArchiveView {
                             IconButton::new("cancel-restore", IconName::Close)
                                 .icon_size(IconSize::Small)
                                 .icon_color(Color::Muted)
-                                .tooltip(Tooltip::text("Cancel Restore"))
+                                .tooltip(Tooltip::text(localization::localized_str!("Cancel Restore")))
                                 .on_click({
                                     let thread_id = thread.thread_id;
                                     cx.listener(move |this, _, _, cx| {
@@ -715,7 +715,7 @@ impl ThreadsArchiveView {
                             .tooltip({
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "Delete Thread",
+                                        localization::localized_str!("Delete Thread"),
                                         &RemoveSelectedThread,
                                         &focus_handle,
                                         cx,
@@ -753,7 +753,7 @@ impl ThreadsArchiveView {
                             .tooltip({
                                 move |_window, cx| {
                                     Tooltip::for_action_in(
-                                        "Archive Thread",
+                                        localization::localized_str!("Archive Thread"),
                                         &ArchiveSelectedThread,
                                         &focus_handle,
                                         cx,
@@ -918,7 +918,7 @@ impl ThreadsArchiveView {
                 this.child(
                     IconButton::new("clear-filter", IconName::Close)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Clear Search"))
+                        .tooltip(Tooltip::text(localization::localized_str!("Clear Search")))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.reset_filter_editor_text(window, cx);
                             this.update_items(cx);
@@ -959,9 +959,17 @@ impl ThreadsArchiveView {
         };
 
         let count_label = if entry_count == 1 {
-            "1 thread".to_string()
+            localization::localized_str!("1 thread").to_string()
         } else {
-            format!("{} threads", entry_count)
+            {
+        let __zed_i18n_arg_0 = format!("{}", entry_count);
+        localization::format_message(
+            "{} threads",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
         };
 
         h_flex()
@@ -983,7 +991,7 @@ impl ThreadsArchiveView {
                     .child(
                         IconButton::new("new-thread", IconName::Plus)
                             .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Start New Agent Thread"))
+                            .tooltip(Tooltip::text(localization::localized_str!("Start New Agent Thread")))
                             .on_click(cx.listener(|_this, _, _, cx| {
                                 cx.emit(ThreadsArchiveViewEvent::NewThread);
                             })),
@@ -991,7 +999,7 @@ impl ThreadsArchiveView {
                     .child(
                         IconButton::new("thread-import", IconName::Download)
                             .icon_size(IconSize::Small)
-                            .tooltip(Tooltip::text("Import Threads"))
+                            .tooltip(Tooltip::text(localization::localized_str!("Import Threads")))
                             .on_click(cx.listener(|_this, _, _, cx| {
                                 cx.emit(ThreadsArchiveViewEvent::Import);
                             })),
@@ -1003,9 +1011,9 @@ impl ThreadsArchiveView {
                             .toggle_state(self.thread_filter == ThreadFilter::ArchivedOnly)
                             .tooltip(Tooltip::text(
                                 if self.thread_filter == ThreadFilter::ArchivedOnly {
-                                    "Show All Threads"
+                                    localization::localized_str!("Show All Threads")
                                 } else {
-                                    "Show Only Archived Threads"
+                                    localization::localized_str!("Show Only Archived Threads")
                                 },
                             ))
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1058,9 +1066,9 @@ impl Render for ThreadsArchiveView {
 
         let content = if is_empty {
             let message = if has_query {
-                "No threads match your search."
+                localization::localized_str!("No threads match your search.")
             } else {
-                "No threads yet."
+                localization::localized_str!("No threads yet.")
             };
 
             v_flex()
@@ -1298,14 +1306,19 @@ impl PickerDelegate for ProjectPickerDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        format!(
-            "Associate the \"{}\" thread with...",
-            self.thread
+        {
+        let __zed_i18n_arg_0 = format!("{}", self.thread
                 .title
                 .as_ref()
                 .map(|t| t.as_ref())
-                .unwrap_or(DEFAULT_THREAD_TITLE)
+                .unwrap_or(DEFAULT_THREAD_TITLE));
+        localization::format_message(
+            "Associate the \"{}\" thread with...",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
         )
+    }
         .into()
     }
 
@@ -1421,7 +1434,7 @@ impl PickerDelegate for ProjectPickerDelegate {
         };
 
         if has_siblings_to_show {
-            entries.push(ProjectPickerEntry::Header("This Window".into()));
+            entries.push(ProjectPickerEntry::Header(localization::localized_str!("This Window").into()));
 
             if is_empty_query {
                 for (id, workspace) in self.workspaces.iter().enumerate() {
@@ -1448,7 +1461,7 @@ impl PickerDelegate for ProjectPickerDelegate {
         };
 
         if has_recent_to_show {
-            entries.push(ProjectPickerEntry::Header("Recent Projects".into()));
+            entries.push(ProjectPickerEntry::Header(localization::localized_str!("Recent Projects").into()));
 
             if is_empty_query {
                 for (id, workspace) in self.workspaces.iter().enumerate() {
@@ -1498,9 +1511,9 @@ impl PickerDelegate for ProjectPickerDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         let text = if self.workspaces.is_empty() {
-            "No recent projects found"
+            localization::localized_str!("No recent projects found")
         } else {
-            "No matches"
+            localization::localized_str!("No matches")
         };
         Some(text.into())
     }
@@ -1617,7 +1630,7 @@ impl PickerDelegate for ProjectPickerDelegate {
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
-                    Button::new("open_local_folder", "Choose from Local Folders")
+                    Button::new("open_local_folder", localization::localized_str!("Choose from Local Folders"))
                         .key_binding(KeyBinding::for_action_in(
                             &workspace::Open::default(),
                             &focus_handle,
@@ -1628,7 +1641,7 @@ impl PickerDelegate for ProjectPickerDelegate {
                         })),
                 )
                 .child(
-                    Button::new("select_project", "Select")
+                    Button::new("select_project", localization::localized_str!("Select"))
                         .disabled(!has_selection)
                         .key_binding(KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx))
                         .on_click(cx.listener(move |picker, _, window, cx| {

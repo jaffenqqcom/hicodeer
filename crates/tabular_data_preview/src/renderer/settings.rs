@@ -48,7 +48,7 @@ pub(crate) fn settings_popover_menu(
             IconButton::new("table-settings-trigger", IconName::Filter)
                 .icon_size(IconSize::Small)
                 .size(ButtonSize::Compact),
-            Tooltip::text("Table Settings"),
+            Tooltip::text(localization::localized_str!("Table Settings")),
         )
         .anchor(Anchor::TopRight)
         .menu(move |window, cx| {
@@ -60,34 +60,34 @@ pub(crate) fn settings_popover_menu(
                     let settings = view_entity.read(cx).settings.clone();
 
                     let menu = toggle_entry(
-                        menu.header("Text Alignment"),
-                        "Top",
-                        Some("Choose vertical text alignment within cells"),
+                        menu.header(localization::localized_str!("Text Alignment")),
+                        localization::localized_str!("Top"),
+                        Some(localization::localized_str!("Choose vertical text alignment within cells")),
                         matches!(settings.vertical_alignment, VerticalAlignment::Top),
                         &view_entity,
                         |settings| settings.vertical_alignment = VerticalAlignment::Top,
                     );
                     let menu = toggle_entry(
                         menu,
-                        "Center",
+                        localization::localized_str!("Center"),
                         None,
                         matches!(settings.vertical_alignment, VerticalAlignment::Center),
                         &view_entity,
                         |settings| settings.vertical_alignment = VerticalAlignment::Center,
                     );
 
-                    let menu = menu.separator().header("Filter Sort");
+                    let menu = menu.separator().header(localization::localized_str!("Filter Sort"));
                     let menu = toggle_entry(
                         menu,
-                        "A-Z, then Count",
-                        Some("Choose how filter values are sorted in the filter menu"),
+                        localization::localized_str!("A-Z, then Count"),
+                        Some(localization::localized_str!("Choose how filter values are sorted in the filter menu")),
                         settings.filter_sort_order == FilterSortOrder::AlphaThenCount,
                         &view_entity,
                         |settings| settings.filter_sort_order = FilterSortOrder::AlphaThenCount,
                     );
                     let menu = toggle_entry(
                         menu,
-                        "Count, then A-Z",
+                        localization::localized_str!("Count, then A-Z"),
                         None,
                         settings.filter_sort_order == FilterSortOrder::CountThenAlpha,
                         &view_entity,
@@ -96,10 +96,10 @@ pub(crate) fn settings_popover_menu(
 
                     let menu = toggle_entry(
                         menu.separator(),
-                        "Display multiline rows",
+                        localization::localized_str!("Display multiline rows"),
                         Some(
-                            "When enabled, row height grows to show all content. \
-                             When disabled, only the first line is visible — hover a cell to see the rest.",
+                            localization::localized_str!("When enabled, row height grows to show all content. \
+                             When disabled, only the first line is visible — hover a cell to see the rest."),
                         ),
                         settings.multiline_cells_enabled,
                         &view_entity,

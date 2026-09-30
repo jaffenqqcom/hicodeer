@@ -484,9 +484,27 @@ impl AnyAgentTool for ContextServerTool {
 fn format_mcp_initial_title(tool_name: &str, input: &serde_json::Value) -> String {
     if let Some(value) = single_string_arg(input) {
         let preview = truncate_chars(value, MAX_INLINE_ARG_LEN);
-        format!("Run MCP tool `{}` {}", tool_name, MarkdownEscaped(&preview))
+        {
+        let __zed_i18n_arg_0 = format!("{}", tool_name);
+        let __zed_i18n_arg_1 = format!("{}", MarkdownEscaped(&preview));
+        localization::format_message(
+            "Run MCP tool `{}` {}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    }
     } else {
-        format!("Run MCP tool `{}`", tool_name)
+        {
+        let __zed_i18n_arg_0 = format!("{}", tool_name);
+        localization::format_message(
+            "Run MCP tool `{}`",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
     }
 }
 

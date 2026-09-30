@@ -64,7 +64,7 @@ impl LspCommandSelector {
         let arguments_editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
             editor.set_placeholder_text(
-                "JSON arguments (42, {\"key\": \"value\"}, …) or plain text for one string",
+                localization::localized_str!("JSON arguments (42, {\"key\": \"value\"}, …) or plain text for one string"),
                 window,
                 cx,
             );
@@ -193,7 +193,7 @@ impl PickerDelegate for LspCommandSelectorDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Select a language server command…".into()
+        localization::localized_str!("Select a language server command…").into()
     }
 
     fn match_count(&self) -> usize {
@@ -240,10 +240,17 @@ impl PickerDelegate for LspCommandSelectorDelegate {
                     Execution::Idle
                 }
                 Err(error) => {
-                    let error = format!(
-                        "Failed to execute LSP command {}: {error:#}",
-                        command.command
-                    );
+                    let error = {
+        let __zed_i18n_arg_0 = format!("{}", command.command);
+        let __zed_i18n_arg_1 = format!("{:#}", error);
+        localization::format_message(
+            "Failed to execute LSP command {}: {error:#}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("error", __zed_i18n_arg_1)
+            ],
+        )
+    };
                     log::error!("{error}");
                     Execution::Failed(SharedString::from(error))
                 }
@@ -370,7 +377,7 @@ impl PickerDelegate for LspCommandSelectorDelegate {
                         .gap_2()
                         .justify_between()
                         .child(
-                            Label::new("Arguments")
+                            Label::new(localization::localized_str!("Arguments"))
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         )
@@ -383,7 +390,7 @@ impl PickerDelegate for LspCommandSelectorDelegate {
                                     cx,
                                 ))
                                 .child(
-                                    Label::new("to switch focus")
+                                    Label::new(localization::localized_str!("to switch focus"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 ),
@@ -393,7 +400,7 @@ impl PickerDelegate for LspCommandSelectorDelegate {
                 .map(|footer| match &self.execution {
                     Execution::Idle => footer,
                     Execution::Running { .. } => footer.child(
-                        Label::new("Executing command…")
+                        Label::new(localization::localized_str!("Executing command…"))
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     ),

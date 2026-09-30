@@ -299,9 +299,17 @@ impl Item for TabularDataPreviewPane {
                 local_file
                     .abs_path(cx)
                     .file_name()
-                    .map(|name| format!("Preview {}", name.to_string_lossy()).into())
+                    .map(|name| {
+        let __zed_i18n_arg_0 = format!("{}", name.to_string_lossy());
+        localization::format_message(
+            "Preview {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into())
             })
-            .unwrap_or_else(|| SharedString::from("Tabular Data Preview"))
+            .unwrap_or_else(|| SharedString::from(localization::localized_str!("Tabular Data Preview")))
     }
 }
 

@@ -51,7 +51,7 @@ impl AttachModalDelegate {
             intent,
             selected_index: 0,
             matches: Vec::default(),
-            placeholder_text: Arc::from("Select the process you want to attach the debugger to"),
+            placeholder_text: Arc::from(localization::localized_str!("Select the process you want to attach the debugger to")),
         }
     }
 }

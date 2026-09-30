@@ -346,7 +346,15 @@ fn render_conflict_buttons(
         .gap_1()
         .bg(cx.theme().colors().editor_background)
         .child(
-            Button::new("head", format!("Use {}", conflict.ours_branch_name))
+            Button::new("head", {
+        let __zed_i18n_arg_0 = format!("{}", conflict.ours_branch_name);
+        localization::format_message(
+            "Use {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 .label_size(LabelSize::Small)
                 .on_click({
                     let editor = editor.clone();
@@ -365,7 +373,15 @@ fn render_conflict_buttons(
                 }),
         )
         .child(
-            Button::new("origin", format!("Use {}", conflict.theirs_branch_name))
+            Button::new("origin", {
+        let __zed_i18n_arg_0 = format!("{}", conflict.theirs_branch_name);
+        localization::format_message(
+            "Use {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 .label_size(LabelSize::Small)
                 .on_click({
                     let editor = editor.clone();
@@ -384,7 +400,7 @@ fn render_conflict_buttons(
                 }),
         )
         .child(
-            Button::new("both", "Use Both")
+            Button::new("both", localization::localized_str!("Use Both"))
                 .label_size(LabelSize::Small)
                 .on_click({
                     let editor = editor.clone();
@@ -405,7 +421,7 @@ fn render_conflict_buttons(
         )
         .when(is_ai_enabled, |this| {
             this.child(Divider::vertical()).child(
-                Button::new("resolve-with-agent", "Resolve with Agent")
+                Button::new("resolve-with-agent", localization::localized_str!("Resolve with Agent"))
                     .label_size(LabelSize::Small)
                     .start_icon(
                         Icon::new(IconName::ZedAssistant)
@@ -626,21 +642,32 @@ impl Render for MergeConflictIndicator {
 
         let file_count = self.conflicted_paths.len();
 
-        let message: SharedString = format!(
+        let message: SharedString = {
+        let __zed_i18n_arg_0 = format!("{}", if file_count == 1 { "" } else { "s" });
+        localization::format_message(
             "Resolve Merge Conflict{} with Agent",
-            if file_count == 1 { "" } else { "s" }
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
         )
+    }
         .into();
 
-        let tooltip_label: SharedString = format!(
-            "Found {} {} across the codebase",
-            file_count,
-            if file_count == 1 {
+        let tooltip_label: SharedString = {
+        let __zed_i18n_arg_0 = format!("{}", file_count);
+        let __zed_i18n_arg_1 = format!("{}", if file_count == 1 {
                 "conflict"
             } else {
                 "conflicts"
-            }
+            });
+        localization::format_message(
+            "Found {} {} across the codebase",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
         )
+    }
         .into();
 
         let border_color = cx.theme().colors().text_accent.opacity(0.2);
@@ -669,7 +696,7 @@ impl Render for MergeConflictIndicator {
                         Tooltip::with_meta(
                             tooltip_label.clone(),
                             None,
-                            "Click to Resolve with Agent",
+                            localization::localized_str!("Click to Resolve with Agent"),
                             cx,
                         )
                     })

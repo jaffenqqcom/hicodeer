@@ -52,6 +52,7 @@ screen-capture = [
 
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+localization.workspace = true
 accesskit.workspace = true
 accesskit_unix.workspace = true
 anyhow.workspace = true

@@ -133,7 +133,7 @@ impl DisconnectedOverlay {
             .await?;
             Ok(())
         })
-        .detach_and_prompt_err("Failed to reconnect", window, cx, |_, _, _| None);
+        .detach_and_prompt_err(localization::localized_str!("Failed to reconnect"), window, cx, |_, _, _| None);
     }
 
     fn cancel(&mut self, _: &menu::Cancel, _: &mut Window, cx: &mut Context<Self>) {
@@ -148,26 +148,35 @@ impl Render for DisconnectedOverlay {
 
         let message = match &self.host {
             Host::CollabGuestProject => {
-                "Your connection to the remote project has been lost.".to_string()
+                localization::localized_str!("Your connection to the remote project has been lost.").to_string()
             }
             Host::RemoteServerProject(options, server_not_running) => {
                 let autosave = if ProjectSettings::get_global(cx)
                     .session
                     .restore_unsaved_buffers
                 {
-                    "\nUnsaved changes are stored locally."
+                    localization::localized_str!("\nUnsaved changes are stored locally.")
                 } else {
                     ""
                 };
                 let reason = if *server_not_running {
-                    "process exiting unexpectedly"
+                    localization::localized_str!("process exiting unexpectedly")
                 } else {
-                    "not responding"
+                    localization::localized_str!("not responding")
                 };
-                format!(
-                    "Your connection to {} has been lost due to the server {reason}.{autosave}",
-                    options.display_name(),
-                )
+                {
+        let __zed_i18n_arg_0 = format!("{}", options.display_name());
+        let __zed_i18n_arg_1 = format!("{}", reason);
+        let __zed_i18n_arg_2 = format!("{}", autosave);
+        localization::format_message(
+            "Your connection to {} has been lost due to the server {reason}.{autosave}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("reason", __zed_i18n_arg_1),
+                ("autosave", __zed_i18n_arg_2)
+            ],
+        )
+    }
             }
         };
 
@@ -183,7 +192,7 @@ impl Render for DisconnectedOverlay {
                     .header(
                         ModalHeader::new()
                             .show_dismiss_button(true)
-                            .child(Headline::new("Disconnected").size(HeadlineSize::Small)),
+                            .child(Headline::new(localization::localized_str!("Disconnected")).size(HeadlineSize::Small)),
                     )
                     .section(Section::new().child(Label::new(message)))
                     .footer(
@@ -191,7 +200,7 @@ impl Render for DisconnectedOverlay {
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    Button::new("close-window", "Close Window")
+                                    Button::new("close-window", localization::localized_str!("Close Window"))
                                         .style(ButtonStyle::Filled)
                                         .layer(ElevationIndex::ModalSurface)
                                         .on_click(cx.listener(move |_, _, window, _| {
@@ -200,7 +209,7 @@ impl Render for DisconnectedOverlay {
                                 )
                                 .when(can_reconnect, |el| {
                                     el.child(
-                                        Button::new("reconnect", "Reconnect")
+                                        Button::new("reconnect", localization::localized_str!("Reconnect"))
                                             .style(ButtonStyle::Filled)
                                             .layer(ElevationIndex::ModalSurface)
                                             .start_icon(Icon::new(IconName::ArrowCircle))

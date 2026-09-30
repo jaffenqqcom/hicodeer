@@ -118,10 +118,18 @@ impl AgentImportStatus {
 
     fn tooltip_text(&self) -> Option<SharedString> {
         match self {
-            Self::Loading => Some("Fetching Sessions…".into()),
+            Self::Loading => Some(localization::localized_str!("Fetching Sessions…").into()),
             Self::Ready { .. } => None,
-            Self::Unsupported => Some("Importing threads from this agent is not possible as it doesn't support ACP's session/list capability.".into()),
-            Self::Error(error) => Some(format!("Failed to fetch sessions: {error}").into()),
+            Self::Unsupported => Some(localization::localized_str!("Importing threads from this agent is not possible as it doesn't support ACP's session/list capability.").into()),
+            Self::Error(error) => Some({
+        let __zed_i18n_arg_0 = format!("{}", error);
+        localization::format_message(
+            "Failed to fetch sessions: {error}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()),
         }
     }
 }
@@ -215,14 +223,14 @@ impl ThreadImportModal {
         }
 
         let Some(multi_workspace) = self.multi_workspace.upgrade() else {
-            self.mark_all_agents_failed("Could not find workspace to import from.");
+            self.mark_all_agents_failed(localization::localized_str!("Could not find workspace to import from."));
             return;
         };
 
         let stores = resolve_agent_connection_stores(&multi_workspace, cx);
         if stores.is_empty() {
             log::error!("Did not find any workspaces to import from");
-            self.mark_all_agents_failed("Did not find any workspaces to import from.");
+            self.mark_all_agents_failed(localization::localized_str!("Did not find any workspaces to import from."));
             return;
         }
 
@@ -389,7 +397,7 @@ impl ThreadImportModal {
 
     fn show_imported_threads_toast(&self, imported_count: usize, cx: &mut App) {
         let status_toast = if imported_count == 0 {
-            StatusToast::new("No threads found to import.", cx, |this, _cx| {
+            StatusToast::new(localization::localized_str!("No threads found to import."), cx, |this, _cx| {
                 this.icon(
                     Icon::new(IconName::Info)
                         .size(IconSize::Small)
@@ -399,9 +407,17 @@ impl ThreadImportModal {
             })
         } else {
             let message = if imported_count == 1 {
-                "Imported 1 thread.".to_string()
+                localization::localized_str!("Imported 1 thread.").to_string()
             } else {
-                format!("Imported {imported_count} threads.")
+                {
+        let __zed_i18n_arg_0 = format!("{}", imported_count);
+        localization::format_message(
+            "Imported {imported_count} threads.",
+            &[
+                ("imported_count", __zed_i18n_arg_0)
+            ],
+        )
+    }
             };
             StatusToast::new(message, cx, |this, _cx| {
                 this.icon(
@@ -501,9 +517,17 @@ impl Render for ThreadImportModal {
                             importable_count: count,
                         } => {
                             let label: SharedString = if count == 0 {
-                                "No threads".into()
+                                localization::localized_str!("No threads").into()
                             } else {
-                                format!("{} threads", count).into()
+                                {
+        let __zed_i18n_arg_0 = format!("{}", count);
+        localization::format_message(
+            "{} threads",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()
                             };
                             this.child(Label::new(label).size(LabelSize::Small).color(Color::Muted))
                         }
@@ -570,10 +594,10 @@ impl Render for ThreadImportModal {
                 Modal::new("import-threads", None)
                     .header(
                         ModalHeader::new()
-                            .headline("Import External Agent Threads")
+                            .headline(localization::localized_str!("Import External Agent Threads"))
                             .description(
-                                "Import threads from agents like Claude Agent, Codex, and more, whether started in Zed or another client. \
-                                Choose which agents to include, and their threads will appear in your thread history."
+                                localization::localized_str!("Import threads from agents like Claude Agent, Codex, and more, whether started in Zed or another client. \
+                                Choose which agents to include, and their threads will appear in your thread history.")
                             )
                             .show_dismiss_button(true),
 
@@ -588,7 +612,7 @@ impl Render for ThreadImportModal {
                                 .when(has_agents, |this| this.children(agent_rows))
                                 .when(!has_agents, |this| {
                                     this.child(
-                                        Label::new("No external agents available.")
+                                        Label::new(localization::localized_str!("No external agents available."))
                                             .color(Color::Muted)
                                             .size(LabelSize::Small),
                                     )
@@ -607,7 +631,7 @@ impl Render for ThreadImportModal {
                                                 .color(Color::Muted)
                                                 .with_rotate_animation(3),
                                         )
-                                        .child(Label::new("Fetching Agent Threads…")
+                                        .child(Label::new(localization::localized_str!("Fetching Agent Threads…"))
                                             .size(LabelSize::Small)
                                             .color(Color::Muted))
 
@@ -622,7 +646,7 @@ impl Render for ThreadImportModal {
                                 )
                             })
                             .end_slot(
-                                Button::new("import-threads", "Import Threads")
+                                Button::new("import-threads", localization::localized_str!("Import Threads"))
                                     .loading(self.is_importing)
                                     .disabled(disabled_import_thread)
                                     .key_binding(
@@ -773,7 +797,7 @@ fn fetch_sessions_for_agent(
                     .errors
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| "Failed to list sessions.".into()),
+                    .unwrap_or_else(|| localization::localized_str!("Failed to list sessions.").into()),
             )
         } else if stats.unsupported_attempt_count > 0 {
             AgentImportStatus::Unsupported
@@ -961,15 +985,23 @@ fn show_cross_channel_import_toast(
     cx: &mut App,
 ) {
     let status_toast = if imported_count == 0 {
-        StatusToast::new("No new threads found to import.", cx, |this, _cx| {
+        StatusToast::new(localization::localized_str!("No new threads found to import."), cx, |this, _cx| {
             this.icon(Icon::new(IconName::Info).color(Color::Muted))
                 .dismiss_button(true)
         })
     } else {
         let message = if imported_count == 1 {
-            "Imported 1 thread from other channels.".to_string()
+            localization::localized_str!("Imported 1 thread from other channels.").to_string()
         } else {
-            format!("Imported {imported_count} threads from other channels.")
+            {
+        let __zed_i18n_arg_0 = format!("{}", imported_count);
+        localization::format_message(
+            "Imported {imported_count} threads from other channels.",
+            &[
+                ("imported_count", __zed_i18n_arg_0)
+            ],
+        )
+    }
         };
         StatusToast::new(message, cx, |this, _cx| {
             this.icon(Icon::new(IconName::Check).color(Color::Success))

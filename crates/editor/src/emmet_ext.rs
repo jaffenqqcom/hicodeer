@@ -147,7 +147,7 @@ pub fn wrap_with_abbreviation(
     let confirm_ranges = ranges.clone();
     let preview_ranges = ranges;
     editor.show_inline_input(
-        "Emmet abbreviation, e.g. ul>li*",
+        localization::localized_str!("Emmet abbreviation, e.g. ul>li*"),
         position,
         preview_language,
         history,
@@ -457,7 +457,15 @@ fn expansion_text(expansion: &str) -> String {
 }
 
 fn no_expansion_message(abbreviation: &str) -> String {
-    format!("No Emmet expansion for {abbreviation:?}")
+    {
+        let __zed_i18n_arg_0 = format!("{:?}", abbreviation);
+        localization::format_message(
+            "No Emmet expansion for {abbreviation:?}",
+            &[
+                ("abbreviation", __zed_i18n_arg_0)
+            ],
+        )
+    }
 }
 
 fn remember_abbreviation(abbreviation: SharedString, cx: &mut App) {

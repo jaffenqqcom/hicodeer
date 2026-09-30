@@ -150,12 +150,28 @@ impl AgentTool for CreateThreadTool {
         _cx: &mut App,
     ) -> SharedString {
         match input {
-            Ok(i) => format!("Create thread: {}", i.title).into(),
+            Ok(i) => {
+        let __zed_i18n_arg_0 = format!("{}", i.title);
+        localization::format_message(
+            "Create thread: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into(),
             Err(value) => value
                 .get("title")
                 .and_then(|v| v.as_str())
-                .map(|s| format!("Create thread: {s}").into())
-                .unwrap_or_else(|| "Create thread".into()),
+                .map(|s| {
+        let __zed_i18n_arg_0 = format!("{}", s);
+        localization::format_message(
+            "Create thread: {s}",
+            &[
+                ("s", __zed_i18n_arg_0)
+            ],
+        )
+    }.into())
+                .unwrap_or_else(|| localization::localized_str!("Create thread").into()),
         }
     }
 

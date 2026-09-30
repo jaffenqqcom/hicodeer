@@ -231,8 +231,16 @@ impl AgentTool for FetchTool {
         _cx: &mut App,
     ) -> SharedString {
         match input {
-            Ok(input) => format!("Fetch {}", MarkdownEscaped(&input.url)).into(),
-            Err(_) => "Fetch URL".into(),
+            Ok(input) => {
+        let __zed_i18n_arg_0 = format!("{}", MarkdownEscaped(&input.url));
+        localization::format_message(
+            "Fetch {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into(),
+            Err(_) => localization::localized_str!("Fetch URL").into(),
         }
     }
 

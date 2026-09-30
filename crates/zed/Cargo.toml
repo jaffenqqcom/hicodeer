@@ -73,6 +73,7 @@ crate-type = ["rlib"]
 # ===== [OHOS PORT END] =====
 
 [dependencies]
+localization.workspace = true
 acp_thread.workspace = true
 acp_tools.workspace = true
 action_log = { workspace = true, optional = true }

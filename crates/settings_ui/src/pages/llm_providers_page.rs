@@ -85,7 +85,7 @@ pub(crate) fn render_add_llm_provider_popover(
 
     PopoverMenu::new("add-llm-provider-popover")
         .trigger(
-            Button::new("add-llm-provider", "Add Provider")
+            Button::new("add-llm-provider", localization::localized_str!("Add Provider"))
                 .style(ButtonStyle::Outlined)
                 .track_focus(&focus_handle)
                 .label_size(LabelSize::Small)
@@ -103,8 +103,8 @@ pub(crate) fn render_add_llm_provider_popover(
         .menu(move |window, cx| {
             let settings_window = settings_window.clone();
             Some(ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                menu.header("Compatible APIs")
-                    .entry("OpenAI", None, {
+                menu.header(localization::localized_str!("Compatible APIs"))
+                    .entry(localization::localized_str!("OpenAI"), None, {
                         let settings_window = settings_window.clone();
                         move |window, cx| {
                             settings_window
@@ -223,20 +223,26 @@ fn render_api_key_providers_item(
 
     if has_key {
         let configured_label = if is_from_env_var {
-            "API Key Set in Environment Variable"
+            localization::localized_str!("API Key Set in Environment Variable")
         } else {
-            "API Key Configured"
+            localization::localized_str!("API Key Configured")
         };
         let button_id = format!("reset-api-key-{}", provider_id.0);
 
         let card = ConfiguredApiCard::new(button_id, configured_label)
-            .button_label("Reset Key")
+            .button_label(localization::localized_str!("Reset Key"))
             .button_tab_index(0)
             .disabled(is_from_env_var)
             .when(is_from_env_var, |this| {
-                this.tooltip_label(format!(
-                    "To reset your API key, unset the {env_var_name} environment variable."
-                ))
+                this.tooltip_label({
+        let __zed_i18n_arg_0 = format!("{}", env_var_name);
+        localization::format_message(
+            "To reset your API key, unset the {env_var_name} environment variable.",
+            &[
+                ("env_var_name", __zed_i18n_arg_0)
+            ],
+        )
+    })
             })
             .on_click({
                 let provider = provider.clone();
@@ -250,7 +256,15 @@ fn render_api_key_providers_item(
     }
 
     let input_id = format!("{}-api-key-input", provider_id.0);
-    let aria_label = format!("{provider_name} API Key");
+    let aria_label = {
+        let __zed_i18n_arg_0 = format!("{}", provider_name);
+        localization::format_message(
+            "{provider_name} API Key",
+            &[
+                ("provider_name", __zed_i18n_arg_0)
+            ],
+        )
+    };
 
     v_flex()
         .gap_2()
@@ -267,7 +281,7 @@ fn render_api_key_providers_item(
                         .min_w_0()
                         .max_w_1_2()
                         .gap_0p5()
-                        .child(Label::new("API Key"))
+                        .child(Label::new(localization::localized_str!("API Key")))
                         .child(
                             h_flex()
                                 .w_full()
@@ -275,13 +289,21 @@ fn render_api_key_providers_item(
                                 .flex_wrap()
                                 .gap_0p5()
                                 .child(
-                                    Label::new("Visit the")
+                                    Label::new(localization::localized_str!("Visit the"))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 )
                                 .child(
                                     ButtonLink::new(
-                                        format!("{provider_name} dashboard"),
+                                        {
+        let __zed_i18n_arg_0 = format!("{}", provider_name);
+        localization::format_message(
+            "{provider_name} dashboard",
+            &[
+                ("provider_name", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                         api_key_url,
                                     )
                                     .no_icon(true)
@@ -289,15 +311,21 @@ fn render_api_key_providers_item(
                                     .label_color(Color::Muted),
                                 )
                                 .child(
-                                    Label::new("to generate an API key.")
+                                    Label::new(localization::localized_str!("to generate an API key."))
                                         .size(LabelSize::Small)
                                         .color(Color::Muted),
                                 ),
                         )
                         .child(
-                            Label::new(format!(
-                                "Or set the {env_var_name} env var and restart Zed for it to take effect."
-                            ))
+                            Label::new({
+        let __zed_i18n_arg_0 = format!("{}", env_var_name);
+        localization::format_message(
+            "Or set the {env_var_name} env var and restart Zed for it to take effect.",
+            &[
+                ("env_var_name", __zed_i18n_arg_0)
+            ],
+        )
+    })
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                         ),
@@ -385,13 +413,13 @@ fn render_subpage_item(
                 .min_w_0()
                 .max_w_1_2()
                 .gap_0p5()
-                .child(Label::new("Configure Provider"))
+                .child(Label::new(localization::localized_str!("Configure Provider")))
                 .when_some(description, |this, description| {
                     this.child(render_inline_description(provider_name, description))
                 }),
         )
         .child(
-            Button::new(format!("configure-{}", provider_id.0), "Configure")
+            Button::new(format!("configure-{}", provider_id.0), localization::localized_str!("Configure"))
                 .style(ButtonStyle::OutlinedGhost)
                 .size(ButtonSize::Medium)
                 .end_icon(
@@ -415,12 +443,20 @@ fn render_inline_description(
         InlineDescription::ApiKeyUrl(url) => h_flex()
             .gap_0p5()
             .child(
-                Label::new("To find an API key, visit the")
+                Label::new(localization::localized_str!("To find an API key, visit the"))
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             )
             .child(
-                ButtonLink::new(format!("{provider_name} dashboard."), url)
+                ButtonLink::new({
+        let __zed_i18n_arg_0 = format!("{}", provider_name);
+        localization::format_message(
+            "{provider_name} dashboard.",
+            &[
+                ("provider_name", __zed_i18n_arg_0)
+            ],
+        )
+    }, url)
                     .label_size(LabelSize::Small),
             )
             .into_any_element(),
@@ -446,7 +482,7 @@ fn open_provider_configuration(
 
     settings_window.push_dynamic_sub_page(
         title,
-        "Agent Configuration",
+        localization::localized_str!("Agent Configuration"),
         Some("llm_providers"),
         true,
         render_provider_config_sub_page,
@@ -583,15 +619,15 @@ impl ModelInput {
 
         Self {
             name: new_input(
-                "e.g. gpt-5, claude-opus-4, gemini-2.5-pro",
+                localization::localized_str!("e.g. gpt-5, claude-opus-4, gemini-2.5-pro"),
                 None,
                 false,
                 window,
                 cx,
             ),
             max_completion_tokens: new_input("200000", Some("200000"), false, window, cx),
-            max_output_tokens: new_input("Max Output Tokens", Some("32000"), false, window, cx),
-            max_tokens: new_input("Max Tokens", Some("200000"), false, window, cx),
+            max_output_tokens: new_input(localization::localized_str!("Max Output Tokens"), Some("32000"), false, window, cx),
+            max_tokens: new_input(localization::localized_str!("Max Tokens"), Some("200000"), false, window, cx),
             reasoning_effort: OpenAiReasoningEffort::Medium,
             supports_tools: tools.into(),
             supports_images: images.into(),
@@ -633,8 +669,16 @@ fn open_llm_provider_form(
 ) {
     settings_window.llm_provider_form = Some(LlmProviderForm::new(kind, window, cx));
     settings_window.push_dynamic_sub_page(
-        format!("Add {}-Compatible Provider", kind.label()),
-        "Agent Configuration",
+        {
+        let __zed_i18n_arg_0 = format!("{}", kind.label());
+        localization::format_message(
+            "Add {}-Compatible Provider",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
+        localization::localized_str!("Agent Configuration"),
         Some("llm_providers"),
         true,
         render_llm_provider_form_page,
@@ -666,28 +710,28 @@ fn render_llm_provider_form_page(
                 .overflow_y_scroll()
                 .child(Label::new(match form.kind {
                     CompatibleProviderKind::OpenAi => {
-                        "This provider will use an OpenAI-compatible API."
+                        localization::localized_str!("This provider will use an OpenAI-compatible API.")
                     }
                     CompatibleProviderKind::Anthropic => {
-                        "This provider will use an Anthropic Messages-compatible API."
+                        localization::localized_str!("This provider will use an Anthropic Messages-compatible API.")
                     }
                 }))
                 .child(Divider::horizontal().flex_shrink_0())
                 .child(render_form_field(
-                    "Provider Name",
-                    "A unique name used to identify this provider.",
+                    localization::localized_str!("Provider Name"),
+                    localization::localized_str!("A unique name used to identify this provider."),
                     &form.provider_name,
                     cx,
                 ))
                 .child(render_form_field(
-                    "API URL",
-                    "The base URL for the compatible API.",
+                    localization::localized_str!("API URL"),
+                    localization::localized_str!("The base URL for the compatible API."),
                     &form.api_url,
                     cx,
                 ))
                 .child(render_form_field(
-                    "API Key",
-                    "Stored in the system keychain, not in settings.json.",
+                    localization::localized_str!("API Key"),
+                    localization::localized_str!("Stored in the system keychain, not in settings.json."),
                     &form.api_key,
                     cx,
                 ))
@@ -764,9 +808,9 @@ fn render_models_section(
         .child(
             h_flex()
                 .justify_between()
-                .child(Label::new("Models"))
+                .child(Label::new(localization::localized_str!("Models")))
                 .child(
-                    Button::new("add-model", "Add Model")
+                    Button::new("add-model", localization::localized_str!("Add Model"))
                         .start_icon(
                             Icon::new(IconName::Plus)
                                 .size(IconSize::XSmall)
@@ -804,35 +848,35 @@ fn render_model(
         .border_color(cx.theme().colors().border.opacity(0.6))
         .bg(cx.theme().colors().element_active.opacity(0.15))
         .child(render_form_field(
-            "Model Name",
-            "The model's name in the provider's API.",
+            localization::localized_str!("Model Name"),
+            localization::localized_str!("The model's name in the provider's API."),
             &model.name,
             cx,
         ))
         .when(matches!(kind, CompatibleProviderKind::OpenAi), |this| {
             this.child(render_form_field(
-                "Max Completion Tokens",
-                "Maximum completion tokens for OpenAI-compatible requests.",
+                localization::localized_str!("Max Completion Tokens"),
+                localization::localized_str!("Maximum completion tokens for OpenAI-compatible requests."),
                 &model.max_completion_tokens,
                 cx,
             ))
         })
         .child(render_form_field(
-            "Max Output Tokens",
-            "The maximum number of tokens the model can output.",
+            localization::localized_str!("Max Output Tokens"),
+            localization::localized_str!("The maximum number of tokens the model can output."),
             &model.max_output_tokens,
             cx,
         ))
         .child(render_form_field(
-            "Max Tokens",
-            "The model context window size.",
+            localization::localized_str!("Max Tokens"),
+            localization::localized_str!("The model context window size."),
             &model.max_tokens,
             cx,
         ))
         .child(render_model_capabilities(kind, model, index, window, cx))
         .when(model_count > 1, |this| {
             this.child(
-                Button::new(("remove-model", index), "Remove Model")
+                Button::new(("remove-model", index), localization::localized_str!("Remove Model"))
                     .start_icon(
                         Icon::new(IconName::Trash)
                             .size(IconSize::XSmall)
@@ -866,7 +910,7 @@ fn render_model_capabilities(
         .child(render_capability_checkbox(
             "supports-tools",
             index,
-            "Supports tools",
+            localization::localized_str!("Supports tools"),
             model.supports_tools,
             |model, state| model.supports_tools = state,
             cx,
@@ -874,7 +918,7 @@ fn render_model_capabilities(
         .child(render_capability_checkbox(
             "supports-images",
             index,
-            "Supports images",
+            localization::localized_str!("Supports images"),
             model.supports_images,
             |model, state| model.supports_images = state,
             cx,
@@ -883,7 +927,7 @@ fn render_model_capabilities(
             this.child(render_capability_checkbox(
                 "supports-parallel-tool-calls",
                 index,
-                "Supports parallel_tool_calls",
+                localization::localized_str!("Supports parallel_tool_calls"),
                 model.supports_parallel_tool_calls,
                 |model, state| model.supports_parallel_tool_calls = state,
                 cx,
@@ -891,7 +935,7 @@ fn render_model_capabilities(
             .child(render_capability_checkbox(
                 "supports-prompt-cache-key",
                 index,
-                "Supports prompt_cache_key",
+                localization::localized_str!("Supports prompt_cache_key"),
                 model.supports_prompt_cache_key,
                 |model, state| model.supports_prompt_cache_key = state,
                 cx,
@@ -899,7 +943,7 @@ fn render_model_capabilities(
             .child(render_capability_checkbox(
                 "supports-chat-completions",
                 index,
-                "Supports /chat/completions",
+                localization::localized_str!("Supports /chat/completions"),
                 model.supports_chat_completions,
                 |model, state| model.supports_chat_completions = state,
                 cx,
@@ -908,7 +952,7 @@ fn render_model_capabilities(
                 this.child(render_capability_checkbox(
                     "max-tokens-parameter",
                     index,
-                    "Uses max_tokens for output limit",
+                    localization::localized_str!("Uses max_tokens for output limit"),
                     model.max_tokens_parameter,
                     |model, state| model.max_tokens_parameter = state,
                     cx,
@@ -917,7 +961,7 @@ fn render_model_capabilities(
             .child(render_capability_checkbox(
                 "supports-thinking",
                 index,
-                "Supports thinking",
+                localization::localized_str!("Supports thinking"),
                 model.supports_thinking,
                 |model, state| model.supports_thinking = state,
                 cx,
@@ -933,7 +977,7 @@ fn render_model_capabilities(
                     this.child(render_capability_checkbox(
                         "interleaved-reasoning",
                         index,
-                        "Preserves thinking in chat history",
+                        localization::localized_str!("Preserves thinking in chat history"),
                         model.interleaved_reasoning,
                         |model, state| model.interleaved_reasoning = state,
                         cx,
@@ -996,7 +1040,7 @@ fn render_reasoning_effort_selector(
 
     v_flex()
         .gap_1()
-        .child(Label::new("Default reasoning effort").size(LabelSize::Small))
+        .child(Label::new(localization::localized_str!("Default reasoning effort")).size(LabelSize::Small))
         .child(
             DropdownMenu::new(
                 ElementId::Name(format!("reasoning-effort-selector-{index}").into()),
@@ -1006,7 +1050,7 @@ fn render_reasoning_effort_selector(
             .style(DropdownStyle::Outlined)
             .trigger_size(ButtonSize::Compact)
             .full_width(true)
-            .aria_label("Default reasoning effort"),
+            .aria_label(localization::localized_str!("Default reasoning effort")),
         )
 }
 
@@ -1028,7 +1072,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
         .gap_1()
         .justify_end()
         .child(
-            Button::new("llm-provider-form-cancel", "Cancel").on_click(cx.listener(
+            Button::new("llm-provider-form-cancel", localization::localized_str!("Cancel")).on_click(cx.listener(
                 |this, _, window, cx| {
                     this.llm_provider_form = None;
                     this.pop_sub_page(window, cx);
@@ -1036,7 +1080,7 @@ fn render_form_actions(cx: &mut Context<SettingsWindow>) -> impl IntoElement {
             )),
         )
         .child(
-            Button::new("llm-provider-form-save", "Save Provider")
+            Button::new("llm-provider-form-save", localization::localized_str!("Save Provider"))
                 .style(ButtonStyle::Filled)
                 .on_click(cx.listener(|this, _, window, cx| {
                     save_llm_provider_form(this, window, cx);
@@ -1202,7 +1246,7 @@ fn validate_llm_provider_form(
 ) -> Result<(String, String, String, ParsedModels), SharedString> {
     let provider_name = values.provider_name.clone();
     if provider_name.is_empty() {
-        return Err("Provider Name cannot be empty".into());
+        return Err(localization::localized_str!("Provider Name cannot be empty").into());
     }
 
     if LanguageModelRegistry::read_global(cx)
@@ -1213,17 +1257,17 @@ fn validate_llm_provider_form(
                 || provider.name().0.as_ref() == provider_name.as_str()
         })
     {
-        return Err("Provider Name is already taken by another provider".into());
+        return Err(localization::localized_str!("Provider Name is already taken by another provider").into());
     }
 
     let api_url = values.api_url.clone();
     if api_url.is_empty() {
-        return Err("API URL cannot be empty".into());
+        return Err(localization::localized_str!("API URL cannot be empty").into());
     }
 
     let api_key = values.api_key.clone();
     if api_key.is_empty() {
-        return Err("API Key cannot be empty".into());
+        return Err(localization::localized_str!("API Key cannot be empty").into());
     }
 
     let models = match values.kind {
@@ -1253,7 +1297,7 @@ fn validate_llm_provider_form(
             .all(|model| model_names.insert(model.name.clone())),
     };
     if !model_names_are_unique {
-        return Err("Model Names must be unique".into());
+        return Err(localization::localized_str!("Model Names must be unique").into());
     }
 
     Ok((provider_name, api_url, api_key, models))
@@ -1261,7 +1305,7 @@ fn validate_llm_provider_form(
 
 fn parse_model_name(model: &ModelValues) -> Result<String, SharedString> {
     if model.name.is_empty() {
-        return Err("Model Name cannot be empty".into());
+        return Err(localization::localized_str!("Model Name cannot be empty").into());
     }
     Ok(model.name.clone())
 }
@@ -1322,7 +1366,15 @@ fn parse_anthropic_model(
 fn parse_u64_field(value: &str, name: &str) -> Result<u64, SharedString> {
     value
         .parse::<u64>()
-        .map_err(|_| format!("{name} must be a number").into())
+        .map_err(|_| {
+        let __zed_i18n_arg_0 = format!("{}", name);
+        localization::format_message(
+            "{name} must be a number",
+            &[
+                ("name", __zed_i18n_arg_0)
+            ],
+        )
+    }.into())
 }
 
 #[cfg(test)]
@@ -1345,7 +1397,7 @@ mod tests {
                         "Zed".into(),
                         Some("Subscribed to Business".into()),
                         Some(InlineDescription::Text(
-                            "You have access to Zed's hosted models through your organization."
+                            localization::localized_str!("You have access to Zed's hosted models through your organization.")
                                 .into(),
                         )),
                         cloud::test_support::young_account_configuration(),

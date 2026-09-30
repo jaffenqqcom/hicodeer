@@ -407,27 +407,47 @@ impl PaneLeaderDecorator for PaneRenderContext<'_> {
                     } => {
                         if Some(leader_project_id) == self.project.read(cx).remote_id() {
                             is_in_unshared_view.then(|| {
-                                Label::new(format!(
-                                    "{} is in an unshared pane",
-                                    leader.user.username
-                                ))
+                                Label::new({
+        let __zed_i18n_arg_0 = format!("{}", leader.user.username);
+        localization::format_message(
+            "{} is in an unshared pane",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                             })
                         } else {
                             leader_join_data = Some((leader_project_id, leader.user.legacy_id));
-                            Some(Label::new(format!(
-                                "Follow {} to their active project",
-                                leader.user.username,
-                            )))
+                            Some(Label::new({
+        let __zed_i18n_arg_0 = format!("{}", leader.user.username);
+        localization::format_message(
+            "Follow {} to their active project",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }))
                         }
                     }
-                    ParticipantLocation::UnsharedProject => Some(Label::new(format!(
-                        "{} is viewing an unshared Zed project",
-                        leader.user.username
-                    ))),
-                    ParticipantLocation::External => Some(Label::new(format!(
-                        "{} is viewing a window outside of Zed",
-                        leader.user.username
-                    ))),
+                    ParticipantLocation::UnsharedProject => Some(Label::new({
+        let __zed_i18n_arg_0 = format!("{}", leader.user.username);
+        localization::format_message(
+            "{} is viewing an unshared Zed project",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })),
+                    ParticipantLocation::External => Some(Label::new({
+        let __zed_i18n_arg_0 = format!("{}", leader.user.username);
+        localization::format_message(
+            "{} is viewing a window outside of Zed",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })),
                 };
                 status_box = leader_status_box.map(|status| {
                     div()
@@ -452,7 +472,7 @@ impl PaneLeaderDecorator for PaneRenderContext<'_> {
                                             cx,
                                         )
                                         .detach_and_prompt_err(
-                                            "Failed to join project",
+                                            localization::localized_str!("Failed to join project"),
                                             window,
                                             cx,
                                             |error, _, _| Some(format!("{error:#}")),

@@ -211,18 +211,18 @@ impl PromptLocalCommand {
 
     pub fn label(&self) -> &'static str {
         match self {
-            Self::ThumbsUp => "Positive Feedback",
-            Self::ThumbsDown => "Negative Feedback",
+            Self::ThumbsUp => localization::localized_str!("Positive Feedback"),
+            Self::ThumbsDown => localization::localized_str!("Negative Feedback"),
         }
     }
 
     pub fn description(&self) -> &'static str {
         match self {
             Self::ThumbsUp => {
-                "Rate this response as helpful. Sends the current conversation to the Zed team."
+                localization::localized_str!("Rate this response as helpful. Sends the current conversation to the Zed team.")
             }
             Self::ThumbsDown => {
-                "Rate this response as not helpful. Sends the current conversation to the Zed team."
+                localization::localized_str!("Rate this response as not helpful. Sends the current conversation to the Zed team.")
             }
         }
     }
@@ -1618,7 +1618,7 @@ impl<T: PromptCompletionProviderDelegate> CompletionProvider for PromptCompletio
                             SlashCompletionCandidate::LocalCommand(command) => {
                                 let group = show_section_headers.then(|| CompletionGroup {
                                     key: "local-commands".into(),
-                                    label: Some("Actions".into()),
+                                    label: Some(localization::localized_str!("Actions").into()),
                                 });
 
                                 Completion {

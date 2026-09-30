@@ -134,7 +134,7 @@ impl<D: PickerDelegate> Picker<D> {
             .icon_size(IconSize::Small)
             .toggle_state(active)
             .tooltip(move |_window, cx| {
-                Tooltip::for_action_in("Toggle Multi Select", &ToggleMultiSelect, &focus_handle, cx)
+                Tooltip::for_action_in(localization::localized_str!("Toggle Multi Select"), &ToggleMultiSelect, &focus_handle, cx)
             })
             .on_click(cx.listener(|_, _, window, cx| {
                 window.dispatch_action(ToggleMultiSelect.boxed_clone(), cx);

@@ -81,9 +81,17 @@ pub enum SearchOption {
     Backwards,
 }
 
-const REPLACE_PLACEHOLDER: &str = "Replace in project…";
-const INCLUDE_PLACEHOLDER: &str = "Include: e.g. src/**/*.rs";
-const EXCLUDE_PLACEHOLDER: &str = "Exclude: e.g. vendor/*, *.lock";
+fn replace_placeholder() -> &'static str {
+    localization::localized_str!("Replace in project…")
+}
+
+fn include_placeholder() -> &'static str {
+    localization::localized_str!("Include: e.g. src/**/*.rs")
+}
+
+fn exclude_placeholder() -> &'static str {
+    localization::localized_str!("Exclude: e.g. vendor/*, *.lock")
+}
 
 pub enum SearchSource<'a, 'b> {
     Buffer,
@@ -97,12 +105,12 @@ impl SearchOption {
 
     pub fn label(&self) -> &'static str {
         match self {
-            SearchOption::WholeWord => "Match Whole Words",
-            SearchOption::CaseSensitive => "Match Case Sensitivity",
-            SearchOption::IncludeIgnored => "Also search files ignored by configuration",
-            SearchOption::Regex => "Use Regular Expressions",
-            SearchOption::OneMatchPerLine => "One Match Per Line",
-            SearchOption::Backwards => "Search Backwards",
+            SearchOption::WholeWord => localization::localized_str!("Match Whole Words"),
+            SearchOption::CaseSensitive => localization::localized_str!("Match Case Sensitivity"),
+            SearchOption::IncludeIgnored => localization::localized_str!("Also search files ignored by configuration"),
+            SearchOption::Regex => localization::localized_str!("Use Regular Expressions"),
+            SearchOption::OneMatchPerLine => localization::localized_str!("One Match Per Line"),
+            SearchOption::Backwards => localization::localized_str!("Search Backwards"),
         }
     }
 
@@ -233,7 +241,7 @@ pub(crate) fn show_no_more_matches(window: &mut Window, cx: &mut App) {
         };
         workspace.update(cx, |workspace, cx| {
             workspace.show_toast(
-                Toast::new(notification_id.clone(), "No more matches").autohide(),
+                Toast::new(notification_id.clone(), localization::localized_str!("No more matches")).autohide(),
                 cx,
             );
         })

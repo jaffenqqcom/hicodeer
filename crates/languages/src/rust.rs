@@ -1056,10 +1056,15 @@ impl ContextProvider for RustContextProvider {
         };
         let mut task_templates = vec![
             TaskTemplate {
-                label: format!(
-                    "Check (package: {})",
-                    RUST_PACKAGE_TASK_VARIABLE.template_value(),
-                ),
+                label: {
+        let __zed_i18n_arg_0 = format!("{}", RUST_PACKAGE_TASK_VARIABLE.template_value());
+        localization::format_message(
+            "Check (package: {})",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 command: "cargo".into(),
                 args: vec![
                     "check".into(),
@@ -1070,18 +1075,24 @@ impl ContextProvider for RustContextProvider {
                 ..TaskTemplate::default()
             },
             TaskTemplate {
-                label: "Check all targets (workspace)".into(),
+                label: localization::localized_str!("Check all targets (workspace)").into(),
                 command: "cargo".into(),
                 args: vec!["check".into(), "--workspace".into(), "--all-targets".into()],
                 cwd: Some("$ZED_DIRNAME".to_owned()),
                 ..TaskTemplate::default()
             },
             TaskTemplate {
-                label: format!(
-                    "Test '{}' (package: {})",
-                    RUST_TEST_NAME_TASK_VARIABLE.template_value(),
-                    RUST_PACKAGE_TASK_VARIABLE.template_value(),
-                ),
+                label: {
+        let __zed_i18n_arg_0 = format!("{}", RUST_TEST_NAME_TASK_VARIABLE.template_value());
+        let __zed_i18n_arg_1 = format!("{}", RUST_PACKAGE_TASK_VARIABLE.template_value());
+        localization::format_message(
+            "Test '{}' (package: {})",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    },
                 command: "cargo".into(),
                 args: vec![
                     "test".into(),
@@ -1097,11 +1108,17 @@ impl ContextProvider for RustContextProvider {
                 ..TaskTemplate::default()
             },
             TaskTemplate {
-                label: format!(
-                    "Doc test '{}' (package: {})",
-                    RUST_DOC_TEST_NAME_TASK_VARIABLE.template_value(),
-                    RUST_PACKAGE_TASK_VARIABLE.template_value(),
-                ),
+                label: {
+        let __zed_i18n_arg_0 = format!("{}", RUST_DOC_TEST_NAME_TASK_VARIABLE.template_value());
+        let __zed_i18n_arg_1 = format!("{}", RUST_PACKAGE_TASK_VARIABLE.template_value());
+        localization::format_message(
+            "Doc test '{}' (package: {})",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    },
                 command: "cargo".into(),
                 args: vec![
                     "test".into(),
@@ -1118,11 +1135,17 @@ impl ContextProvider for RustContextProvider {
                 ..TaskTemplate::default()
             },
             TaskTemplate {
-                label: format!(
-                    "Test mod '{}' (package: {})",
-                    VariableName::Stem.template_value(),
-                    RUST_PACKAGE_TASK_VARIABLE.template_value(),
-                ),
+                label: {
+        let __zed_i18n_arg_0 = format!("{}", VariableName::Stem.template_value());
+        let __zed_i18n_arg_1 = format!("{}", RUST_PACKAGE_TASK_VARIABLE.template_value());
+        localization::format_message(
+            "Test mod '{}' (package: {})",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    },
                 command: "cargo".into(),
                 args: vec![
                     "test".into(),
@@ -1136,12 +1159,19 @@ impl ContextProvider for RustContextProvider {
                 ..TaskTemplate::default()
             },
             TaskTemplate {
-                label: format!(
-                    "Run {} {} (package: {})",
-                    RUST_BIN_KIND_TASK_VARIABLE.template_value(),
-                    RUST_BIN_NAME_TASK_VARIABLE.template_value(),
-                    RUST_PACKAGE_TASK_VARIABLE.template_value(),
-                ),
+                label: {
+        let __zed_i18n_arg_0 = format!("{}", RUST_BIN_KIND_TASK_VARIABLE.template_value());
+        let __zed_i18n_arg_1 = format!("{}", RUST_BIN_NAME_TASK_VARIABLE.template_value());
+        let __zed_i18n_arg_2 = format!("{}", RUST_PACKAGE_TASK_VARIABLE.template_value());
+        localization::format_message(
+            "Run {} {} (package: {})",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1),
+                ("2", __zed_i18n_arg_2)
+            ],
+        )
+    },
                 command: "cargo".into(),
                 args: vec![
                     "run".into(),
@@ -1157,10 +1187,15 @@ impl ContextProvider for RustContextProvider {
                 ..TaskTemplate::default()
             },
             TaskTemplate {
-                label: format!(
-                    "Test (package: {})",
-                    RUST_PACKAGE_TASK_VARIABLE.template_value()
-                ),
+                label: {
+        let __zed_i18n_arg_0 = format!("{}", RUST_PACKAGE_TASK_VARIABLE.template_value());
+        localization::format_message(
+            "Test (package: {})",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 command: "cargo".into(),
                 args: vec![
                     "test".into(),
@@ -1171,14 +1206,14 @@ impl ContextProvider for RustContextProvider {
                 ..TaskTemplate::default()
             },
             TaskTemplate {
-                label: "Run".into(),
+                label: localization::localized_str!("Run").into(),
                 command: "cargo".into(),
                 args: run_task_args,
                 cwd: Some(RUST_MANIFEST_DIRNAME_TASK_VARIABLE.template_value()),
                 ..TaskTemplate::default()
             },
             TaskTemplate {
-                label: "Clean".into(),
+                label: localization::localized_str!("Clean").into(),
                 command: "cargo".into(),
                 args: vec!["clean".into()],
                 cwd: Some(RUST_MANIFEST_DIRNAME_TASK_VARIABLE.template_value()),

@@ -1,5 +1,6 @@
 {
   "$schema": "zed://schemas/settings",
+  "ui_locale": "zh-CN",
   // The name of the Zed theme to use for the UI.
   //
   // `mode` is one of:
@@ -1179,7 +1180,7 @@
     // Whether to limit the content width in the agent panel. When enabled,
     // content will be constrained to `max_content_width` and centered when
     // the panel is wider, for optimal readability.
-    "limit_content_width": true,
+    "limit_content_width": false,
     // Maximum content width in pixels when limit_content_width is enabled.
     // Content will be centered within the panel.
     "max_content_width": 850,
@@ -1192,6 +1193,8 @@
       // Whether thinking is enabled.
       "enable_thinking": false,
     },
+    // Favorite models to show at the top of the model selector.
+    "favorite_models": [],
     // Additional parameters for language model requests. When making a request to a model, parameters will be taken
     // from the last entry in this list that matches the model's provider and name. In each entry, both provider
     // and model are optional, so that you can specify parameters for either one.

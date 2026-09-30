@@ -14,6 +14,7 @@ path = "src/git_ui_core.rs"
 doctest = false
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 askpass.workspace = true
 buffer_diff.workspace = true

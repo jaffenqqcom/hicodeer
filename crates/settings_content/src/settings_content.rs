@@ -326,6 +326,12 @@ pub struct SettingsContent {
     /// Default: 5
     pub modeline_lines: Option<usize>,
 
+    /// The locale used by the Zed UI. `system` follows the operating system language.
+    /// Changes apply after restarting Zed.
+    ///
+    /// Default: system
+    pub ui_locale: Option<UiLocale>,
+
     /// Local overrides for feature flags, keyed by flag name.
     pub feature_flags: Option<FeatureFlagsMap>,
 
@@ -355,6 +361,26 @@ pub struct PerformanceProfilerSettingsContent {
     ///
     /// Default: false
     pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MergeFrom)]
+#[serde(transparent)]
+pub struct UiLocale(pub String);
+
+impl Default for UiLocale {
+    fn default() -> Self {
+        Self("system".into())
+    }
+}
+
+impl JsonSchema for UiLocale {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "UiLocale".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "string" })
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, MergeFrom)]
@@ -408,7 +434,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
         global_lsp_settings, image_viewer, markdown_preview, repl, helix_mode, hide_mouse,
         journal, log, line_indicator_format, language_models, outline_panel, project_panel,
         node, proxy, reduce_motion, server_url, credentials_url, session, telemetry, terminal,
-        title_bar, vim_mode, calls, which_key, vim, modeline_lines, feature_flags,
+        title_bar, vim_mode, calls, which_key, vim, modeline_lines, ui_locale, feature_flags,
         instrumentation,
     },
     defaults: {},

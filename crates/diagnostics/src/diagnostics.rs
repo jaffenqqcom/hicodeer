@@ -104,9 +104,9 @@ impl Render for ProjectDiagnosticsEditor {
         let child =
             if warning_count + self.summary.error_count == 0 && self.editor.read(cx).is_empty(cx) {
                 let label = if self.summary.warning_count == 0 {
-                    SharedString::new_static("No problems in workspace")
+                    SharedString::new_static(localization::localized_str!("No problems in workspace"))
                 } else {
-                    SharedString::new_static("No errors in workspace")
+                    SharedString::new_static(localization::localized_str!("No errors in workspace"))
                 };
                 v_flex()
                     .key_context("EmptyPane")
@@ -123,10 +123,17 @@ impl Render for ProjectDiagnosticsEditor {
                         } else {
                             ""
                         };
-                        let label = format!(
-                            "Show {} warning{}",
-                            self.summary.warning_count, plural_suffix
-                        );
+                        let label = {
+        let __zed_i18n_arg_0 = format!("{}", self.summary.warning_count);
+        let __zed_i18n_arg_1 = format!("{}", plural_suffix);
+        localization::format_message(
+            "Show {} warning{}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    };
                         this.child(
                             Button::new("diagnostics-show-warning-label", label).on_click(
                                 cx.listener(|this, _, window, cx| {
@@ -756,7 +763,7 @@ impl Item for ProjectDiagnosticsEditor {
     }
 
     fn tab_content_text(&self, _detail: usize, _: &App) -> SharedString {
-        "Diagnostics".into()
+        localization::localized_str!("Diagnostics").into()
     }
 
     fn tab_content(&self, params: TabContentParams, _window: &Window, _: &App) -> AnyElement {
@@ -769,7 +776,7 @@ impl Item for ProjectDiagnosticsEditor {
                         h_flex()
                             .gap_1()
                             .child(Icon::new(IconName::Check).color(Color::Success))
-                            .child(Label::new("No problems").color(params.text_color())),
+                            .child(Label::new(localization::localized_str!("No problems")).color(params.text_color())),
                     )
                 },
             )

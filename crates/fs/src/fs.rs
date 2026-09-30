@@ -1271,7 +1271,15 @@ impl Fs for RealFs {
         let job_info = JobInfo {
             id: job_id,
             start: Instant::now(),
-            message: SharedString::from(format!("Cloning {}", repo_url)),
+            message: SharedString::from({
+        let __zed_i18n_arg_0 = format!("{}", repo_url);
+        localization::format_message(
+            "Cloning {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }),
         };
 
         let job_tracker = JobTracker::new(job_info, self.job_event_subscribers.clone());

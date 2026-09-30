@@ -13,6 +13,7 @@ path = "src/file_finder.rs"
 doctest = false
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 channel.workspace = true
 client.workspace = true

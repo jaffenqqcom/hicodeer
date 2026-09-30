@@ -85,7 +85,7 @@ impl AgentTool for AskUserTool {
     ) -> SharedString {
         match input {
             Ok(input) if !input.question.is_empty() => SharedString::from(input.question),
-            _ => "Asking a question".into(),
+            _ => localization::localized_str!("Asking a question").into(),
         }
     }
 
@@ -149,7 +149,15 @@ impl AgentTool for AskUserTool {
             };
 
             event_stream.update_fields(
-                acp::ToolCallUpdateFields::new().title(format!("Answered: {selected}")),
+                acp::ToolCallUpdateFields::new().title({
+        let __zed_i18n_arg_0 = format!("{}", selected);
+        localization::format_message(
+            "Answered: {selected}",
+            &[
+                ("selected", __zed_i18n_arg_0)
+            ],
+        )
+    }),
             );
 
             Ok(AskUserToolOutput::Answered { selected })
@@ -174,7 +182,7 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
         schema = schema.property(
             CHOICE_FIELD,
             acp::StringPropertySchema::new()
-                .title("Choose an option")
+                .title(localization::localized_str!("Choose an option"))
                 .one_of(enum_options),
             !allow_free_text,
         );
@@ -182,9 +190,9 @@ fn build_schema(options: &[String], allow_free_text: bool) -> acp::ElicitationSc
 
     if allow_free_text {
         let title = if options.is_empty() {
-            "Your answer"
+            localization::localized_str!("Your answer")
         } else {
-            "Or type your own answer"
+            localization::localized_str!("Or type your own answer")
         };
         schema = schema.property(
             OTHER_FIELD,

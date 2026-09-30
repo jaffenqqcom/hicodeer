@@ -4,10 +4,10 @@
       {
         "name": "default",
         "material": {
-          "storePassword": "000000200B27DBA50FFE09A38ABAE9D79E082F5D9B09D7B2889CFA062D5DDDD96334F3056E279B5AA6BBD386287C1C98",
+          "storePassword": "0000002000550AE09C984EFC8B0FC133444CEAE1BE14E82C7D1B9D0D4694473BA39600E29156B7832907D5082F5248C7",
           "certpath": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "000000200B27DBA50FFE09A38ABAE9D79E082F5D9B09D7B2889CFA062D5DDDD96334F3056E279B5AA6BBD386287C1C98",
+          "keyPassword": "0000002000550AE09C984EFC8B0FC133444CEAE1BE14E82C7D1B9D0D4694473BA39600E29156B7832907D5082F5248C7",
           "profile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p12"
@@ -26,7 +26,10 @@
             "enableSourceCodeCheck": false
           },
           "nativeLib": {
-            "collectAllLibs": true
+            "collectAllLibs": true,
+            "debugSymbol": {
+              "strip": true
+            }
           },
           "strictMode": {
             "caseSensitiveCheck": true,
@@ -37,9 +40,9 @@
             "abiFilters": [
               "arm64-v8a"
             ]
-          }
+          },
+          "debuggable": false
         },
-        "bundleName": "com.hicodeer.studio",
         "signingConfig": "default"
       }
     ],

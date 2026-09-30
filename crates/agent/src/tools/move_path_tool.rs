@@ -86,12 +86,32 @@ impl AgentTool for MovePathTool {
             {
                 Some(filename) if src_path.parent() == dest_path.parent() => {
                     let filename = MarkdownInlineCode(&filename);
-                    format!("Rename {src} to {filename}").into()
+                    {
+        let __zed_i18n_arg_0 = format!("{}", src);
+        let __zed_i18n_arg_1 = format!("{}", filename);
+        localization::format_message(
+            "Rename {src} to {filename}",
+            &[
+                ("src", __zed_i18n_arg_0),
+                ("filename", __zed_i18n_arg_1)
+            ],
+        )
+    }.into()
                 }
-                _ => format!("Move {src} to {dest}").into(),
+                _ => {
+        let __zed_i18n_arg_0 = format!("{}", src);
+        let __zed_i18n_arg_1 = format!("{}", dest);
+        localization::format_message(
+            "Move {src} to {dest}",
+            &[
+                ("src", __zed_i18n_arg_0),
+                ("dest", __zed_i18n_arg_1)
+            ],
+        )
+    }.into(),
             }
         } else {
-            "Move path".into()
+            localization::localized_str!("Move path").into()
         }
     }
 

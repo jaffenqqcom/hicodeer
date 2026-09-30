@@ -1998,9 +1998,9 @@ impl Pane {
                     let detail = Self::file_names_for_prompt(&mut dirty_items.iter(), cx);
                     window.prompt(
                         PromptLevel::Warning,
-                        "Do you want to save changes to the following files?",
+                        localization::localized_str!("Do you want to save changes to the following files?"),
                         Some(&detail),
-                        &["Save all", "Discard all", "Cancel"],
+                        &[localization::localized_str!("Save all"), localization::localized_str!("Discard all"), localization::localized_str!("Cancel")],
                         cx,
                     )
                 })?;
@@ -2049,9 +2049,17 @@ impl Pane {
                                 );
                                 window.prompt(
                                     PromptLevel::Warning,
-                                    &format!("Unable to save file: {err}"),
+                                    &{
+        let __zed_i18n_arg_0 = format!("{}", err);
+        localization::format_message(
+            "Unable to save file: {err}",
+            &[
+                ("err", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                     Some(&detail),
-                                    &["Close Without Saving", "Cancel"],
+                                    &[localization::localized_str!("Close Without Saving"), localization::localized_str!("Cancel")],
                                     cx,
                                 )
                             })?;
@@ -2250,9 +2258,9 @@ impl Pane {
         save_intent: SaveIntent,
         cx: &mut AsyncWindowContext,
     ) -> Result<bool> {
-        const CONFLICT_MESSAGE: &str = "This file has changed on disk since you started editing it. Do you want to overwrite it?";
+        let conflict_message = localization::localized_str!("This file has changed on disk since you started editing it. Do you want to overwrite it?");
 
-        const DELETED_MESSAGE: &str = "This file has been deleted on disk since you started editing it. Do you want to recreate it?";
+        let deleted_message = localization::localized_str!("This file has been deleted on disk since you started editing it. Do you want to recreate it?");
 
         let path_style = project.read_with(cx, |project, cx| project.path_style(cx));
         if save_intent == SaveIntent::Skip {
@@ -2323,9 +2331,9 @@ impl Pane {
                     pane.activate_item(item_ix, true, true, window, cx);
                     window.prompt(
                         PromptLevel::Warning,
-                        DELETED_MESSAGE,
+                        deleted_message,
                         None,
-                        &["Save", "Close", "Cancel"],
+                        &[localization::localized_str!("Save"), localization::localized_str!("Close"), localization::localized_str!("Cancel")],
                         cx,
                     )
                 })?;
@@ -2358,9 +2366,9 @@ impl Pane {
                     pane.activate_item(item_ix, true, true, window, cx);
                     window.prompt(
                         PromptLevel::Warning,
-                        CONFLICT_MESSAGE,
+                        conflict_message,
                         None,
-                        &["Overwrite", "Discard Edits", "Cancel"],
+                        &[localization::localized_str!("Overwrite"), localization::localized_str!("Discard Edits"), localization::localized_str!("Cancel")],
                         cx,
                     )
                 })?;
@@ -2403,7 +2411,7 @@ impl Pane {
                                 PromptLevel::Warning,
                                 &prompt,
                                 None,
-                                &["Save", "Don't Save", "Cancel"],
+                                &[localization::localized_str!("Save"), localization::localized_str!("Don't Save"), localization::localized_str!("Cancel")],
                                 cx,
                             ))
                         } else {
@@ -2886,13 +2894,13 @@ impl Pane {
                 .tooltip(move |_, cx| {
                     if toggleable {
                         Tooltip::with_meta(
-                            "Unlock Tab",
+                            localization::localized_str!("Unlock Tab"),
                             None,
-                            "This will make this tab editable",
+                            localization::localized_str!("This will make this tab editable"),
                             cx,
                         )
                     } else {
-                        Tooltip::with_meta("Locked Tab", None, "This tab is read-only", cx)
+                        Tooltip::with_meta(localization::localized_str!("Locked Tab"), None, localization::localized_str!("This tab is read-only"), cx)
                     }
                 })
                 .on_click(cx.listener(move |pane, _, window, cx| {
@@ -3002,7 +3010,7 @@ impl Pane {
                 let end_slot_tooltip_text: &'static str;
                 let end_slot = if is_pinned {
                     end_slot_action = &TogglePinTab;
-                    end_slot_tooltip_text = "Unpin Tab";
+                    end_slot_tooltip_text = localization::localized_str!("Unpin Tab");
                     IconButton::new("unpin tab", IconName::Pin)
                         .shape(IconButtonShape::Square)
                         .icon_color(Color::Muted)
@@ -3016,7 +3024,7 @@ impl Pane {
                         save_intent: None,
                         close_pinned: false,
                     };
-                    end_slot_tooltip_text = "Close Tab";
+                    end_slot_tooltip_text = localization::localized_str!("Close Tab");
                     match show_close_button {
                         ShowCloseButton::Always => IconButton::new("close tab", IconName::Close),
                         ShowCloseButton::Hover => {
@@ -3069,7 +3077,7 @@ impl Pane {
                             } else {
                                 this.tooltip(move |_, cx| {
                                     let text = text.clone();
-                                    Tooltip::with_meta(text, None, "Read-Only Tab", cx)
+                                    Tooltip::with_meta(text, None, localization::localized_str!("Read-Only Tab"), cx)
                                 })
                             }
                         }
@@ -3136,7 +3144,7 @@ impl Pane {
                     if let Some(pane) = pane.upgrade() {
                         menu = menu
                             .entry(
-                                "Close",
+                                localization::localized_str!("Close"),
                                 Some(Box::new(close_active_item_action)),
                                 window.handler_for(&pane, move |pane, window, cx| {
                                     pane.close_item_by_id(item_id, SaveIntent::Close, window, cx)
@@ -3144,7 +3152,7 @@ impl Pane {
                                 }),
                             )
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("Close Others")
+                                ContextMenuEntry::new(localization::localized_str!("Close Others"))
                                     .action(Box::new(close_inactive_items_action.clone()))
                                     .disabled(total_items == 1)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3160,7 +3168,7 @@ impl Pane {
                             // We make this optional, instead of using disabled as to not overwhelm the context menu unnecessarily
                             .extend(has_multibuffer_items.then(|| {
                                 ContextMenuItem::Entry(
-                                    ContextMenuEntry::new("Close Multibuffers")
+                                    ContextMenuEntry::new(localization::localized_str!("Close Multibuffers"))
                                         .action(Box::new(close_multibuffers_action.clone()))
                                         .handler(window.handler_for(
                                             &pane,
@@ -3177,7 +3185,7 @@ impl Pane {
                             }))
                             .separator()
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("Close Left")
+                                ContextMenuEntry::new(localization::localized_str!("Close Left"))
                                     .action(Box::new(close_items_to_the_left_action.clone()))
                                     .disabled(!has_items_to_left)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3191,7 +3199,7 @@ impl Pane {
                                     })),
                             ))
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("Close Right")
+                                ContextMenuEntry::new(localization::localized_str!("Close Right"))
                                     .action(Box::new(close_items_to_the_right_action.clone()))
                                     .disabled(!has_items_to_right)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3206,7 +3214,7 @@ impl Pane {
                             ))
                             .separator()
                             .item(ContextMenuItem::Entry(
-                                ContextMenuEntry::new("Close Clean")
+                                ContextMenuEntry::new(localization::localized_str!("Close Clean"))
                                     .action(Box::new(close_clean_items_action.clone()))
                                     .disabled(!has_clean_items)
                                     .handler(window.handler_for(&pane, move |pane, window, cx| {
@@ -3219,7 +3227,7 @@ impl Pane {
                                     })),
                             ))
                             .entry(
-                                "Close All",
+                                localization::localized_str!("Close All"),
                                 Some(Box::new(close_all_items_action.clone())),
                                 window.handler_for(&pane, move |pane, window, cx| {
                                     pane.close_all_items(&close_all_items_action, window, cx)
@@ -3231,7 +3239,7 @@ impl Pane {
                             menu.separator().map(|this| {
                                 if is_pinned {
                                     this.entry(
-                                        "Unpin Tab",
+                                        localization::localized_str!("Unpin Tab"),
                                         Some(TogglePinTab.boxed_clone()),
                                         window.handler_for(&pane, move |pane, window, cx| {
                                             pane.unpin_tab_at(ix, window, cx);
@@ -3239,7 +3247,7 @@ impl Pane {
                                     )
                                 } else {
                                     this.entry(
-                                        "Pin Tab",
+                                        localization::localized_str!("Pin Tab"),
                                         Some(TogglePinTab.boxed_clone()),
                                         window.handler_for(&pane, move |pane, window, cx| {
                                             pane.pin_tab_at(ix, window, cx);
@@ -3251,9 +3259,9 @@ impl Pane {
 
                         if capability != Capability::ReadOnly {
                             let read_only_label = if capability.editable() {
-                                "Make Tab Read-Only"
+                                localization::localized_str!("Make Tab Read-Only")
                             } else {
-                                "Make Tab Editable"
+                                localization::localized_str!("Make Tab Editable")
                             };
                             menu = menu.separator().entry(
                                 read_only_label,
@@ -3323,7 +3331,7 @@ impl Pane {
                                 .separator()
                                 .when_some(entry_abs_path, |menu, abs_path| {
                                     menu.entry(
-                                        "Copy Path",
+                                        localization::localized_str!("Copy Path"),
                                         Some(Box::new(zed_actions::workspace::CopyPath)),
                                         window.handler_for(&pane, move |_, _, cx| {
                                             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -3334,7 +3342,7 @@ impl Pane {
                                 })
                                 .when_some(relative_path, |menu, relative_path| {
                                     menu.entry(
-                                        "Copy Relative Path",
+                                        localization::localized_str!("Copy Relative Path"),
                                         Some(Box::new(zed_actions::workspace::CopyRelativePath)),
                                         window.handler_for(&pane, move |this, _, cx| {
                                             let Some(project) = this.project.upgrade() else {
@@ -3353,7 +3361,7 @@ impl Pane {
                                         project_path.clone(),
                                         |menu, project_path| {
                                             menu.entry(
-                                                "Open File Permalink",
+                                                localization::localized_str!("Open File Permalink"),
                                                 Some(OpenFilePermalink.boxed_clone()),
                                                 window.handler_for(&pane, {
                                                     let project_path = project_path.clone();
@@ -3373,7 +3381,7 @@ impl Pane {
                                                 }),
                                             )
                                             .entry(
-                                                "Copy File Permalink",
+                                                localization::localized_str!("Copy File Permalink"),
                                                 Some(CopyFilePermalink.boxed_clone()),
                                                 window.handler_for(
                                                     &pane,
@@ -3417,7 +3425,7 @@ impl Pane {
                                 .map(pin_tab_entries)
                                 .when(visible_in_project_panel, |menu| {
                                     menu.entry(
-                                        "Reveal In Project Panel",
+                                        localization::localized_str!("Reveal In Project Panel"),
                                         Some(Box::new(RevealInProjectPanel::default())),
                                         window.handler_for(&pane, move |pane, _, cx| {
                                             pane.project
@@ -3432,7 +3440,7 @@ impl Pane {
                                 })
                                 .when_some(parent_abs_path, |menu, parent_abs_path| {
                                     menu.entry(
-                                        "Open in Terminal",
+                                        localization::localized_str!("Open in Terminal"),
                                         Some(Box::new(OpenInTerminal)),
                                         window.handler_for(&pane, move |_, window, cx| {
                                             window.dispatch_action(
@@ -3486,7 +3494,7 @@ impl Pane {
                 let focus_handle = focus_handle.clone();
                 move |window, cx| {
                     Tooltip::for_action_in(
-                        "Go Back",
+                        localization::localized_str!("Go Back"),
                         &GoBack,
                         &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
                         cx,
@@ -3509,7 +3517,7 @@ impl Pane {
                 let focus_handle = focus_handle.clone();
                 move |window, cx| {
                     Tooltip::for_action_in(
-                        "Go Forward",
+                        localization::localized_str!("Go Forward"),
                         &GoForward,
                         &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
                         cx,
@@ -4131,13 +4139,13 @@ impl Pane {
                 let project = workspace.project().read(cx);
 
                 if project.is_via_collab() {
-                    workspace.show_error("Cannot drop files on a remote project", cx);
+                    workspace.show_error(localization::localized_str!("Cannot drop files on a remote project"), cx);
                     return (true, false);
                 }
                 if project.is_via_remote_server() {
                     if !project.is_via_wsl(cx) {
                         workspace.show_error(
-                            "Cannot drop local files on a remote SSH/Docker project",
+                            localization::localized_str!("Cannot drop local files on a remote SSH/Docker project"),
                             cx,
                         );
                         return (true, false);
@@ -4195,7 +4203,7 @@ impl Pane {
                             workspace
                                 .update_in(cx, |workspace, _, cx| {
                                     workspace.show_error(
-                                        "Could not translate the dropped paths into WSL paths",
+                                        localization::localized_str!("Could not translate the dropped paths into WSL paths"),
                                         cx,
                                     );
                                 })
@@ -4232,7 +4240,15 @@ impl Pane {
                         _ = workspace.update_in(cx, |workspace, window, cx| {
                             for item in opened_items.into_iter().flatten() {
                                 if let Err(e) = item {
-                                    workspace.show_error(format!("Error: {e}"), cx);
+                                    workspace.show_error({
+        let __zed_i18n_arg_0 = format!("{}", e);
+        localization::format_message(
+            "Error: {e}",
+            &[
+                ("e", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx);
                                 }
                             }
                             if to_pane.read(cx).items_len() == 0 {
@@ -4330,21 +4346,21 @@ fn default_render_tab_bar_buttons(
             PopoverMenu::new("pane-tab-bar-popover-menu")
                 .trigger_with_tooltip(
                     IconButton::new("plus", IconName::Plus).icon_size(IconSize::Small),
-                    Tooltip::text("New…"),
+                    Tooltip::text(localization::localized_str!("New…")),
                 )
                 .anchor(Anchor::TopRight)
                 .with_handle(pane.new_item_context_menu_handle.clone())
                 .menu(move |window, cx| {
                     Some(ContextMenu::build(window, cx, |menu, _, _| {
-                        menu.action("New File", NewFile.boxed_clone())
-                            .action("Open File", ToggleFileFinder::default().boxed_clone())
+                        menu.action(localization::localized_str!("New File"), NewFile.boxed_clone())
+                            .action(localization::localized_str!("Open File"), ToggleFileFinder::default().boxed_clone())
                             .separator()
-                            .action("Search Project", DeploySearch::default().boxed_clone())
-                            .action("Search Symbols", ToggleProjectSymbols.boxed_clone())
+                            .action(localization::localized_str!("Search Project"), DeploySearch::default().boxed_clone())
+                            .action(localization::localized_str!("Search Symbols"), ToggleProjectSymbols.boxed_clone())
                             .separator()
-                            .action("New Terminal", NewTerminal::default().boxed_clone())
+                            .action(localization::localized_str!("New Terminal"), NewTerminal::default().boxed_clone())
                             .action(
-                                "New Center Terminal",
+                                localization::localized_str!("New Center Terminal"),
                                 NewCenterTerminal::default().boxed_clone(),
                             )
                     }))
@@ -4356,7 +4372,7 @@ fn default_render_tab_bar_buttons(
                     IconButton::new("split", IconName::Split)
                         .icon_size(IconSize::Small)
                         .disabled(!can_clone && !can_split_move),
-                    Tooltip::text("Split Pane"),
+                    Tooltip::text(localization::localized_str!("Split Pane")),
                 )
                 .anchor(Anchor::TopRight)
                 .with_handle(pane.split_item_context_menu_handle.clone())
@@ -4364,15 +4380,15 @@ fn default_render_tab_bar_buttons(
                     ContextMenu::build(window, cx, |menu, _, _| {
                         let mode = SplitMode::MovePane;
                         if can_split_move {
-                            menu.action("Split Right", SplitRight { mode }.boxed_clone())
-                                .action("Split Left", SplitLeft { mode }.boxed_clone())
-                                .action("Split Up", SplitUp { mode }.boxed_clone())
-                                .action("Split Down", SplitDown { mode }.boxed_clone())
+                            menu.action(localization::localized_str!("Split Right"), SplitRight { mode }.boxed_clone())
+                                .action(localization::localized_str!("Split Left"), SplitLeft { mode }.boxed_clone())
+                                .action(localization::localized_str!("Split Up"), SplitUp { mode }.boxed_clone())
+                                .action(localization::localized_str!("Split Down"), SplitDown { mode }.boxed_clone())
                         } else {
-                            menu.action("Split Right", SplitRight::default().boxed_clone())
-                                .action("Split Left", SplitLeft::default().boxed_clone())
-                                .action("Split Up", SplitUp::default().boxed_clone())
-                                .action("Split Down", SplitDown::default().boxed_clone())
+                            menu.action(localization::localized_str!("Split Right"), SplitRight::default().boxed_clone())
+                                .action(localization::localized_str!("Split Left"), SplitLeft::default().boxed_clone())
+                                .action(localization::localized_str!("Split Up"), SplitUp::default().boxed_clone())
+                                .action(localization::localized_str!("Split Down"), SplitDown::default().boxed_clone())
                         }
                     })
                     .into()
@@ -4389,7 +4405,7 @@ fn default_render_tab_bar_buttons(
                 }))
                 .tooltip(move |_window, cx| {
                     Tooltip::for_action(
-                        if zoomed { "Zoom Out" } else { "Zoom In" },
+                        if zoomed { localization::localized_str!("Zoom Out") } else { localization::localized_str!("Zoom In") },
                         &ToggleZoom,
                         cx,
                     )
@@ -5025,12 +5041,17 @@ fn dirty_message_for(buffer_path: Option<ProjectPath>, path_style: PathStyle) ->
     match path {
         Some(path) => {
             let path = truncate_and_remove_front(&path, 80);
-            format!(
-                "{} contains unsaved edits. Do you want to save it?",
-                MarkdownInlineCode(path.as_str())
-            )
+            {
+        let __zed_i18n_arg_0 = format!("{}", MarkdownInlineCode(path.as_str()));
+        localization::format_message(
+            "{} contains unsaved edits. Do you want to save it?",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
         }
-        None => "This buffer contains unsaved edits. Do you want to save it?".to_string(),
+        None => localization::localized_str!("This buffer contains unsaved edits. Do you want to save it?").to_string(),
     }
 }
 

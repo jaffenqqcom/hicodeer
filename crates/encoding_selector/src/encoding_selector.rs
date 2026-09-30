@@ -60,7 +60,7 @@ impl EncodingSelector {
             workspace.show_toast(
                 Toast::new(
                     NotificationId::unique::<EncodingSelector>(),
-                    "Save file to change encoding",
+                    localization::localized_str!("Save file to change encoding"),
                 ),
                 cx,
             );
@@ -70,7 +70,7 @@ impl EncodingSelector {
             workspace.show_toast(
                 Toast::new(
                     NotificationId::unique::<EncodingSelector>(),
-                    "Cannot change encoding during collaboration",
+                    localization::localized_str!("Cannot change encoding during collaboration"),
                 ),
                 cx,
             );
@@ -80,7 +80,7 @@ impl EncodingSelector {
             workspace.show_toast(
                 Toast::new(
                     NotificationId::unique::<EncodingSelector>(),
-                    "Cannot change encoding of remote server file",
+                    localization::localized_str!("Cannot change encoding of remote server file"),
                 ),
                 cx,
             );
@@ -225,7 +225,7 @@ impl PickerDelegate for EncodingSelectorDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Reopen with encoding...".into()
+        localization::localized_str!("Reopen with encoding...").into()
     }
 
     fn match_count(&self) -> usize {

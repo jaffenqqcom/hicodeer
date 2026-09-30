@@ -7,6 +7,22 @@ use ui::{
     IconPosition, px,
 };
 
+fn translated_enum_label(label: &str, title_case: bool) -> String {
+    let display_source = if title_case {
+        label.to_title_case()
+    } else {
+        label.to_owned()
+    };
+    // Labels with an explicit `#[strum(serialize = "...")]` value are
+    // cataloged verbatim, so fall back to the untitle-cased label before
+    // giving up (`"Prefer LF"` title-cases to `"Prefer Lf"` and would
+    // otherwise never match its catalog key).
+    localization::lookup(&display_source)
+        .or_else(|| localization::lookup(label))
+        .unwrap_or(&display_source)
+        .to_owned()
+}
+
 #[derive(IntoElement)]
 pub struct EnumVariantDropdown {
     id: ElementId,
@@ -93,16 +109,12 @@ impl RenderOnce for EnumVariantDropdown {
     fn render(self, window: &mut ui::Window, cx: &mut ui::App) -> impl gpui::IntoElement {
         let current_value_label = self.labels[self.selected_index];
 
-        let context_menu = window.use_keyed_state(current_value_label, cx, |window, cx| {
+        let context_menu = window.use_keyed_state(self.selected_index, cx, |window, cx| {
             ContextMenu::new(window, cx, move |mut menu, _, _| {
                 for (index, &label) in self.labels.iter().enumerate() {
                     let on_change = self.on_change.clone();
                     menu = menu.toggleable_entry(
-                        if self.should_do_title_case {
-                            label.to_title_case()
-                        } else {
-                            label.to_string()
-                        },
+                        translated_enum_label(label, self.should_do_title_case),
                         index == self.selected_index,
                         IconPosition::End,
                         None,
@@ -117,11 +129,7 @@ impl RenderOnce for EnumVariantDropdown {
 
         DropdownMenu::new(
             self.id,
-            if self.should_do_title_case {
-                current_value_label.to_title_case()
-            } else {
-                current_value_label.to_string()
-            },
+            translated_enum_label(current_value_label, self.should_do_title_case),
             context_menu,
         )
         .when_some(self.aria_label, |this, label| this.aria_label(label))

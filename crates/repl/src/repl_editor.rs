@@ -99,7 +99,15 @@ pub fn install_ipykernel_and_assign(
             workspace.show_toast(
                 workspace::Toast::new(
                     notification_id.clone(),
-                    format!("Installing ipykernel in {}...", env_name),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", env_name);
+        localization::format_message(
+            "Installing ipykernel in {}...",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                 ),
                 cx,
             );
@@ -150,7 +158,15 @@ pub fn install_ipykernel_and_assign(
                             workspace.show_toast(
                                 workspace::Toast::new(
                                     notification_id.clone(),
-                                    format!("ipykernel installed in {}", env_name),
+                                    {
+        let __zed_i18n_arg_0 = format!("{}", env_name);
+        localization::format_message(
+            "ipykernel installed in {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                 )
                                 .autohide(),
                                 cx,
@@ -183,10 +199,17 @@ pub fn install_ipykernel_and_assign(
                             workspace.show_toast(
                                 workspace::Toast::new(
                                     notification_id.clone(),
-                                    format!(
-                                        "Failed to install ipykernel in {}: {}",
-                                        env_name, error
-                                    ),
+                                    {
+        let __zed_i18n_arg_0 = format!("{}", env_name);
+        let __zed_i18n_arg_1 = format!("{}", error);
+        localization::format_message(
+            "Failed to install ipykernel in {}: {}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    },
                                 ),
                                 cx,
                             );

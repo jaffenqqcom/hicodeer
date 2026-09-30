@@ -180,7 +180,7 @@ impl Render for AgentNotification {
                     .gap_1()
                     .items_center()
                     .child(
-                        Button::new("open", "View")
+                        Button::new("open", localization::localized_str!("View"))
                             .style(ButtonStyle::Tinted(ui::TintColor::Accent))
                             .full_width()
                             .on_click({
@@ -189,7 +189,7 @@ impl Render for AgentNotification {
                                 })
                             }),
                     )
-                    .child(Button::new("dismiss", "Dismiss").full_width().on_click({
+                    .child(Button::new("dismiss", localization::localized_str!("Dismiss")).full_width().on_click({
                         cx.listener(move |this, _event, _, cx| {
                             this.dismiss(cx);
                         })

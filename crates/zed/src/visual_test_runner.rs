@@ -2840,7 +2840,7 @@ impl gpui::Render for ErrorWrappingTestView {
             Requested 59724. Please try again in 264ms. Visit \
             https://platform.openai.com/account/rate-limits to learn more.";
 
-        let retry_description = "Retrying. Next attempt in 4 seconds (Attempt 1 of 2).";
+        let retry_description = localization::localized_str!("Retrying. Next attempt in 4 seconds (Attempt 1 of 2).");
 
         v_flex()
             .size_full()
@@ -2858,16 +2858,16 @@ impl gpui::Render for ErrorWrappingTestView {
                 Callout::new()
                     .severity(Severity::Error)
                     .icon(IconName::XCircle)
-                    .title("An Error Happened")
+                    .title(localization::localized_str!("An Error Happened"))
                     .description(long_error_message)
-                    .actions_slot(Button::new("dismiss", "Dismiss").label_size(LabelSize::Small)),
+                    .actions_slot(Button::new("dismiss", localization::localized_str!("Dismiss")).label_size(LabelSize::Small)),
             )
             .child(
                 Callout::new()
                     .severity(Severity::Error)
                     .icon(IconName::XCircle)
                     .title(long_error_message)
-                    .actions_slot(Button::new("retry", "Retry").label_size(LabelSize::Small)),
+                    .actions_slot(Button::new("retry", localization::localized_str!("Retry")).label_size(LabelSize::Small)),
             )
     }
 }

@@ -116,18 +116,18 @@ impl LinuxWslSandboxError {
     pub fn user_facing_message(&self) -> String {
         match self {
             LinuxWslSandboxError::BwrapNotFound => {
-                "No usable `bwrap` binary was found on your PATH. Install Bubblewrap to let \
-                 the agent sandbox terminal commands."
+                localization::localized_str!("No usable `bwrap` binary was found on your PATH. Install Bubblewrap to let \
+                 the agent sandbox terminal commands.")
                     .to_string()
             }
             LinuxWslSandboxError::SetuidRejected => {
-                "The only `bwrap` available is setuid-root, which Zed refuses to run. Install \
-                 a non-setuid Bubblewrap to let the agent sandbox terminal commands."
+                localization::localized_str!("The only `bwrap` available is setuid-root, which Zed refuses to run. Install \
+                 a non-setuid Bubblewrap to let the agent sandbox terminal commands.")
                     .to_string()
             }
             LinuxWslSandboxError::SandboxProbeFailed => {
-                "`bwrap` is installed but couldn't create a sandbox, likely because \
-                 unprivileged user namespaces are disabled on this system."
+                localization::localized_str!("`bwrap` is installed but couldn't create a sandbox, likely because \
+                 unprivileged user namespaces are disabled on this system.")
                     .to_string()
             }
             LinuxWslSandboxError::Other(message) => message.clone(),
@@ -275,21 +275,29 @@ impl SandboxWrap {
             let mut locations = Vec::new();
             for path in &self.writable_paths {
                 let location = sandbox::HostFilesystemLocation::capture(path).map_err(|error| {
-                    anyhow::anyhow!(error).context(format!(
-                        "cannot capture writable sandbox path `{}`",
-                        path.display()
-                    ))
+                    anyhow::anyhow!(error).context({
+        let __zed_i18n_arg_0 = format!("{}", path.display());
+        localization::format_message(
+            "cannot capture writable sandbox path `{}`",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 })?;
                 locations.push(location);
             }
             for granted in &self.extra_write_paths {
                 let location = granted_write_path_to_location(granted).map_err(|error| {
-                    anyhow::anyhow!(error).context(format!(
-                        "cannot re-verify approved sandbox write grant `{}` (if the \
-                         directory was removed, remove the grant or recreate the \
-                         directory)",
-                        granted.requested.display()
-                    ))
+                    anyhow::anyhow!(error).context({
+        let __zed_i18n_arg_0 = format!("{}", granted.requested.display());
+        localization::format_message(
+            "cannot re-verify approved sandbox write grant `{}` (if the directory was removed, remove the grant or recreate the directory)",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                 })?;
                 locations.push(location);
             }

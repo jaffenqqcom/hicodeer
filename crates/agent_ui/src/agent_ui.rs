@@ -734,7 +734,7 @@ fn rerun_rules_to_skills_migration(
             cx.update(|_window, cx| {
                 show_rules_to_skills_migration_toast(
                     &workspace,
-                    "Rules-to-skills migration rerun. Please double-check AGENTS.md and Skills for missing or duplicated prompts.",
+                    localization::localized_str!("Rules-to-skills migration rerun. Please double-check AGENTS.md and Skills for missing or duplicated prompts."),
                     cx,
                 );
             })?;

@@ -520,13 +520,13 @@ impl Render for DivInspector {
             .when_some(self.inspector_state.as_ref(), |this, inspector_state| {
                 this.child(
                     v_flex()
-                        .child(Label::new("Layout").size(LabelSize::Large))
+                        .child(Label::new(localization::localized_str!("Layout")).size(LabelSize::Large))
                         .child(render_layout_state(inspector_state, cx)),
                 )
             })
             .map(|this| match &self.state {
                 State::Loading | State::BuffersLoaded { .. } => {
-                    this.child(Label::new("Loading..."))
+                    this.child(Label::new(localization::localized_str!("Loading...")))
                 }
                 State::LoadError { message } => this.child(
                     div()
@@ -546,10 +546,10 @@ impl Render for DivInspector {
                             .child(
                                 h_flex()
                                     .justify_between()
-                                    .child(Label::new("Rust Style").size(LabelSize::Large))
+                                    .child(Label::new(localization::localized_str!("Rust Style")).size(LabelSize::Large))
                                     .child(
                                         IconButton::new("reset-style", IconName::Eraser)
-                                            .tooltip(Tooltip::text("Reset style"))
+                                            .tooltip(Tooltip::text(localization::localized_str!("Reset style")))
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 this.reset_style(cx);
                                             })),
@@ -560,7 +560,7 @@ impl Render for DivInspector {
                     .child(
                         v_flex()
                             .gap_2()
-                            .child(Label::new("JSON Style").size(LabelSize::Large))
+                            .child(Label::new(localization::localized_str!("JSON Style")).size(LabelSize::Large))
                             .child(div().h_128().child(json_style_editor.clone()))
                             .when_some(self.json_style_error.as_ref(), |this, last_error| {
                                 this.child(
@@ -582,21 +582,43 @@ fn render_layout_state(inspector_state: &DivInspectorState, cx: &App) -> Div {
         .child(
             div()
                 .text_ui(cx)
-                .child(format!(
-                    "Bounds: ⌜{} - {}⌟",
-                    inspector_state.bounds.origin,
-                    inspector_state.bounds.bottom_right()
-                ))
-                .child(format!("Size: {}", inspector_state.bounds.size)),
+                .child({
+        let __zed_i18n_arg_0 = format!("{}", inspector_state.bounds.origin);
+        let __zed_i18n_arg_1 = format!("{}", inspector_state.bounds.bottom_right());
+        localization::format_message(
+            "Bounds: ⌜{} - {}⌟",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    })
+                .child({
+        let __zed_i18n_arg_0 = format!("{}", inspector_state.bounds.size);
+        localization::format_message(
+            "Size: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }),
         )
         .child(
             div()
                 .id("content-size")
                 .text_ui(cx)
-                .tooltip(Tooltip::text("Size of the element's children"))
+                .tooltip(Tooltip::text(localization::localized_str!("Size of the element's children")))
                 .child(
                     if inspector_state.content_size != inspector_state.bounds.size {
-                        format!("Content size: {}", inspector_state.content_size)
+                        {
+        let __zed_i18n_arg_0 = format!("{}", inspector_state.content_size);
+        localization::format_message(
+            "Content size: {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
                     } else {
                         "".to_string()
                     },

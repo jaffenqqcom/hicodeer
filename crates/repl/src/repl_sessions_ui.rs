@@ -207,7 +207,7 @@ impl Item for ReplSessionsPage {
     type Event = ItemEvent;
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "REPL Sessions".into()
+        localization::localized_str!("REPL Sessions").into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -242,7 +242,7 @@ impl Render for ReplSessionsPage {
         // install kernels. It can be assumed they don't have a running kernel if we have no
         // specifications.
         if kernel_specifications.is_empty() {
-            let instructions = "To start interactively running code in your editor, you need to install and configure Jupyter kernels.";
+            let instructions = localization::localized_str!("To start interactively running code in your editor, you need to install and configure Jupyter kernels.");
 
             return ReplSessionsContainer::new("No Jupyter Kernels Available")
                 .child(Label::new(instructions))
@@ -252,7 +252,7 @@ impl Render for ReplSessionsPage {
                             .style(ButtonStyle::Filled)
                             .size(ButtonSize::Large)
                             .layer(ElevationIndex::ModalSurface)
-                            .child(Label::new("Install Kernels"))
+                            .child(Label::new(localization::localized_str!("Install Kernels")))
                             .on_click(move |_, _, cx| {
                                 cx.open_url(
                                     "https://zed.dev/docs/repl#language-specific-instructions",
@@ -264,7 +264,7 @@ impl Render for ReplSessionsPage {
 
         // When there are no sessions, show the command to run code in an editor
         if sessions.is_empty() {
-            let instructions = "To run code in a Jupyter kernel, select some code and use the 'repl::Run' command.";
+            let instructions = localization::localized_str!("To run code in a Jupyter kernel, select some code and use the 'repl::Run' command.");
 
             return ReplSessionsContainer::new("No Jupyter Kernel Sessions").child(
                 v_flex()
@@ -367,7 +367,7 @@ mod tests {
 
         fn meta(&self) -> ToolchainMetadata {
             ToolchainMetadata {
-                term: SharedString::new_static("Python"),
+                term: SharedString::new_static(localization::localized_str!("Python")),
                 new_toolchain_placeholder: SharedString::default(),
                 manifest_name: ManifestName::from(SharedString::new_static("pyproject.toml")),
             }

@@ -542,13 +542,29 @@ impl PickerDelegate for CallHierarchyDelegate {
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
         match (&self.root_item, self.mode) {
             (Some(root), CallHierarchyMode::Incoming) => {
-                Arc::from(format!("Search calls to `{}`...", root.name))
+                Arc::from({
+        let __zed_i18n_arg_0 = format!("{}", root.name);
+        localization::format_message(
+            "Search calls to `{}`...",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
             }
             (Some(root), CallHierarchyMode::Outgoing) => {
-                Arc::from(format!("Search calls from `{}`...", root.name))
+                Arc::from({
+        let __zed_i18n_arg_0 = format!("{}", root.name);
+        localization::format_message(
+            "Search calls from `{}`...",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
             }
-            (None, CallHierarchyMode::Incoming) => Arc::from("Search incoming calls..."),
-            (None, CallHierarchyMode::Outgoing) => Arc::from("Search outgoing calls..."),
+            (None, CallHierarchyMode::Incoming) => Arc::from(localization::localized_str!("Search incoming calls...")),
+            (None, CallHierarchyMode::Outgoing) => Arc::from(localization::localized_str!("Search outgoing calls...")),
         }
     }
 
@@ -562,16 +578,16 @@ impl PickerDelegate for CallHierarchyDelegate {
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
         Some(SharedString::new_static(match self.state {
-            FetchState::Loading => "Fetching call hierarchy…",
-            FetchState::NoSymbol => "No callable symbol under the cursor",
+            FetchState::Loading => localization::localized_str!("Fetching call hierarchy…"),
+            FetchState::NoSymbol => localization::localized_str!("No callable symbol under the cursor"),
             FetchState::Loaded => {
                 if self.calls.is_empty() {
                     match self.mode {
-                        CallHierarchyMode::Incoming => "No incoming calls found",
-                        CallHierarchyMode::Outgoing => "No outgoing calls found",
+                        CallHierarchyMode::Incoming => localization::localized_str!("No incoming calls found"),
+                        CallHierarchyMode::Outgoing => localization::localized_str!("No outgoing calls found"),
                     }
                 } else {
-                    "No matches"
+                    localization::localized_str!("No matches")
                 }
             }
         }))
@@ -697,8 +713,8 @@ impl PickerDelegate for CallHierarchyDelegate {
         }
         let focus_handle = self.focus_handle.clone();
         let expand_label = match self.mode {
-            CallHierarchyMode::Incoming => "Show Callers",
-            CallHierarchyMode::Outgoing => "Show Callees",
+            CallHierarchyMode::Incoming => localization::localized_str!("Show Callers"),
+            CallHierarchyMode::Outgoing => localization::localized_str!("Show Callees"),
         };
         Some(
             h_flex()
@@ -711,7 +727,7 @@ impl PickerDelegate for CallHierarchyDelegate {
                 .border_color(cx.theme().colors().border_variant)
                 .when(!self.root_stack.is_empty(), |this| {
                     this.child(
-                        Button::new("collapse-call", "Back")
+                        Button::new("collapse-call", localization::localized_str!("Back"))
                             .key_binding(
                                 KeyBinding::for_action_in(&menu::SelectParent, &focus_handle, cx)
                                     .map(|key_binding| key_binding.size(rems_from_px(12_f32))),
@@ -734,7 +750,7 @@ impl PickerDelegate for CallHierarchyDelegate {
                     )
                 })
                 .child(
-                    Button::new("toggle-direction", "Switch Direction")
+                    Button::new("toggle-direction", localization::localized_str!("Switch Direction"))
                         .key_binding(
                             KeyBinding::for_action_in(&ToggleDirection, &focus_handle, cx)
                                 .map(|key_binding| key_binding.size(rems_from_px(12_f32))),
@@ -1101,7 +1117,19 @@ fn compute_call_display(call: &Call, cx: &App) -> CallDisplay {
     let path = call_display_path(buffer, cx).map(|path| {
         let path = path.to_string_lossy();
         SharedString::from(if call.site_count > 1 {
-            format!("{path}:{line_number} ({} calls)", call.site_count)
+            {
+        let __zed_i18n_arg_0 = format!("{}", call.site_count);
+        let __zed_i18n_arg_1 = format!("{}", path);
+        let __zed_i18n_arg_2 = format!("{}", line_number);
+        localization::format_message(
+            "{path}:{line_number} ({} calls)",
+            &[
+                ("path", __zed_i18n_arg_1),
+                ("line_number", __zed_i18n_arg_2),
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
         } else {
             format!("{path}:{line_number}")
         })

@@ -727,7 +727,7 @@ impl PickerDelegate for Delegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search all files…".into()
+        localization::localized_str!("Search all files…").into()
     }
 
     fn searchbar_trailer(
@@ -788,30 +788,30 @@ impl PickerDelegate for Delegate {
     ) -> Vec<picker::PickerAction> {
         use gpui::Action as _;
         vec![
-            picker::PickerAction::header("Split…"),
+            picker::PickerAction::header(localization::localized_str!("Split…")),
             picker::PickerAction::button(
-                "Left",
+                localization::localized_str!("Left"),
                 workspace::pane::SplitLeft::default().boxed_clone(),
             ),
             picker::PickerAction::button(
-                "Right",
+                localization::localized_str!("Right"),
                 workspace::pane::SplitRight::default().boxed_clone(),
             ),
-            picker::PickerAction::button("Up", workspace::pane::SplitUp::default().boxed_clone()),
+            picker::PickerAction::button(localization::localized_str!("Up"), workspace::pane::SplitUp::default().boxed_clone()),
             picker::PickerAction::button(
-                "Down",
+                localization::localized_str!("Down"),
                 workspace::pane::SplitDown::default().boxed_clone(),
             ),
             picker::PickerAction::separator(),
             picker::PickerAction::button(
                 if self.selected_matches.len() > 1 {
-                    "Open Multiple"
+                    localization::localized_str!("Open Multiple")
                 } else {
-                    "Open File"
+                    localization::localized_str!("Open File")
                 },
                 menu::Confirm.boxed_clone(),
             ),
-            picker::PickerAction::button("Open as Tab", super::ToProjectSearch.boxed_clone()),
+            picker::PickerAction::button(localization::localized_str!("Open as Tab"), super::ToProjectSearch.boxed_clone()),
         ]
     }
 
@@ -1123,21 +1123,26 @@ impl Delegate {
                                             .tooltip(move |_window, cx| {
                                                 let (label, action): (_, &dyn gpui::Action) =
                                                     if is_collapsed {
-                                                        ("Unfold", &Unfold)
+                                                        (localization::localized_str!("Unfold"), &Unfold)
                                                     } else {
-                                                        ("Fold", &Fold)
+                                                        (localization::localized_str!("Fold"), &Fold)
                                                     };
                                                 Tooltip::with_meta_in(
                                                     label,
                                                     Some(action),
-                                                    format!(
-                                                        "{} to toggle all",
-                                                        text_for_keystroke(
+                                                    {
+        let __zed_i18n_arg_0 = format!("{}", text_for_keystroke(
                                                             &Modifiers::alt(),
                                                             "click",
                                                             cx
-                                                        )
-                                                    ),
+                                                        ));
+        localization::format_message(
+            "{} to toggle all",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                                     &tooltip_focus_handle,
                                                     cx,
                                                 )

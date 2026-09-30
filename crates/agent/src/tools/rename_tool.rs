@@ -51,13 +51,20 @@ impl AgentTool for RenameTool {
         _cx: &mut App,
     ) -> SharedString {
         if let Ok(input) = input {
-            format!(
-                "Rename `{}` to `{}`",
-                input.symbol.symbol_name, input.new_name
-            )
+            {
+        let __zed_i18n_arg_0 = format!("{}", input.symbol.symbol_name);
+        let __zed_i18n_arg_1 = format!("{}", input.new_name);
+        localization::format_message(
+            "Rename `{}` to `{}`",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    }
             .into()
         } else {
-            "Rename symbol".into()
+            localization::localized_str!("Rename symbol").into()
         }
     }
 

@@ -48,9 +48,9 @@ pub(crate) fn render_external_agents_page(
         .pb_16()
         .track_scroll(scroll_handle)
         .overflow_y_scroll()
-        .child(Label::new("External Agents"))
+        .child(Label::new(localization::localized_str!("External Agents")))
         .child(
-            Label::new("Agents connected through the Agent Client Protocol.")
+            Label::new(localization::localized_str!("Agents connected through the Agent Client Protocol."))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
@@ -117,7 +117,7 @@ fn render_empty_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("No external agents added yet. Click \"Add Agent\" to get started.")
+            Label::new(localization::localized_str!("No external agents added yet. Click \"Add Agent\" to get started."))
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -133,7 +133,7 @@ fn render_no_project_state(cx: &App) -> AnyElement {
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
         .child(
-            Label::new("No active project found. Open a workspace to manage external agents.")
+            Label::new(localization::localized_str!("No active project found. Open a workspace to manage external agents."))
                 .color(Color::Muted)
                 .size(LabelSize::Small),
         )
@@ -182,7 +182,7 @@ fn render_agent(
             .icon_size(IconSize::Small)
             .size(ButtonSize::Medium)
             .tab_index(0isize)
-            .tooltip(Tooltip::text("Configure Agent"))
+            .tooltip(Tooltip::text(localization::localized_str!("Configure Agent")))
             .on_click(cx.listener({
                 let id = id.clone();
                 move |this, _event, window, cx| {
@@ -194,8 +194,8 @@ fn render_agent(
     });
 
     let remove_tooltip = match source {
-        ExternalAgentSource::Registry => "Remove Registry Agent",
-        ExternalAgentSource::Custom => "Remove Custom Agent",
+        ExternalAgentSource::Registry => localization::localized_str!("Remove Registry Agent"),
+        ExternalAgentSource::Custom => localization::localized_str!("Remove Custom Agent"),
     };
 
     let remove_button = IconButton::new(format!("uninstall-{}", id_string), IconName::Trash)
@@ -267,7 +267,7 @@ pub(crate) fn render_add_agent_popover(
 
     let popover = PopoverMenu::new("add-agent-server-popover")
         .trigger(
-            Button::new("add-agent", "Add Agent")
+            Button::new("add-agent", localization::localized_str!("Add Agent"))
                 .style(ButtonStyle::Outlined)
                 .track_focus(&focus_handle)
                 .start_icon(
@@ -281,7 +281,7 @@ pub(crate) fn render_add_agent_popover(
         .menu(move |window, cx| {
             let settings_window = settings_window.clone();
             Some(ContextMenu::build(window, cx, move |menu, _window, _cx| {
-                menu.entry("Install from Registry", None, move |_window, cx| {
+                menu.entry(localization::localized_str!("Install from Registry"), None, move |_window, cx| {
                     if let Some(original_window) = original_window {
                         cx.activate(true);
                         original_window
@@ -292,7 +292,7 @@ pub(crate) fn render_add_agent_popover(
                             .log_err();
                     }
                 })
-                .entry("Add Custom Agent", None, move |window, cx| {
+                .entry(localization::localized_str!("Add Custom Agent"), None, move |window, cx| {
                     settings_window
                         .update(cx, |this, cx| {
                             open_custom_agent_form(this, None, window, cx);
@@ -300,9 +300,9 @@ pub(crate) fn render_add_agent_popover(
                         .log_err();
                 })
                 .separator()
-                .header("Learn More")
+                .header(localization::localized_str!("Learn More"))
                 .item(
-                    ContextMenuEntry::new("ACP Docs")
+                    ContextMenuEntry::new(localization::localized_str!("ACP Docs"))
                         .icon(IconName::ArrowUpRight)
                         .icon_color(Color::Muted)
                         .icon_position(IconPosition::End)
@@ -451,8 +451,8 @@ fn new_kv_row(
     cx: &mut Context<SettingsWindow>,
 ) -> KeyValueRow {
     KeyValueRow {
-        key: new_input("Key", key, window, cx),
-        value: new_input("Value", value, window, cx),
+        key: new_input(localization::localized_str!("Key"), key, window, cx),
+        value: new_input(localization::localized_str!("Value"), value, window, cx),
     }
 }
 
@@ -467,14 +467,14 @@ pub(crate) fn open_custom_agent_form(
     settings_window.custom_agent_form = Some(CustomAgentForm::new(existing, window, cx));
 
     let title = if is_edit {
-        "Configure External Agent"
+        localization::localized_str!("Configure External Agent")
     } else {
-        "Add Custom Agent"
+        localization::localized_str!("Add Custom Agent")
     };
 
     settings_window.push_dynamic_sub_page(
         title,
-        "Agent Configuration",
+        localization::localized_str!("Agent Configuration"),
         Some("agent_servers"),
         false,
         render_custom_agent_form_page,
@@ -500,8 +500,8 @@ fn render_custom_agent_form_page(
         .child(
             crate::render_settings_item_layout(
                 settings_window,
-                "Agent Name",
-                "Required. A unique name used to identify this agent.",
+                localization::localized_str!("Agent Name"),
+                localization::localized_str!("Required. A unique name used to identify this agent."),
                 input_box(&form.name, cx).into_any_element(),
                 None,
                 None,
@@ -514,8 +514,8 @@ fn render_custom_agent_form_page(
         .child(
             crate::render_settings_item_layout(
                 settings_window,
-                "Command",
-                "Required. Path to the executable that launches the agent.",
+                localization::localized_str!("Command"),
+                localization::localized_str!("Required. Path to the executable that launches the agent."),
                 input_box(&form.command, cx).into_any_element(),
                 None,
                 None,
@@ -528,8 +528,8 @@ fn render_custom_agent_form_page(
         .child(
             crate::render_settings_item_layout(
                 settings_window,
-                "Arguments",
-                "Space-separated arguments passed to the command.",
+                localization::localized_str!("Arguments"),
+                localization::localized_str!("Space-separated arguments passed to the command."),
                 input_box(&form.args, cx).into_any_element(),
                 None,
                 None,
@@ -597,7 +597,7 @@ fn render_env_section(
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Muted)
                             .tab_index(0isize)
-                            .tooltip(Tooltip::text("Remove"))
+                            .tooltip(Tooltip::text(localization::localized_str!("Remove")))
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 if let Some(form) = this.custom_agent_form.as_mut()
                                     && ix < form.env.len()
@@ -610,7 +610,7 @@ fn render_env_section(
             )
         }))
         .child(
-            Button::new("custom-agent-env-add", "Add")
+            Button::new("custom-agent-env-add", localization::localized_str!("Add"))
                 .style(ButtonStyle::Outlined)
                 .label_size(LabelSize::Small)
                 .tab_index(0isize)
@@ -635,8 +635,8 @@ fn render_env_section(
 
     crate::render_settings_item_layout(
         settings_window,
-        "Environment Variables",
-        "Environment variables provided to the agent process.",
+        localization::localized_str!("Environment Variables"),
+        localization::localized_str!("Environment variables provided to the agent process."),
         control,
         None,
         None,
@@ -681,7 +681,7 @@ fn render_form_actions(
                 .border_1()
                 .border_color(cancel_border)
                 .child(
-                    Button::new("custom-agent-form-cancel", "Cancel")
+                    Button::new("custom-agent-form-cancel", localization::localized_str!("Cancel"))
                         .style(ButtonStyle::Subtle)
                         .track_focus(&cancel_handle)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -696,7 +696,7 @@ fn render_form_actions(
                 .border_1()
                 .border_color(save_border)
                 .child(
-                    Button::new("custom-agent-form-save", "Save")
+                    Button::new("custom-agent-form-save", localization::localized_str!("Save"))
                         .style(ButtonStyle::Filled)
                         .track_focus(&save_handle)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -752,7 +752,15 @@ fn save_custom_agent_form(
         });
     if collides_with_other_agent {
         if let Some(form) = settings_window.custom_agent_form.as_mut() {
-            form.error = Some(format!("An agent named \"{}\" already exists.", id.0).into());
+            form.error = Some({
+        let __zed_i18n_arg_0 = format!("{}", id.0);
+        localization::format_message(
+            "An agent named \"{}\" already exists.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into());
         }
         cx.notify();
         return;
@@ -814,12 +822,12 @@ fn build_settings_from_values(
 ) -> Result<(AgentId, Option<AgentId>, CustomAgentServerSettings), SharedString> {
     let name = values.name.trim().to_string();
     if name.is_empty() {
-        return Err("Agent name is required.".into());
+        return Err(localization::localized_str!("Agent name is required.").into());
     }
 
     let command = values.command.trim().to_string();
     if command.is_empty() {
-        return Err("Command is required.".into());
+        return Err(localization::localized_str!("Command is required.").into());
     }
 
     let args = values
@@ -863,7 +871,17 @@ fn collect_kv(
             continue;
         }
         if map.contains_key(&key) {
-            return Err(format!("Duplicate {label} \"{key}\".").into());
+            return Err({
+        let __zed_i18n_arg_0 = format!("{}", label);
+        let __zed_i18n_arg_1 = format!("{}", key);
+        localization::format_message(
+            "Duplicate {label} \"{key}\".",
+            &[
+                ("label", __zed_i18n_arg_0),
+                ("key", __zed_i18n_arg_1)
+            ],
+        )
+    }.into());
         }
         map.insert(key, value.clone());
     }
@@ -1058,7 +1076,7 @@ mod tests {
         values.name = "   ".into();
         assert_eq!(
             build_settings_from_values(values).unwrap_err().as_ref(),
-            "Agent name is required."
+            localization::localized_str!("Agent name is required.")
         );
     }
 
@@ -1068,7 +1086,7 @@ mod tests {
         values.command = "   ".into();
         assert_eq!(
             build_settings_from_values(values).unwrap_err().as_ref(),
-            "Command is required."
+            localization::localized_str!("Command is required.")
         );
     }
 

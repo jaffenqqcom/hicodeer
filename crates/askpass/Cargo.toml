@@ -13,6 +13,7 @@ path = "src/askpass.rs"
 doctest = false
 
 [dependencies]
+localization.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 gpui.workspace = true

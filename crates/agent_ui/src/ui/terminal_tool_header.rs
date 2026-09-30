@@ -187,10 +187,10 @@ impl RenderOnce for TerminalToolHeader {
                                     .icon_color(Color::Error)
                                     .tooltip(move |_window, cx| {
                                         Tooltip::with_meta(
-                                            "Stop This Command",
+                                            localization::localized_str!("Stop This Command"),
                                             None,
-                                            "Also possible by placing your cursor inside the \
-                                             terminal and using regular terminal bindings.",
+                                            localization::localized_str!("Also possible by placing your cursor inside the \
+                                             terminal and using regular terminal bindings."),
                                             cx,
                                         )
                                     })
@@ -218,7 +218,15 @@ impl RenderOnce for TerminalToolHeader {
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Error)
                             .when_some(exit_code, |this, code| {
-                                this.tooltip(Tooltip::text(format!("Exited with code {code}")))
+                                this.tooltip(Tooltip::text({
+        let __zed_i18n_arg_0 = format!("{}", code);
+        localization::format_message(
+            "Exited with code {code}",
+            &[
+                ("code", __zed_i18n_arg_0)
+            ],
+        )
+    }))
                             }),
                     )
             })
@@ -235,7 +243,15 @@ impl RenderOnce for TerminalToolHeader {
                             Tooltip::with_meta(
                                 title.clone(),
                                 None,
-                                format!("{detail} Click to learn more about sandboxing."),
+                                {
+        let __zed_i18n_arg_0 = format!("{}", detail);
+        localization::format_message(
+            "{detail} Click to learn more about sandboxing.",
+            &[
+                ("detail", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                 cx,
                             )
                         })

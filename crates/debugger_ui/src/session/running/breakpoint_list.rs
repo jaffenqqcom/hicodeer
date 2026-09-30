@@ -192,9 +192,9 @@ impl BreakpointList {
     ) {
         self.strip_mode = Some(prop);
         let placeholder = match prop {
-            ActiveBreakpointStripMode::Log => "Set Log Message",
-            ActiveBreakpointStripMode::Condition => "Set Condition",
-            ActiveBreakpointStripMode::HitCondition => "Set Hit Condition",
+            ActiveBreakpointStripMode::Log => localization::localized_str!("Set Log Message"),
+            ActiveBreakpointStripMode::Condition => localization::localized_str!("Set Condition"),
+            ActiveBreakpointStripMode::HitCondition => localization::localized_str!("Set Hit Condition"),
         };
         let mut is_exception_breakpoint = true;
         let active_value = self.selected_ix.and_then(|ix| {
@@ -580,21 +580,21 @@ impl BreakpointList {
         let focus_handle = self.focus_handle.clone();
 
         let remove_breakpoint_tooltip = selection_kind.map(|(kind, _)| match kind {
-            SelectedBreakpointKind::Source => "Remove breakpoint from a breakpoint list",
+            SelectedBreakpointKind::Source => localization::localized_str!("Remove breakpoint from a breakpoint list"),
             SelectedBreakpointKind::Exception => {
-                "Exception Breakpoints cannot be removed from the breakpoint list"
+                localization::localized_str!("Exception Breakpoints cannot be removed from the breakpoint list")
             }
-            SelectedBreakpointKind::Data => "Remove data breakpoint from a breakpoint list",
+            SelectedBreakpointKind::Data => localization::localized_str!("Remove data breakpoint from a breakpoint list"),
         });
 
         let toggle_label = selection_kind.map(|(_, is_enabled)| {
             if is_enabled {
                 (
-                    "Disable Breakpoint",
-                    "Disable a breakpoint without removing it from the list",
+                    localization::localized_str!("Disable Breakpoint"),
+                    localization::localized_str!("Disable a breakpoint without removing it from the list"),
                 )
             } else {
-                ("Enable Breakpoint", "Re-enable a breakpoint")
+                (localization::localized_str!("Enable Breakpoint"), localization::localized_str!("Re-enable a breakpoint"))
             }
         });
 
@@ -636,7 +636,7 @@ impl BreakpointList {
                             let focus_handle = focus_handle.clone();
                             move |_window, cx| {
                                 Tooltip::with_meta_in(
-                                    "Remove Breakpoint",
+                                    localization::localized_str!("Remove Breakpoint"),
                                     Some(&UnsetBreakpoint),
                                     tooltip,
                                     &focus_handle,
@@ -851,9 +851,9 @@ impl LineBreakpoint {
                 move |_window, cx| {
                     Tooltip::for_action_in(
                         if is_enabled {
-                            "Disable Breakpoint"
+                            localization::localized_str!("Disable Breakpoint")
                         } else {
-                            "Enable Breakpoint"
+                            localization::localized_str!("Enable Breakpoint")
                         },
                         &ToggleEnableBreakpoint,
                         &focus_handle,
@@ -934,9 +934,15 @@ impl LineBreakpoint {
                                 .truncate()
                         }))
                         .when_some(self.dir.as_ref(), |this, parent_dir| {
-                            this.tooltip(Tooltip::text(format!(
-                                "Worktree parent path: {parent_dir}"
-                            )))
+                            this.tooltip(Tooltip::text({
+        let __zed_i18n_arg_0 = format!("{}", parent_dir);
+        localization::format_message(
+            "Worktree parent path: {parent_dir}",
+            &[
+                ("parent_dir", __zed_i18n_arg_0)
+            ],
+        )
+    }))
                         }),
                 )
                 .child(BreakpointOptionsStrip {
@@ -1004,9 +1010,9 @@ impl DataBreakpoint {
                     move |_window, cx| {
                         Tooltip::for_action_in(
                             if is_enabled {
-                                "Disable Data Breakpoint"
+                                localization::localized_str!("Disable Data Breakpoint")
                             } else {
-                                "Enable Data Breakpoint"
+                                localization::localized_str!("Enable Data Breakpoint")
                             },
                             &ToggleEnableBreakpoint,
                             &focus_handle,
@@ -1108,9 +1114,9 @@ impl ExceptionBreakpoint {
                     move |_window, cx| {
                         Tooltip::for_action_in(
                             if is_enabled {
-                                "Disable Exception Breakpoint"
+                                localization::localized_str!("Disable Exception Breakpoint")
                             } else {
-                                "Enable Exception Breakpoint"
+                                localization::localized_str!("Enable Exception Breakpoint")
                             },
                             &ToggleEnableBreakpoint,
                             &focus_handle,
@@ -1424,9 +1430,9 @@ impl RenderOnce for BreakpointOptionsStrip {
                         .on_click(self.on_click_callback(ActiveBreakpointStripMode::Log))
                         .tooltip(|_window, cx|  {
                             Tooltip::with_meta(
-                                "Set Log Message",
+                                localization::localized_str!("Set Log Message"),
                                 None,
-                                "Set log message to display (instead of stopping) when a breakpoint is hit.",
+                                localization::localized_str!("Set log message to display (instead of stopping) when a breakpoint is hit."),
                                 cx,
                             )
                         }),
@@ -1460,9 +1466,9 @@ impl RenderOnce for BreakpointOptionsStrip {
                             .on_click(self.on_click_callback(ActiveBreakpointStripMode::Condition))
                             .tooltip(|_window, cx|  {
                                 Tooltip::with_meta(
-                                    "Set Condition",
+                                    localization::localized_str!("Set Condition"),
                                     None,
-                                    "Set condition to evaluate when a breakpoint is hit. Program execution will stop only when the condition is met.",
+                                    localization::localized_str!("Set condition to evaluate when a breakpoint is hit. Program execution will stop only when the condition is met."),
                                     cx,
                                 )
                             }),
@@ -1495,9 +1501,9 @@ impl RenderOnce for BreakpointOptionsStrip {
                         .on_click(self.on_click_callback(ActiveBreakpointStripMode::HitCondition))
                         .tooltip(|_window, cx|  {
                             Tooltip::with_meta(
-                                "Set Hit Condition",
+                                localization::localized_str!("Set Hit Condition"),
                                 None,
-                                "Set expression that controls how many hits of the breakpoint are ignored.",
+                                localization::localized_str!("Set expression that controls how many hits of the breakpoint are ignored."),
                                 cx,
                             )
                         }),

@@ -1238,14 +1238,14 @@ impl Item for Editor {
 
         if is_markdown {
             actions.push((
-                "Open Markdown Preview".into(),
+                localization::localized_str!("Open Markdown Preview").into(),
                 Box::new(OpenMarkdownPreview) as Box<dyn gpui::Action>,
             ));
         }
 
         if is_svg {
             actions.push((
-                "Open SVG Preview".into(),
+                localization::localized_str!("Open SVG Preview").into(),
                 Box::new(OpenSvgPreview) as Box<dyn gpui::Action>,
             ));
         }

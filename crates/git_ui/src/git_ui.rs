@@ -489,7 +489,7 @@ impl RenameBranchModal {
                 Err(_) => Err(anyhow!("Operation was canceled")),
             }
         })
-        .detach_and_prompt_err("Failed to rename branch", window, cx, |_, _, _| None);
+        .detach_and_prompt_err(localization::localized_str!("Failed to rename branch"), window, cx, |_, _, _| None);
         cx.emit(DismissEvent);
     }
 }
@@ -519,7 +519,15 @@ impl Render for RenameBranchModal {
                     .gap_1p5()
                     .child(Icon::new(IconName::GitBranch).size(IconSize::XSmall))
                     .child(
-                        Headline::new(format!("Rename Branch ({})", self.current_branch))
+                        Headline::new({
+        let __zed_i18n_arg_0 = format!("{}", self.current_branch);
+        localization::format_message(
+            "Rename Branch ({})",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    })
                             .size(HeadlineSize::XSmall),
                     ),
             )
@@ -587,7 +595,7 @@ impl RefPickerModal {
     ) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Enter git ref...", window, cx);
+            editor.set_placeholder_text(localization::localized_str!("Enter git ref..."), window, cx);
             editor
         });
 
@@ -772,7 +780,7 @@ impl Render for RefPickerModal {
                     .w_full()
                     .gap_1p5()
                     .child(Icon::new(IconName::Hash).size(IconSize::XSmall))
-                    .child(Headline::new("View Commit").size(HeadlineSize::XSmall)),
+                    .child(Headline::new(localization::localized_str!("View Commit")).size(HeadlineSize::XSmall)),
             )
             .child(div().px_3().w_full().child(self.editor.clone()))
             .when_some(commit_preview, |el, preview| {
@@ -870,7 +878,7 @@ mod remote_button {
     ) -> SplitButton {
         split_button(
             id,
-            "Fetch",
+            localization::localized_str!("Fetch"),
             0,
             0,
             Some(IconName::ArrowCircle),
@@ -882,7 +890,7 @@ mod remote_button {
             },
             move |_window, cx| {
                 git_action_tooltip(
-                    "Fetch updates from remote",
+                    localization::localized_str!("Fetch updates from remote"),
                     &git::Fetch,
                     "git fetch",
                     keybinding_target.clone(),
@@ -901,7 +909,7 @@ mod remote_button {
     ) -> SplitButton {
         split_button(
             id,
-            "Push",
+            localization::localized_str!("Push"),
             ahead as usize,
             0,
             None,
@@ -913,7 +921,7 @@ mod remote_button {
             },
             move |_window, cx| {
                 git_action_tooltip(
-                    "Push committed changes to remote",
+                    localization::localized_str!("Push committed changes to remote"),
                     &git::Push,
                     "git push",
                     keybinding_target.clone(),
@@ -933,7 +941,7 @@ mod remote_button {
     ) -> SplitButton {
         split_button(
             id,
-            "Pull",
+            localization::localized_str!("Pull"),
             ahead as usize,
             behind as usize,
             None,
@@ -945,7 +953,7 @@ mod remote_button {
             },
             move |_window, cx| {
                 git_action_tooltip(
-                    "Pull",
+                    localization::localized_str!("Pull"),
                     &git::Pull,
                     "git pull",
                     keybinding_target.clone(),
@@ -963,7 +971,7 @@ mod remote_button {
     ) -> SplitButton {
         split_button(
             id,
-            "Publish",
+            localization::localized_str!("Publish"),
             0,
             0,
             Some(IconName::ExpandUp),
@@ -975,7 +983,7 @@ mod remote_button {
             },
             move |_window, cx| {
                 git_action_tooltip(
-                    "Publish branch to remote",
+                    localization::localized_str!("Publish branch to remote"),
                     &git::Push,
                     "git push --set-upstream",
                     keybinding_target.clone(),
@@ -993,7 +1001,7 @@ mod remote_button {
     ) -> SplitButton {
         split_button(
             id,
-            "Republish",
+            localization::localized_str!("Republish"),
             0,
             0,
             Some(IconName::ExpandUp),
@@ -1005,7 +1013,7 @@ mod remote_button {
             },
             move |_window, cx| {
                 git_action_tooltip(
-                    "Re-publish branch to remote",
+                    localization::localized_str!("Re-publish branch to remote"),
                     &git::Push,
                     "git push --set-upstream",
                     keybinding_target.clone(),
@@ -1059,14 +1067,14 @@ mod remote_button {
                         .when_some(keybinding_target.clone(), |el, keybinding_target| {
                             el.context(keybinding_target)
                         })
-                        .action("Fetch", git::Fetch.boxed_clone())
-                        .action("Fetch From", git::FetchFrom.boxed_clone())
-                        .action("Pull", git::Pull.boxed_clone())
-                        .action("Pull (Rebase)", git::PullRebase.boxed_clone())
+                        .action(localization::localized_str!("Fetch"), git::Fetch.boxed_clone())
+                        .action(localization::localized_str!("Fetch From"), git::FetchFrom.boxed_clone())
+                        .action(localization::localized_str!("Pull"), git::Pull.boxed_clone())
+                        .action(localization::localized_str!("Pull (Rebase)"), git::PullRebase.boxed_clone())
                         .separator()
-                        .action("Push", git::Push.boxed_clone())
-                        .action("Push To", git::PushTo.boxed_clone())
-                        .action("Force Push", git::ForcePush.boxed_clone())
+                        .action(localization::localized_str!("Push"), git::Push.boxed_clone())
+                        .action(localization::localized_str!("Push To"), git::PushTo.boxed_clone())
+                        .action(localization::localized_str!("Force Push"), git::ForcePush.boxed_clone())
                 }))
             })
             .anchor(Anchor::TopRight)
@@ -1277,7 +1285,7 @@ impl GitCloneModal {
     pub fn show(panel: Entity<GitPanel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let repo_input = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text("Enter repository URL…", window, cx);
+            editor.set_placeholder_text(localization::localized_str!("Enter repository URL…"), window, cx);
             editor
         });
         let focus_handle = repo_input.focus_handle(cx);
@@ -1321,12 +1329,12 @@ impl Render for GitCloneModal {
                     .rounded_b_sm()
                     .bg(cx.theme().colors().editor_background)
                     .child(
-                        Label::new("Clone a repository from GitHub or other sources.")
+                        Label::new(localization::localized_str!("Clone a repository from GitHub or other sources."))
                             .color(Color::Muted)
                             .size(LabelSize::Small),
                     )
                     .child(
-                        Button::new("learn-more", "Learn More")
+                        Button::new("learn-more", localization::localized_str!("Learn More"))
                             .label_size(LabelSize::Small)
                             .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::XSmall))
                             .on_click(|_, _, cx| {

@@ -242,6 +242,7 @@ impl VsCodeSettings {
             workspace: self.workspace_settings_content(),
             which_key: None,
             modeline_lines: None,
+            ui_locale: None,
             feature_flags: None,
             instrumentation: None,
         }

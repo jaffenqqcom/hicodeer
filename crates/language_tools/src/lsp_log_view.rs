@@ -840,7 +840,7 @@ impl Item for LspLogView {
     }
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "LSP Logs".into()
+        localization::localized_str!("LSP Logs").into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
@@ -1257,7 +1257,7 @@ impl Render for LspLogToolbarItemView {
                                         .trigger(
                                             Button::new(
                                                 "language_server_trace_level_selector",
-                                                "Trace level",
+                                                localization::localized_str!("Trace level"),
                                             )
                                             .end_icon(
                                                 Icon::new(IconName::ChevronDown)
@@ -1291,9 +1291,9 @@ impl Render for LspLogToolbarItemView {
                                                         let log_view = log_view.clone();
 
                                                         for (option, label) in [
-                                                            (TraceValue::Off, "Off"),
-                                                            (TraceValue::Messages, "Messages"),
-                                                            (TraceValue::Verbose, "Verbose"),
+                                                            (TraceValue::Off, localization::localized_str!("Off")),
+                                                            (TraceValue::Messages, localization::localized_str!("Messages")),
+                                                            (TraceValue::Verbose, localization::localized_str!("Verbose")),
                                                         ] {
                                                             menu = menu.entry(label, None, {
                                                                 let log_view = log_view.clone();
@@ -1331,7 +1331,7 @@ impl Render for LspLogToolbarItemView {
                                         .trigger(
                                             Button::new(
                                                 "language_server_log_level_selector",
-                                                "Log level",
+                                                localization::localized_str!("Log level"),
                                             )
                                             .end_icon(
                                                 Icon::new(IconName::ChevronDown)
@@ -1365,10 +1365,10 @@ impl Render for LspLogToolbarItemView {
                                                         let log_view = log_view.clone();
 
                                                         for (option, label) in [
-                                                            (MessageType::LOG, "Log"),
-                                                            (MessageType::INFO, "Info"),
-                                                            (MessageType::WARNING, "Warning"),
-                                                            (MessageType::ERROR, "Error"),
+                                                            (MessageType::LOG, localization::localized_str!("Log")),
+                                                            (MessageType::INFO, localization::localized_str!("Info")),
+                                                            (MessageType::WARNING, localization::localized_str!("Warning")),
+                                                            (MessageType::ERROR, localization::localized_str!("Error")),
                                                         ] {
                                                             menu = menu.entry(label, None, {
                                                                 let log_view = log_view.clone();
@@ -1403,7 +1403,7 @@ impl Render for LspLogToolbarItemView {
                     ),
             )
             .child(
-                Button::new("clear_log_button", "Clear").on_click(cx.listener(
+                Button::new("clear_log_button", localization::localized_str!("Clear")).on_click(cx.listener(
                     |this, _, window, cx| {
                         if let Some(log_view) = this.log_view.as_ref() {
                             log_view.update(cx, |log_view, cx| {

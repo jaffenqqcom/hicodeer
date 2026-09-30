@@ -75,8 +75,8 @@ pub fn sidebar_side_context_menu(
         let fs = <dyn fs::Fs>::global(cx);
         ContextMenu::build(window, cx, move |mut menu, _, _cx| {
             let positions: [(SidebarDockPosition, &str); 2] = [
-                (SidebarDockPosition::Left, "Left"),
-                (SidebarDockPosition::Right, "Right"),
+                (SidebarDockPosition::Left, localization::localized_str!("Left")),
+                (SidebarDockPosition::Right, localization::localized_str!("Right")),
             ];
             for (position, label) in positions {
                 let fs = fs.clone();

@@ -294,12 +294,12 @@ impl Render for SvgPreviewView {
                             .p_4()
                             .gap_2()
                             .child(Icon::new(IconName::Warning))
-                            .child("Failed to load SVG image")
+                            .child(localization::localized_str!("Failed to load SVG image"))
                             .into_any_element()
                     }))
                 }
                 Some(Err(e)) => this.child(div().p_4().child(e).into_any_element()),
-                None => this.child(div().p_4().child("No SVG file selected")),
+                None => this.child(div().p_4().child(localization::localized_str!("No SVG file selected"))),
             })
     }
 }
@@ -328,8 +328,16 @@ impl Item for SvgPreviewView {
         self.buffer
             .as_ref()
             .and_then(|svg_path| svg_path.read(cx).file())
-            .map(|name| format!("Preview {}", name.file_name(cx)).into())
-            .unwrap_or_else(|| "SVG Preview".into())
+            .map(|name| {
+        let __zed_i18n_arg_0 = format!("{}", name.file_name(cx));
+        localization::format_message(
+            "Preview {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into())
+            .unwrap_or_else(|| localization::localized_str!("SVG Preview").into())
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {

@@ -49,7 +49,7 @@ pub fn init(app_state: Arc<AppState>, cx: &mut App) {
                 ..Default::default()
             },
             |window, cx| {
-                window.set_window_title("Debug Filesystem Watching");
+                window.set_window_title(localization::localized_str!("Debug Filesystem Watching"));
                 let view = cx.new(|cx| WatcherDebug::new(app_state, window, cx));
                 window.activate_window();
                 view.focus_handle(cx).focus(window, cx);
@@ -90,27 +90,29 @@ impl WatcherTab {
 
     fn label(self) -> &'static str {
         match self {
-            Self::RawEvents => "Raw Events",
-            Self::WatchRoots => "Watch Roots",
-            Self::ScanExclusions => "Scan Exclusions",
+            Self::RawEvents => localization::localized_str!("Raw Events"),
+            Self::WatchRoots => localization::localized_str!("Watch Roots"),
+            Self::ScanExclusions => localization::localized_str!("Scan Exclusions"),
         }
     }
 
     fn description(self) -> &'static str {
         match self {
             Self::RawEvents => {
-                "Raw watcher notifications, oldest first. Times are shown in your local time zone."
+                localization::localized_str!("Raw watcher notifications, oldest first. Times are shown in your local time zone.")
             }
-            Self::WatchRoots => "Live native and polling watch roots across the app.",
-            Self::ScanExclusions => EXCLUSION_SCOPE,
+            Self::WatchRoots => localization::localized_str!("Live native and polling watch roots across the app."),
+            Self::ScanExclusions => localization::localized_str!(
+                "Patterns Zed skips when scanning your open local projects. Excluded files may still produce watcher events."
+            ),
         }
     }
 
     fn empty_message(self) -> &'static str {
         match self {
-            Self::RawEvents => "Waiting for filesystem watcher events…",
-            Self::WatchRoots => "No watch roots.",
-            Self::ScanExclusions => "No local projects are open.",
+            Self::RawEvents => localization::localized_str!("Waiting for filesystem watcher events…"),
+            Self::WatchRoots => localization::localized_str!("No watch roots."),
+            Self::ScanExclusions => localization::localized_str!("No local projects are open."),
         }
     }
 }
@@ -432,7 +434,15 @@ impl WatcherDebug {
                 this.saving = false;
                 this.save_error = match result {
                     Ok(()) => None,
-                    Err(error) => Some(format!("Save failed: {error:#}").into()),
+                    Err(error) => Some({
+        let __zed_i18n_arg_0 = format!("{:#}", error);
+        localization::format_message(
+            "Save failed: {error:#}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    }.into()),
                 };
                 cx.notify();
             })
@@ -505,7 +515,7 @@ impl Render for WatcherDebug {
                     .bg(cx.theme().colors().elevated_surface_background)
                     .p(DynamicSpacing::Base04.rems(cx))
                     .child(
-                        Button::new("save-watcher-json", "Export as JSON")
+                        Button::new("save-watcher-json", localization::localized_str!("Export as JSON"))
                             .disabled(self.saving || self.recording.is_none())
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     ),
@@ -773,7 +783,7 @@ mod tests {
         let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
         assert_eq!(
             visual.window_title().as_deref(),
-            Some("Debug Filesystem Watching")
+            Some(localization::localized_str!("Debug Filesystem Watching"))
         );
         visual.run_until_parked();
         let footer = visual.debug_bounds("watcher-footer").unwrap();

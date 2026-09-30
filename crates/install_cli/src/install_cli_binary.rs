@@ -86,9 +86,9 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
         if cfg!(any(target_os = "linux", target_os = "freebsd")) {
             let prompt = cx.prompt(
                 PromptLevel::Warning,
-                "CLI should already be installed",
+                localization::localized_str!("CLI should already be installed"),
                 Some(LINUX_PROMPT_DETAIL),
-                &["OK"],
+                &[localization::localized_str!("OK")],
             );
             cx.background_spawn(prompt).detach();
             return Ok(());
@@ -108,11 +108,11 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                         |cx| {
                             cx.new(|cx| {
                                 MessageNotification::new(
-                                    "You can add `zed` to your PATH manually.",
+                                    localization::localized_str!("You can add `zed` to your PATH manually."),
                                     cx,
                                 )
-                                .with_title("Couldn't install the Zed CLI")
-                                .more_info_message("Show me how")
+                                .with_title(localization::localized_str!("Couldn't install the Zed CLI"))
+                                .more_info_message(localization::localized_str!("Show me how"))
                                 .more_info_url(CANT_INSTALL_DOCS_URL)
                             })
                         },
@@ -128,11 +128,17 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
             workspace.show_toast(
                 Toast::new(
                     NotificationId::unique::<InstalledZedCli>(),
-                    format!(
-                        "Installed `zed` to {}. You can launch {} from your terminal.",
-                        path.to_string_lossy(),
-                        ReleaseChannel::global(cx).display_name()
-                    ),
+                    {
+        let __zed_i18n_arg_0 = format!("{}", path.to_string_lossy());
+        let __zed_i18n_arg_1 = format!("{}", ReleaseChannel::global(cx).display_name());
+        localization::format_message(
+            "Installed `zed` to {}. You can launch {} from your terminal.",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    },
                 ),
                 cx,
             )
@@ -140,5 +146,5 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
         register_zed_scheme(cx).await.log_err();
         Ok(())
     })
-    .detach_and_prompt_err("Cannot install the Zed CLI", window, cx, |_, _, _| None);
+    .detach_and_prompt_err(localization::localized_str!("Cannot install the Zed CLI"), window, cx, |_, _, _| None);
 }

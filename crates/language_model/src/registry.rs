@@ -22,11 +22,17 @@ impl Global for GlobalLanguageModelRegistry {}
 
 #[derive(Error)]
 pub enum ConfigurationError {
-    #[error("Configure at least one LLM provider to start using the panel.")]
+    #[error("{}", localization::localized_str!("Configure at least one LLM provider to start using the panel."))]
     NoProvider,
-    #[error("LLM provider is not configured or does not support the configured model.")]
+    #[error("{}", localization::localized_str!("LLM provider is not configured or does not support the configured model."))]
     ModelNotFound,
-    #[error("{} LLM provider is not configured.", .0.name().0)]
+    #[error(
+        "{}",
+        localization::format_message(
+            "{} LLM provider is not configured.",
+            &[("0", format!("{}", .0.name().0))],
+        )
+    )]
     ProviderNotAuthenticated(Arc<dyn LanguageModelProvider>),
 }
 

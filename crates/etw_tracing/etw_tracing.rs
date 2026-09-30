@@ -62,13 +62,21 @@ fn show_etw_notification(cx: &mut App, message: impl Into<gpui::SharedString>) {
 fn show_etw_status_notification(cx: &mut App, status: Result<StatusMessage>) {
     match status {
         Ok(StatusMessage::Stopped { output_path }) => {
-            let message = format!("ETW trace saved to {}", output_path.display());
+            let message = {
+        let __zed_i18n_arg_0 = format!("{}", output_path.display());
+        localization::format_message(
+            "ETW trace saved to {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    };
             show_app_notification(NotificationId::unique::<EtwNotification>(), cx, move |cx| {
                 let message = message.clone();
                 let output_path = output_path.clone();
                 cx.new(|cx| {
                     MessageNotification::new(message, cx)
-                        .primary_message("Show in File Manager")
+                        .primary_message(localization::localized_str!("Show in File Manager"))
                         .primary_on_click(move |_window, cx| {
                             cx.reveal_path(&output_path);
                             cx.emit(DismissEvent);
@@ -77,16 +85,32 @@ fn show_etw_status_notification(cx: &mut App, status: Result<StatusMessage>) {
             });
         }
         Ok(StatusMessage::Cancelled) => {
-            show_etw_notification(cx, "ETW recording cancelled");
+            show_etw_notification(cx, localization::localized_str!("ETW recording cancelled"));
         }
         Ok(StatusMessage::Error { message }) => {
-            show_etw_notification(cx, format!("ETW recording failed: {message}"));
+            show_etw_notification(cx, {
+        let __zed_i18n_arg_0 = format!("{}", message);
+        localization::format_message(
+            "ETW recording failed: {message}",
+            &[
+                ("message", __zed_i18n_arg_0)
+            ],
+        )
+    });
         }
         Ok(StatusMessage::Started) => {
-            show_etw_notification(cx, "ETW recording ended unexpectedly");
+            show_etw_notification(cx, localization::localized_str!("ETW recording ended unexpectedly"));
         }
         Err(error) => {
-            show_etw_notification(cx, format!("Failed to complete ETW recording: {error:#}"));
+            show_etw_notification(cx, {
+        let __zed_i18n_arg_0 = format!("{:#}", error);
+        localization::format_message(
+            "Failed to complete ETW recording: {error:#}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    });
         }
     }
 }
@@ -113,7 +137,7 @@ pub fn init(cx: &mut App) {
 
 fn prompt_for_etw_output_path(cx: &mut App) {
     let Some(session) = cx.global_mut::<GlobalEtwSession>().0.as_mut() else {
-        show_etw_notification(cx, "No active ETW recording to stop");
+        show_etw_notification(cx, localization::localized_str!("No active ETW recording to stop"));
         return;
     };
     match &session.state {
@@ -121,11 +145,11 @@ fn prompt_for_etw_output_path(cx: &mut App) {
             session.state = EtwSessionState::ChoosingOutputPath;
         }
         EtwSessionState::ChoosingOutputPath => {
-            show_etw_notification(cx, "ETW recording is already waiting for a save location");
+            show_etw_notification(cx, localization::localized_str!("ETW recording is already waiting for a save location"));
             return;
         }
         EtwSessionState::Stopping => {
-            show_etw_notification(cx, "ETW recording is already stopping");
+            show_etw_notification(cx, localization::localized_str!("ETW recording is already stopping"));
             return;
         }
     }
@@ -138,7 +162,15 @@ fn prompt_for_etw_output_path(cx: &mut App) {
             Ok(None) => resume_etw_recording(cx),
             Err(error) => {
                 resume_etw_recording(cx);
-                show_etw_notification(cx, format!("Failed to pick save location: {error:#}"));
+                show_etw_notification(cx, {
+        let __zed_i18n_arg_0 = format!("{:#}", error);
+        localization::format_message(
+            "Failed to pick save location: {error:#}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    });
             }
         });
     })
@@ -159,11 +191,19 @@ fn save_etw_recording(output_path: PathBuf, cx: &mut App) {
     match send_json(&mut session.writer, &command) {
         Ok(()) => {
             session.state = EtwSessionState::Stopping;
-            show_etw_notification(cx, "Stopping ETW recording...");
+            show_etw_notification(cx, localization::localized_str!("Stopping ETW recording..."));
         }
         Err(error) => {
             session.state = EtwSessionState::Recording;
-            show_etw_notification(cx, format!("Failed to stop ETW recording: {error:#}"));
+            show_etw_notification(cx, {
+        let __zed_i18n_arg_0 = format!("{:#}", error);
+        localization::format_message(
+            "Failed to stop ETW recording: {error:#}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    });
         }
     }
 }
@@ -179,29 +219,37 @@ fn resume_etw_recording(cx: &mut App) {
 
 fn cancel_etw_recording(cx: &mut App) {
     let Some(session) = cx.global_mut::<GlobalEtwSession>().0.as_mut() else {
-        show_etw_notification(cx, "No active ETW recording to cancel");
+        show_etw_notification(cx, localization::localized_str!("No active ETW recording to cancel"));
         return;
     };
     if matches!(&session.state, EtwSessionState::Stopping) {
-        show_etw_notification(cx, "ETW recording is already stopping");
+        show_etw_notification(cx, localization::localized_str!("ETW recording is already stopping"));
         return;
     }
 
     match send_json(&mut session.writer, &Command::Cancel) {
         Ok(()) => {
             session.state = EtwSessionState::Stopping;
-            show_etw_notification(cx, "Cancelling ETW recording...");
+            show_etw_notification(cx, localization::localized_str!("Cancelling ETW recording..."));
         }
         Err(error) => {
             session.state = EtwSessionState::Recording;
-            show_etw_notification(cx, format!("Failed to cancel ETW recording: {error:#}"));
+            show_etw_notification(cx, {
+        let __zed_i18n_arg_0 = format!("{:#}", error);
+        localization::format_message(
+            "Failed to cancel ETW recording: {error:#}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    });
         }
     }
 }
 
 fn start_etw_recording(cx: &mut App, heap_pid: Option<u32>) {
     if cx.global::<GlobalEtwSession>().0.is_some() {
-        show_etw_notification(cx, "ETW recording is already in progress");
+        show_etw_notification(cx, localization::localized_str!("ETW recording is already in progress"));
         return;
     }
     cx.spawn(async move |cx| {
@@ -213,7 +261,15 @@ fn start_etw_recording(cx: &mut App, heap_pid: Option<u32>) {
             Ok(session) => session,
             Err(error) => {
                 cx.update(|cx| {
-                    show_etw_notification(cx, format!("Failed to start ETW recording: {error:#}"));
+                    show_etw_notification(cx, {
+        let __zed_i18n_arg_0 = format!("{:#}", error);
+        localization::format_message(
+            "Failed to start ETW recording: {error:#}",
+            &[
+                ("error", __zed_i18n_arg_0)
+            ],
+        )
+    });
                 });
                 return;
             }
@@ -221,7 +277,7 @@ fn start_etw_recording(cx: &mut App, heap_pid: Option<u32>) {
 
         cx.update(|cx| {
             cx.global_mut::<GlobalEtwSession>().0 = Some(handle);
-            show_etw_notification(cx, "ETW recording started");
+            show_etw_notification(cx, localization::localized_str!("ETW recording started"));
         });
 
         let status = cx

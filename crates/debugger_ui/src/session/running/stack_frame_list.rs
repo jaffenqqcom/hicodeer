@@ -658,7 +658,7 @@ impl StackFrameList {
                                     }
                                 }))
                                 .tooltip(move |window, cx| {
-                                    Tooltip::text("Restart Stack Frame")(window, cx)
+                                    Tooltip::text(localization::localized_str!("Restart Stack Frame"))(window, cx)
                                 }),
                             ),
                     )
@@ -722,15 +722,21 @@ impl StackFrameList {
                     .text_ui_sm(cx)
                     .truncate()
                     .text_color(cx.theme().colors().text_muted)
-                    .child(format!(
-                        "Show {} more{}",
-                        stack_frames.len(),
-                        first_stack_frame
+                    .child({
+        let __zed_i18n_arg_0 = format!("{}", stack_frames.len());
+        let __zed_i18n_arg_1 = format!("{}", first_stack_frame
                             .source
                             .as_ref()
                             .and_then(|source| source.origin.as_ref())
-                            .map_or(String::new(), |origin| format!(": {}", origin))
-                    )),
+                            .map_or(String::new(), |origin| format!(": {}", origin)));
+        localization::format_message(
+            "Show {} more{}",
+            &[
+                ("0", __zed_i18n_arg_0),
+                ("1", __zed_i18n_arg_1)
+            ],
+        )
+    }),
             )
             .into_any()
     }
@@ -906,8 +912,8 @@ impl StackFrameList {
 
     pub(crate) fn render_control_strip(&self) -> AnyElement {
         let tooltip_title = match self.list_filter {
-            StackFrameFilter::All => "Show stack frames from your project",
-            StackFrameFilter::OnlyUserFrames => "Show all stack frames",
+            StackFrameFilter::All => localization::localized_str!("Show stack frames from your project"),
+            StackFrameFilter::OnlyUserFrames => localization::localized_str!("Show all stack frames"),
         };
 
         h_flex()

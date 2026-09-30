@@ -189,7 +189,7 @@ impl RenderOnce for PendingBindings {
                             .child(Self::keybinding(self.pending_keystrokes, cx)),
                     )
                     .child(
-                        Label::new("is waiting for more keys…")
+                        Label::new(localization::localized_str!("is waiting for more keys…"))
                             .size(LabelSize::Small)
                             .color(Color::Muted)
                             .single_line()

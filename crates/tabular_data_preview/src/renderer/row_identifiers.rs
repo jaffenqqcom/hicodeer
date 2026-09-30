@@ -121,11 +121,11 @@ impl TabularDataPreviewPane {
                 let (icon, tooltip_text) = match self.settings.numbering_type {
                     RowIdentifiers::SrcLines => (
                         IconName::Code,
-                        "Showing file line numbers.\nClick to show sequential row numbers.",
+                        localization::localized_str!("Showing file line numbers.\nClick to show sequential row numbers."),
                     ),
                     RowIdentifiers::RowNum => (
                         IconName::Hash,
-                        "Showing sequential row numbers.\nClick to show file line numbers.",
+                        localization::localized_str!("Showing sequential row numbers.\nClick to show file line numbers."),
                     ),
                 };
 

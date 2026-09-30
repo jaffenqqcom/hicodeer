@@ -177,7 +177,7 @@ impl Addon for CommitDiffAddon {
         menu.when_some(file_to_open, |menu, file| {
             let commit_view = self.commit_view.clone();
             menu.entry(
-                "Open File in Project",
+                localization::localized_str!("Open File in Project"),
                 Some(Box::new(OpenFileAtHead)),
                 move |window, cx| {
                     commit_view
@@ -564,12 +564,12 @@ impl CommitView {
             .justify_center()
             .gap_2()
             .child(
-                Label::new("This commit is at the boundary of a shallow clone.")
+                Label::new(localization::localized_str!("This commit is at the boundary of a shallow clone."))
                     .color(Color::Muted),
             )
             .child(
                 Label::new(
-                    "Its parent history was not fetched, so the changes it introduced cannot be shown.",
+                    localization::localized_str!("Its parent history was not fetched, so the changes it introduced cannot be shown."),
                 )
                 .color(Color::Muted),
             )
@@ -585,15 +585,15 @@ impl CommitView {
                             Button::new(
                                 "fetch-unshallow",
                                 if fetch_in_flight {
-                                    "Fetching…"
+                                    localization::localized_str!("Fetching…")
                                 } else {
-                                    "Fetch Missing History"
+                                    localization::localized_str!("Fetch Missing History")
                                 },
                             )
                                 .style(ButtonStyle::Filled)
                                 .disabled(fetch_in_flight)
                                 .tooltip(Tooltip::text(
-                                    "Run `git fetch --unshallow` to download the full history, then show this commit's changes.",
+                                    localization::localized_str!("Run `git fetch --unshallow` to download the full history, then show this commit's changes."),
                                 ))
                                 .on_click(move |_, window, cx| {
                                     let fetch = crate::commit_tooltip::fetch_unshallow(
@@ -630,16 +630,16 @@ impl CommitView {
                         Button::new(
                             "load-shallow-snapshot",
                             if file_filter.is_some() {
-                                "Load File Snapshot"
+                                localization::localized_str!("Load File Snapshot")
                             } else {
-                                "Load Full Snapshot"
+                                localization::localized_str!("Load Full Snapshot")
                             },
                         )
                             .style(ButtonStyle::Outlined)
                             .tooltip(Tooltip::text(if file_filter.is_some() {
-                                "Show this file's full contents at this commit as added."
+                                localization::localized_str!("Show this file's full contents at this commit as added.")
                             } else {
-                                "Show every file at this commit as added. This can be slow in large repositories."
+                                localization::localized_str!("Show every file at this commit as added. This can be slow in large repositories.")
                             }))
                             .on_click(move |_, window, cx| {
                                 Self::open_with_options(
@@ -780,9 +780,9 @@ impl CommitView {
         let has_more = self.commit.message.trim().contains('\n');
         let is_expanded = self.message_expanded;
         let expand_tooltip = if is_expanded {
-            "Fold Commit Description"
+            localization::localized_str!("Fold Commit Description")
         } else {
-            "Expand Commit Description"
+            localization::localized_str!("Expand Commit Description")
         };
 
         v_flex()
@@ -855,7 +855,7 @@ impl CommitView {
                     )
                     .when(self.stash.is_none(), |this| {
                         this.child(
-                            Button::new("sha", "Commit SHA")
+                            Button::new("sha", localization::localized_str!("Commit SHA"))
                                 .start_icon(
                                     Icon::new(copy_icon)
                                         .size(IconSize::Small)
@@ -865,7 +865,7 @@ impl CommitView {
                                     let commit_sha = commit_sha.clone();
                                     move |_, cx| {
                                         Tooltip::with_meta(
-                                            "Copy Commit SHA",
+                                            localization::localized_str!("Copy Commit SHA"),
                                             None,
                                             commit_sha.clone(),
                                             cx,
@@ -962,7 +962,7 @@ impl CommitView {
     fn apply_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "Apply",
+            localization::localized_str!("Apply"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -989,7 +989,7 @@ impl CommitView {
     fn pop_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "Pop",
+            localization::localized_str!("Pop"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -1016,7 +1016,7 @@ impl CommitView {
     fn remove_stash(workspace: &mut Workspace, window: &mut Window, cx: &mut App) {
         Self::stash_action(
             workspace,
-            "Drop",
+            localization::localized_str!("Drop"),
             window,
             cx,
             async move |repository, sha, stash, commit_view, workspace, cx| {
@@ -1068,7 +1068,7 @@ impl CommitView {
             PromptLevel::Info,
             &format!("{} stash@{{{}}}?", str_action, stash),
             None,
-            &[str_action, "Cancel"],
+            &[str_action, localization::localized_str!("Cancel")],
             cx,
         );
 
@@ -1518,7 +1518,7 @@ impl Render for CommitViewToolbar {
                     .icon_size(IconSize::Small)
                     .tooltip(move |_, cx| {
                         Tooltip::for_action(
-                            "Buffer Search",
+                            localization::localized_str!("Buffer Search"),
                             &zed_actions::buffer_search::Deploy::find(),
                             cx,
                         )
@@ -1534,7 +1534,7 @@ impl Render for CommitViewToolbar {
                 this.child(
                     IconButton::new("show-in-git-graph", IconName::GitGraph)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Show in Git Graph"))
+                        .tooltip(Tooltip::text(localization::localized_str!("Show in Git Graph")))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::git_graph::OpenAtCommit {
@@ -1549,7 +1549,15 @@ impl Render for CommitViewToolbar {
 
                     IconButton::new("view_on_provider", icon)
                         .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text(format!("View on {}", provider_name)))
+                        .tooltip(Tooltip::text({
+        let __zed_i18n_arg_0 = format!("{}", provider_name);
+        localization::format_message(
+            "View on {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }))
                         .on_click(move |_, _, cx| cx.open_url(&url))
                 }))
             })

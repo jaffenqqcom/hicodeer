@@ -73,7 +73,7 @@ fn notify_release_notes_failed_to_show(
 
     impl WorkspaceError for ReleaseNotesError {
         fn primary_message(&self) -> SharedString {
-            "Couldn't load release notes".into()
+            localization::localized_str!("Couldn't load release notes").into()
         }
         fn severity(&self) -> ErrorSeverity {
             ErrorSeverity::Error
@@ -81,7 +81,7 @@ fn notify_release_notes_failed_to_show(
         fn primary_action(&self) -> ErrorAction {
             self.url
                 .clone()
-                .map(|url| ErrorAction::link("View in Browser", url))
+                .map(|url| ErrorAction::link(localization::localized_str!("View in Browser"), url))
                 .unwrap_or_else(ErrorAction::dismiss)
         }
     }
@@ -224,20 +224,28 @@ fn announcement_for_version(version: &Version, cx: &App) -> Option<AnnouncementC
 
         let mut bullet_items: Vec<SharedString> = Vec::with_capacity(3);
         bullet_items
-            .push(format!("Skills live in {GLOBAL_SKILLS_DIR_DISPLAY}/<name>/SKILL.md").into());
-        bullet_items.push("Type / to manually invoke a skill".into());
+            .push({
+        let __zed_i18n_arg_0 = format!("{}", GLOBAL_SKILLS_DIR_DISPLAY);
+        localization::format_message(
+            "Skills live in {GLOBAL_SKILLS_DIR_DISPLAY}/<name>/SKILL.md",
+            &[
+                ("GLOBAL_SKILLS_DIR_DISPLAY", __zed_i18n_arg_0)
+            ],
+        )
+    }.into());
+        bullet_items.push(localization::localized_str!("Type / to manually invoke a skill").into());
         if migrated_anything {
             bullet_items.push(
-                "The Rules Library is making way for skills: your default rules are now in a global AGENTS.md, and your other rules have been converted to skills".into(),
+                localization::localized_str!("The Rules Library is making way for skills: your default rules are now in a global AGENTS.md, and your other rules have been converted to skills").into(),
             );
         }
 
         Some(AnnouncementContent {
-            heading: "Introducing Skills Support".into(),
-            description: "Extend the agent with focused instructions and domain knowledge.".into(),
+            heading: localization::localized_str!("Introducing Skills Support").into(),
+            description: localization::localized_str!("Extend the agent with focused instructions and domain knowledge.").into(),
             bullet_items,
-            primary_action_label: "Try Now".into(),
-            secondary_action_label: "Read Documentation".into(),
+            primary_action_label: localization::localized_str!("Try Now").into(),
+            secondary_action_label: localization::localized_str!("Read Documentation").into(),
             primary_action_url: None,
             primary_action_callback: Some(Arc::new(move |window, cx| {
                 window.dispatch_action(Box::new(zed_actions::assistant::FocusAgent), cx);
@@ -350,8 +358,18 @@ fn show_update_notification(cx: &mut App) {
             move |cx| {
                 let workspace_handle = cx.entity().downgrade();
                 cx.new(|cx| {
-                    MessageNotification::new(format!("Updated to {app_name} {}", version), cx)
-                        .primary_message("View Release Notes")
+                    MessageNotification::new({
+        let __zed_i18n_arg_0 = format!("{}", version);
+        let __zed_i18n_arg_1 = format!("{}", app_name);
+        localization::format_message(
+            "Updated to {app_name} {}",
+            &[
+                ("app_name", __zed_i18n_arg_1),
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }, cx)
+                        .primary_message(localization::localized_str!("View Release Notes"))
                         .primary_on_click(move |window, cx| {
                             if let Some(workspace) = workspace_handle.upgrade() {
                                 workspace.update(cx, |workspace, cx| {

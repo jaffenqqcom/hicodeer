@@ -57,7 +57,7 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
     return v_flex()
         .gap_2()
         .child(
-            h_flex().justify_between().child(Label::new("Theme")).child(
+            h_flex().justify_between().child(Label::new(localization::localized_str!("Theme"))).child(
                 ToggleButtonGroup::single_row(
                     "theme-selector-onboarding-dark-light",
                     [
@@ -66,13 +66,13 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
                         ThemeAppearanceMode::System,
                     ]
                     .map(|mode| {
-                        const MODE_NAMES: [SharedString; 3] = [
-                            SharedString::new_static("Light"),
-                            SharedString::new_static("Dark"),
-                            SharedString::new_static("System"),
+                        let mode_names: [SharedString; 3] = [
+                            localization::localized_str!("Light").into(),
+                            localization::localized_str!("Dark").into(),
+                            localization::localized_str!("System").into(),
                         ];
                         ToggleButtonSimple::new(
-                            MODE_NAMES[mode as usize].clone(),
+                            mode_names[mode as usize].clone(),
                             move |_, _, cx| {
                                 write_mode_change(mode, cx);
 
@@ -250,7 +250,7 @@ fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement
             SwitchField::new(
                 "onboarding-telemetry-metrics",
                 None::<&str>,
-                Some("Help improve Zed by sending anonymous usage data".into()),
+                Some(localization::localized_str!("Help improve Zed by sending anonymous usage data").into()),
                 if TelemetrySettings::get_global(cx).metrics {
                     ui::ToggleState::Selected
                 } else {
@@ -290,7 +290,7 @@ fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement
                 "onboarding-telemetry-crash-reports",
                 None::<&str>,
                 Some(
-                    "Help fix Zed by sending crash reports so we can fix critical issues fast"
+                    localization::localized_str!("Help fix Zed by sending crash reports so we can fix critical issues fast")
                         .into(),
                 ),
                 if TelemetrySettings::get_global(cx).diagnostics {
@@ -342,7 +342,7 @@ fn render_base_keymap_section(tab_index: &mut isize, cx: &mut App) -> impl IntoE
         BaseKeymap::None => None,
     };
 
-    return v_flex().gap_2().child(Label::new("Base Keymap")).child(
+    return v_flex().gap_2().child(Label::new(localization::localized_str!("Base Keymap"))).child(
         ToggleButtonGroup::two_rows(
             "base_keymap_selection",
             [
@@ -402,8 +402,8 @@ fn render_vim_mode_switch(tab_index: &mut isize, cx: &mut App) -> impl IntoEleme
     };
     SwitchField::new(
         "onboarding-vim-mode",
-        Some("Vim Mode"),
-        Some("Coming from Neovim? Use our first-class implementation of Vim Mode".into()),
+        Some(localization::localized_str!("Vim Mode")),
+        Some(localization::localized_str!("Coming from Neovim? Use our first-class implementation of Vim Mode").into()),
         toggle_state,
         {
             let fs = <dyn Fs>::global(cx);
@@ -439,12 +439,12 @@ fn render_worktree_auto_trust_switch(tab_index: &mut isize, cx: &mut App) -> imp
         ui::ToggleState::Unselected
     };
 
-    let tooltip_description = "Zed can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.";
+    let tooltip_description = localization::localized_str!("Zed can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.");
 
     SwitchField::new(
         "onboarding-auto-trust-worktrees",
-        Some("Trust All Projects By Default"),
-        Some("Automatically mark all new projects as trusted to unlock all Zed's features".into()),
+        Some(localization::localized_str!("Trust All Projects By Default")),
+        Some(localization::localized_str!("Automatically mark all new projects as trusted to unlock all Zed's features").into()),
         toggle_state,
         {
             let fs = <dyn Fs>::global(cx);
@@ -527,9 +527,9 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
             v_flex()
                 .gap_0p5()
                 .max_w_5_6()
-                .child(Label::new("Import Settings"))
+                .child(Label::new(localization::localized_str!("Import Settings")))
                 .child(
-                    Label::new("Automatically pull your settings from other editors")
+                    Label::new(localization::localized_str!("Automatically pull your settings from other editors"))
                         .color(Color::Muted),
                 ),
         )
@@ -562,7 +562,7 @@ fn render_registry_agent_button(
             .color(Color::Success)
             .into_any_element()
     } else {
-        Label::new("Install")
+        Label::new(localization::localized_str!("Install"))
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()
@@ -616,12 +616,12 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
     let is_signed_in = !is_signed_out;
 
     let state_element = if is_signed_out {
-        Label::new("Sign In")
+        Label::new(localization::localized_str!("Sign In"))
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()
     } else if is_signing_in {
-        Label::new("Signing In…")
+        Label::new(localization::localized_str!("Signing In…"))
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .with_animation(
@@ -633,7 +633,7 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
             )
             .into_any_element()
     } else if is_signed_in && is_free {
-        Label::new("Start Free Trial")
+        Label::new(localization::localized_str!("Start Free Trial"))
             .size(LabelSize::XSmall)
             .color(Color::Muted)
             .into_any_element()
@@ -704,9 +704,9 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
 
     v_flex()
         .gap_0p5()
-        .child(Label::new("Agent Setup"))
+        .child(Label::new(localization::localized_str!("Agent Setup")))
         .child(
-            Label::new("Install your favorite agents and start your first thread.")
+            Label::new(localization::localized_str!("Install your favorite agents and start your first thread."))
                 .color(Color::Muted),
         )
         .child(grid)

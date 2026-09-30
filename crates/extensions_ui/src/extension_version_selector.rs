@@ -97,7 +97,7 @@ impl PickerDelegate for ExtensionVersionSelectorDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Select extension version...".into()
+        localization::localized_str!("Select extension version...").into()
     }
 
     fn match_count(&self) -> usize {
@@ -236,7 +236,7 @@ impl PickerDelegate for ExtensionVersionSelectorDelegate {
                     h_flex()
                         .gap_2()
                         .when(!is_version_compatible, |this| {
-                            this.child(Label::new("Incompatible").color(Color::Muted))
+                            this.child(Label::new(localization::localized_str!("Incompatible")).color(Color::Muted))
                         })
                         .child(
                             Label::new(

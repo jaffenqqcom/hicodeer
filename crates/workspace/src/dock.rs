@@ -360,9 +360,9 @@ impl From<TerminalDockPosition> for DockPosition {
 impl DockPosition {
     fn label(&self) -> &'static str {
         match self {
-            Self::Left => "Left",
-            Self::Bottom => "Bottom",
-            Self::Right => "Right",
+            Self::Left => localization::localized_str!("Left"),
+            Self::Bottom => localization::localized_str!("Bottom"),
+            Self::Right => localization::localized_str!("Right"),
         }
     }
 
@@ -1426,7 +1426,15 @@ impl Render for PanelButtons {
                     let action = dock.toggle_action();
 
                     let tooltip: SharedString =
-                        format!("Close {} Dock", dock.position.label()).into();
+                        {
+        let __zed_i18n_arg_0 = format!("{}", dock.position.label());
+        localization::format_message(
+            "Close {} Dock",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }.into();
 
                     (action, tooltip)
                 } else {
@@ -1455,7 +1463,15 @@ impl Render for PanelButtons {
                                         let is_current = position == dock_position;
                                         let panel = panel.clone();
                                         menu = menu.toggleable_entry(
-                                            format!("Dock {}", position.label()),
+                                            {
+        let __zed_i18n_arg_0 = format!("{}", position.label());
+        localization::format_message(
+            "Dock {}",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    },
                                             is_current,
                                             IconPosition::Start,
                                             None,
@@ -1476,7 +1492,7 @@ impl Render for PanelButtons {
                                     let dock_for_flex = dock_for_menu.clone();
                                     let workspace_for_flex = workspace_for_menu.clone();
                                     menu = menu.toggleable_entry(
-                                        "Flex Width",
+                                        localization::localized_str!("Flex Width"),
                                         currently_flexible,
                                         IconPosition::Start,
                                         None,
@@ -1499,7 +1515,7 @@ impl Render for PanelButtons {
                                     let dock_for_fixed = dock_for_menu.clone();
                                     let workspace_for_fixed = workspace_for_menu.clone();
                                     menu = menu.toggleable_entry(
-                                        "Fixed Width",
+                                        localization::localized_str!("Fixed Width"),
                                         !currently_flexible,
                                         IconPosition::Start,
                                         None,

@@ -94,7 +94,7 @@ fn build_application() -> Application {
 }
 
 fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
-    let message = "Zed failed to launch";
+    let message = localization::localized_str!("Zed failed to launch");
     let error_details = errors
         .into_iter()
         .flat_map(|(kind, paths)| {
@@ -133,7 +133,7 @@ fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
                             gpui::PromptLevel::Critical,
                             message,
                             Some(&error_details),
-                            &["Exit"],
+                            &[localization::localized_str!("Exit")],
                             cx,
                         );
 
@@ -177,7 +177,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
             proxy
                 .add_notification(
                     notification_id,
-                    Notification::new("Zed failed to launch")
+                    Notification::new(localization::localized_str!("Zed failed to launch"))
                         .body(Some(
                             format!(
                                 "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
@@ -513,6 +513,7 @@ fn main() {
         settings::init(cx);
         zlog_settings::init(cx);
         zed::watch_settings_files(fs.clone(), cx);
+        zed::initialize_localization(fs.clone(), cx);
         handle_keymap_file_changes(user_keymap_file_rx, user_keymap_watcher, cx);
 
         let user_agent = format!(
@@ -1498,12 +1499,17 @@ pub(crate) async fn restore_or_create_workspace(
 
         if error_count > 0 {
             let message = if error_count == 1 {
-                "Failed to restore 1 workspace. Check logs for details.".to_string()
+                localization::localized_str!("Failed to restore 1 workspace. Check logs for details.").to_string()
             } else {
-                format!(
-                    "Failed to restore {} workspaces. Check logs for details.",
-                    error_count
-                )
+                {
+        let __zed_i18n_arg_0 = format!("{}", error_count);
+        localization::format_message(
+            "Failed to restore {} workspaces. Check logs for details.",
+            &[
+                ("0", __zed_i18n_arg_0)
+            ],
+        )
+    }
             };
 
             // Try to find an active workspace to show the toast

@@ -45,17 +45,17 @@ impl Render for EditPredictionOnboarding {
         let github_copilot = v_flex()
             .gap_1()
             .child(Label::new(if self.copilot_is_configured {
-                "Alternatively, you can continue to use GitHub Copilot as that's already set up."
+                localization::localized_str!("Alternatively, you can continue to use GitHub Copilot as that's already set up.")
             } else {
-                "Alternatively, you can use GitHub Copilot as your edit prediction provider."
+                localization::localized_str!("Alternatively, you can use GitHub Copilot as your edit prediction provider.")
             }))
             .child(
                 Button::new(
                     "configure-copilot",
                     if self.copilot_is_configured {
-                        "Use Copilot"
+                        localization::localized_str!("Use Copilot")
                     } else {
-                        "Configure Copilot"
+                        localization::localized_str!("Configure Copilot")
                     },
                 )
                 .full_width()

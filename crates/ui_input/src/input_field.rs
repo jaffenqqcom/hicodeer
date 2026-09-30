@@ -215,7 +215,7 @@ impl Render for InputField {
                             )
                             .icon_size(IconSize::Small)
                             .icon_color(Color::Muted)
-                            .tooltip(Tooltip::text(if is_masked { "Show" } else { "Hide" }))
+                            .tooltip(Tooltip::text(if is_masked { localization::localized_str!("Show") } else { localization::localized_str!("Hide") }))
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
                                     if let Some(ref mut masked) = this.masked {

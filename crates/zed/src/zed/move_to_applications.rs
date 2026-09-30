@@ -73,14 +73,14 @@ impl MoveToApplicationsRequest {
         let response = cx
             .prompt(
                 PromptLevel::Info,
-                "Move Zed to Applications?",
+                localization::localized_str!("Move Zed to Applications?"),
                 Some(
-                    "Zed is running from a temporary location. Move it to Applications to finish installing it.",
+                    localization::localized_str!("Zed is running from a temporary location. Move it to Applications to finish installing it."),
                 ),
                 &[
-                    PromptButton::ok("Yes"),
-                    PromptButton::cancel("No"),
-                    PromptButton::new("Don't ask me again"),
+                    PromptButton::ok(localization::localized_str!("Yes")),
+                    PromptButton::cancel(localization::localized_str!("No")),
+                    PromptButton::new(localization::localized_str!("Don't ask me again")),
                 ],
             )
             .await?;
@@ -103,9 +103,9 @@ impl MoveToApplicationsRequest {
                         .ok();
                     cx.prompt(
                         PromptLevel::Critical,
-                        "Failed to move Zed to Applications",
+                        localization::localized_str!("Failed to move Zed to Applications"),
                         Some(&error.to_string()),
-                        &["OK"],
+                        &[localization::localized_str!("OK")],
                     )
                     .await
                     .log_err();
@@ -178,7 +178,7 @@ impl Render for InstallingZedModal {
                     .py_3()
                     .border_b_1()
                     .border_color(theme.colors().border_variant)
-                    .child(Label::new("Installing Zed…")),
+                    .child(Label::new(localization::localized_str!("Installing Zed…"))),
             )
             .child(
                 h_flex()
@@ -196,9 +196,9 @@ impl Render for InstallingZedModal {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(Label::new("Moving Zed to Applications"))
+                            .child(Label::new(localization::localized_str!("Moving Zed to Applications")))
                             .child(
-                                Label::new("Zed will reopen when installation is complete.")
+                                Label::new(localization::localized_str!("Zed will reopen when installation is complete."))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),

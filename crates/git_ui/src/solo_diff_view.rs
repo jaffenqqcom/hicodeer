@@ -352,9 +352,9 @@ impl SoloDiffView {
                 .await
                 .with_context(|| {
                     if stage {
-                        "failed to stage file"
+                        localization::localized_str!("failed to stage file")
                     } else {
-                        "failed to unstage file"
+                        localization::localized_str!("failed to unstage file")
                     }
                 })
         });
@@ -624,9 +624,9 @@ impl Render for SoloDiffStyleToolbar {
             GitPanelSettings::get_global(cx).status_style != StatusStyle::LabelColor;
 
         let (expand_icon, expand_tooltip) = if showing_full_file {
-            (IconName::ChevronDownUp, "Show Changes Only")
+            (IconName::ChevronDownUp, localization::localized_str!("Show Changes Only"))
         } else {
-            (IconName::ChevronUpDown, "Show Full File")
+            (IconName::ChevronUpDown, localization::localized_str!("Show Full File"))
         };
 
         h_flex()
@@ -787,7 +787,7 @@ impl Render for SoloDiffGitToolbar {
                             .icon_size(IconSize::Small)
                             .disabled(!button_states.prev_next)
                             .tooltip(Tooltip::for_action_title_in(
-                                "Go to Previous Hunk",
+                                localization::localized_str!("Go to Previous Hunk"),
                                 &GoToPreviousHunk,
                                 &focus_handle,
                             ))
@@ -800,7 +800,7 @@ impl Render for SoloDiffGitToolbar {
                             .icon_size(IconSize::Small)
                             .disabled(!button_states.prev_next)
                             .tooltip(Tooltip::for_action_title_in(
-                                "Go to Next Hunk",
+                                localization::localized_str!("Go to Next Hunk"),
                                 &GoToHunk,
                                 &focus_handle,
                             ))
@@ -814,10 +814,10 @@ impl Render for SoloDiffGitToolbar {
                 h_group_sm()
                     .when(button_states.selection, |el| {
                         el.child(
-                            Button::new("stage", "Toggle Staged")
+                            Button::new("stage", localization::localized_str!("Toggle Staged"))
                                 .disabled(!button_states.stage && !button_states.unstage)
                                 .tooltip(Tooltip::for_action_title_in(
-                                    "Toggle Staged",
+                                    localization::localized_str!("Toggle Staged"),
                                     &ToggleStaged,
                                     &focus_handle,
                                 ))
@@ -828,10 +828,10 @@ impl Render for SoloDiffGitToolbar {
                     })
                     .when(!button_states.selection, |el| {
                         el.child(
-                            Button::new("stage", "Stage")
+                            Button::new("stage", localization::localized_str!("Stage"))
                                 .disabled(!button_states.stage)
                                 .tooltip(Tooltip::for_action_title_in(
-                                    "Stage and Go to Next Hunk",
+                                    localization::localized_str!("Stage and Go to Next Hunk"),
                                     &StageAndNext,
                                     &focus_handle,
                                 ))
@@ -840,10 +840,10 @@ impl Render for SoloDiffGitToolbar {
                                 })),
                         )
                         .child(
-                            Button::new("unstage", "Unstage")
+                            Button::new("unstage", localization::localized_str!("Unstage"))
                                 .disabled(!button_states.unstage)
                                 .tooltip(Tooltip::for_action_title_in(
-                                    "Unstage and Go to Next Hunk",
+                                    localization::localized_str!("Unstage and Go to Next Hunk"),
                                     &UnstageAndNext,
                                     &focus_handle,
                                 ))
@@ -853,9 +853,9 @@ impl Render for SoloDiffGitToolbar {
                         )
                     })
                     .child(
-                        Button::new("restore", "Restore")
+                        Button::new("restore", localization::localized_str!("Restore"))
                             .tooltip(Tooltip::for_action_title_in(
-                                "Restore selected hunk",
+                                localization::localized_str!("Restore selected hunk"),
                                 &Restore,
                                 &focus_handle,
                             ))
@@ -867,21 +867,21 @@ impl Render for SoloDiffGitToolbar {
             )
             .child(Divider::vertical())
             .child(h_group_sm().child(if button_states.stage_file {
-                Button::new("stage-file", "Stage All")
+                Button::new("stage-file", localization::localized_str!("Stage All"))
                     .width(rems_from_px(80_f32))
                     .disabled(!button_states.stage_file)
                     .tooltip(Tooltip::for_action_title_in(
-                        "Stage All",
+                        localization::localized_str!("Stage All"),
                         &StageFile,
                         &focus_handle,
                     ))
                     .on_click(cx.listener(|this, _, window, cx| this.stage_file(window, cx)))
             } else {
-                Button::new("unstage-file", "Unstage All")
+                Button::new("unstage-file", localization::localized_str!("Unstage All"))
                     .width(rems_from_px(80_f32))
                     .disabled(!button_states.unstage_file)
                     .tooltip(Tooltip::for_action_title_in(
-                        "Unstage All",
+                        localization::localized_str!("Unstage All"),
                         &UnstageFile,
                         &focus_handle,
                     ))
@@ -889,9 +889,9 @@ impl Render for SoloDiffGitToolbar {
             }))
             .child(Divider::vertical())
             .child(
-                Button::new("commit", "Commit")
+                Button::new("commit", localization::localized_str!("Commit"))
                     .tooltip(Tooltip::for_action_title_in(
-                        "Commit",
+                        localization::localized_str!("Commit"),
                         &Commit,
                         &focus_handle,
                     ))

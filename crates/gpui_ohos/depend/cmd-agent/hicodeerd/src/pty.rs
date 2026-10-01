@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{FromRawFd, RawFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -206,9 +207,19 @@ pub async fn run_pty_shell(
     // prompt, command output) fail with EBADF, so the terminal sees no output
     // at all while input still works. An O_RDWR slave is what lets the shell's
     // stdout/stderr reach the master read side.
+    //
+    // O_NOCTTY matters as much as O_RDWR. The daemon is normally a session
+    // leader with no controlling terminal of its own (it is started detached,
+    // or the terminal it was started from has since gone), and opening a tty
+    // from such a process adopts it as that process's controlling terminal.
+    // This slave would then belong to the daemon's session, and the child's
+    // TIOCSCTTY below would fail with EPERM -- no shell would ever start. Worse,
+    // tearing the pty down would hang up the daemon along with it. Opening with
+    // O_NOCTTY leaves the slave unclaimed, so the child is the one that takes it.
     let slave = match std::fs::OpenOptions::new()
         .read(true)
         .write(true)
+        .custom_flags(libc::O_NOCTTY)
         .open(&slave_path)
     {
         Ok(f) => f,
@@ -277,10 +288,13 @@ pub async fn run_pty_shell(
     drop(slave);
 
     // The shell leads its own session (see the pre_exec above), so its pid is
-    // also its process-group id. Recording that group is what lets a terminal's
-    // whole tree go down with the client that opened it.
+    // also its process-group id and its session id. Recording the group reaches
+    // the shell; recording the session reaches the jobs its control of the
+    // terminal puts in further groups, so the whole tree goes down with the
+    // client that opened it.
     let shell_pgid = child.id().unwrap_or(0) as i32;
     crate::peers::add_group(client_id, shell_pgid);
+    crate::peers::add_session(client_id, shell_pgid);
 
     let master_for_input =
         match set_nonblocking(master_for_input.as_raw_fd()).and_then(|()| AsyncFd::new(master_for_input)) {
@@ -289,6 +303,7 @@ pub async fn run_pty_shell(
             log::error!("pty: master write side channel={channel}: {err}");
             let _ = child.kill().await;
             crate::peers::drop_group(client_id, shell_pgid);
+            crate::peers::drop_session(client_id, shell_pgid);
             // SAFETY: close the raw fd we own.
             unsafe { libc::close(master_fd) };
             let _ = handle.channel_failure(channel).await;
@@ -317,6 +332,7 @@ pub async fn run_pty_shell(
             log::error!("pty: async master read channel={channel}: {err}");
             let _ = child.kill().await;
             crate::peers::drop_group(client_id, shell_pgid);
+            crate::peers::drop_session(client_id, shell_pgid);
             MASTERS
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -363,7 +379,13 @@ pub async fn run_pty_shell(
     // disconnect never leaves an orphan shell behind. A kill that fails here
     // has already exited, which is the case being handled.
     let _ = child.kill().await;
+    // The reaped shell took nothing with it: job control had put the jobs it
+    // was running in their own process groups, so they are not covered by
+    // signalling the shell. Tear down the whole session, so the terminal's tree
+    // does not outlive the terminal.
+    crate::peers::kill_session(shell_pgid);
     crate::peers::drop_group(client_id, shell_pgid);
+    crate::peers::drop_session(client_id, shell_pgid);
     MASTERS
         .lock()
         .unwrap_or_else(|p| p.into_inner())

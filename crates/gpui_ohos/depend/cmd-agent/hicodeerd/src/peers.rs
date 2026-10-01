@@ -46,12 +46,16 @@ const TERM_GRACE: Duration = Duration::from_secs(1);
 /// Lowest process group id worth signalling: 0 addresses the caller's own
 /// group and 1 belongs to init, so both reach far beyond an instance's tree.
 const MIN_GROUP: i32 = 2;
+/// The procfs mount the session scan reads process state from.
+const PROC: &str = "/proc";
 
 /// One client instance: the process groups it started that have not exited
-/// yet, and the management connections currently open on its behalf. The
-/// instance is alive for exactly as long as the latter is non-empty.
+/// yet, the sessions it opened, and the management connections currently open
+/// on its behalf. The instance is alive for exactly as long as the latter is
+/// non-empty.
 struct Peer {
     groups: BTreeSet<i32>,
+    sessions: BTreeSet<i32>,
     management_conns: BTreeSet<u64>,
 }
 
@@ -103,6 +107,7 @@ pub(crate) fn touch(client_id: &str) {
                 client_id.to_string(),
                 Peer {
                     groups: BTreeSet::new(),
+                    sessions: BTreeSet::new(),
                     management_conns: BTreeSet::new(),
                 },
             );
@@ -127,6 +132,7 @@ pub(crate) fn management_opened(client_id: &str, token: u64) {
     }
     let mut peer = Peer {
         groups: BTreeSet::new(),
+        sessions: BTreeSet::new(),
         management_conns: BTreeSet::new(),
     };
     peer.management_conns.insert(token);
@@ -172,18 +178,49 @@ pub(crate) fn drop_group(client_id: &str, pgid: i32) {
     peer.groups.remove(&pgid);
 }
 
+/// Records a session as belonging to an instance.
+///
+/// An interactive shell is started as its own session leader (`setsid`), and
+/// the shell's jobs -- each in its own process group under job control -- stay
+/// in that session. Signalling only the shell's group would leave those jobs
+/// behind, so the session is recorded too: [`session_pgids`] finds every group
+/// its tree spread across.
+pub(crate) fn add_session(client_id: &str, session_id: i32) {
+    if !is_tracked(client_id) || session_id < MIN_GROUP {
+        return;
+    }
+    let mut table = peers();
+    let Some(peer) = table.get_mut(client_id) else {
+        return;
+    };
+    peer.sessions.insert(session_id);
+}
+
+/// Forgets a session that ended on its own.
+pub(crate) fn drop_session(client_id: &str, session_id: i32) {
+    let mut table = peers();
+    let Some(peer) = table.get_mut(client_id) else {
+        return;
+    };
+    peer.sessions.remove(&session_id);
+}
+
 /// Takes down everything an instance started and forgets it.
 fn retire(client_id: &str, reason: &str) {
-    let groups = {
+    let (groups, sessions) = {
         let mut table = peers();
         match table.remove(client_id) {
-            Some(peer) => peer.groups,
+            Some(peer) => (peer.groups, peer.sessions),
             None => return,
         }
     };
-    let count = groups.len();
-    signal_groups(groups);
-    log::warn!("conn: client {client_id} {reason}; took down {count} group(s)");
+    let group_count = groups.len();
+    let session_count = sessions.len();
+    signal_tree(&groups, &sessions);
+    log::warn!(
+        "conn: client {client_id} {reason}; took down {group_count} group(s) across {session_count} \
+         session(s)"
+    );
 }
 
 /// Takes down everything every instance started and clears the record.
@@ -193,11 +230,11 @@ fn retire(client_id: &str, reason: &str) {
 /// pass, given the same grace [`retire`] would give them, and then insisted
 /// upon, so no child can outlive the daemon that owns it.
 pub(crate) fn retire_all(reason: &str) {
-    let drained: Vec<(String, BTreeSet<i32>)> = {
+    let drained: Vec<(String, BTreeSet<i32>, BTreeSet<i32>)> = {
         let mut table = peers();
         table
             .drain()
-            .map(|(client_id, peer)| (client_id, peer.groups))
+            .map(|(client_id, peer)| (client_id, peer.groups, peer.sessions))
             .collect()
     };
     if drained.is_empty() {
@@ -205,10 +242,16 @@ pub(crate) fn retire_all(reason: &str) {
     }
     let instances = drained.len();
     let mut groups: BTreeSet<i32> = BTreeSet::new();
-    for (client_id, peer_groups) in drained {
+    let mut sessions: BTreeSet<i32> = BTreeSet::new();
+    for (client_id, peer_groups, peer_sessions) in drained {
         log::warn!("conn: client {client_id} {reason}");
         groups.extend(peer_groups);
+        sessions.extend(peer_sessions);
     }
+    // One scan covers every session at once. This runs on the daemon's own way
+    // out, where there is no runtime to hand an escalation to and no client
+    // left to serve.
+    groups.extend(session_pgids(&sessions));
     log::warn!(
         "conn: {reason}; taking down {} group(s) from {instances} client(s)",
         groups.len()
@@ -218,32 +261,157 @@ pub(crate) fn retire_all(reason: &str) {
     signal_now(&groups, libc::SIGKILL);
 }
 
-/// Signals every group politely, then again without appeal once the grace has
-/// passed. The escalation runs off the caller, so the connection teardown that
-/// noticed the instance is gone is never held up by it.
-fn signal_groups(groups: BTreeSet<i32>) {
-    signal_now(&groups, libc::SIGTERM);
+/// Every process group an instance's tree is spread across: the groups recorded
+/// directly, plus the groups of every process found in its sessions.
+fn tree_groups(groups: &BTreeSet<i32>, sessions: &BTreeSet<i32>) -> BTreeSet<i32> {
+    let mut targets = groups.clone();
+    targets.extend(session_pgids(sessions));
+    targets
+}
+
+/// Signals every group in an instance's tree politely, then again without
+/// appeal once the grace has passed. The escalation runs off the caller, so the
+/// connection teardown that noticed the instance is gone is never held up by
+/// it. The tree is resolved once, up front: re-deriving it after the grace
+/// would risk matching a session that reused a freed id in the meantime, and
+/// the jobs that matter are the ones running now.
+fn signal_tree(groups: &BTreeSet<i32>, sessions: &BTreeSet<i32>) {
+    let tree = tree_groups(groups, sessions);
+    signal_now(&tree, libc::SIGTERM);
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         // Nothing to schedule the follow-up on, so a tree that ignores the
         // polite signal would keep running: insist immediately instead.
-        signal_now(&groups, libc::SIGKILL);
+        signal_now(&tree, libc::SIGKILL);
         return;
     };
     handle.spawn(async move {
         tokio::time::sleep(TERM_GRACE).await;
-        signal_now(&groups, libc::SIGKILL);
+        signal_now(&tree, libc::SIGKILL);
     });
+}
+
+/// Takes down one session's whole tree: its leader and every process that
+/// carries its session id, across the process groups job control created.
+pub(crate) fn kill_session(session_id: i32) {
+    if session_id < MIN_GROUP {
+        return;
+    }
+    let mut sessions = BTreeSet::new();
+    sessions.insert(session_id);
+    signal_tree(&BTreeSet::new(), &sessions);
+}
+
+/// The process groups of every live process whose session is in `targets`.
+///
+/// A session leader (an interactive shell, started with `setsid`) is reached by
+/// its recorded group, but its jobs -- each in its own group under job control
+/// -- are not. This finds them by their session, the leader's pid, which stays
+/// with them even after the leader exits. Only `targets` are matched, so no
+/// other client's trees are touched.
+fn session_pgids(targets: &BTreeSet<i32>) -> BTreeSet<i32> {
+    let mut groups = BTreeSet::new();
+    if targets.is_empty() {
+        return groups;
+    }
+    let own_pid = std::process::id() as i32;
+    let entries = match std::fs::read_dir(PROC) {
+        Ok(entries) => entries,
+        Err(err) => {
+            log::warn!("conn: cannot read {PROC}, session trees will not be found: {err}");
+            return groups;
+        }
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if pid <= 1 || pid == own_pid {
+            continue;
+        }
+        let Some((pgrp, session)) = process_groups(pid) else {
+            continue;
+        };
+        if pgrp >= MIN_GROUP && targets.contains(&session) {
+            groups.insert(pgrp);
+        }
+    }
+    groups
+}
+
+/// The process group and session a live process reports, from its `/proc`
+/// entry. A process that exits between the directory listing and this read, or
+/// one this daemon may not inspect, reports nothing and is skipped.
+fn process_groups(pid: i32) -> Option<(i32, i32)> {
+    let stat = std::fs::read_to_string(format!("{PROC}/{pid}/stat")).ok()?;
+    parse_stat_groups(&stat)
+}
+
+/// The process group and session carried by a `/proc/<pid>/stat` line.
+///
+/// Field 2 (`comm`) is the program name in parentheses and may itself contain
+/// spaces and parentheses, so the fields that follow are only reliably located
+/// after the last `)`: state, ppid, pgrp, session, ...
+fn parse_stat_groups(stat: &str) -> Option<(i32, i32)> {
+    let mut fields = stat.rsplit_once(')')?.1.split_whitespace();
+    let _state = fields.next()?;
+    let _ppid = fields.next()?;
+    let pgrp = fields.next()?.parse().ok()?;
+    let session = fields.next()?.parse().ok()?;
+    Some((pgrp, session))
 }
 
 /// Sends one signal to each group. A negative pid addresses the whole group,
 /// which is what reaches the descendants that never appear in any table.
 fn signal_now(groups: &BTreeSet<i32>, signal: i32) {
+    // Never signal the daemon's own group: it is part of no client's tree, and
+    // a scan that somehow reported it would take the daemon down with it.
+    let own_group = unsafe { libc::getpgrp() };
     for &pgid in groups {
-        if pgid < MIN_GROUP {
+        if pgid < MIN_GROUP || pgid == own_group {
             continue;
         }
         // SAFETY: a negative pid addresses the process group; the group was
         // created by this daemon (see `exec` and `pty`) and is still on record.
         unsafe { libc::kill(-pgid, signal) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_stat_groups;
+
+    /// The fields after a plain `comm`.
+    #[test]
+    fn parses_plain_stat() {
+        assert_eq!(parse_stat_groups("1 (init) S 0 1 1 0 0 0"), Some((1, 1)));
+    }
+
+    /// `comm` may contain spaces: they must not shift the fields.
+    #[test]
+    fn parses_comm_with_space() {
+        assert_eq!(parse_stat_groups("42 (a b) S 1 42 42 0 0"), Some((42, 42)));
+    }
+
+    /// `comm` may contain parentheses, including a trailing one: only the last
+    /// `)` ends the name.
+    #[test]
+    fn parses_comm_with_parens() {
+        assert_eq!(parse_stat_groups("7 (weird)name) R 1 7 7 0 0"), Some((7, 7)));
+    }
+
+    /// An empty `comm` still parses.
+    #[test]
+    fn parses_empty_comm() {
+        assert_eq!(parse_stat_groups("8 () S 1 8 8 0 0"), Some((8, 8)));
+    }
+
+    /// A line missing the session field reports nothing.
+    #[test]
+    fn rejects_truncated_stat() {
+        assert_eq!(parse_stat_groups("9 (x) S 1 9"), None);
     }
 }

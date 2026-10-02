@@ -32,11 +32,8 @@ const SHELL_PROGRAM: &str = "/usr/bin/zsh";
 /// hicodeerd is not running, so the caller still ends up with a shell.
 const FALLBACK_SHELL_PATH: &str = "/bin/sh";
 /// Arguments used when the caller passed none, which is the case when hishell is
-/// run by hand or started by the terminal as its shell. They are zsh options:
-/// without `--no-rcs` the device's `/etc/zshrc` loads a system shell plugin that
-/// hijacks the ZLE widgets and then stalls on a sandbox path hicodeerd cannot
-/// reach, freezing input on the pty (Enter stops responding until Ctrl-C).
-const DEFAULT_SHELL_ARGS: &[&str] = &["-g", "--no-rcs"];
+/// run by hand or started by the terminal as its shell. They are zsh options.
+const DEFAULT_SHELL_ARGS: &[&str] = &["-g"];
 /// Reported when hicodeerd cannot be reached. Kept verbatim: it is the only
 /// thing that tells the user how to get the privileged session back.
 pub(crate) const DAEMON_NOT_READY_MESSAGE: &str =
@@ -172,13 +169,18 @@ fn run_interactive(requested: &RequestedShell) -> Result<i32, String> {
     // the correction in `bridge` to reach it.
     let (cols, rows) = settled_local_size().unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
 
-    // No working directory is requested: the daemon would `cd` into a path from
-    // this side's sandbox, which is not a place its own account can use. The
-    // shell starts where hicodeerd runs, and zsh resolves its own HOME.
+    // The caller starts this process in the directory its terminal should open
+    // in -- the project (worktree) directory -- so the shell is asked to start
+    // there too. Entering it is best effort: the daemon runs `cd <dir>
+    // 2>/dev/null` before the `exec` (see `pty::shell_command`), so a path that
+    // names no directory on the daemon's side -- the app's sandbox before the
+    // user has picked a home directory -- leaves the shell in the daemon's own
+    // directory instead of failing to start.
+    let cwd = working_directory();
     let pty = smol::block_on(executor.open_shell_pty(
         cols,
         rows,
-        None,
+        cwd.as_deref(),
         SHELL_PROGRAM,
         &requested.args,
     ))
@@ -212,9 +214,8 @@ fn run_command(shell_args: &[String]) -> Result<i32, String> {
     // in -- the terminal's own working directory -- so the command is given the
     // same one. A child of the daemon would otherwise start in the daemon's own
     // directory, where a command like `git status` reads the wrong repository, or
-    // none at all. The interactive bridge deliberately does not do this: there
-    // the caller chose no directory, and this process's own is the host
-    // application's.
+    // none at all. The interactive bridge hands over its own directory the same
+    // way, so the shell opens where the terminal does.
     let cwd = working_directory();
 
     // A terminal executor here too: this process serves one command and exits,

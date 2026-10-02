@@ -14,6 +14,7 @@
 
 mod exec;
 mod keygen;
+mod keys;
 mod logger;
 mod management;
 mod peers;
@@ -27,7 +28,6 @@ mod sshd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use russh::keys::ssh_key::{PrivateKey, PublicKey};
 use russh::server as russh_server;
 use tokio::net::TcpListener;
 
@@ -35,13 +35,13 @@ use crate::management::ManagementServer;
 use crate::protocol::{COMMAND_PORT, LOOPBACK_ADDR, MANAGEMENT_PORT};
 use crate::sshd::{ConnectionHandler, SshServer};
 
-/// Env var overriding the fixed management-key directory (for local bring-up
-/// and for hdc-launched runs where the keys live outside the HNP conf dir).
-const CONF_DIR_ENV: &str = "HICODEERD_CONF_DIR";
 /// Env var overriding the address both SSH listeners bind to. The daemon build
 /// that runs inside the QEMU guest must bind `0.0.0.0` so the host-side slirp
 /// hostfwd rules can reach it; the OHOS build keeps the loopback default.
 const BIND_ADDR_ENV: &str = "HICODEERD_BIND_ADDR";
+/// Env var overriding the directory the fixed management host private key is
+/// read from. The default is `<package root>/conf`, where the HNP installs it.
+const CONF_DIR_ENV: &str = "HICODEERD_CONF_DIR";
 /// Env var (guest mode): when set to "1", periodically reclaims guest dcache.
 /// The embedded virtiofsd backend holds one O_PATH fd per guest-looked-up inode
 /// until the guest sends FUSE_FORGET; a guest with ample RAM rarely evicts its
@@ -65,10 +65,6 @@ const REKEY_BYTE_LIMIT: usize = 1 << 30;
 /// effectively "never" for a connection that only ever carries a few kilobytes.
 const REKEY_TIME_LIMIT: std::time::Duration =
     std::time::Duration::from_secs(365 * 24 * 60 * 60);
-/// Name of the fixed management host private key file (ssh-keygen output).
-const MGMT_HOST_KEY_FILE: &str = "mgmt_host_key";
-/// Name of the file holding the authorized management client public key.
-const MGMT_AUTHORIZED_KEYS_FILE: &str = "authorized_keys";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -134,54 +130,27 @@ pub(crate) fn package_root() -> std::io::Result<PathBuf> {
         .ok_or_else(|| std::io::Error::other("bin dir has no parent dir"))
 }
 
-/// Resolves the directory holding the fixed management keys: `CONF_DIR_ENV`
-/// when set, otherwise `<package root>/conf` (a `conf` directory next to the
-/// `bin` that contains this executable).
+/// Resolves the directory holding the fixed management host private key:
+/// `CONF_DIR_ENV` when set, otherwise `<package root>/conf` (a `conf` directory
+/// next to the `bin` that contains this executable).
 fn conf_dir() -> std::io::Result<PathBuf> {
     if let Some(dir) = std::env::var_os(CONF_DIR_ENV) {
-        let path = PathBuf::from(dir);
-        return Ok(path);
+        return Ok(PathBuf::from(dir));
     }
     // The HNP layout is <pkg>/bin/<daemon binary> + <pkg>/conf/... .
     Ok(package_root()?.join("conf"))
 }
 
-/// Loads the fixed management host private key and the authorized management
-/// client public key from the conf dir.
-fn read_mgmt_keys(conf: &Path) -> Result<(PrivateKey, PublicKey), String> {
-    let host_pem = std::fs::read_to_string(conf.join(MGMT_HOST_KEY_FILE))
-        .map_err(|err| format!("read {}: {err}", MGMT_HOST_KEY_FILE))?;
-    let host_key = PrivateKey::from_openssh(&host_pem)
-        .map_err(|err| format!("parse {}: {err}", MGMT_HOST_KEY_FILE))?;
-    let authorized_text = std::fs::read_to_string(conf.join(MGMT_AUTHORIZED_KEYS_FILE))
-        .map_err(|err| format!("read {}: {err}", MGMT_AUTHORIZED_KEYS_FILE))?;
-    let pub_line = authorized_text
-        .lines()
-        .find(|line| {
-            let trimmed = line.trim();
-            !trimmed.is_empty() && !trimmed.starts_with('#')
-        })
-        .ok_or_else(|| format!("{} is empty", MGMT_AUTHORIZED_KEYS_FILE))?;
-    // Keep only the two key tokens so a trailing comment or extra whitespace
-    // (as `ssh-keygen` appends) never leaks into the parsed value.
-    let canonical: String = pub_line
-        .trim()
-        .split_whitespace()
-        .take(2)
-        .collect::<Vec<_>>()
-        .join(" ");
-    let authorized = PublicKey::from_openssh(&canonical)
-        .map_err(|err| format!("parse {}: {err}", MGMT_AUTHORIZED_KEYS_FILE))?;
-    Ok((host_key, authorized))
-}
-
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let conf = conf_dir()?;
     // Exports the preloads every program spawned from here on has to inherit.
     // Resolved from the package root, so it needs nothing from a client. A
     // package that ships no preloads leaves the environment untouched.
     shim::install();
-    let (mgmt_host_key, mgmt_authorized) = read_mgmt_keys(&conf)?;
+    // Fixed management keys: the host private key comes from the package's
+    // `conf` directory (0600, never embedded -- the daemon is a 0755 public
+    // HNP), the authorized client public key is compiled in (see `keys`).
+    let conf = conf_dir()?;
+    let (mgmt_host_key, mgmt_authorized) = keys::mgmt_keys(&conf)?;
 
     // Dynamic keys for this run's command listener (never persisted).
     let dynamic = keygen::generate()?;
@@ -329,4 +298,3 @@ impl ShutdownSignals {
         }
     }
 }
-

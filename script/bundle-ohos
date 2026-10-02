@@ -213,6 +213,23 @@ fi
 # target 目录确定之后（见下方 SHIM 段）—— HarmonyOS 的垫片产物就落在那个 scratch
 # 目录里。两个 shim 都只作用于编译进程，hvigor/hnpcli/java 调用前用 $NO_SHIM 卸掉。
 
+# ==================== OHOS hilog level (single source of truth) ====================
+# The OHOS log sinks -- zlog inside libhicodeer.so, hishell and hicodeerd -- each
+# read this variable at compile time via option_env!("HICODEER_LOG_LEVEL"), and
+# fall back to their own build-profile default when it is unset or unrecognized.
+# Exporting it here, ahead of every cargo call below, lets a single override
+# retarget all three sinks at once. Accepted values are trace/debug/info/warn/
+# error/off, case-insensitive. The default follows the build profile, matching
+# what the sinks themselves would pick: a debug build keeps `info`, a release
+# build drops to `warn`. The three sinks intentionally share the variable name
+# rather than a crate, so none of them depends on another.
+if [ "$IS_RELEASE" = true ]; then
+  HICODEER_LOG_LEVEL_DEFAULT="warn"
+else
+  HICODEER_LOG_LEVEL_DEFAULT="info"
+fi
+export HICODEER_LOG_LEVEL="${HICODEER_LOG_LEVEL:-$HICODEER_LOG_LEVEL_DEFAULT}"
+
 # ==================== Cargo build（OHOS 交叉编译） ====================
 # 工具链版本：本仓根 rust-toolchain.toml 指定 1.97.1。此前该工具链组件损坏
 # （bin 目录缺 rustc/cargo，cargo 每次自修复失败），故临时绕到 warp 使用的 1.92.0。
@@ -398,6 +415,34 @@ if [ "$CHECK_TLS" = true ]; then
   exit 0
 fi
 
+# ==================== 固定管理密钥（构建期内嵌 + HNP conf） ====================
+# The fixed management keys are shared by three consumers: cmd-client and
+# hishell embed their client halves with include_str!, and hicodeerd embeds the
+# authorized client public key. They must exist before the first cargo
+# invocation, because each crate's build.rs copies the files it needs out of
+# this shared directory. The management host private key is not embedded: it is
+# staged into the daemon HNP's conf/ below (mode 0600) and read at runtime, so
+# the secret never sits in the daemon's world-readable binary. The pair is
+# generated once and reused across builds, so a freshly installed HAP still
+# matches the hicodeerd already running on the device (a fresh pair per build
+# forced a device restart after every install). Set MGMT_KEYS_REGENERATE=1 to
+# regenerate. HICODEERD_KEYS_DIR hands the directory to the three build scripts
+# before cargo runs; the build scripts' fallback (standalone cargo runs) is
+# <repository root>/target/hicodeerd-keys.
+if [ "$MODE" != "hap" ]; then
+  MGMT_KEYS_REGENERATE=0
+  KEYS_DIR="$SHARED_TARGET_DIR/hicodeerd-keys"
+  mkdir -p "$KEYS_DIR"
+  if [ "$MGMT_KEYS_REGENERATE" = 1 ] \
+     || [ ! -f "$KEYS_DIR/mgmt_host_key" ] || [ ! -f "$KEYS_DIR/mgmt_client_key" ]; then
+    rm -f "$KEYS_DIR"/mgmt_host_key "$KEYS_DIR"/mgmt_host_key.pub \
+          "$KEYS_DIR"/mgmt_client_key "$KEYS_DIR"/mgmt_client_key.pub
+    ssh-keygen -t ed25519 -N '' -f "$KEYS_DIR/mgmt_host_key" -q
+    ssh-keygen -t ed25519 -N '' -f "$KEYS_DIR/mgmt_client_key" -q
+  fi
+  export HICODEERD_KEYS_DIR="$KEYS_DIR"
+fi
+
 cd "$PROJECT_ROOT"
 
 # --hap-only 跳过 launch-zed 编译与 so 拷贝，直接复用现有 libhicodeer.so
@@ -436,108 +481,11 @@ if [ "$MODE" != "hap" ]; then
   echo "[hicodeer-ohos-build] $OHOS_LIB_NAME staged at $HAP_LIBS_DIR/$OHOS_LIB_NAME"
 fi
 
-# ==================== 命令守护进程编译 + 固定钥匙 + HNP 装配 ====================
-# The daemon is the on-device command server (replaces the retired cmd-agentd/VM
-# and qemu-ssh-agentd/QEMU backends). It runs ON the OHOS device, so it is
-# compiled with the OHOS (musl) target - unlike the old VM servers which used
-# the host gnu toolchain. The fixed management keys are generated per build: the
-# server half ships inside the daemon's public HNP conf dir, the client half goes
-# into the HAP resfile for cmd-client (both halves install together in the same
-# HAP, so they always match). The daemon HNP is assembled into
-# hap/entry/hnp/arm64-v8a/ and injected + re-signed by the HNP section below.
-HAP_RESFILE_DIR="$HAP_DIR/entry/src/main/resources/resfile"
-DAEMON_MANIFEST="$PROJECT_ROOT/crates/gpui_ohos/depend/cmd-agent/hicodeerd/Cargo.toml"
-HNP_SRC_DIR="$HAP_DIR/entry/hnp/arm64-v8a"
-mkdir -p "$HAP_RESFILE_DIR" "$HNP_SRC_DIR"
-
-if [ "$MODE" != "hap" ]; then
-  DAEMON_TARGET_DIR="$SHARED_TARGET_DIR"
-  echo "[hicodeer-ohos-build] Building hicodeerd (OHOS $OHOS_TARGET) ..."
-  CARGO_TARGET_DIR="$DAEMON_TARGET_DIR" \
-    cargo build --release --manifest-path "$DAEMON_MANIFEST" --target "$OHOS_TARGET" -j "$NPROC"
-  DAEMON_BIN="$DAEMON_TARGET_DIR/$OHOS_TARGET/release/hicodeerd"
-  if [ ! -x "$DAEMON_BIN" ]; then
-    echo "[hicodeer-ohos-build] ERROR: hicodeerd binary missing: $DAEMON_BIN" >&2
-    exit 1
-  fi
-
-  # Fixed management keys (temporary measure): reuse the pair already in KEYS_DIR
-  # instead of regenerating it every build, so a freshly installed HAP still
-  # matches the hicodeerd already running on the device (a fresh pair per build
-  # forced a device restart after every install). The pair is generated once when
-  # absent; set MGMT_KEYS_REGENERATE=1 to restore the per-build regeneration
-  # (the original generate commands below are unchanged).
-  MGMT_KEYS_REGENERATE=0
-  KEYS_DIR="$SHARED_TARGET_DIR/hicodeerd-keys"
-  mkdir -p "$KEYS_DIR"
-  if [ "$MGMT_KEYS_REGENERATE" = 1 ] \
-     || [ ! -f "$KEYS_DIR/mgmt_host_key" ] || [ ! -f "$KEYS_DIR/mgmt_client_key" ]; then
-    rm -f "$KEYS_DIR"/mgmt_host_key "$KEYS_DIR"/mgmt_host_key.pub \
-          "$KEYS_DIR"/mgmt_client_key "$KEYS_DIR"/mgmt_client_key.pub
-    ssh-keygen -t ed25519 -N '' -f "$KEYS_DIR/mgmt_host_key" -q
-    ssh-keygen -t ed25519 -N '' -f "$KEYS_DIR/mgmt_client_key" -q
-  fi
-
-  # Stage the public-HNP payload: <pkg>/bin/<daemon binary>, <pkg>/conf/<server
-  # keys> and <pkg>/shim/<preloads>.
-  STAGE_DIR="$SHARED_TARGET_DIR/hicodeerd-stage"
-  mkdir -p "$STAGE_DIR/hicodeerd/bin" "$STAGE_DIR/hicodeerd/conf" "$STAGE_DIR/hicodeerd/shim"
-  # A staged file left behind by an earlier build can carry fs-verity
-  # (FS_VERITY_FL), which makes the inode unwritable: an open-for-write returns
-  # EPERM and `cp` cannot overwrite it in place. Remove it first so the copy
-  # lands on a fresh inode without the verity tag.
-  rm -f "$STAGE_DIR/hicodeerd/bin/hicodeerd"
-  cp "$DAEMON_BIN" "$STAGE_DIR/hicodeerd/bin/hicodeerd"
-  chmod 755 "$STAGE_DIR/hicodeerd/bin/hicodeerd"
-  cp "$KEYS_DIR/mgmt_host_key" "$STAGE_DIR/hicodeerd/conf/mgmt_host_key"
-  cp "$KEYS_DIR/mgmt_client_key.pub" "$STAGE_DIR/hicodeerd/conf/authorized_keys"
-  chmod 600 "$STAGE_DIR/hicodeerd/conf/mgmt_host_key"
-  # The preloads travel inside the package so the system installs them: the
-  # daemon addresses them at <pkg>/shim/ from its own /proc/self/exe, and nothing
-  # is written at runtime. Only the read bit matters -- the mode they land with is
-  # decided by the installer from the zip entry (0744 here, see the permission
-  # rewrite below), and a shared object is mapped without an execute bit. The two
-  # payloads are staged by name, so the TLS shim's .c source -- which shares that
-  # directory -- never ships.
-  cp "$DAEMON_SHIM_DIR/$DAEMON_NODE_SHIM_FILE" "$STAGE_DIR/hicodeerd/shim/$DAEMON_NODE_SHIM_FILE"
-  cp "$DAEMON_SHIM_DIR/$DAEMON_TLS_SHIM_FILE" "$STAGE_DIR/hicodeerd/shim/$DAEMON_TLS_SHIM_FILE"
-  cat > "$STAGE_DIR/hicodeerd/hnp.json" <<'JSON'
-{"type":"hnp-config","name":"hicodeerd","version":"0.1.0","install":{}}
-JSON
-
-  # Client half of the management keys -> resfile (cmd-client reads them).
-  mkdir -p "$HAP_RESFILE_DIR/hicodeerd-mgmt"
-  rm -f "$HAP_RESFILE_DIR/hicodeerd-mgmt/mgmt-host.pub" "$HAP_RESFILE_DIR/hicodeerd-mgmt/mgmt-client-key"
-  cp "$KEYS_DIR/mgmt_host_key.pub" "$HAP_RESFILE_DIR/hicodeerd-mgmt/mgmt-host.pub"
-  cp "$KEYS_DIR/mgmt_client_key" "$HAP_RESFILE_DIR/hicodeerd-mgmt/mgmt-client-key"
-  chmod 600 "$HAP_RESFILE_DIR/hicodeerd-mgmt/mgmt-client-key"
-
-  # 用官方 OpenHarmony 打包工具 hnpcli 装配 daemon HNP。hnpcli 路径已在平台分支设定
-  # （本机为 commandline-ohos 的 OHOS 原生版；VM 为交叉 SDK 的 box64 包装版），此处不再重定义。
-  # hnpcli 从 staged hnp.json 读取包名/版本，向 -o 输出 <name>.hnp。
-  # HNPCLI 已在平台分支中按平台设定（本机用 commandline-ohos 的 OHOS 原生版，
-  # VM 用交叉 SDK 的 box64 包装版），此处不再重定义。
-  if [ ! -x "$HNPCLI" ]; then
-    echo "[hicodeer-ohos-build] ERROR: hnpcli 不可用 ($HNPCLI)；HarmonyOS 本机需先编译 OHOS 原生版 hnpcli 放入 commandline-ohos 对应目录" >&2
-    exit 1
-  fi
-  echo "[hicodeer-ohos-build] Assembling hicodeerd.hnp (hnpcli) ..."
-  rm -f "$HNP_SRC_DIR/hicodeerd.hnp"
-  $NO_SHIM "$HNPCLI" pack -i "$STAGE_DIR/hicodeerd" -o "$HNP_SRC_DIR"
-
-  # hnpcli records each entry's permission by stat() on the staged file
-  # (hnp_zip.c ZipAddFile). The staging tree lives on /storage, which is hmdfs:
-  # that filesystem keeps only the owner bits, rewrites the group bits and
-  # forces the other bits to zero -- chmod 755 and chmod 777 both yield 0770
-  # there. The on-device installer decides the extracted mode from the other
-  # execute bit alone (hnp_zip.c HnpUnZipForFile: mode & S_IXOTH ? 0755 : 0744),
-  # so every executable packed from this host lands as 0744 and is not runnable
-  # by anyone other than the package owner. Rewrite the recorded permission for
-  # the entries whose staged source is owner-executable, so the package carries
-  # the mode the chmod calls above intend. Only the central directory carries
-  # the unix mode (minizip reads external_fa from there), so the local headers,
-  # the entry data and their CRCs stay untouched.
-  python3 - "$HNP_SRC_DIR/hicodeerd.hnp" "$STAGE_DIR" <<'PY'
+# rewrite_hnp_exec_bits <hnp> <stage_dir> — see the explanation at the first
+# call site: hnpcli records owner-executable staged files as 0744 on hmdfs, so
+# the recorded unix mode has to be rewritten to 0755 for those entries.
+rewrite_hnp_exec_bits() {
+  python3 - "$1" "$2" <<'PY'
 import os
 import struct
 import sys
@@ -580,12 +528,150 @@ for _ in range(entry_count):
 with open(hnp_path, "wb") as hnp_file:
     hnp_file.write(archive)
 PY
+}
+
+# ==================== 命令守护进程编译 + 固定钥匙 + HNP 装配 ====================
+# The daemon is the on-device command server (replaces the retired cmd-agentd/VM
+# and qemu-ssh-agentd/QEMU backends). It runs ON the OHOS device, so it is
+# compiled with the OHOS (musl) target - unlike the old VM servers which used
+# the host gnu toolchain. The fixed management key pair is shared by three
+# consumers (see the keys section above): the client halves are embedded into
+# cmd-client and hishell at build time, and the daemon embeds only the
+# authorized client public key. The management host private key is the one
+# secret that travels with the package: it is staged into the daemon HNP's
+# conf/ (mode 0600) and read at runtime, so it never sits in the daemon's
+# world-readable 0755 binary. The daemon HNP is assembled into
+# hap/entry/hnp/arm64-v8a/ and injected + re-signed by the HNP section below.
+HAP_RESFILE_DIR="$HAP_DIR/entry/src/main/resources/resfile"
+DAEMON_MANIFEST="$PROJECT_ROOT/crates/gpui_ohos/depend/cmd-agent/hicodeerd/Cargo.toml"
+HNP_SRC_DIR="$HAP_DIR/entry/hnp/arm64-v8a"
+mkdir -p "$HAP_RESFILE_DIR" "$HNP_SRC_DIR"
+
+if [ "$MODE" != "hap" ]; then
+  DAEMON_TARGET_DIR="$SHARED_TARGET_DIR"
+  echo "[hicodeer-ohos-build] Building hicodeerd (OHOS $OHOS_TARGET) ..."
+  CARGO_TARGET_DIR="$DAEMON_TARGET_DIR" \
+    cargo build --release --manifest-path "$DAEMON_MANIFEST" --target "$OHOS_TARGET" -j "$NPROC"
+  DAEMON_BIN="$DAEMON_TARGET_DIR/$OHOS_TARGET/release/hicodeerd"
+  if [ ! -x "$DAEMON_BIN" ]; then
+    echo "[hicodeer-ohos-build] ERROR: hicodeerd binary missing: $DAEMON_BIN" >&2
+    exit 1
+  fi
+
+  # Stage the public-HNP payload: <pkg>/bin/<daemon binary>, <pkg>/conf/<host
+  # private key> and <pkg>/shim/<preloads>. The only key file that travels here
+  # is the management host private key: it must not be compiled into the
+  # daemon's world-readable 0755 binary, so the daemon reads it from conf/ at
+  # runtime instead. The authorized client public key is compiled into the
+  # daemon; the client halves are compiled into cmd-client and hishell.
+  STAGE_DIR="$SHARED_TARGET_DIR/hicodeerd-stage"
+  mkdir -p "$STAGE_DIR/hicodeerd/bin" "$STAGE_DIR/hicodeerd/conf" "$STAGE_DIR/hicodeerd/shim"
+  # A staged file left behind by an earlier build can carry fs-verity
+  # (FS_VERITY_FL), which makes the inode unwritable: an open-for-write returns
+  # EPERM and `cp` cannot overwrite it in place. Remove it first so the copy
+  # lands on a fresh inode without the verity tag.
+  rm -f "$STAGE_DIR/hicodeerd/bin/hicodeerd"
+  cp "$DAEMON_BIN" "$STAGE_DIR/hicodeerd/bin/hicodeerd"
+  chmod 755 "$STAGE_DIR/hicodeerd/bin/hicodeerd"
+  # The host private key is packed mode 0600. hnpcli records the staged file's
+  # mode, so the chmod has to happen before the pack below.
+  rm -f "$STAGE_DIR/hicodeerd/conf/mgmt_host_key"
+  cp "$KEYS_DIR/mgmt_host_key" "$STAGE_DIR/hicodeerd/conf/mgmt_host_key"
+  chmod 600 "$STAGE_DIR/hicodeerd/conf/mgmt_host_key"
+  # The preloads travel inside the package so the system installs them: the
+  # daemon addresses them at <pkg>/shim/ from its own /proc/self/exe, and nothing
+  # is written at runtime. Only the read bit matters -- the mode they land with is
+  # decided by the installer from the zip entry (0744 here, see the permission
+  # rewrite below), and a shared object is mapped without an execute bit. The two
+  # payloads are staged by name, so the TLS shim's .c source -- which shares that
+  # directory -- never ships.
+  cp "$DAEMON_SHIM_DIR/$DAEMON_NODE_SHIM_FILE" "$STAGE_DIR/hicodeerd/shim/$DAEMON_NODE_SHIM_FILE"
+  cp "$DAEMON_SHIM_DIR/$DAEMON_TLS_SHIM_FILE" "$STAGE_DIR/hicodeerd/shim/$DAEMON_TLS_SHIM_FILE"
+  cat > "$STAGE_DIR/hicodeerd/hnp.json" <<'JSON'
+{"type":"hnp-config","name":"hicodeerd","version":"0.1.0","install":{}}
+JSON
+
+  # 用官方 OpenHarmony 打包工具 hnpcli 装配 daemon HNP。hnpcli 路径已在平台分支设定
+  # （本机为 commandline-ohos 的 OHOS 原生版；VM 为交叉 SDK 的 box64 包装版），此处不再重定义。
+  # hnpcli 从 staged hnp.json 读取包名/版本，向 -o 输出 <name>.hnp。
+  # HNPCLI 已在平台分支中按平台设定（本机用 commandline-ohos 的 OHOS 原生版，
+  # VM 用交叉 SDK 的 box64 包装版），此处不再重定义。
+  if [ ! -x "$HNPCLI" ]; then
+    echo "[hicodeer-ohos-build] ERROR: hnpcli 不可用 ($HNPCLI)；HarmonyOS 本机需先编译 OHOS 原生版 hnpcli 放入 commandline-ohos 对应目录" >&2
+    exit 1
+  fi
+  echo "[hicodeer-ohos-build] Assembling hicodeerd.hnp (hnpcli) ..."
+  rm -f "$HNP_SRC_DIR/hicodeerd.hnp"
+  $NO_SHIM "$HNPCLI" pack -i "$STAGE_DIR/hicodeerd" -o "$HNP_SRC_DIR"
+
+  # hnpcli records each entry's permission by stat() on the staged file
+  # (hnp_zip.c ZipAddFile). The staging tree lives on /storage, which is hmdfs:
+  # that filesystem keeps only the owner bits, rewrites the group bits and
+  # forces the other bits to zero -- chmod 755 and chmod 777 both yield 0770
+  # there. The on-device installer decides the extracted mode from the other
+  # execute bit alone (hnp_zip.c HnpUnZipForFile: mode & S_IXOTH ? 0755 : 0744),
+  # so every executable packed from this host lands as 0744 and is not runnable
+  # by anyone other than the package owner. Rewrite the recorded permission for
+  # the entries whose staged source is owner-executable, so the package carries
+  # the mode the chmod calls above intend. Only the central directory carries
+  # the unix mode (minizip reads external_fa from there), so the local headers,
+  # the entry data and their CRCs stay untouched.
+  rewrite_hnp_exec_bits "$HNP_SRC_DIR/hicodeerd.hnp" "$STAGE_DIR"
 
   if [ ! -f "$HNP_SRC_DIR/hicodeerd.hnp" ]; then
     echo "[hicodeer-ohos-build] ERROR: hnpcli did not produce $HNP_SRC_DIR/hicodeerd.hnp" >&2
     exit 1
   fi
   echo "[hicodeer-ohos-build] hicodeerd.hnp staged at $HNP_SRC_DIR/hicodeerd.hnp"
+fi
+
+# ==================== 本地 SHELL 桥（hishell）编译 + HNP 装配 ====================
+# hishell is the terminal's local $SHELL: a private HNP executable installed at
+# /data/app/bin/hishell that bridges an interactive shell on hicodeerd (falling
+# back to /bin/sh when the daemon is unreachable). Like hicodeerd it is a
+# standalone crate with its own workspace; a dedicated target dir keeps its
+# fingerprints from evicting hicodeerd's. Its embedded management keys come from
+# the shared keys dir (HICODEERD_KEYS_DIR, exported above). The HNP is packed
+# into hap/entry/hnp/arm64-v8a/ and injected + re-signed by the HNP section, and
+# its package must be declared in module.json5's hnpPackages.
+HISHELL_MANIFEST="$PROJECT_ROOT/crates/gpui_ohos/depend/cmd-agent/hishell/Cargo.toml"
+if [ "$MODE" != "hap" ]; then
+  HISHELL_TARGET_DIR="$SHARED_TARGET_DIR/hishell"
+  echo "[hicodeer-ohos-build] Building hishell (OHOS $OHOS_TARGET) ..."
+  CARGO_TARGET_DIR="$HISHELL_TARGET_DIR" \
+    cargo build --release --manifest-path "$HISHELL_MANIFEST" --target "$OHOS_TARGET" --bin hishell -j "$NPROC"
+  HISHELL_BIN="$HISHELL_TARGET_DIR/$OHOS_TARGET/release/hishell"
+  if [ ! -x "$HISHELL_BIN" ]; then
+    echo "[hicodeer-ohos-build] ERROR: hishell binary missing: $HISHELL_BIN" >&2
+    exit 1
+  fi
+
+  # Stage the private-HNP payload: <pkg>/bin/hishell. The parent stage dir is
+  # the hnpcli input, so the packed entries carry the `hishell/` prefix that
+  # rewrite_hnp_exec_bits resolves against it.
+  HISHELL_STAGE_DIR="$SHARED_TARGET_DIR/hishell-stage"
+  mkdir -p "$HISHELL_STAGE_DIR/hishell/bin"
+  rm -f "$HISHELL_STAGE_DIR/hishell/bin/hishell"
+  cp "$HISHELL_BIN" "$HISHELL_STAGE_DIR/hishell/bin/hishell"
+  chmod 755 "$HISHELL_STAGE_DIR/hishell/bin/hishell"
+  cat > "$HISHELL_STAGE_DIR/hishell/hnp.json" <<'JSON'
+{"type":"hnp-config","name":"hishell","version":"0.1.0","install":{}}
+JSON
+
+  if [ ! -x "$HNPCLI" ]; then
+    echo "[hicodeer-ohos-build] ERROR: hnpcli 不可用 ($HNPCLI)；HarmonyOS 本机需先编译 OHOS 原生版 hnpcli 放入 commandline-ohos 对应目录" >&2
+    exit 1
+  fi
+  echo "[hicodeer-ohos-build] Assembling hishell.hnp (hnpcli) ..."
+  rm -f "$HNP_SRC_DIR/hishell.hnp"
+  $NO_SHIM "$HNPCLI" pack -i "$HISHELL_STAGE_DIR/hishell" -o "$HNP_SRC_DIR"
+  rewrite_hnp_exec_bits "$HNP_SRC_DIR/hishell.hnp" "$HISHELL_STAGE_DIR"
+
+  if [ ! -f "$HNP_SRC_DIR/hishell.hnp" ]; then
+    echo "[hicodeer-ohos-build] ERROR: hnpcli did not produce $HNP_SRC_DIR/hishell.hnp" >&2
+    exit 1
+  fi
+  echo "[hicodeer-ohos-build] hishell.hnp staged at $HNP_SRC_DIR/hishell.hnp"
 fi
 
 # ==================== Embedded QEMU guest packaging ====================

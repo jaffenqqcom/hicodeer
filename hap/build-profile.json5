@@ -4,10 +4,10 @@
       {
         "name": "default",
         "material": {
-          "storePassword": "0000002000550AE09C984EFC8B0FC133444CEAE1BE14E82C7D1B9D0D4694473BA39600E29156B7832907D5082F5248C7",
+          "storePassword": "0000002079C4E0DC887A7AAF67CB6E24CD2F72424E3C548089974F8B182B9140632DCB2A0DF5BA4C44D538475EC51082",
           "certpath": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000002000550AE09C984EFC8B0FC133444CEAE1BE14E82C7D1B9D0D4694473BA39600E29156B7832907D5082F5248C7",
+          "keyPassword": "0000002079C4E0DC887A7AAF67CB6E24CD2F72424E3C548089974F8B182B9140632DCB2A0DF5BA4C44D538475EC51082",
           "profile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p12"
@@ -43,7 +43,8 @@
           },
           "debuggable": false
         },
-        "signingConfig": "default"
+        "signingConfig": "default",
+        "bundleName": "com.hicodeer.edit"
       }
     ],
     "buildModeSet": [

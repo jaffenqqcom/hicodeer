@@ -1,0 +1,40 @@
+[package]
+name = "hishell"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Local $SHELL bridge to the on-device hicodeerd command server (HarmonyOS)"
+
+# Standalone crate: NOT a member of the top-level workspace. Declaring an empty
+# [workspace] here stops cargo from searching upward into the repository
+# workspace, so this crate resolves independently and its binary can be built
+# without touching the host application's build.
+[workspace]
+
+[lib]
+name = "hishell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hishell"
+path = "src/main.rs"
+
+[dependencies]
+# Same russh configuration as the daemon: ring backend (pure Rust, fast compile)
+# instead of the default aws-lc-rs. This crate only uses the client half, but
+# both modules compile unconditionally in russh.
+russh = { version = "0.55", default-features = false, features = ["ring", "flate2", "rsa"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "process"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+smol = "2"
+# Terminal control for the bridge binary: raw mode and window size.
+libc = "0.2"
+
+[build-dependencies]
+# `flock` for the shared management-key generation in build.rs.
+libc = "0.2"
+
+[dev-dependencies]
+env_logger = "0.11"

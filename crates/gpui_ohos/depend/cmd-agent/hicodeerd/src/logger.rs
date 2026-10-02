@@ -274,10 +274,74 @@ mod ohos {
 
     static LOGGER: HilogLogger = HilogLogger;
 
-    /// Installs the hilog logger as the process-wide `log` logger.
+    /// Level installed by [`init`].
+    ///
+    /// `HICODEER_LOG_LEVEL` is the single source of truth for the on-device
+    /// hilog level: the build script exports it and every sink reads it at
+    /// compile time. An unset or unrecognized value falls back to the build
+    /// profile default (see [`default_level`]). `--log` only decides whether a
+    /// logger is installed at all (see the crate-level `init`).
+    const DEFAULT_LEVEL: LevelFilter = match option_env!("HICODEER_LOG_LEVEL") {
+        Some(raw) => match level_filter_from_str_const(raw) {
+            Some(level) => level,
+            None => default_level(),
+        },
+        None => default_level(),
+    };
+
+    /// Fallback level when `HICODEER_LOG_LEVEL` is unset or unrecognized: a
+    /// debug build keeps `info`, a release build drops to `warn`.
+    const fn default_level() -> LevelFilter {
+        if cfg!(debug_assertions) {
+            LevelFilter::Info
+        } else {
+            LevelFilter::Warn
+        }
+    }
+
+    /// Parses a `HICODEER_LOG_LEVEL` value at compile time. Kept `const` and
+    /// byte-based because [`DEFAULT_LEVEL`] is a `const`; the comparison is
+    /// ASCII-case-insensitive, matching the values the build script documents.
+    const fn level_filter_from_str_const(level: &str) -> Option<LevelFilter> {
+        const fn ascii_eq_ignore_case(input: &str, expected: &str) -> bool {
+            let input = input.as_bytes();
+            let expected = expected.as_bytes();
+            if input.len() != expected.len() {
+                return false;
+            }
+            let mut index = 0;
+            while index < input.len() {
+                if input[index].to_ascii_lowercase() != expected[index] {
+                    return false;
+                }
+                index += 1;
+            }
+            true
+        }
+
+        if ascii_eq_ignore_case(level, "trace") {
+            Some(LevelFilter::Trace)
+        } else if ascii_eq_ignore_case(level, "debug") {
+            Some(LevelFilter::Debug)
+        } else if ascii_eq_ignore_case(level, "info") {
+            Some(LevelFilter::Info)
+        } else if ascii_eq_ignore_case(level, "warn") {
+            Some(LevelFilter::Warn)
+        } else if ascii_eq_ignore_case(level, "error") {
+            Some(LevelFilter::Error)
+        } else if ascii_eq_ignore_case(level, "off") {
+            Some(LevelFilter::Off)
+        } else {
+            None
+        }
+    }
+
+    /// Installs the hilog logger as the process-wide `log` logger, emitting
+    /// records at or above [`DEFAULT_LEVEL`] unless the build script asked for
+    /// a different `HICODEER_LOG_LEVEL`.
     pub fn init() {
         let _ = log::set_logger(&LOGGER);
-        log::set_max_level(LevelFilter::Info);
+        log::set_max_level(DEFAULT_LEVEL);
     }
 }
 

@@ -12,7 +12,83 @@ use log;
 static ENV_FILTER: OnceLock<env_config::EnvFilter> = OnceLock::new();
 static SCOPE_MAP: RwLock<ScopeMap> = RwLock::new(ScopeMap::empty());
 
-pub const LEVEL_ENABLED_MAX_DEFAULT: log::LevelFilter = log::LevelFilter::Info;
+/// The compile-time `HICODEER_LOG_LEVEL` override, parsed at compile time.
+///
+/// The build script exports this variable as the single source of truth for the
+/// on-device hilog level, and each OHOS log sink reads it here; sharing the
+/// variable instead of a crate keeps the sinks independent. It must stay
+/// `const`: the value feeds the `const` defaults below.
+const ENV_LEVEL: Option<log::LevelFilter> = match option_env!("HICODEER_LOG_LEVEL") {
+    Some(value) => level_filter_from_str_const(value),
+    None => None,
+};
+
+/// Parses a `HICODEER_LOG_LEVEL` value at compile time.
+///
+/// Kept `const` and byte-based because [`ENV_LEVEL`] is a `const`, and the
+/// comparison is ASCII-case-insensitive so any casing of the accepted level
+/// names works. An unrecognized value yields `None` so the caller keeps its
+/// platform default.
+const fn level_filter_from_str_const(raw: &str) -> Option<log::LevelFilter> {
+    const fn ascii_eq_ignore_case(input: &str, expected: &str) -> bool {
+        let input = input.as_bytes();
+        let expected = expected.as_bytes();
+        if input.len() != expected.len() {
+            return false;
+        }
+        let mut index = 0;
+        while index < input.len() {
+            if input[index].to_ascii_lowercase() != expected[index] {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    if ascii_eq_ignore_case(raw, "trace") {
+        Some(log::LevelFilter::Trace)
+    } else if ascii_eq_ignore_case(raw, "debug") {
+        Some(log::LevelFilter::Debug)
+    } else if ascii_eq_ignore_case(raw, "info") {
+        Some(log::LevelFilter::Info)
+    } else if ascii_eq_ignore_case(raw, "warn") {
+        Some(log::LevelFilter::Warn)
+    } else if ascii_eq_ignore_case(raw, "error") {
+        Some(log::LevelFilter::Error)
+    } else if ascii_eq_ignore_case(raw, "off") {
+        Some(log::LevelFilter::Off)
+    } else {
+        None
+    }
+}
+
+/// The default maximum log level of verbosity.
+///
+/// `HICODEER_LOG_LEVEL` wins when it names a level, letting the build script
+/// retarget every sink at once; otherwise the build profile decides: a debug
+/// build keeps the verbose `info` default, a release build falls back to
+/// `warn`.
+#[cfg(target_env = "ohos")]
+pub const LEVEL_ENABLED_MAX_DEFAULT: log::LevelFilter = match ENV_LEVEL {
+    Some(level) => level,
+    None => {
+        if cfg!(debug_assertions) {
+            log::LevelFilter::Info
+        } else {
+            log::LevelFilter::Warn
+        }
+    }
+};
+/// The default maximum log level of verbosity.
+///
+/// `HICODEER_LOG_LEVEL` wins when it names a level; otherwise every platform
+/// other than OpenHarmony keeps the more verbose `info` default.
+#[cfg(not(target_env = "ohos"))]
+pub const LEVEL_ENABLED_MAX_DEFAULT: log::LevelFilter = match ENV_LEVEL {
+    Some(level) => level,
+    None => log::LevelFilter::Info,
+};
 /// The maximum log level of verbosity that is enabled by default.
 /// All messages more verbose than this level will be discarded
 /// by default unless specially configured.

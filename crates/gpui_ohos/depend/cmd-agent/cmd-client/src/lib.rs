@@ -11,6 +11,7 @@ pub mod bootstrap;
 pub mod command;
 pub mod endpoint;
 pub mod executor;
+pub mod keys;
 pub mod pool;
 pub mod protocol;
 pub mod pty;
@@ -20,6 +21,7 @@ use std::sync::{Arc, OnceLock};
 
 pub use endpoint::CommandEndpoint;
 pub use executor::SshCommandExecutor;
+pub use keys::{MGMT_CLIENT_KEY, MGMT_HOST_PUB};
 pub use pty::{RemotePty, ResizeHandle};
 pub use types::{
     ExecSpec, FdMode, RemoteChild, RemoteCommandExecutor, ShellPtyFuture, Signal,

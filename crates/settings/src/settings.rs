@@ -132,8 +132,50 @@ pub fn init(cx: &mut App) {
     SettingsStore::observe_active_settings_profile_name(cx).detach();
 }
 
+#[cfg(not(target_env = "ohos"))]
 pub fn default_settings() -> Cow<'static, str> {
     asset_str::<SettingsAssets>("settings/default.json")
+}
+
+// ===== [OHOS PORT BEGIN] Layer the OHOS-only defaults on the shared base =====
+// `settings/default-ohos.json` holds every default this build changes from the
+// shared base, so an OHOS-only default is a JSON edit rather than a code change.
+// The process `$SHELL` is `/bin/sh` (see launch-zed's `ensure_shell_env`), so
+// without these deltas the terminal would open a plain sandbox shell; the delta
+// pins `terminal.shell` to hishell - the private HNP bridge that runs an
+// interactive shell on hicodeerd and falls back to `/bin/sh` without it. It also
+// turns on copy-on-select, drops the absent collaboration button, disables
+// edit-prediction data collection, and widens the agent panel to 0.8 of the
+// window width.
+#[cfg(target_env = "ohos")]
+pub fn default_settings() -> Cow<'static, str> {
+    let base = asset_str::<SettingsAssets>("settings/default.json");
+    let overlay = asset_str::<SettingsAssets>("settings/default-ohos.json");
+    match merge_default_overlay(base.as_ref(), overlay.as_ref()) {
+        Ok(merged) => Cow::Owned(merged),
+        Err(err) => {
+            log::error!(
+                "default_settings: cannot layer settings/default-ohos.json over the base: {err:#}"
+            );
+            base
+        }
+    }
+}
+// ===== [OHOS PORT END] =====
+
+/// Deep-merges the OHOS default-settings delta (`overlay`) over the shared base
+/// (`base`) and returns the merged JSON text. [`MergeFrom`](settings_content::merge_from::MergeFrom)
+/// keeps base keys the overlay omits and recurses into objects, so a delta such
+/// as `terminal.shell` overrides only that key and leaves the rest of `terminal`
+/// untouched - the same merge the settings store applies to user settings.
+#[cfg(target_env = "ohos")]
+fn merge_default_overlay(base: &str, overlay: &str) -> anyhow::Result<String> {
+    use settings_content::merge_from::MergeFrom as _;
+
+    let mut merged: serde_json::Value = parse_json_with_comments(base)?;
+    let delta: serde_json::Value = parse_json_with_comments(overlay)?;
+    merged.merge_from(&delta);
+    Ok(serde_json::to_string(&merged)?)
 }
 
 pub fn default_semantic_token_rules() -> Cow<'static, str> {

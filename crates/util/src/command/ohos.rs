@@ -10,10 +10,10 @@
 //! private sandbox. Only a local child receives the caller's overrides.
 //!
 //! Tools found on-device in the private HNP install dir (`/data/app/bin`) are
-//! the exception: they are forked on the device itself via `smol::process`, so
-//! they no longer depend on the daemon. The install dir is snapshotted once at
-//! startup ([`init_local_tools`]); `spawn` routes a command local when its
-//! basename is in that set and forwards everything else to the daemon. Because
+//! the exception: they are forked on the device itself, so they no longer
+//! depend on the daemon. The install dir is snapshotted once at startup
+//! ([`init_local_tools`]); `spawn` routes a command local when its basename is
+//! in that set and forwards everything else to the daemon. Because
 //! `/data/app/bin` never changes while the process lives, no per-spawn
 //! directory read is needed. If the set is empty (no HNP shipped), every
 //! command simply runs through the daemon.
@@ -25,12 +25,14 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::task::{Context, Poll, Waker};
 
 use cmd_client::{ExecSpec, FdMode, RemoteCommandExecutor, Signal};
 use smol::io::{AsyncRead, AsyncReadExt, AsyncWrite};
@@ -493,7 +495,7 @@ fn fd_mode(stdio: Stdio) -> FdMode {
 /// official $ORIGIN resolution drive library loading. Each entry is applied
 /// only when the corresponding directory actually exists, so a build without
 /// the HNP never depends on hard-coded absolute paths.
-fn apply_local_tool_env(command: &mut smol::process::Command, resolved: &Path) {
+fn apply_local_tool_env(command: &mut std::process::Command, resolved: &Path) {
     let Ok(real) = std::fs::canonicalize(resolved) else {
         return;
     };
@@ -530,23 +532,31 @@ fn apply_local_tool_env(command: &mut smol::process::Command, resolved: &Path) {
     }
 }
 
-fn local_stdio(stdio: Stdio) -> smol::process::Stdio {
+fn local_stdio(stdio: Stdio) -> std::process::Stdio {
     match stdio {
-        Stdio::Piped => smol::process::Stdio::piped(),
+        Stdio::Piped => std::process::Stdio::piped(),
         // A local child genuinely shares the caller's descriptors, so Inherit
         // keeps its real meaning here (the remote path maps it to null instead).
-        Stdio::Inherit => smol::process::Stdio::inherit(),
-        Stdio::Null => smol::process::Stdio::null(),
+        Stdio::Inherit => std::process::Stdio::inherit(),
+        Stdio::Null => std::process::Stdio::null(),
     }
 }
 
 /// Fork and exec a local HNP tool on this device. Never touches the remote
-/// executor; a resolution/spawn failure surfaces as an error. Uses plain
-/// `smol::process` (no `pre_exec`), so the OHOS musl signal-reset / close_fds
-/// workarounds required by warp's PTY fork path do not apply here.
+/// executor; a resolution/spawn failure surfaces as an error. Plain
+/// `std::process` is used deliberately (no `pre_exec`), so the OHOS musl
+/// signal-reset / close_fds workarounds required by warp's PTY fork path do not
+/// apply here, and exit observation is handed to [`LocalChild`] rather than to
+/// `async-process`.
+///
+/// `std::process::Command` is the workspace's disallowed default because its
+/// I/O can block the calling thread; this path accepts that (spawn is a fast
+/// fork/exec, and the streams are made non-blocking below) because the
+/// `smol::process` alternative is the one that misbehaves on this kernel.
+#[allow(clippy::disallowed_methods)]
 fn spawn_local(command: &Command) -> io::Result<Child> {
     let exe = resolve_local_program(&command.program)?;
-    let mut child_command = smol::process::Command::new(&exe);
+    let mut child_command = std::process::Command::new(&exe);
     child_command.args(&command.args);
     child_command.stdin(local_stdio(command.stdin_cfg));
     child_command.stdout(local_stdio(command.stdout_cfg));
@@ -568,8 +578,7 @@ fn spawn_local(command: &Command) -> io::Result<Child> {
         }
     }
     apply_local_tool_env(&mut child_command, &exe);
-    child_command.kill_on_drop(command.kill_on_drop);
-    let mut child = child_command.spawn().map_err(|error| {
+    let mut process = child_command.spawn().map_err(|error| {
         log::error!(
             "util::command::spawn_local: spawn {} failed: {error} (HNP type 'private' may deny \
              main-process exec on this device; flip to 'public' and reinstall if EACCES)",
@@ -577,22 +586,306 @@ fn spawn_local(command: &Command) -> io::Result<Child> {
         );
         io::Error::new(error.kind(), format!("spawn {} failed: {error}", exe.display()))
     })?;
+    // Take the pipes out first, then wrap them. A `?` here used to run before
+    // `LocalChild::new` took ownership, so a failed wrap dropped the child
+    // without killing or reaping it: a running orphan, and a zombie once it
+    // exited. Every failure is now funnelled through `reap_local_child`.
+    let stdin_pipe = process.stdin.take();
+    let stdout_pipe = process.stdout.take();
+    let stderr_pipe = process.stderr.take();
+    let stdin = match wrap_child_stdin(stdin_pipe) {
+        Ok(stream) => stream,
+        Err(error) => return Err(reap_local_child(process, error)),
+    };
+    let stdout = match wrap_child_stdout(stdout_pipe) {
+        Ok(stream) => stream,
+        Err(error) => return Err(reap_local_child(process, error)),
+    };
+    let stderr = match wrap_child_stderr(stderr_pipe) {
+        Ok(stream) => stream,
+        Err(error) => return Err(reap_local_child(process, error)),
+    };
+    let child = LocalChild::new(process)?;
     Ok(Child {
-        stdin: child
-            .stdin
-            .take()
-            .map(|stream| Box::new(stream) as Box<dyn AsyncWrite + Unpin + Send + Sync>),
-        stdout: child
-            .stdout
-            .take()
-            .map(|stream| Box::new(stream) as Box<dyn AsyncRead + Unpin + Send + Sync>),
-        stderr: child
-            .stderr
-            .take()
-            .map(|stream| Box::new(stream) as Box<dyn AsyncRead + Unpin + Send + Sync>),
+        stdin,
+        stdout,
+        stderr,
         kind: ChildKind::Local { child },
         kill_on_drop: command.kill_on_drop,
     })
+}
+
+/// Wrap a piped child stdin as an async stream driven by the smol reactor. A
+/// non-piped descriptor was never captured, so it maps to `None`.
+fn wrap_child_stdin(
+    stream: Option<std::process::ChildStdin>,
+) -> io::Result<Option<Box<dyn AsyncWrite + Unpin + Send + Sync>>> {
+    match stream {
+        Some(stream) => Ok(Some(
+            Box::new(smol::Async::new(stream)?) as Box<dyn AsyncWrite + Unpin + Send + Sync>
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Wrap a piped child stdout as an async stream driven by the smol reactor.
+fn wrap_child_stdout(
+    stream: Option<std::process::ChildStdout>,
+) -> io::Result<Option<Box<dyn AsyncRead + Unpin + Send + Sync>>> {
+    match stream {
+        Some(stream) => Ok(Some(
+            Box::new(smol::Async::new(stream)?) as Box<dyn AsyncRead + Unpin + Send + Sync>
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Wrap a piped child stderr as an async stream driven by the smol reactor.
+fn wrap_child_stderr(
+    stream: Option<std::process::ChildStderr>,
+) -> io::Result<Option<Box<dyn AsyncRead + Unpin + Send + Sync>>> {
+    match stream {
+        Some(stream) => Ok(Some(
+            Box::new(smol::Async::new(stream)?) as Box<dyn AsyncRead + Unpin + Send + Sync>
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Kills and reaps a local child whose stdio could not be wrapped. `LocalChild`
+/// has not taken the process over yet, so no waiter thread can race this; both
+/// outcomes are logged and the original error is returned unchanged.
+fn reap_local_child(mut process: std::process::Child, cause: io::Error) -> io::Error {
+    let pid = process.id();
+    if let Err(error) = process.kill() {
+        log::warn!(
+            "util::command::spawn_local: killing local child {pid} after stdio setup failed: \
+             {error}"
+        );
+    }
+    if let Err(error) = process.wait() {
+        log::warn!(
+            "util::command::spawn_local: reaping local child {pid} after stdio setup failed: \
+             {error}"
+        );
+    }
+    cause
+}
+
+/// A locally forked child whose exit is observed by a dedicated blocking waiter
+/// thread instead of by polling a `pidfd`.
+///
+/// HarmonyOS answers `pidfd_open` with a valid descriptor but reports that
+/// descriptor as pollable before the process has exited. `async-process` picks
+/// its pidfd backend purely from `pidfd_open` succeeding (`wait::available`),
+/// so `WaitableChild::poll_wait` never blocks: it loops `try_wait` ->
+/// `poll_readable` at full CPU on whichever thread drives the future (in the
+/// observed freeze, the foreground one). Local children therefore observe exit
+/// through a thread that blocks in `waitpid`, publishes the result to `state`,
+/// and wakes the async waiter. A pidfd is still used for `kill`, where the
+/// problem is the opposite one: the signal must not reach a recycled pid.
+struct LocalChild {
+    /// OS process id, valid until the waiter thread has reaped the child.
+    pid: u32,
+    /// Exit outcome, shared with the waiter thread and the async waiters.
+    state: Arc<Mutex<LocalExitState>>,
+}
+
+/// The exit result a [`LocalChild`] is waiting for, or the reason the blocking
+/// wait itself failed.
+enum LocalExit {
+    /// The waiter thread has not returned yet.
+    Pending,
+    /// The child exited with this status.
+    Exited(ExitStatus),
+    /// The blocking wait failed; the message is the rendered cause.
+    Failed(String),
+}
+
+/// Shared state between a [`LocalChild`] and its waiter thread.
+struct LocalExitState {
+    outcome: LocalExit,
+    /// Async waiters to wake once `outcome` leaves [`LocalExit::Pending`].
+    wakers: Vec<Waker>,
+}
+
+impl LocalChild {
+    /// Hand `process` to a dedicated thread that blocks in `waitpid` and
+    /// publishes the exit. The returned value is immediately usable: `kill` and
+    /// `id` act on the pid, and `status` waits on the published outcome.
+    fn new(process: std::process::Child) -> io::Result<Self> {
+        let pid = process.id();
+        let state = Arc::new(Mutex::new(LocalExitState {
+            outcome: LocalExit::Pending,
+            wakers: Vec::new(),
+        }));
+        // The child is handed to the thread through a slot so that a failed
+        // `spawn` leaves it reachable for a synchronous reap here instead of
+        // leaking a zombie.
+        let handoff = Arc::new(Mutex::new(Some(process)));
+        let waiter_handoff = Arc::clone(&handoff);
+        let waiter_state = Arc::clone(&state);
+        let started = std::thread::Builder::new()
+            .name(format!("ohos-local-wait-{pid}"))
+            .spawn(move || {
+                let Some(mut process) = waiter_handoff.lock().unwrap().take() else {
+                    return;
+                };
+                let outcome = match process.wait() {
+                    Ok(status) => LocalExit::Exited(status),
+                    Err(error) => {
+                        LocalExit::Failed(format!("wait for local child {pid} failed: {error}"))
+                    }
+                };
+                publish_exit(&waiter_state, outcome);
+            });
+        if let Err(error) = started {
+            log::error!(
+                "util::command::spawn_local: cannot start waiter thread for local child {pid}: \
+                 {error}"
+            );
+            if let Some(mut process) = handoff.lock().unwrap().take() {
+                if let Err(kill_error) = process.kill() {
+                    log::warn!(
+                        "util::command::spawn_local: killing local child {pid} after the waiter \
+                         thread failed to start failed: {kill_error}"
+                    );
+                }
+                if let Err(wait_error) = process.wait() {
+                    log::warn!(
+                        "util::command::spawn_local: reaping local child {pid} after the waiter \
+                         thread failed to start failed: {wait_error}"
+                    );
+                }
+            }
+            return Err(io::Error::new(
+                error.kind(),
+                format!("cannot start waiter thread for local child {pid}: {error}"),
+            ));
+        }
+        Ok(Self { pid, state })
+    }
+
+    fn id(&self) -> u32 {
+        self.pid
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        if !matches!(&self.state.lock().unwrap().outcome, LocalExit::Pending) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "local child has already exited",
+            ));
+        }
+        // Signal through a pidfd rather than the bare pid. The waiter thread may
+        // reap the child between the check above and the signal below; a raw pid
+        // could then name a recycled process and this SIGKILL would land on it.
+        // The pidfd pins this child's identity, so the worst case is that an
+        // already-exited child reports ESRCH.
+        let pidfd = open_pidfd(self.pid)?;
+        send_signal_through_pidfd(&pidfd, self.pid as libc::pid_t, libc::SIGKILL)
+    }
+
+    fn try_status(&mut self) -> io::Result<Option<ExitStatus>> {
+        let state = self.state.lock().unwrap();
+        match &state.outcome {
+            LocalExit::Pending => Ok(None),
+            LocalExit::Exited(status) => Ok(Some(*status)),
+            LocalExit::Failed(message) => Err(io::Error::other(message.clone())),
+        }
+    }
+
+    /// Future resolving once the waiter thread has published the exit. The
+    /// clone keeps the future `'static`, so callers can move it elsewhere.
+    fn status(&self) -> impl std::future::Future<Output = io::Result<ExitStatus>> + Send + 'static {
+        let state = Arc::clone(&self.state);
+        async move { futures_lite::future::poll_fn(move |cx| poll_exit(&state, cx)).await }
+    }
+}
+
+/// Opens a pidfd for `pid` with the raw syscall: this target's libc exposes the
+/// syscall number but no wrapper. The descriptor keeps naming that one process
+/// even after it is reaped, which is what makes signalling it race-free.
+fn open_pidfd(pid: u32) -> io::Result<OwnedFd> {
+    // SAFETY: pidfd_open(2) takes (pid, flags) and returns a fresh descriptor or
+    // -1; zero flags is the plain lookup.
+    let descriptor = unsafe {
+        libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t as libc::c_long, 0 as libc::c_long)
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the syscall returned a descriptor that this process owns.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor as libc::c_int) })
+}
+
+/// Delivers `signal` to the process a pidfd refers to. An already-exited child
+/// makes the syscall fail with ESRCH instead of reaching another process.
+fn send_signal_through_pidfd(
+    pidfd: &OwnedFd,
+    pid: libc::pid_t,
+    signal: libc::c_int,
+) -> io::Result<()> {
+    // SAFETY: `pidfd` is a live pidfd; a null siginfo and zero flags are the
+    // documented way to send a plain signal.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            pidfd.as_raw_fd() as libc::c_long,
+            signal as libc::c_long,
+            std::ptr::null::<libc::siginfo_t>(),
+            0 as libc::c_long,
+        )
+    };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    // Some OHOS kernels predate pidfd_send_signal(2) and reject it with ENOSYS.
+    // Fall back to a bare kill instead of leaving kill() permanently broken:
+    // the pidfd identity check is lost, so a pid recycled between the caller's
+    // liveness check and this signal could receive it. That window is very
+    // small, and a working kill is worth more than the guarantee.
+    if error.raw_os_error() == Some(libc::ENOSYS) {
+        log::warn!(
+            "command: pidfd_send_signal is unimplemented (ENOSYS); falling back to kill(pid={pid}, signal={signal})"
+        );
+        // SAFETY: kill(2) reads no memory; it only names a pid and a signal.
+        if unsafe { libc::kill(pid, signal) } == 0 {
+            return Ok(());
+        }
+        return Err(io::Error::last_os_error());
+    }
+    Err(error)
+}
+
+/// Store the final outcome and wake every registered waiter. Runs on the waiter
+/// thread; the lock is released before waking so a waker cannot re-enter here.
+fn publish_exit(state: &Mutex<LocalExitState>, outcome: LocalExit) {
+    let wakers: Vec<Waker> = {
+        let mut state = state.lock().unwrap();
+        state.outcome = outcome;
+        state.wakers.drain(..).collect()
+    };
+    for waker in wakers {
+        waker.wake();
+    }
+}
+
+/// Poll the shared outcome, registering `cx`'s waker while it is still pending.
+fn poll_exit(state: &Mutex<LocalExitState>, cx: &mut Context<'_>) -> Poll<io::Result<ExitStatus>> {
+    let mut state = state.lock().unwrap();
+    match &state.outcome {
+        LocalExit::Pending => {}
+        LocalExit::Exited(status) => return Poll::Ready(Ok(*status)),
+        LocalExit::Failed(message) => {
+            return Poll::Ready(Err(io::Error::other(message.clone())));
+        }
+    }
+    if !state.wakers.iter().any(|waker| waker.will_wake(cx.waker())) {
+        state.wakers.push(cx.waker().clone());
+    }
+    Poll::Pending
 }
 
 /// Where the child actually runs: on the VM through the remote executor, or
@@ -603,7 +896,7 @@ enum ChildKind {
         executor: Arc<dyn RemoteCommandExecutor>,
     },
     Local {
-        child: smol::process::Child,
+        child: LocalChild,
     },
 }
 
@@ -685,10 +978,9 @@ impl Child {
                 })
             }
             ChildKind::Local { child } => {
-                // async-process's status() future is 'static (internally cloned
-                // Arc), so it can be boxed without borrowing `child` afterwards.
-                let status = child.status();
-                Box::pin(async move { status.await })
+                // `LocalChild::status` is `'static` (it clones the shared
+                // state), so it boxes without borrowing `child` afterwards.
+                Box::pin(child.status())
             }
         };
         future
@@ -776,45 +1068,5 @@ fn status_from_code(exit_code: Option<i32>) -> ExitStatus {
         Some(code) => ExitStatus::from_raw(code << 8),
         // Terminated by a signal; approximate with a non-successful status.
         None => ExitStatus::from_raw(128 << 8),
-    }
-}
-
-/// An interactive shell session on the command backend's pty.
-pub use cmd_client::RemotePty as RemoteShell;
-// Re-exported so callers that host a remote shell (crates/terminal) can forward
-// window resizes from a thread that does not own the session.
-pub use cmd_client::ResizeHandle;
-
-/// Opens an interactive shell on the registered command backend - the OHOS
-/// the daemon or the QEMU guest daemon, whichever the launch layer selected.
-/// The shell runs `program` with `args` and starts in `cwd` when that directory
-/// exists on the backend; the caller's program and arguments travel unchanged,
-/// so the backend never substitutes a shell of its own.
-///
-/// Returns `NotFound` when no backend is registered and `Unsupported` when the
-/// backend cannot serve a pty, so the terminal can fall back to a local shell
-/// instead of failing to open.
-pub async fn open_remote_shell(
-    cols: u32,
-    rows: u32,
-    cwd: Option<&str>,
-    program: &str,
-    args: &[String],
-) -> io::Result<RemoteShell> {
-    log::info!(
-        "util::command::open_remote_shell: cols={cols} rows={rows} cwd={cwd:?} program={program} args={args:?}"
-    );
-    let executor = cmd_client::executor().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "no command backend registered")
-    })?;
-    match executor.open_shell_pty(cols, rows, cwd, program, args).await {
-        Ok(shell) => {
-            log::info!("util::command::open_remote_shell: interactive shell opened");
-            Ok(shell)
-        }
-        Err(err) => {
-            log::warn!("util::command::open_remote_shell: backend has no shell: {err}");
-            Err(err)
-        }
     }
 }

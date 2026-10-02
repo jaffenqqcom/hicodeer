@@ -23,5 +23,9 @@ serde_json = "1.0"
 log = "0.4"
 smol = "2"
 
+[build-dependencies]
+# `flock` for the shared management-key generation in build.rs.
+libc = "0.2"
+
 [dev-dependencies]
 env_logger = "0.11"

@@ -1,8 +1,6 @@
 mod mappings;
 
 mod alacritty;
-#[cfg(target_env = "ohos")]
-mod ohos_shell;
 mod pty_info;
 pub mod terminal_settings;
 
@@ -63,14 +61,12 @@ use gpui::{
 
 #[cfg(not(windows))]
 use crate::alacritty::current_child_signal_mask;
-#[cfg(not(target_env = "ohos"))]
-use crate::alacritty::open_pty;
 use crate::alacritty::{
     AlacrittyCell, AlacrittyGridIterator, AlacrittyHyperlink, AlacrittySearch, AlacrittyTerm,
     AlacrittyTermConfig, AlacrittyTermLock, HyperlinkMatch, PtySender, RegexSearches,
     append_text_to_term, apply_config, clear_saved_screen, content_text, display_offset,
     display_only_term_config, find_from_terminal_point, full_content_range, last_non_empty_lines,
-    make_content, new_term, pty_options, pty_term_config, resize, screen_lines,
+    make_content, new_term, open_pty, pty_options, pty_term_config, resize, screen_lines,
     scroll_display, scroll_to_point, search_matches, selection_text, set_default_cursor_style,
     set_selection as set_term_selection, shrink_to_used, spawn_event_loop,
     toggle_vi_mode as toggle_term_vi_mode, total_lines, update_selection as update_term_selection,
@@ -1131,12 +1127,6 @@ impl TerminalBuilder {
             // Remove SHLVL so the spawned shell initializes it to 1, matching
             // the behavior of standalone terminal emulators like iTerm2/Kitty/Alacritty.
             env.remove("SHLVL");
-            // The OHOS process environment is captured from the OpenEuler VM's
-            // login shell (see util::load_login_shell_environment), whose SHELL
-            // is /bin/bash, which the device does not have. Pin the child's
-            // SHELL to the shell we actually exec (/bin/sh).
-            #[cfg(target_env = "ohos")]
-            env.insert("SHELL".to_string(), "/bin/sh".to_string());
 
             // If the parent environment doesn't have a locale set
             // (As is the case when launched from a .app on MacOS),
@@ -1179,15 +1169,6 @@ impl TerminalBuilder {
                             None,
                             None,
                         ))
-                    } else if cfg!(target_env = "ohos") {
-                        // The OHOS sandbox only execs `/bin/sh`. `System` would
-                        // otherwise fall through to alacritty's shell discovery,
-                        // which reads the process `SHELL` variable; that var is
-                        // overwritten by `load_login_shell_environment` with the
-                        // OpenEuler VM's /bin/bash, which does not exist on the
-                        // device. Pin the child shell to /bin/sh to bypass that
-                        // lookup entirely.
-                        Some(ShellParams::new("/bin/sh".to_string(), None, None))
                     } else {
                         None
                     }
@@ -1274,38 +1255,12 @@ impl TerminalBuilder {
                 };
                 (TerminalType::DisplayOnly, Some(subprocess))
             } else {
-                // OHOS: when the command backend serves a pty, the terminal's
-                // shell runs inside the QEMU guest instead of the sandbox
-                // /bin/sh. The probe resolves before the pty is opened so a
-                // backend without a shell simply keeps the local one.
-                // The task's own program and arguments are handed to the guest
-                // pty, so a task command runs as written instead of the pty
-                // substituting a shell of its own.
-                #[cfg(target_env = "ohos")]
-                let guest_shell = match shell_params.as_ref() {
-                    Some(params) => {
-                        crate::ohos_shell::probe(
-                            working_directory.as_deref().and_then(|path| path.to_str()),
-                            &params.program,
-                            params.args.as_deref().unwrap_or(&[]),
-                        )
-                        .await
-                    }
-                    None => None,
-                };
-
                 let alacritty_shell = shell_params.as_ref().map(|params| {
                     (
                         params.program.clone(),
                         params.args.clone().unwrap_or_default(),
                     )
                 });
-                // A guest shell provides the argv of its parked local child.
-                #[cfg(target_env = "ohos")]
-                let alacritty_shell = match guest_shell.as_ref() {
-                    Some(guest) => Some(guest.local_shell_argv()),
-                    None => alacritty_shell,
-                };
                 let pty_options = pty_options(
                     alacritty_shell,
                     working_directory.clone(),
@@ -1321,13 +1276,7 @@ impl TerminalBuilder {
                 );
 
                 //Setup the pty...
-                // A guest shell hosts its own local pty pair; otherwise this is
-                // the plain alacritty pty with a local /bin/sh child.
-                #[cfg(target_env = "ohos")]
-                let opened_pty = crate::ohos_shell::open_pty(guest_shell, &pty_options, window_id);
-                #[cfg(not(target_env = "ohos"))]
-                let opened_pty = open_pty(&pty_options, TerminalBounds::default(), window_id);
-                let pty = match opened_pty {
+                let pty = match open_pty(&pty_options, TerminalBounds::default(), window_id) {
                     Ok(pty) => pty,
                     Err(error) => {
                         bail!(TerminalError {
@@ -1809,10 +1758,7 @@ impl Terminal {
                 if self.vi_mode_enabled {
                     update_vi_cursor_for_scroll(term, *scroll);
                     if let Some(selection_head) = update_selection_to_vi_cursor(term) {
-                        #[cfg(all(
-                            any(target_os = "linux", target_os = "freebsd"),
-                            not(target_env = "ohos")
-                        ))]
+                        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                         if let Some(selection_text) = selection_text(term) {
                             cx.write_to_primary(ClipboardItem::new_string(selection_text));
                         }
@@ -1826,10 +1772,7 @@ impl Terminal {
                 trace!("Setting selection: selection={selection:?}");
                 set_term_selection(term, selection.as_ref());
 
-                #[cfg(all(
-                    any(target_os = "linux", target_os = "freebsd"),
-                    not(target_env = "ohos")
-                ))]
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                 if let Some(selection_text) = selection_text(term) {
                     cx.write_to_primary(ClipboardItem::new_string(selection_text));
                 }
@@ -1848,10 +1791,7 @@ impl Terminal {
                 );
 
                 if update_term_selection(term, point, side) {
-                    #[cfg(all(
-                        any(target_os = "linux", target_os = "freebsd"),
-                        not(target_env = "ohos")
-                    ))]
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                     if let Some(selection_text) = selection_text(term) {
                         cx.write_to_primary(ClipboardItem::new_string(selection_text));
                     }
@@ -2787,10 +2727,7 @@ impl Terminal {
                             .push_back(InternalEvent::SetSelection(Some(selection)));
                     }
                 }
-                #[cfg(all(
-                    any(target_os = "linux", target_os = "freebsd"),
-                    not(target_env = "ohos")
-                ))]
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                 MouseButton::Middle => {
                     if mode == MouseInputMode::ReportToTerminal
                         && let Some(item) = cx.read_from_primary()
@@ -3384,12 +3321,10 @@ fn spawn_task_subprocess(
 ) -> Result<SubprocessHandle> {
     use futures::io::AsyncReadExt as _;
 
-    // ===== [OHOS PORT BEGIN] `Stdio` is the platform router's type on OHOS =====
-    #[cfg(not(target_env = "ohos"))]
-    use std::process::Stdio;
-    #[cfg(target_env = "ohos")]
+    // This is `std::process::Stdio` on every platform except OHOS, where
+    // `util::process` re-exports the command router's `Stdio`; the `spawn` below
+    // takes the same type from `util::process::Child`.
     use util::process::Stdio;
-    // ===== [OHOS PORT END] =====
 
     let mut command = util::command::new_std_command(&program);
     command.args(&args);

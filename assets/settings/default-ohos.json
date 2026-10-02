@@ -1,30 +1,17 @@
-// Defaults this build layers on top of "settings/default.json".
-//
-// Keep this file to deltas: a value that is absent here keeps the shipped
-// default, so upstream default changes are inherited without editing this file.
 {
-  // A terminal selection is copied as soon as it is made. The panel has no
-  // hardware copy chord, so requiring an explicit copy command would put the
-  // selection one step out of reach.
   "terminal": {
     "copy_on_select": true,
+    "shell": {
+      "program": "/data/app/bin/hishell"
+    }
   },
-  // The collaboration panel button is not offered in this build, so keep it out
-  // of the status bar.
   "collaboration_panel": {
-    "button": false,
+    "button": false
   },
-  // Training data for edit predictions is never collected in this build. "no"
-  // is unconditional, unlike the shipped "default", which follows whatever the
-  // status-bar toggle last stored.
   "edit_predictions": {
-    "allow_data_collection": "no",
+    "allow_data_collection": "no"
   },
-  // The agent panel is used zoomed to the whole window, so let its content span
-  // 0.8 of that width, leaving a tenth blank on each side, instead of stopping
-  // at the shipped 850px readability cap. 1128 is 0.8 x the 1410 logical px the
-  // window reports at this device's 2.2125 density.
   "agent": {
-    "max_content_width": 1128,
-  },
+    "max_content_width": 1128
+  }
 }

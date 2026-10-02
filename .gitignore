@@ -81,4 +81,5 @@ build/
 hap/cerfile/
 
 hap/entry/hnp/arm64-v8a/hicodeerd.hnp
+hap/entry/hnp/arm64-v8a/hishell.hnp
 crates/gpui_ohos/depend/cmd-agent/hicodeerd/shim/musllib-shim.so

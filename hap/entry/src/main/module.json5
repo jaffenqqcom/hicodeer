@@ -158,6 +158,10 @@
       {
         "package": "hicodeerd.hnp",
         "type": "public"
+      },
+      {
+        "package": "hishell.hnp",
+        "type": "private"
       }
     ]
   }

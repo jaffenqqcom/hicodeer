@@ -107,7 +107,7 @@ pub fn start_command_backend(app: &OpenHarmonyApp) {
 
     if settings.enabled {
         match provision_guest_files(&base_path, &settings) {
-            Some((paths, cfg, host_pub, client_key)) => {
+            Some((paths, cfg, _, _)) => {
                 boot_trace("provision_guest_files OK; starting qemu");
                 // Directories the guest already sees through a static share.
                 // Nothing under them may go through the lazy mount path: that
@@ -127,11 +127,7 @@ pub fn start_command_backend(app: &OpenHarmonyApp) {
                         return;
                     }
                 };
-                let inner = match SshCommandExecutor::new(
-                    CommandEndpoint::qemu_guest(),
-                    client_key,
-                    host_pub,
-                ) {
+                let inner = match SshCommandExecutor::new(CommandEndpoint::qemu_guest()) {
                     Ok(executor) => Arc::new(executor),
                     Err(err) => {
                         boot_trace(&format!(

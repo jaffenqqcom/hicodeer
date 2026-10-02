@@ -12,6 +12,13 @@ use openharmony_ability_derive::ability;
 /// through this name.
 const SANDBOX_FILES_DIR_ENV: &str = "SANDBOX_FILES_DIR";
 
+/// The process `$SHELL` every `Shell::System` caller inherits (ACP agents, MCP
+/// servers, project environment detection, git, tasks): the only shell the
+/// sandbox ships. The terminal's own shell is hishell, pinned separately through
+/// the `terminal.shell` default (see `crates/settings`), so that only the
+/// terminal is redirected to hicodeerd.
+const SYSTEM_SHELL_PATH: &str = "/bin/sh";
+
 // Replaces the NAPI launch entry that used to live in crates/zed/src/lib.rs.
 // Dependency direction is now openharmony-ability -> zed: this entry depends on
 // zed and only passes it the information zed truly needs (the sandbox base path).
@@ -20,10 +27,10 @@ pub fn launch_app(app: openharmony_ability::OpenHarmonyApp) {
     // Hand the app to the platform layer immediately; OhosPlatform picks it up from
     // the global on construction, so gpui never sees the OpenHarmonyApp type.
     openharmony_ability::set_global_app(app.clone());
-    // [ohos] Pin the terminal child shell to /bin/sh before Zed starts. The
-    // sandbox only execs /bin/sh and the app uid has no /etc/passwd entry
-    // (every present entry resolves to /bin/false), so alacritty's shell
-    // discovery would otherwise fail before spawn. See ensure_shell_env.
+    // [ohos] Pin the process shell to /bin/sh before Zed starts. The app uid has
+    // no /etc/passwd entry (every present entry resolves to /bin/false), so
+    // alacritty's shell discovery would otherwise fail before spawn. See
+    // ensure_shell_env.
     ensure_shell_env(app.base_path(), app.home_directory());
     // Publish the system languages the ets side read through `@ohos.i18n`; upstream resolves the
     // UI locale and the date/time formats from the POSIX `LANGUAGE` list. See export_system_locale.
@@ -126,15 +133,21 @@ fn write_home_directory_record(base_path: &str, home_directory: &str) {
     }
 }
 
-/// Pins the process environment that alacritty's terminal shell discovery
-/// (`ShellUser::from_env`) reads, so an OHOS terminal always execs `/bin/sh`.
+/// Pins the process environment that command execution depends on: `SHELL` for
+/// every `Shell::System` caller (`util::get_system_shell`) and `USER`/`HOME` for
+/// tools that read them.
 ///
 /// Why this is required on OHOS:
-///   - The sandbox whitelist only allows `execve` of `/bin/sh`.
 ///   - `/etc/passwd` has no entry for the app uid, and every present entry
 ///     resolves its shell to `/bin/false`.
-/// Without `SHELL`/`USER`/`HOME` all set, `ShellUser::from_env` errors out and
-/// opening a terminal fails before the child is even spawned.
+///   - `SHELL` is pinned to `/bin/sh` (the only shell the sandbox ships) and not
+///     to hishell: the process-wide shell must not redirect ACP agents, MCP
+///     servers, project environment detection, git or tasks to hicodeerd. The
+///     terminal is the one caller that reaches hicodeerd, and it is pinned to
+///     hishell on its own through the `terminal.shell` default (see
+///     `crates/settings`).
+/// Without `SHELL`/`USER`/`HOME` all set, alacritty's `ShellUser::from_env`
+/// errors out and opening a terminal fails before the child is even spawned.
 fn ensure_shell_env(base_path: Option<String>, home_directory: Option<String>) {
     // Export the sandbox files directory under its own name (see the constant).
     // The terminal's shell probe runs off the main thread, so it cannot call
@@ -145,7 +158,7 @@ fn ensure_shell_env(base_path: Option<String>, home_directory: Option<String>) {
     if let Some(base_path_ref) = base_path.as_deref() {
         std::env::set_var(SANDBOX_FILES_DIR_ENV, base_path_ref);
     }
-    std::env::set_var("SHELL", "/bin/sh");
+    std::env::set_var("SHELL", SYSTEM_SHELL_PATH);
     if std::env::var_os("USER").is_none() {
         std::env::set_var("USER", "app");
     }
@@ -238,12 +251,9 @@ fn log_local_tools_delayed() {
             for program in util::command::local_tool_programs() {
                 let status = util::command::local_tool_status(program);
                 match &status.resolved {
-                    Some(path) => log::info!(
-                        "[diag] local tool {} -> {} (executable={})",
-                        status.program,
-                        path.display(),
-                        status.executable
-                    ),
+                    // A resolved tool is the normal path and stays silent; only
+                    // a missing tool is worth a record.
+                    Some(_) => {}
                     None => log::warn!(
                         "[diag] local tool {} MISSING: {}",
                         status.program,
@@ -275,36 +285,16 @@ pub(crate) fn boot_trace(msg: &str) {
 
 /// OHOS app module name (resfile resources live under it).
 const APP_MODULE_NAME: &str = "entry";
-/// Resfile subdir holding the on-device command service management keys.
-const OHOS_KEY_SUBDIR: &str = "hicodeerd-mgmt";
 /// Management host public key file (client half).
 const MGMT_HOST_PUB_FILE: &str = "mgmt-host.pub";
 /// Management client private key file (client half).
 const MGMT_CLIENT_KEY_FILE: &str = "mgmt-client-key";
 
 /// Registers the on-device command service as the process-wide command executor.
+/// The management keys are compiled into `cmd-client`, so nothing is read from
+/// the resfile here.
 pub(crate) fn register_ohos_backend(_app: &openharmony_ability::OpenHarmonyApp) {
-    boot_trace("register_ohos_backend entered");
-    let resource_dir = match resource_dir() {
-        Some(dir) => dir,
-        None => {
-            log::error!("register_ohos_backend: no resource dir");
-            return;
-        }
-    };
-    let (host_pub, client_key) =
-        match read_management_keys(&resource_dir.join(OHOS_KEY_SUBDIR)) {
-            Some(pair) => pair,
-            None => {
-                log::error!("register_ohos_backend: no OHOS management keys");
-                return;
-            }
-        };
-    let inner = match SshCommandExecutor::new(
-        CommandEndpoint::ohos_default(),
-        client_key,
-        host_pub,
-    ) {
+    let inner = match SshCommandExecutor::new(CommandEndpoint::ohos_default()) {
         Ok(executor) => Arc::new(executor) as Arc<dyn RemoteCommandExecutor>,
         Err(err) => {
             log::error!("register_ohos_backend: create executor: {err}");
@@ -322,8 +312,6 @@ pub(crate) fn register_executor(executor: Arc<dyn RemoteCommandExecutor>) {
     if let Err(err) = util::command::init("") {
         log::warn!("launch_app: util command init failed: {err}");
     }
-    boot_trace("register_executor done");
-    log::info!("launch_app: command executor registered");
 }
 
 /// Reads the fixed management key pair (host public + client private) from a

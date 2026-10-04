@@ -233,6 +233,16 @@ pub fn prevent_root_execution() {
     let allow_root = std::env::var("ZED_ALLOW_ROOT").is_ok_and(|val| val == "true");
 
     if is_root && !allow_root {
+        // [OHOS PORT BEGIN] The upstream message names Zed and its variable.
+        #[cfg(target_env = "ohos")]
+        eprintln!(
+            "\
+Error: Running HiCodeer as root or via sudo is unsupported.
+       Doing so (even once) may subtly break things for all subsequent non-root usage."
+        );
+        // [OHOS PORT END]
+        // [OHOS PORT BEGIN] To restore the upstream message, delete this block.
+        #[cfg(not(target_env = "ohos"))]
         eprintln!(
             "\
 Error: Running Zed as root or via sudo is unsupported.
@@ -240,6 +250,7 @@ Error: Running Zed as root or via sudo is unsupported.
        It is untested and not recommended, don't complain when things break.
        If you wish to proceed anyways, set `ZED_ALLOW_ROOT=true` in your environment."
         );
+        // [OHOS PORT END]
         std::process::exit(1);
     }
 }

@@ -29,6 +29,58 @@ pub(crate) fn render_edit_prediction_setup_page(
     window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
+    // [OHOS PORT BEGIN] HiCodeer offers only the two providers a user can point
+    // at their own server; the hosted ones have no account to connect to. The
+    // dropdown above still comes from `get_available_providers`, which enforces
+    // the same set. To restore the upstream providers, delete this block.
+    #[cfg(target_env = "ohos")]
+    let providers = [
+        Some(render_ollama_provider(settings_window, window, cx).into_any_element()),
+        Some(
+            render_api_key_provider(
+                IconName::AiOpenAiCompat,
+                "OpenAI Compatible API",
+                // [OHOS PORT BEGIN] This provider takes a key the user brings
+                // themselves, so its label says what the key is for. To restore
+                // the upstream label, delete this argument.
+                "API Key for authentication",
+                // [OHOS PORT END]
+                // [OHOS PORT BEGIN] The message is not rendered on this
+                // platform, so it is left empty. To restore the upstream
+                // providers, delete this block.
+                #[cfg(target_env = "ohos")]
+                ApiKeyDocs::Custom {
+                    message: SharedString::default(),
+                },
+                // [OHOS PORT END]
+                // [OHOS PORT BEGIN] To restore the upstream providers, delete
+                // this block.
+                #[cfg(not(target_env = "ohos"))]
+                ApiKeyDocs::Custom {
+                    message: "The API key sent as Authorization: Bearer {key}.".into(),
+                },
+                // [OHOS PORT END]
+                open_ai_compatible_api_token(cx),
+                |cx| open_ai_compatible_api_url(cx),
+                Some(
+                    settings_window
+                        .render_sub_page_items_section(
+                            open_ai_compatible_settings().iter().enumerate(),
+                            true,
+                            window,
+                            cx,
+                        )
+                        .into_any_element(),
+                ),
+                window,
+                cx,
+            )
+            .into_any_element(),
+        ),
+    ];
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the upstream providers, delete this block.
+    #[cfg(not(target_env = "ohos"))]
     let providers = [
         Some(render_provider_dropdown(window, cx)),
         Some(render_zed_provider(settings_window, window, cx).into_any_element()),
@@ -38,6 +90,7 @@ pub(crate) fn render_edit_prediction_setup_page(
             render_api_key_provider(
                 IconName::Inception,
                 "Mercury",
+                "API Key",
                 ApiKeyDocs::Link {
                     dashboard_url: "https://platform.inceptionlabs.ai/dashboard/api-keys".into(),
                 },
@@ -62,6 +115,7 @@ pub(crate) fn render_edit_prediction_setup_page(
             render_api_key_provider(
                 IconName::AiMistral,
                 "Codestral",
+                "API Key",
                 ApiKeyDocs::Link {
                     dashboard_url: "https://console.mistral.ai/codestral".into(),
                 },
@@ -87,6 +141,7 @@ pub(crate) fn render_edit_prediction_setup_page(
             render_api_key_provider(
                 IconName::AiOpenAiCompat,
                 "OpenAI Compatible API",
+                "API Key",
                 ApiKeyDocs::Custom {
                     message: "The API key sent as Authorization: Bearer {key}.".into(),
                 },
@@ -108,6 +163,7 @@ pub(crate) fn render_edit_prediction_setup_page(
             .into_any_element(),
         ),
     ];
+    // [OHOS PORT END]
 
     div()
         .size_full()
@@ -187,11 +243,25 @@ enum ApiKeyDocs {
     Link { dashboard_url: SharedString },
     Custom { message: SharedString },
 }
-
 fn render_api_key_provider(
     icon: IconName,
     title: &'static str,
+    // [OHOS PORT BEGIN] Each provider words its own key label, so it is passed
+    // in rather than shared: the one offered on this platform says what the key
+    // is for. To restore the upstream label, delete this parameter and the
+    // `key_label` arguments at the call sites.
+    key_label: &'static str,
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] `docs` describes the second line, which is left out on
+    // this platform, so the argument goes unnamed to keep it unused. To restore
+    // the upstream providers, delete this block.
+    #[cfg(target_env = "ohos")]
+    _docs: ApiKeyDocs,
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the upstream providers, delete this block.
+    #[cfg(not(target_env = "ohos"))]
     docs: ApiKeyDocs,
+    // [OHOS PORT END]
     api_key_state: Entity<ApiKeyState>,
     current_url: fn(&mut App) -> SharedString,
     additional_fields: Option<AnyElement>,
@@ -249,7 +319,15 @@ fn render_api_key_provider(
         .icon(icon)
         .no_padding(true);
 
-    let description = match docs {
+    // [OHOS PORT BEGIN] On this platform the second line is left out, so the
+    // description is `None` and the label stands alone. To restore it, delete
+    // this block.
+    #[cfg(target_env = "ohos")]
+    let description: Option<gpui::Div> = None;
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the second line, delete this block.
+    #[cfg(not(target_env = "ohos"))]
+    let description: Option<gpui::Div> = Some(match docs {
         ApiKeyDocs::Custom { message } => div().min_w_0().w_full().child(
             Label::new(message)
                 .size(LabelSize::Small)
@@ -284,7 +362,8 @@ fn render_api_key_provider(
                     .size(LabelSize::Small)
                     .color(Color::Muted),
             ),
-    };
+    });
+    // [OHOS PORT END]
 
     let configured_card_label = if is_from_env_var {
         localization::localized_str!("API Key Set in Environment Variable")
@@ -328,11 +407,30 @@ fn render_api_key_provider(
                         .min_w_0()
                         .max_w_1_2()
                         .gap_0p5()
-                        .child(Label::new(localization::localized_str!("API Key")))
-                        .child(description)
-                        .when_some(env_var_name, |this, env_var_name| {
-                            this.child({
-                                let label = {
+                        // `localized_str!` only takes a literal, so the runtime
+                        // key goes through the same translation entry point
+                        // directly. Falls back to the key when the catalogue has
+                        // no entry, which is what the macro does too.
+                        .child(Label::new(localization::translate_static(key_label)))
+                        .when_some(description, |this, description| this.child(description))
+                        // [OHOS PORT BEGIN] The environment-variable hint names
+                        // an upstream product, so it is not shown here. To
+                        // restore it, delete this block.
+                        .when(
+                            {
+                                #[cfg(target_env = "ohos")]
+                                {
+                                    false
+                                }
+                                #[cfg(not(target_env = "ohos"))]
+                                {
+                                    env_var_name.is_some()
+                                }
+                            },
+                            |this| {
+                                this.when_some(env_var_name, |this, env_var_name| {
+                                    this.child({
+                                        let label = {
         let __zed_i18n_arg_0 = format!("{}", env_var_name.as_ref());
         localization::format_message(
             "Or set the {} env var and restart Zed.",
@@ -341,9 +439,14 @@ fn render_api_key_provider(
             ],
         )
     };
-                                Label::new(label).size(LabelSize::Small).color(Color::Muted)
-                            })
-                        }),
+                                        Label::new(label)
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted)
+                                    })
+                                })
+                            },
+                        )
+                        // [OHOS PORT END]
                 )
                 .child(
                     SettingsInputField::new(format!("{}-api-key-input", title))

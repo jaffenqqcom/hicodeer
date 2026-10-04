@@ -16,28 +16,63 @@ actions!(
     ]
 );
 
-const ZED_REPO_URL: &str = "https://github.com/zed-industries/zed";
-
+// [OHOS PORT BEGIN] HiCodeer is not developed in the Zed repository, so bug
+// reports and feature requests must not point at the upstream tracker. To
+// restore the upstream behaviour, delete these blocks.
+#[cfg(target_env = "ohos")]
+const HICODEER_REPO_URL: &str = "https://github.com/jaffenqqcom/hicodeer";
+#[cfg(target_env = "ohos")]
+const REQUEST_FEATURE_URL: &str =
+    "https://github.com/jaffenqqcom/hicodeer/discussions/new/choose";
+// [OHOS PORT END]
+// [OHOS PORT BEGIN] To restore the upstream addresses, delete these definitions.
+#[cfg(not(target_env = "ohos"))]
+const HICODEER_REPO_URL: &str = "https://github.com/zed-industries/zed";
+#[cfg(not(target_env = "ohos"))]
 const REQUEST_FEATURE_URL: &str = "https://github.com/zed-industries/zed/discussions/new/choose";
+// [OHOS PORT END]
 
 fn file_bug_report_url(specs: &SystemSpecs) -> String {
-    format!(
+    // [OHOS PORT BEGIN] HiCodeer is not developed in the Zed repository, so bug
+    // reports point at the HiCodeer tracker. The upstream repository's issue
+    // template does not exist there, so only the environment is attached. To
+    // restore the upstream behaviour, delete this block.
+    #[cfg(target_env = "ohos")]
+    let url = format!(
+        "{HICODEER_REPO_URL}/issues/new?environment={}",
+        urlencoding::encode(&specs.to_string())
+    );
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the upstream behaviour, delete this block.
+    #[cfg(not(target_env = "ohos"))]
+    // [OHOS PORT END]
+    #[cfg(not(target_env = "ohos"))]
+    let url = format!(
         concat!(
-            "https://github.com/zed-industries/zed/issues/new",
+            "https://github.com/zed-industries/zed",
+            "/issues/new",
             "?",
             "template=10_bug_report.yml",
             "&",
             "environment={}"
         ),
         urlencoding::encode(&specs.to_string())
-    )
+    );
+    // [OHOS PORT END]
+    url
 }
 
 fn email_zed_url(specs: &SystemSpecs) -> String {
-    format!(
-        concat!("mailto:hi@zed.dev", "?", "body={}"),
-        email_body(specs)
-    )
+    // [OHOS PORT BEGIN] HiCodeer has no Zed support mailbox, so the feedback
+    // mailto is dropped. To restore the upstream behaviour, delete this block.
+    #[cfg(target_env = "ohos")]
+    let mail_to = "mailto:";
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the upstream mailbox, delete this block.
+    #[cfg(not(target_env = "ohos"))]
+    let mail_to = "mailto:hi@zed.dev";
+    // [OHOS PORT END]
+    format!("{mail_to}?body={}", email_body(specs))
 }
 
 fn email_body(specs: &SystemSpecs) -> String {
@@ -109,7 +144,7 @@ pub fn init(cx: &mut App) {
                 .detach();
             })
             .register_action(move |_, _: &OpenZedRepo, _, cx| {
-                cx.open_url(ZED_REPO_URL);
+                cx.open_url(HICODEER_REPO_URL);
             });
     })
     .detach();

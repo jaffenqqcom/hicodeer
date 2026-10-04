@@ -115,6 +115,23 @@ impl EditPredictionProvider {
     }
 
     pub fn display_name(&self) -> Option<&'static str> {
+        // [OHOS PORT BEGIN] HiCodeer never offers the Zed-operated prediction
+        // backends, so their display names must not reach the UI. Guarded here
+        // in addition to the provider list itself so no code path can surface
+        // the name. To restore the other providers, delete this block.
+        #[cfg(target_env = "ohos")]
+        {
+            let ohos_name = match self {
+                EditPredictionProvider::Ollama => Some("Ollama"),
+                EditPredictionProvider::OpenAiCompatibleApi => {
+                    Some("OpenAI-Compatible API")
+                }
+                _ => None,
+            };
+            return ohos_name;
+        }
+        // [OHOS PORT END]
+
         match self {
             EditPredictionProvider::Zed => Some("Zed AI"),
             EditPredictionProvider::Copilot => Some("GitHub Copilot"),

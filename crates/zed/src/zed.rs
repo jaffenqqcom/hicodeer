@@ -108,13 +108,9 @@ use workspace::{
 use workspace::{CloseProject, CloseWindow, RestoreBanner, with_active_or_new_workspace};
 use workspace::{Pane, notifications::DetachAndPromptErr};
 use zed_actions::{
-    About, GetMerch, OpenAccountSettings, OpenBrowser, OpenDocs, OpenProjectTasks,
-    OpenServerSettings, OpenSettingsFile, OpenStatusPage, OpenZedUrl, Quit,
+    About, OpenAccountSettings, OpenBrowser, OpenProjectTasks, OpenServerSettings,
+    OpenSettingsFile, OpenZedUrl, Quit,
 };
-
-const DOCS_URL: &str = "https://zed.dev/docs/";
-const STATUS_URL: &str = "https://status.zed.dev";
-const MERCH_URL: &str = "https://merch.zed.dev/";
 
 pub struct CrashHandler(pub Arc<crashes::Client>);
 
@@ -270,6 +266,12 @@ pub fn init(cx: &mut App) {
         });
     })
     .on_action(|_: &OpenAccountSettings, cx| {
+        // [OHOS PORT BEGIN] HiCodeer has no Zed account to manage, and the
+        // account URL can no longer be built because the server address is
+        // pinned to empty. To restore the upstream behaviour, delete this block.
+        #[cfg(target_env = "ohos")]
+        return;
+        // [OHOS PORT END]
         with_active_or_new_workspace(cx, |_, _, cx| {
             cx.open_url(&zed_urls::account_url(cx));
         });
@@ -669,30 +671,43 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
 #[allow(unused)]
 fn initialize_file_watcher(fs: &dyn Fs, window: &mut Window, cx: &mut Context<Workspace>) {
     if let Err(e) = fs.start_native_watcher() {
-        let message = format!(
-            db::indoc! {r#"
-            inotify_init returned {}
+        // [OHOS PORT BEGIN] The upstream prompt sends the user to the Zed
+        // documentation site and quits the app on acknowledgement. To restore
+        // the upstream prompt, delete this block.
+        #[cfg(target_env = "ohos")]
+        {
+            eprintln!("inotify_init returned {e}");
+        }
+        // [OHOS PORT END]
+        // [OHOS PORT BEGIN] To restore the upstream prompt, delete this block.
+        #[cfg(not(target_env = "ohos"))]
+        {
+            let message = format!(
+                db::indoc! {r#"
+                inotify_init returned {}
 
-            This may be due to system-wide limits on inotify instances. For troubleshooting see: https://zed.dev/docs/linux
-            "#},
-            e
-        );
-        let prompt = window.prompt(
-            PromptLevel::Critical,
-            localization::localized_str!("Could not start inotify"),
-            Some(&message),
-            &[localization::localized_str!("Troubleshoot and Quit")],
-            cx,
-        );
-        cx.spawn(async move |_, cx| {
-            if prompt.await == Ok(0) {
-                cx.update(|cx| {
-                    cx.open_url("https://zed.dev/docs/linux#could-not-start-inotify");
-                    cx.quit();
-                });
-            }
-        })
-        .detach()
+                This may be due to system-wide limits on inotify instances. For troubleshooting see: https://zed.dev/docs/linux
+                "#},
+                e
+            );
+            let prompt = window.prompt(
+                PromptLevel::Critical,
+                localization::localized_str!("Could not start inotify"),
+                Some(&message),
+                &[localization::localized_str!("Troubleshoot and Quit")],
+                cx,
+            );
+            cx.spawn(async move |_, cx| {
+                if prompt.await == Ok(0) {
+                    cx.update(|cx| {
+                        cx.open_url("https://zed.dev/docs/linux#could-not-start-inotify");
+                        cx.quit();
+                    });
+                }
+            })
+            .detach()
+        }
+        // [OHOS PORT END]
     }
 }
 
@@ -733,6 +748,13 @@ fn show_software_emulation_warning_if_needed(
     cx: &mut Context<Workspace>,
 ) {
     if specs.is_software_emulated && std::env::var("ZED_ALLOW_EMULATED_GPU").is_err() {
+        // [OHOS PORT BEGIN] The upstream prompt is worded around the Zed product
+        // and links to the Zed documentation site. To restore the upstream
+        // prompt, delete this block.
+        #[cfg(target_env = "ohos")]
+        return;
+        // [OHOS PORT END]
+
         let (graphics_api, docs_url, open_url) = if cfg!(target_os = "windows") {
             (
                 "DirectX",
@@ -920,10 +942,25 @@ fn register_actions(
     _: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
+    // [OHOS PORT BEGIN] HiCodeer exposes no Zed-operated web properties, so
+    // these actions are not registered and the command palette does not list
+    // them. To restore the upstream behaviour, delete this block.
+    #[cfg(not(target_env = "ohos"))]
+    {
+        use zed_actions::{GetMerch, OpenDocs, OpenStatusPage};
+
+        const DOCS_URL: &str = "https://zed.dev/docs/";
+        const STATUS_URL: &str = "https://status.zed.dev";
+        const MERCH_URL: &str = "https://merch.zed.dev/";
+
+        workspace
+            .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
+            .register_action(|_, _: &OpenStatusPage, _, cx| cx.open_url(STATUS_URL))
+            .register_action(|_, _: &GetMerch, _, cx| cx.open_url(MERCH_URL));
+    }
+    // [OHOS PORT END]
+
     workspace
-        .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
-        .register_action(|_, _: &OpenStatusPage, _, cx| cx.open_url(STATUS_URL))
-        .register_action(|_, _: &GetMerch, _, cx| cx.open_url(MERCH_URL))
         .register_action(
             |workspace: &mut Workspace,
              _: &input_latency_ui::DumpInputLatencyHistogram,
@@ -1051,6 +1088,12 @@ fn register_actions(
             },
         )
         .register_action(|_, action: &OpenZedUrl, _, cx| {
+            // [OHOS PORT BEGIN] HiCodeer exposes no Zed web properties, so this
+            // entry point is disabled. To restore the upstream behaviour,
+            // delete this block.
+            #[cfg(target_env = "ohos")]
+            return;
+            // [OHOS PORT END]
             OpenListener::global(cx).open(RawOpenRequest {
                 urls: vec![String::from(&*action.url)],
                 ..Default::default()

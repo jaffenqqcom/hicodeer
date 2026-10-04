@@ -14,6 +14,40 @@ fn application_menu_name(name: &'static str) -> gpui::SharedString {
     }
 }
 
+// [OHOS PORT BEGIN] HiCodeer has no documentation site, social account, or
+// hiring page, so the Help menu omits them. To restore the upstream menu items,
+// delete this block.
+#[cfg(target_env = "ohos")]
+fn upstream_help_links() -> Vec<MenuItem> {
+    Vec::new()
+}
+#[cfg(not(target_env = "ohos"))]
+// [OHOS PORT END]
+fn upstream_help_links() -> Vec<MenuItem> {
+    vec![
+        MenuItem::action(
+            localization::localized_str!("Documentation"),
+            super::OpenBrowser {
+                url: "https://zed.dev/docs".into(),
+            },
+        ),
+        MenuItem::action(localization::localized_str!("Zed Repository"), feedback::OpenZedRepo),
+        MenuItem::action(
+            localization::localized_str!("Zed Twitter"),
+            super::OpenBrowser {
+                url: "https://twitter.com/zeddotdev".into(),
+            },
+        ),
+        MenuItem::action(
+            localization::localized_str!("Join the Team"),
+            super::OpenBrowser {
+                url: "https://zed.dev/jobs".into(),
+            },
+        ),
+    ]
+}
+// [OHOS PORT END]
+
 pub fn app_menus(cx: &mut App) -> Vec<Menu> {
     let mut view_items = vec![
         MenuItem::action(
@@ -74,13 +108,66 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
         view_items.push(MenuItem::separator());
     }
 
+    // [OHOS PORT BEGIN] The platform draws the window controls itself, so the
+    // Window menu has nothing to act on and is left out. To restore it, delete
+    // this block and the `window_menu_items` chain below.
+    #[cfg(target_env = "ohos")]
+    let window_menu_items: Vec<Menu> = Vec::new();
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the Window menu, delete this block.
+    #[cfg(not(target_env = "ohos"))]
+    let window_menu_items: Vec<Menu> = vec![Menu {
+        name: application_menu_name("Window"),
+        disabled: false,
+        items: vec![
+            MenuItem::action(localization::localized_str!("Minimize"), super::Minimize),
+            MenuItem::action(localization::localized_str!("Zoom"), super::Zoom),
+            MenuItem::separator(),
+        ],
+    }];
+    // [OHOS PORT END]
+
+    // [OHOS PORT BEGIN] Only the licence viewer stays: everything else in this
+    // menu either opens an upstream web property or reports to a service
+    // HiCodeer does not run. To restore the upstream menu, delete this block.
+    #[cfg(target_env = "ohos")]
+    let help_menu_items: Vec<MenuItem> = vec![MenuItem::action(
+        localization::localized_str!("View Dependency Licenses"),
+        zed_actions::OpenLicenses,
+    )];
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the upstream Help menu, delete this block.
+    #[cfg(not(target_env = "ohos"))]
+    let help_menu_items: Vec<MenuItem> = vec![
+        MenuItem::action(
+            localization::localized_str!("View Release Notes Locally"),
+            auto_update_ui::ViewReleaseNotesLocally,
+        ),
+        MenuItem::action(localization::localized_str!("View Telemetry"), zed_actions::OpenTelemetryLog),
+        MenuItem::action(localization::localized_str!("View Dependency Licenses"), zed_actions::OpenLicenses),
+        MenuItem::action(localization::localized_str!("Show Welcome"), onboarding::ShowWelcome),
+        MenuItem::separator(),
+        MenuItem::action(localization::localized_str!("File Bug Report..."), zed_actions::feedback::FileBugReport),
+        MenuItem::action(localization::localized_str!("Request Feature..."), zed_actions::feedback::RequestFeature),
+        MenuItem::action(localization::localized_str!("Email Us..."), zed_actions::feedback::EmailZed),
+    ]
+    .into_iter()
+    .chain(upstream_help_links())
+    .collect();
+    // [OHOS PORT END]
+
     vec![
         Menu {
             name: application_menu_name("Zed"),
             disabled: false,
             items: vec![
                 MenuItem::action(localization::localized_str!("About Zed"), zed_actions::About),
+                // [OHOS PORT BEGIN] HiCodeer does not auto-update, so the menu
+                // entry that triggers the check is hidden. To restore the
+                // upstream behaviour, delete this block.
+                #[cfg(not(target_env = "ohos"))]
                 MenuItem::action(localization::localized_str!("Check for Updates"), auto_update::Check),
+                // [OHOS PORT END]
                 MenuItem::separator(),
                 MenuItem::submenu(Menu::new(localization::localized_str!("Settings")).items([
                     MenuItem::action(localization::localized_str!("Open Settings"), zed_actions::OpenSettings),
@@ -299,51 +386,13 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action(localization::localized_str!("Clear All Breakpoints"), debugger_ui::ClearAllBreakpoints),
             ],
         },
-        Menu {
-            name: application_menu_name("Window"),
-            disabled: false,
-            items: vec![
-                MenuItem::action(localization::localized_str!("Minimize"), super::Minimize),
-                MenuItem::action(localization::localized_str!("Zoom"), super::Zoom),
-                MenuItem::separator(),
-            ],
-        },
-        Menu {
-            name: application_menu_name("Help"),
-            disabled: false,
-            items: vec![
-                MenuItem::action(
-                    localization::localized_str!("View Release Notes Locally"),
-                    auto_update_ui::ViewReleaseNotesLocally,
-                ),
-                MenuItem::action(localization::localized_str!("View Telemetry"), zed_actions::OpenTelemetryLog),
-                MenuItem::action(localization::localized_str!("View Dependency Licenses"), zed_actions::OpenLicenses),
-                MenuItem::action(localization::localized_str!("Show Welcome"), onboarding::ShowWelcome),
-                MenuItem::separator(),
-                MenuItem::action(localization::localized_str!("File Bug Report..."), zed_actions::feedback::FileBugReport),
-                MenuItem::action(localization::localized_str!("Request Feature..."), zed_actions::feedback::RequestFeature),
-                MenuItem::action(localization::localized_str!("Email Us..."), zed_actions::feedback::EmailZed),
-                MenuItem::separator(),
-                MenuItem::action(
-                    localization::localized_str!("Documentation"),
-                    super::OpenBrowser {
-                        url: "https://zed.dev/docs".into(),
-                    },
-                ),
-                MenuItem::action(localization::localized_str!("Zed Repository"), feedback::OpenZedRepo),
-                MenuItem::action(
-                    localization::localized_str!("Zed Twitter"),
-                    super::OpenBrowser {
-                        url: "https://twitter.com/zeddotdev".into(),
-                    },
-                ),
-                MenuItem::action(
-                    localization::localized_str!("Join the Team"),
-                    super::OpenBrowser {
-                        url: "https://zed.dev/jobs".into(),
-                    },
-                ),
-            ],
-        },
     ]
+    .into_iter()
+    .chain(window_menu_items)
+    .chain(vec![Menu {
+        name: application_menu_name("Help"),
+        disabled: false,
+        items: help_menu_items,
+    }])
+    .collect()
 }

@@ -375,6 +375,18 @@ impl Render for TitleBar {
                 client::Status::SignedOut | client::Status::AuthenticationError
             );
 
+        // [OHOS PORT BEGIN] HiCodeer has no account to sign in to, so the
+        // sign-in button is dropped. The user menu beside it stays, because it
+        // holds the settings and the other account-independent entries. To
+        // restore the upstream button, delete this block.
+        #[cfg(target_env = "ohos")]
+        let show_sign_in_button = false;
+        // [OHOS PORT END]
+        // [OHOS PORT BEGIN] To restore the upstream button, delete this block.
+        #[cfg(not(target_env = "ohos"))]
+        let show_sign_in_button = true;
+        // [OHOS PORT END]
+
         children.push(
             h_flex()
                 .pr_1()
@@ -384,7 +396,8 @@ impl Render for TitleBar {
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
                 .when(
-                    user.is_none()
+                    show_sign_in_button
+                        && user.is_none()
                         && is_signed_out_or_auth_error
                         && TitleBarSettings::get_global(cx).show_sign_in,
                     |this| this.child(self.render_sign_in_button(cx)),

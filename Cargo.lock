@@ -8215,6 +8215,7 @@ dependencies = [
  "gpui",
  "itertools 0.14.0",
  "log",
+ "ohos-libc-shim",
  "openharmony-ability",
  "openharmony-ability-plugin-cursor",
  "openharmony-ability-plugin-filedropin",
@@ -13327,6 +13328,7 @@ name = "ohos-libc-shim"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "log",
 ]
 
 [[package]]

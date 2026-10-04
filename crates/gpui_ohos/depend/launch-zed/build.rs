@@ -20,6 +20,10 @@ fn main() {
             "opendir",
             "realpath",
             "syscall",
+            // Not path-taking: redirected as well, but to refuse the host names
+            // listed in `ohos-libc-shim`'s `blocked_host` before any lookup
+            // leaves the process.
+            "getaddrinfo",
         ] {
             println!("cargo:rustc-link-arg=-Wl,--wrap={symbol}");
         }

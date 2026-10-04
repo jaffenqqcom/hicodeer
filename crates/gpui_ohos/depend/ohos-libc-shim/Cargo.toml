@@ -12,3 +12,4 @@ path = "src/ohos_libc_shim.rs"
 
 [dependencies]
 libc.workspace = true
+log.workspace = true

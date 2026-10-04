@@ -27,7 +27,53 @@ pub(crate) fn render_llm_providers_page(
     window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
+    // [OHOS PORT BEGIN] HiCodeer lists only the providers a user can reach
+    // without a HiCodeer account. The filter matches on the built-in ids
+    // rather than on a whitelist, so a provider the user added themselves -
+    // which is registered under a name they chose, not one of these - stays.
+    // To restore the upstream list, delete this block and the retain below.
+    #[cfg(target_env = "ohos")]
+    const BUILTIN_PROVIDER_IDS: &[&str] = &[
+        // Kept: reachable with the user's own key or on their own machine.
+        "deepseek",
+        "llama.cpp",
+        "lmstudio",
+        "ollama",
+        // Upstream-hosted or upstream-account-only: not offered.
+        "zed.dev",
+        "anthropic",
+        "openai",
+        "google",
+        "mistral",
+        "amazon-bedrock",
+        "openrouter",
+        "vercel_ai_gateway",
+        "x_ai",
+        "x_ai_subscribed",
+        "openai-subscribed",
+        "opencode",
+        "copilot_chat",
+    ];
+    // [OHOS PORT END]
+
+    // [OHOS PORT BEGIN] See BUILTIN_PROVIDER_IDS.
+    #[cfg(target_env = "ohos")]
+    let providers = {
+        let registry = LanguageModelRegistry::read_global(cx);
+        let mut providers = registry.visible_providers();
+        providers.retain(|provider| {
+            let id = provider.id();
+            let id = id.0.as_ref();
+            !BUILTIN_PROVIDER_IDS.contains(&id)
+                || matches!(id, "deepseek" | "llama.cpp" | "lmstudio" | "ollama")
+        });
+        providers
+    };
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the upstream list, delete this block.
+    #[cfg(not(target_env = "ohos"))]
     let providers = LanguageModelRegistry::read_global(cx).visible_providers();
+    // [OHOS PORT END]
 
     v_flex()
         .id("llm-providers-page")

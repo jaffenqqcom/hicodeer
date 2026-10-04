@@ -7,6 +7,14 @@ mod zed;
 
 // Ensure the binary name stays in sync with APP_NAME so that the paths used
 // at runtime (data dir, config dir, etc.) match what the binary is called.
+// [OHOS PORT BEGIN] HiCodeer ships as libhicodeer.so and takes its data
+// directory from set_custom_data_dir, so the `zed` development binary name
+// does not have to agree with APP_NAME. To restore the upstream check, delete
+// this block.
+#[cfg(target_env = "ohos")]
+const _: () = ();
+// [OHOS PORT END]
+#[cfg(not(target_env = "ohos"))]
 const _: () = assert!(
     paths::APP_NAME_LOWERCASE
         .as_bytes()
@@ -155,9 +163,18 @@ fn fail_to_open_window_async(e: anyhow::Error, cx: &mut AsyncApp) {
 }
 
 fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
+    // [OHOS PORT BEGIN] The upstream message links to the Zed documentation
+    // site, which HiCodeer must not advertise. To restore the upstream message,
+    // delete this block.
+    #[cfg(target_env = "ohos")]
+    eprintln!("HiCodeer failed to open a window: {e:?}.");
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the upstream message, delete this block.
+    #[cfg(not(target_env = "ohos"))]
     eprintln!(
         "Zed failed to open a window: {e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
     );
+    // [OHOS PORT END]
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     {
         process::exit(1);
@@ -173,17 +190,25 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
                 process::exit(1);
             };
 
+            // [OHOS PORT BEGIN] The upstream notification body links to the Zed
+            // documentation site. To restore the upstream behaviour, delete
+            // this block.
+            #[cfg(target_env = "ohos")]
+            let launch_error_body = format!("{e:?}.");
+            // [OHOS PORT END]
+            // [OHOS PORT BEGIN] To restore the upstream behaviour, delete this block.
+            #[cfg(not(target_env = "ohos"))]
+            let launch_error_body = format!(
+                "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
+            );
+            // [OHOS PORT END]
+
             let notification_id = "dev.zed.Oops";
             proxy
                 .add_notification(
                     notification_id,
                     Notification::new(localization::localized_str!("Zed failed to launch"))
-                        .body(Some(
-                            format!(
-                                "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
-                            )
-                            .as_str(),
-                        ))
+                        .body(Some(launch_error_body.as_str()))
                         .priority(Priority::High)
                         .icon(ashpd::desktop::Icon::with_names(&[
                             "dialog-question-symbolic",

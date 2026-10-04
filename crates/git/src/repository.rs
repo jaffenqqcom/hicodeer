@@ -4276,11 +4276,21 @@ fn parse_upstream_track(upstream_track: &str) -> Result<UpstreamTracking> {
 }
 
 fn checkpoint_author_envs() -> HashMap<String, String> {
+    // [OHOS PORT BEGIN] Checkpoint commits are the user's own code history, so
+    // they must not be attributed to the upstream author. To restore the
+    // upstream identity, delete this block.
+    #[cfg(target_env = "ohos")]
+    let (author_name, author_email) = ("jaffenqqcom", "jaffen@qq.com");
+    // [OHOS PORT END]
+    // [OHOS PORT BEGIN] To restore the upstream identity, delete this block.
+    #[cfg(not(target_env = "ohos"))]
+    let (author_name, author_email) = ("Zed", "hi@zed.dev");
+    // [OHOS PORT END]
     HashMap::from_iter([
-        ("GIT_AUTHOR_NAME".to_string(), "Zed".to_string()),
-        ("GIT_AUTHOR_EMAIL".to_string(), "hi@zed.dev".to_string()),
-        ("GIT_COMMITTER_NAME".to_string(), "Zed".to_string()),
-        ("GIT_COMMITTER_EMAIL".to_string(), "hi@zed.dev".to_string()),
+        ("GIT_AUTHOR_NAME".to_string(), author_name.to_string()),
+        ("GIT_AUTHOR_EMAIL".to_string(), author_email.to_string()),
+        ("GIT_COMMITTER_NAME".to_string(), author_name.to_string()),
+        ("GIT_COMMITTER_EMAIL".to_string(), author_email.to_string()),
     ])
 }
 

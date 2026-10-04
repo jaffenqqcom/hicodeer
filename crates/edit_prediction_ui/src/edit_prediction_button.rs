@@ -52,7 +52,12 @@ actions!(
 
 const COPILOT_SETTINGS_PATH: &str = "/settings/copilot";
 const COPILOT_SETTINGS_URL: &str = concat!("https://github.com", "/settings/copilot");
+// [OHOS PORT BEGIN] HiCodeer publishes no privacy documentation of its own, so
+// the menu entry that opens it is left out. To restore the upstream entry,
+// delete this block and the one at its call site.
+#[cfg(not(target_env = "ohos"))]
 const PRIVACY_DOCS: &str = "https://zed.dev/docs/ai/privacy-and-security";
+// [OHOS PORT END]
 
 struct CopilotErrorToast;
 
@@ -399,7 +404,20 @@ impl Render for EditPredictionButton {
                     }
                 };
 
-                if edit_prediction::should_show_upsell_modal(cx) {
+                // [OHOS PORT BEGIN] HiCodeer does not sell an edit prediction
+                // plan, so the first click must open the panel directly instead
+                // of the plan onboarding. To restore the upstream first click,
+                // delete this block.
+                #[cfg(target_env = "ohos")]
+                let show_upsell_onboarding = false;
+                // [OHOS PORT END]
+                // [OHOS PORT BEGIN] To restore the upstream first click, delete
+                // this block.
+                #[cfg(not(target_env = "ohos"))]
+                let show_upsell_onboarding = edit_prediction::should_show_upsell_modal(cx);
+                // [OHOS PORT END]
+
+                if show_upsell_onboarding {
                     let tooltip_meta = if self.user_store.read(cx).current_user().is_some() {
                         localization::localized_str!("Choose a Plan")
                     } else {
@@ -813,6 +831,27 @@ impl EditPredictionButton {
         let subtle_mode = matches!(current_mode, EditPredictionsMode::Subtle);
         let eager_mode = matches!(current_mode, EditPredictionsMode::Eager);
 
+        // [OHOS PORT BEGIN] See PRIVACY_DOCS. To restore the upstream entry,
+        // delete this block and the `when_some` at the end of the chain below.
+        #[cfg(target_env = "ohos")]
+        let view_docs_item: Option<ContextMenuEntry> = None;
+        // [OHOS PORT END]
+        // [OHOS PORT BEGIN] To restore the upstream entry, delete this block.
+        #[cfg(not(target_env = "ohos"))]
+        let view_docs_item: Option<ContextMenuEntry> = Some(
+            ContextMenuEntry::new(localization::localized_str!("View Docs"))
+                .icon(IconName::FileGeneric)
+                .icon_color(Color::Muted)
+                .handler(move |_, cx| {
+                    telemetry::event!(
+                        "Edit Prediction Menu Action",
+                        action = "view_docs",
+                    );
+                    cx.open_url(PRIVACY_DOCS);
+                }),
+        );
+        // [OHOS PORT END]
+
         menu = menu
                 .separator()
                 .header(localization::localized_str!("Display Modes"))
@@ -983,18 +1022,12 @@ impl EditPredictionButton {
                             .detach_and_log_err(cx);
                     }
                 }),
-        ).item(
-            ContextMenuEntry::new(localization::localized_str!("View Docs"))
-                .icon(IconName::FileGeneric)
-                .icon_color(Color::Muted)
-                .handler(move |_, cx| {
-                    telemetry::event!(
-                        "Edit Prediction Menu Action",
-                        action = "view_docs",
-                    );
-                    cx.open_url(PRIVACY_DOCS);
-                })
-        );
+        )
+        // [OHOS PORT BEGIN] See PRIVACY_DOCS. To restore the upstream entry,
+        // delete this block.
+        .when_some(view_docs_item, |this, item| this.item(item))
+        // [OHOS PORT END]
+        ;
 
         if !self.editor_enabled.unwrap_or(true) {
             let icons = self
@@ -1133,6 +1166,22 @@ impl EditPredictionButton {
                 );
 
             if needs_sign_in {
+                // [OHOS PORT BEGIN] HiCodeer has no plan to sign in to and no
+                // hosted documentation to link to, so the panel keeps only its
+                // title on this platform. To restore the upstream panel, delete
+                // this block.
+                #[cfg(target_env = "ohos")]
+                {
+                    menu = menu.custom_row(move |_window, _cx| {
+                        Label::new(localization::localized_str!("Edit Prediction"))
+                            .into_any_element()
+                    });
+                }
+                // [OHOS PORT END]
+                // [OHOS PORT BEGIN] To restore the upstream panel, delete this
+                // block.
+                #[cfg(not(target_env = "ohos"))]
+                {
                 menu = menu
                     .custom_row(move |_window, cx| {
                         let description = localization::translate_static(indoc!{"You get 2,000 accepted suggestions at every keystroke for free, \
@@ -1182,6 +1231,8 @@ impl EditPredictionButton {
                         },
                     )
                     .separator();
+                }
+                // [OHOS PORT END]
             } else {
                 let mercury_payment_required = matches!(provider, EditPredictionProvider::Mercury)
                     && edit_prediction::EditPredictionStore::try_global(cx).is_some_and(
@@ -1499,6 +1550,35 @@ pub fn set_completion_provider(fs: Arc<dyn Fs>, cx: &mut App, provider: EditPred
 }
 
 pub fn get_available_providers(cx: &mut App) -> Vec<EditPredictionProvider> {
+    // [OHOS PORT BEGIN] HiCodeer offers only the self-hosted / user-supplied
+    // prediction backends. Every provider that talks to a Zed-operated service
+    // is filtered out here instead of being removed from the enum, so the
+    // upstream code stays intact. To restore the other providers, delete this
+    // block.
+    #[cfg(target_env = "ohos")]
+    {
+        let mut ohos_providers = Vec::new();
+
+        if all_language_settings(None, cx)
+            .edit_predictions
+            .ollama
+            .is_some()
+        {
+            ohos_providers.push(EditPredictionProvider::Ollama);
+        }
+
+        if all_language_settings(None, cx)
+            .edit_predictions
+            .open_ai_compatible_api
+            .is_some()
+        {
+            ohos_providers.push(EditPredictionProvider::OpenAiCompatibleApi);
+        }
+
+        return ohos_providers;
+    }
+    // [OHOS PORT END]
+
     let mut providers = Vec::new();
 
     providers.push(EditPredictionProvider::Zed);

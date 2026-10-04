@@ -34,13 +34,23 @@
 //! calls `syscall(SYS_openat, ...)` directly, which is why that entry point is
 //! covered too.
 //!
+//! `getaddrinfo` is wrapped for a different reason: it is the single entry
+//! point every hostname lookup goes through, so refusing the names listed in
+//! `blocked_host` here keeps requests to them from ever reaching the network -
+//! including the ones made deep inside the networking stack, where no
+//! application-level check would find them.
+//!
 //! Activation applies to a whole directory tree, so once it succeeds every
 //! later access below that directory goes straight through the fast path and
 //! never reaches the activation code again. No cache of activated paths is
 //! needed for that - the success of the real call is the cache.
 //!
-//! Nothing here logs. The shim is meant to be invisible to the code it
-//! forwards, so it adds no output of its own on any path.
+//! The grant wrappers log nothing: the shim is meant to be invisible to the
+//! code it forwards, so it adds no output of its own on any path. The one
+//! wrapper that does report is `getaddrinfo`, because a refused name is a
+//! decision worth explaining rather than a transparent retry.
+
+pub mod blocked_host;
 
 use std::cell::Cell;
 use std::ffi::{c_char, c_int, c_long, c_uint, c_void, CStr, CString};
@@ -252,6 +262,12 @@ unsafe extern "C" {
         arg5: c_long,
         arg6: c_long,
     ) -> c_long;
+    fn __real_getaddrinfo(
+        node: *const c_char,
+        service: *const c_char,
+        hints: *const libc::addrinfo,
+        res: *mut *mut libc::addrinfo,
+    ) -> c_int;
 }
 
 /// `open` reports failure as a negative descriptor.
@@ -414,6 +430,54 @@ pub unsafe extern "C" fn __wrap_syscall(
         }
         __real_syscall(number, arg1, arg2, arg3, arg4, arg5, arg6)
     }
+}
+
+/// `getaddrinfo` reports failure as a negative `EAI_*` code and leaves `res`
+/// untouched, so a refused name has to return a code rather than a null list.
+/// `EAI_NONAME` - "the name does not resolve" - is what the caller already
+/// handles for an unknown host, which keeps a refused name indistinguishable
+/// from a typo one. The libc crate does not re-export the `EAI_*` family, so
+/// the value is spelled out here.
+const EAI_NONAME: c_int = -2;
+
+/// Refuses the host names listed in `blocked_host` before the real lookup
+/// starts, so no packet for them is ever sent. `node` is null when the caller
+/// only asks for a service (`getaddrinfo(NULL, "80", ...)`); that case has no
+/// host to judge and goes straight through.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __wrap_getaddrinfo(
+    node: *const c_char,
+    service: *const c_char,
+    hints: *const libc::addrinfo,
+    res: *mut *mut libc::addrinfo,
+) -> c_int {
+    // SAFETY: a non-null `node` is a NUL-terminated string, exactly what the
+    // real entry point reads it as; a non-UTF-8 one simply fails to convert
+    // and is forwarded unjudged.
+    if node_is_blocked(node) {
+        return EAI_NONAME;
+    }
+    // SAFETY: all arguments are forwarded unchanged to the real entry point.
+    unsafe { __real_getaddrinfo(node, service, hints, res) }
+}
+
+/// Whether the host argument is one of the refused names. A null `node` means
+/// the caller only asked for a service (`getaddrinfo(NULL, "80", ...)`), which
+/// has no host to judge.
+fn node_is_blocked(node: *const c_char) -> bool {
+    if node.is_null() {
+        return false;
+    }
+    // SAFETY: the caller guarantees `node` is either null or a
+    // NUL-terminated string, which is the contract of `getaddrinfo`.
+    let Ok(host) = (unsafe { CStr::from_ptr(node) }).to_str() else {
+        return false;
+    };
+    if !blocked_host::host_is_blocked(host) {
+        return false;
+    }
+    log::warn!("getaddrinfo refused blocked host: {host}");
+    true
 }
 
 /// Returns the path argument of a path-taking syscall, or `None` for any other

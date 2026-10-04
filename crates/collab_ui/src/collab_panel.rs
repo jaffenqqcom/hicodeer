@@ -4105,9 +4105,19 @@ impl Panel for CollabPanel {
     }
 
     fn icon(&self, _window: &Window, cx: &App) -> Option<ui::IconName> {
-        CollaborationPanelSettings::get_global(cx)
-            .button
-            .then_some(ui::IconName::UserGroup)
+        // [OHOS PORT BEGIN] HiCodeer does not host a collaboration service, so
+        // the status bar has no button to open this panel. Returning `None` is
+        // what `Dock` reads to leave the button out. To restore it, delete this
+        // block.
+        #[cfg(target_env = "ohos")]
+        let show_button = false;
+        // [OHOS PORT END]
+        // [OHOS PORT BEGIN] To restore the upstream button, delete this block.
+        #[cfg(not(target_env = "ohos"))]
+        let show_button = CollaborationPanelSettings::get_global(cx).button;
+        // [OHOS PORT END]
+
+        show_button.then_some(ui::IconName::UserGroup)
     }
 
     fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {

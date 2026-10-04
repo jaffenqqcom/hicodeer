@@ -589,6 +589,13 @@ impl Platform for OhosPlatform {
     }
 
     fn open_url(&self, url: &str) {
+        // The system browser resolves the URL outside this process, so the
+        // `getaddrinfo` wrapper that refuses the upstream vendor's host names
+        // never sees it. Judging the host here is what closes that gap.
+        if ohos_libc_shim::blocked_host::url_host_is_blocked(url) {
+            warn!("open_url refused blocked host: {url}");
+            return;
+        }
         let url = url.to_string();
         if let Some(app) = self.app.borrow().clone() {
             self.foreground_executor.spawn(async move {

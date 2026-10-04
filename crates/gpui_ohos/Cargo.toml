@@ -22,6 +22,9 @@ etagere = "0.2"
 futures.workspace = true
 itertools.workspace = true
 log.workspace = true
+# Shares the rule for which host names this product refuses with the
+# `getaddrinfo` wrapper, so the two layers cannot drift apart.
+ohos-libc-shim = { path = "depend/ohos-libc-shim" }
 parking_lot.workspace = true
 profiling.workspace = true
 raw-window-handle = "0.6"

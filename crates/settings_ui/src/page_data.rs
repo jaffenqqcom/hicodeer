@@ -63,7 +63,7 @@ macro_rules! concat_sections {
 }
 
 pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
-    vec![
+    let mut pages = vec![
         general_page(cx),
         appearance_page(),
         keymap_page(),
@@ -79,8 +79,101 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         ai_page(cx),
         network_page(),
         developer_page(cx),
+    ];
+    // [OHOS PORT BEGIN] Hide the switches whose features do not exist on this
+    // platform, so a stale configuration cannot make them look actionable. The
+    // features themselves are gated separately. To restore the upstream
+    // settings, delete this call.
+    drop_unsupported_settings(&mut pages);
+    // [OHOS PORT END]
+    pages
+}
+
+// [OHOS PORT BEGIN] The pages below are removed on this platform: the features
+// behind them are not part of HiCodeer. A page is named by its translation key
+// rather than by its text, because `SettingsPage::title` already holds the
+// translated string, which differs per locale. To restore the upstream settings,
+// delete this function and its use in `drop_unsupported_settings`.
+#[cfg(target_env = "ohos")]
+fn unsupported_setting_pages() -> Vec<&'static str> {
+    vec![
+        // Upstream collaboration service: HiCodeer does not host one.
+        localization::localized_str!("Collaboration"),
     ]
 }
+// [OHOS PORT END]
+
+// [OHOS PORT BEGIN] The settings below drive desktop-only or upstream-only
+// behaviour, so they are removed from the pages on this platform. A value left
+// in the configuration file is still read by the feature itself; only the
+// interface stops offering the switch. To restore the upstream settings, delete
+// this table and its use in `settings_data`.
+#[cfg(target_env = "ohos")]
+const UNSUPPORTED_SETTING_PATHS: &[&str] = &[
+    // Desktop window management: OHOS opens a single window and lets the system
+    // draw its own decorations.
+    "on_new_window",
+    "on_last_window_closed",
+    "use_system_window_tabs",
+    "title_bar.button_layout",
+    "fullscreen_mode",
+    "window_decorations",
+    // Linux-only input behaviour.
+    "languages.$(language).editor.middle_click_paste",
+    "terminal.option_as_meta",
+    // Upstream-only reporting: nothing is sent anywhere from this platform.
+    "edit_predictions.allow_data_collection",
+    "telemetry.diagnostics",
+    "telemetry.metrics",
+    "telemetry.anthropic_retention",
+    "auto_update",
+    // The accessibility tree is not built on this platform.
+    "accessible_mode",
+    // Upstream release channel: HiCodeer is not distributed through it.
+    "preview_channel_settings",
+    // Sign-in surface: HiCodeer has no hosted server to sign in to.
+    "title_bar.show_sign_in",
+    "title_bar.show_onboarding_banner",
+    "collaboration_panel.button",
+    "collaboration_panel.dock",
+    "collaboration_panel.default_width",
+    "server_url",
+];
+// [OHOS PORT END]
+
+// [OHOS PORT BEGIN] See UNSUPPORTED_SETTING_PATHS and UNSUPPORTED_SETTING_PAGES.
+#[cfg(target_env = "ohos")]
+fn drop_unsupported_settings(pages: &mut Vec<SettingsPage>) {
+    use crate::AnySettingField;
+    pages.retain(|page| !unsupported_setting_pages().contains(&page.title));
+    for page in pages.iter_mut() {
+        let items = std::mem::take(&mut page.items);
+        let mut kept: Vec<SettingsPageItem> = Vec::with_capacity(items.len());
+        for item in items.into_vec() {
+            let keep = match &item {
+                SettingsPageItem::SettingItem(setting) => !setting
+                    .field
+                    .json_path()
+                    .is_some_and(|path| {
+                        UNSUPPORTED_SETTING_PATHS
+                            .iter()
+                            .any(|unsupported| path.starts_with(unsupported))
+                    }),
+                _ => true,
+            };
+            if keep {
+                kept.push(item);
+            }
+        }
+        page.items = kept.into_boxed_slice();
+    }
+}
+// [OHOS PORT END]
+
+// [OHOS PORT BEGIN] To restore the upstream settings, delete this definition.
+#[cfg(not(target_env = "ohos"))]
+fn drop_unsupported_settings(_pages: &mut Vec<SettingsPage>) {}
+// [OHOS PORT END]
 
 fn developer_page(cx: &App) -> SettingsPage {
     use feature_flags::FeatureFlagAppExt as _;
@@ -429,8 +522,16 @@ fn general_page(cx: &App) -> SettingsPage {
         ]
     }
 
-    fn privacy_section() -> [SettingsPageItem; 4] {
-        [
+    fn privacy_section() -> Vec<SettingsPageItem> {
+        // [OHOS PORT BEGIN] HiCodeer reports nothing to any server, so the three
+        // telemetry switches must not be offered; the reporter itself is gated in
+        // client::telemetry. To restore the upstream settings, delete this block.
+        #[cfg(target_env = "ohos")]
+        let items: Vec<SettingsPageItem> = Vec::new();
+        // [OHOS PORT END]
+        // [OHOS PORT BEGIN] To restore the upstream settings, delete this block.
+        #[cfg(not(target_env = "ohos"))]
+        let items: Vec<SettingsPageItem> = vec![
             SettingsPageItem::SectionHeader(localization::localized_str!("Privacy")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Telemetry Diagnostics"),
@@ -495,11 +596,21 @@ fn general_page(cx: &App) -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
-        ]
+        ];
+        // [OHOS PORT END]
+        items
     }
 
-    fn auto_update_section() -> [SettingsPageItem; 2] {
-        [
+    fn auto_update_section() -> Vec<SettingsPageItem> {
+        // [OHOS PORT BEGIN] HiCodeer does not auto-update, and the update check is
+        // already gated in auto_update::check, so the switch must not be offered.
+        // To restore the upstream setting, delete this block.
+        #[cfg(target_env = "ohos")]
+        let items: Vec<SettingsPageItem> = Vec::new();
+        // [OHOS PORT END]
+        // [OHOS PORT BEGIN] To restore the upstream setting, delete this block.
+        #[cfg(not(target_env = "ohos"))]
+        let items: Vec<SettingsPageItem> = vec![
             SettingsPageItem::SectionHeader(localization::localized_str!("Auto Update")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Update"),
@@ -515,7 +626,9 @@ fn general_page(cx: &App) -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
-        ]
+        ];
+        // [OHOS PORT END]
+        items
     }
 
     SettingsPage {
@@ -6759,9 +6872,16 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-    fn collaboration_panel_section() -> [SettingsPageItem; 4] {
-        [
-            SettingsPageItem::SectionHeader(localization::localized_str!("Collaboration Panel")),
+    fn collaboration_panel_section() -> Vec<SettingsPageItem> {
+        // [OHOS PORT BEGIN] Collaboration is unavailable in HiCodeer, and its
+        // actions are not registered either, so these switches must not be
+        // offered. To restore the upstream settings, delete this block.
+        #[cfg(target_env = "ohos")]
+        let panel_items: Vec<SettingsPageItem> = Vec::new();
+        // [OHOS PORT END]
+        // [OHOS PORT BEGIN] To restore the upstream settings, delete this block.
+        #[cfg(not(target_env = "ohos"))]
+        let panel_items: Vec<SettingsPageItem> = vec![
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Collaboration Panel Button"),
                 description: localization::localized_str!("Show the collaboration panel button in the status bar."),
@@ -6827,7 +6947,17 @@ fn panels_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+        ];
+        // [OHOS PORT END]
+        if panel_items.is_empty() {
+            return Vec::new();
+        }
+        [
+            SettingsPageItem::SectionHeader(localization::localized_str!("Collaboration Panel")),
         ]
+        .into_iter()
+        .chain(panel_items)
+        .collect()
     }
 
     fn agent_panel_section() -> [SettingsPageItem; 7] {
@@ -9232,7 +9362,35 @@ fn ai_page(cx: &App) -> SettingsPage {
 }
 
 fn network_page() -> SettingsPage {
-    fn network_section() -> [SettingsPageItem; 3] {
+    fn network_section() -> Vec<SettingsPageItem> {
+        // [OHOS PORT BEGIN] HiCodeer does not connect to a hosted server, so the
+        // Server URL setting is not offered. To restore the upstream settings
+        // page, delete this block.
+        #[cfg(target_env = "ohos")]
+        let server_url_item: Option<SettingsPageItem> = None;
+        // [OHOS PORT END]
+        // [OHOS PORT BEGIN] To restore the upstream settings page, delete this block.
+        #[cfg(not(target_env = "ohos"))]
+        let server_url_item: Option<SettingsPageItem> = Some(SettingsPageItem::SettingItem(
+            SettingItem {
+                title: localization::localized_str!("Server URL"),
+                description: localization::localized_str!("The URL of the Zed server to connect to."),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("server_url"),
+                    pick: |settings_content| settings_content.server_url.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.server_url = value;
+                    },
+                }),
+                metadata: Some(Box::new(SettingsFieldMetadata {
+                    placeholder: Some("https://zed.dev"),
+                    ..Default::default()
+                })),
+                files: USER,
+            },
+        ));
+        // [OHOS PORT END]
         [
             SettingsPageItem::SectionHeader(localization::localized_str!("Network")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -9252,24 +9410,10 @@ fn network_page() -> SettingsPage {
                 })),
                 files: USER,
             }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: localization::localized_str!("Server URL"),
-                description: localization::localized_str!("The URL of the Zed server to connect to."),
-                field: Box::new(SettingField {
-                    organization_override: None,
-                    json_path: Some("server_url"),
-                    pick: |settings_content| settings_content.server_url.as_ref(),
-                    write: |settings_content, value, _| {
-                        settings_content.server_url = value;
-                    },
-                }),
-                metadata: Some(Box::new(SettingsFieldMetadata {
-                    placeholder: Some("https://zed.dev"),
-                    ..Default::default()
-                })),
-                files: USER,
-            }),
         ]
+        .into_iter()
+        .chain(server_url_item)
+        .collect()
     }
 
     SettingsPage {

@@ -18352,6 +18352,7 @@ dependencies = [
  "http_client",
  "http_proxy",
  "itertools 0.14.0",
+ "keymap_editor",
  "language",
  "language_model",
  "language_models",

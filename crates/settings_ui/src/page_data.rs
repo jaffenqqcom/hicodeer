@@ -1,4 +1,4 @@
-use gpui::{Action as _, App};
+use gpui::{Action as _, App, Context};
 use itertools::Itertools as _;
 use settings::{
     AudioInputDeviceName, AudioOutputDeviceName, EditPredictionDataCollectionChoice,
@@ -1610,19 +1610,55 @@ fn keymap_page() -> SettingsPage {
                 title: localization::localized_str!("Edit Keybindings").into(),
                 description: Some(localization::localized_str!("Customize keybindings in the keymap editor.").into()),
                 button_text: localization::localized_str!("Open Keymap").into(),
-                on_click: Arc::new(|settings_window, window, cx| {
-                    let Some(original_window) = settings_window.original_window else {
-                        return;
-                    };
-                    original_window
-                        .update(cx, |_workspace, original_window, cx| {
+                on_click: Arc::new(
+                    |settings_window, window, cx: &mut Context<crate::SettingsWindow>| {
+                        let Some(original_window) = settings_window.original_window else {
+                            return;
+                        };
+
+                        // ===== [OHOS PORT BEGIN] the settings page is a tab, not
+                        // a window =====
+                        // The editor is opened by calling it rather than by
+                        // dispatching `OpenKeymap`: dispatching from this
+                        // context goes through `WindowHandle::update`, which
+                        // fails while the settings window is still open, so the
+                        // window is then removed with the editor never created.
+                        // `open_in_workspace_then_close_settings_tab` is shared
+                        // with `open_current_settings_file`. To restore the
+                        // upstream behaviour, delete this block.
+                        #[cfg(target_env = "ohos")]
+                        {
+                            crate::open_in_workspace_then_close_settings_tab(
+                                original_window,
+                                cx.entity_id(),
+                                cx,
+                                |workspace, window, cx| {
+                                    keymap_editor::open_keymap_editor(None, workspace, window, cx)
+                                },
+                            );
+                            return;
+                        }
+                        // ===== [OHOS PORT END] =====
+
+                        // ===== [OHOS PORT BEGIN] the branch above returns, so on
+                        // this platform `window` would be unused and the code
+                        // below dead. Gated to keep both away from the build.
+                        // To restore the upstream behaviour, delete this block
+                        // and the one above.
+                        #[cfg(not(target_env = "ohos"))]
+                        {
                             original_window
-                                .dispatch_action(zed_actions::OpenKeymap.boxed_clone(), cx);
-                            original_window.activate_window();
-                        })
-                        .ok();
-                    window.remove_window();
-                }),
+                                .update(cx, |_workspace, original_window, cx| {
+                                    original_window
+                                        .dispatch_action(zed_actions::OpenKeymap.boxed_clone(), cx);
+                                    original_window.activate_window();
+                                })
+                                .ok();
+                            window.remove_window();
+                        }
+                        // ===== [OHOS PORT END] =====
+                    },
+                ),
                 files: USER,
             }),
         ]
@@ -8533,9 +8569,11 @@ fn collaboration_page() -> SettingsPage {
                 title: localization::localized_str!("Test Audio").into(),
                 description: Some(localization::localized_str!("Test your microphone and speaker setup").into()),
                 button_text: localization::localized_str!("Test Audio").into(),
-                on_click: Arc::new(|_settings_window, window, cx| {
-                    open_audio_test_window(window, cx);
-                }),
+                on_click: Arc::new(
+                    |_settings_window, window, cx: &mut Context<crate::SettingsWindow>| {
+                        open_audio_test_window(window, cx);
+                    },
+                ),
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {

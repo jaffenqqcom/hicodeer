@@ -91,46 +91,6 @@ pub fn init(cx: &mut App) {
     let keymap_event_channel = KeymapEventChannel::new();
     cx.set_global(keymap_event_channel);
 
-    fn open_keymap_editor(
-        filter: Option<String>,
-        workspace: &mut Workspace,
-        window: &mut Window,
-        cx: &mut Context<Workspace>,
-    ) {
-        let existing = workspace
-            .active_pane()
-            .read(cx)
-            .items()
-            .find_map(|item| item.downcast::<KeymapEditor>());
-
-        let keymap_editor = if let Some(existing) = existing {
-            workspace.activate_item(&existing, true, true, window, cx);
-            existing
-        } else {
-            let keymap_editor = cx.new(|cx| KeymapEditor::new(workspace.weak_handle(), window, cx));
-            workspace.add_item_to_active_pane(
-                Box::new(keymap_editor.clone()),
-                None,
-                true,
-                window,
-                cx,
-            );
-            keymap_editor
-        };
-
-        if let Some(filter) = filter {
-            keymap_editor.update(cx, |editor, cx| {
-                editor.filter_editor.update(cx, |editor, cx| {
-                    editor.clear(window, cx);
-                    editor.insert(&filter, window, cx);
-                });
-                if !editor.has_binding_for(&filter) {
-                    open_binding_modal_after_loading(cx)
-                }
-            })
-        }
-    }
-
     cx.on_action(|_: &OpenKeymap, cx| {
         with_active_or_new_workspace(cx, |workspace, window, cx| {
             open_keymap_editor(None, workspace, window, cx);
@@ -145,6 +105,50 @@ pub fn init(cx: &mut App) {
     .detach();
 
     register_serializable_item::<KeymapEditor>(cx);
+}
+
+/// Opens the keymap editor, or focuses it when it is already open.
+///
+/// Exposed so that the settings page can open it directly: the page cannot
+/// dispatch [`OpenKeymap`], because doing that from its own context goes
+/// through `WindowHandle::update`, which fails while it still holds the
+/// settings window. The settings page therefore passes this function to
+/// `with_local_or_wsl_workspace` the same way it opens the settings file.
+///
+/// `filter` is the binding to search for; it comes from
+/// [`zed_actions::ChangeKeybinding`].
+pub fn open_keymap_editor(
+    filter: Option<String>,
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let existing = workspace
+        .active_pane()
+        .read(cx)
+        .items()
+        .find_map(|item| item.downcast::<KeymapEditor>());
+
+    let keymap_editor = if let Some(existing) = existing {
+        workspace.activate_item(&existing, true, true, window, cx);
+        existing
+    } else {
+        let keymap_editor = cx.new(|cx| KeymapEditor::new(workspace.weak_handle(), window, cx));
+        workspace.add_item_to_active_pane(Box::new(keymap_editor.clone()), None, true, window, cx);
+        keymap_editor
+    };
+
+    if let Some(filter) = filter {
+        keymap_editor.update(cx, |editor, cx| {
+            editor.filter_editor.update(cx, |editor, cx| {
+                editor.clear(window, cx);
+                editor.insert(&filter, window, cx);
+            });
+            if !editor.has_binding_for(&filter) {
+                open_binding_modal_after_loading(cx)
+            }
+        })
+    }
 }
 
 fn open_binding_modal_after_loading(cx: &mut Context<KeymapEditor>) {

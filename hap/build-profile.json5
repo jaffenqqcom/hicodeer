@@ -4,10 +4,10 @@
       {
         "name": "default",
         "material": {
-          "storePassword": "0000002079C4E0DC887A7AAF67CB6E24CD2F72424E3C548089974F8B182B9140632DCB2A0DF5BA4C44D538475EC51082",
+          "storePassword": "000000207EBC7D67BA0B4595EE3C3425E8048E4190BFCA792E08BD0F41E040436DFE462C234D2C91CD45B3908479AE9E",
           "certpath": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000002079C4E0DC887A7AAF67CB6E24CD2F72424E3C548089974F8B182B9140632DCB2A0DF5BA4C44D538475EC51082",
+          "keyPassword": "000000207EBC7D67BA0B4595EE3C3425E8048E4190BFCA792E08BD0F41E040436DFE462C234D2C91CD45B3908479AE9E",
           "profile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p12"
@@ -40,8 +40,7 @@
             "abiFilters": [
               "arm64-v8a"
             ]
-          },
-          "debuggable": false
+          }
         },
         "signingConfig": "default",
         "bundleName": "com.hicodeer.edit"

@@ -15,7 +15,7 @@ help_info() {
 Usage: ${0##*/} [options]
 Build a HarmonyOS NEXT HAP for HiCodeer.
 
-Builds the Rust crate as a cdylib (libhicodeer.so), stages it into the HAP
+Builds the Rust crate as a cdylib (libcore.so), stages it into the HAP
 project's libs directory, and runs hvigor assembleHap.
 
 Options:
@@ -199,7 +199,7 @@ export NODE_PATH="$HVIGOR_MOD_DIR${NODE_PATH:+:$NODE_PATH}"
 
 OHOS_TARGET="aarch64-unknown-linux-ohos"
 CRATE="launch-zed"
-OHOS_LIB_NAME="libhicodeer.so"   # 引擎 so 名；须与 NAPI 模块注册名、EntryAbility.moduleName 三方一致
+OHOS_LIB_NAME="libcore.so"   # 引擎 so 名；须与 NAPI 模块注册名、EntryAbility.moduleName 三方一致
 
 PROFILE_DIR="debug"
 BUILD_MODE="debug"
@@ -214,7 +214,7 @@ fi
 # 目录里。两个 shim 都只作用于编译进程，hvigor/hnpcli/java 调用前用 $NO_SHIM 卸掉。
 
 # ==================== OHOS hilog level (single source of truth) ====================
-# The OHOS log sinks -- zlog inside libhicodeer.so, hishell and hicodeerd -- each
+# The OHOS log sinks -- zlog inside libcore.so, hishell and hicodeerd -- each
 # read this variable at compile time via option_env!("HICODEER_LOG_LEVEL"), and
 # fall back to their own build-profile default when it is unset or unrecognized.
 # Exporting it here, ahead of every cargo call below, lets a single override
@@ -348,10 +348,10 @@ needs_strip() {
 }
 
 # NAPI 模块注册名：napi-derive-ohos 用 NAPI_BUILD_TARGET_NAME > CARGO_CRATE_NAME > CARGO_PKG_NAME
-# 决定 nm_modname。so 名由 launch-zed 的 [lib] name 决定（libhicodeer.so）；三者必须一致，
+# 决定 nm_modname。so 名由 launch-zed 的 [lib] name 决定（libcore.so）；三者必须一致，
 # 否则 loadNativeModule 找不到模块。故把 NAPI_BUILD_TARGET_NAME 设为与 so 文件名、
 # EntryAbility.moduleName 相同的取值（见下一行）。
-export NAPI_BUILD_TARGET_NAME=hicodeer
+export NAPI_BUILD_TARGET_NAME=core
 
 # 全量编译加 -A warnings 避免既有警告阻塞；
 # release 用 codegen-units=2：Cargo.toml 的 1 在本机内存下编译不了，
@@ -445,7 +445,7 @@ fi
 
 cd "$PROJECT_ROOT"
 
-# --hap-only 跳过 launch-zed 编译与 so 拷贝，直接复用现有 libhicodeer.so
+# --hap-only 跳过 launch-zed 编译与 so 拷贝，直接复用现有 libcore.so
 if [ "$MODE" != "hap" ]; then
   NPROC=$(nproc 2>/dev/null || echo 4)
   OHOS_TARGET_DIR="$SHARED_TARGET_DIR"
@@ -455,20 +455,20 @@ if [ "$MODE" != "hap" ]; then
   CARGO_TARGET_DIR="$OHOS_TARGET_DIR" \
     cargo build $($IS_RELEASE && echo --release) --lib -p "$CRATE" --target "$OHOS_TARGET" -j "$NPROC" "${EMBED_CARGO_FEATURE[@]}" "${QEMU_CARGO_FEATURE[@]}" "${CARGO_ARGS[@]}"
 
-  # ==================== 拷贝 libhicodeer.so ====================
+  # ==================== 拷贝 libcore.so ====================
   HAP_LIBS_DIR="$HAP_DIR/entry/libs/arm64-v8a"
   mkdir -p "$HAP_LIBS_DIR"
-  # launch-zed 的 [lib] name 与 so 文件名一致，产物直接是 libhicodeer.so（无需改名）
-  cp "$OHOS_TARGET_DIR/$OHOS_TARGET/$PROFILE_DIR/libhicodeer.so" "$HAP_LIBS_DIR/$OHOS_LIB_NAME"
+  # launch-zed 的 [lib] name 与 so 文件名一致，产物直接是 libcore.so（无需改名）
+  cp "$OHOS_TARGET_DIR/$OHOS_TARGET/$PROFILE_DIR/libcore.so" "$HAP_LIBS_DIR/$OHOS_LIB_NAME"
   # Keep an unstripped copy for symbolizing device crashes (addr2line against
   # this archive recovers functions/lines from hilog backtraces). The HAP copy
   # is stripped below: its full .symtab (~0.5G) plus DWARF debug sections
   # (~0.3G) made hvigor zip/sign peak memory exceed the 11G RAM on every code
   # change (a full 1.3G repack), OOM-rebooting the host. Stripping cuts
-  # libhicodeer.so ~1.3G -> ~0.45G while dynamic (napi) exports are preserved.
-  SYMBOL_DIR="$SHARED_TARGET_DIR/libhicodeer-symbols"
+  # libcore.so ~1.3G -> ~0.45G while dynamic (napi) exports are preserved.
+  SYMBOL_DIR="$SHARED_TARGET_DIR/libcore-symbols"
   mkdir -p "$SYMBOL_DIR"
-  cp "$OHOS_TARGET_DIR/$OHOS_TARGET/$PROFILE_DIR/libhicodeer.so" "$SYMBOL_DIR/libhicodeer.so"
+  cp "$OHOS_TARGET_DIR/$OHOS_TARGET/$PROFILE_DIR/libcore.so" "$SYMBOL_DIR/libcore.so"
   if command -v strip >/dev/null 2>&1; then
     if strip "$HAP_LIBS_DIR/$OHOS_LIB_NAME"; then
       echo "[hicodeer-ohos-build] $OHOS_LIB_NAME stripped ($(du -h "$HAP_LIBS_DIR/$OHOS_LIB_NAME" | cut -f1)); unstripped kept at $SYMBOL_DIR"
@@ -785,14 +785,14 @@ if [ "$MODE" != "hap" ]; then
   # pcre2 and intl into itself, so only slirp and zlib stay external. zlib ships
   # under the bare name the engine asks for (its DT_NEEDED is "libz.so").
   #
-  # These arrive as external inputs, so unlike libhicodeer.so they are stripped
+  # These arrive as external inputs, so unlike libcore.so they are stripped
   # here instead of at the source: images/ keeps the symbols, only the HAP copy
   # loses them. Measured on the shipped engine: libqemu-system-aarch64.so drops
   # 52,481,120 -> 41,373,552 bytes, libslirp.so.0 558,816 -> 213,440 (10.6 MB off
   # every package). The dynamic symbol table survives untouched - 22,333 entries
   # before and after, with main, qemu_fsdev_add and the SONAME/DT_NEEDED set all
   # intact - so dlopen + dlsym("main") and vhost-user-fs still resolve. An
-  # unstripped copy per lib is archived beside libhicodeer.so's symbol dir so an
+  # unstripped copy per lib is archived beside libcore.so's symbol dir so an
   # engine crash backtrace can still be symbolized with addr2line.
   QEMU_SYMBOL_DIR="$SHARED_TARGET_DIR/qemu-engine-symbols"
   mkdir -p "$QEMU_SYMBOL_DIR"
@@ -949,7 +949,7 @@ sync_arkts_sources
 
 # ==================== ohpm install（首次 / 为空 / 有坏符号链接 / 关键 so 链接缺失时） ====================
 # 说明：hvigor 在 DevEco Studio 里会自动触发 ohpm install；命令行 assembleHap 不一定触发。
-# 新增 Rust so 依赖（libhicodeer.so）后，若 oh_modules 里缺对应符号链接，ArkTS 编译报
+# 新增 Rust so 依赖（libcore.so）后，若 oh_modules 里缺对应符号链接，ArkTS 编译报
 # "Cannot find module 'libxxx.so'"。此处兜底：顶层与 entry 两处 oh_modules 的关键 so 链接
 # 齐全才跳过 install，否则补跑（顶层 + entry 各一次）。
 OHPM_LINK_DEPS=(
@@ -1055,7 +1055,7 @@ $NO_SHIM "$NODE_CMD" "$HVIGORW_JS" \
     # Copy the HAP verbatim (streaming cp, not an in-memory zip rewrite) and
     # append each hnp payload as a NEW zip entry. Rewriting every entry with
     # ZipFile("w") + zin.read() pulled the largest STORED payload wholly into
-    # RAM (~1.3G pre-strip libhicodeer.so), which stacked with hvigor/node and
+    # RAM (~1.3G pre-strip libcore.so), which stacked with hvigor/node and
     # the signer JVM to OOM the 11G host. Appending only rewrites the tail
     # central directory, so memory stays O(hnp size).
     cp -f "$UNSIGNED_HAP" "$PACKED_HAP"

@@ -20,7 +20,7 @@
 //!
 //! Wired up by `launch-zed`'s build script through `-Wl,--wrap=<symbol>`. That
 //! is a link-time binding: every undefined reference to `<symbol>` inside the
-//! final `libhicodeer.so` is redirected to `__wrap_<symbol>` here, while the
+//! final `libcore.so` is redirected to `__wrap_<symbol>` here, while the
 //! real implementation stays reachable as `__real_<symbol>`. Unlike
 //! `LD_PRELOAD` this does not depend on the runtime symbol lookup order, and it
 //! covers the app process itself - a preload only reaches the processes we

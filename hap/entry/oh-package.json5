@@ -15,6 +15,6 @@
     "@ohos-rs/ability-plugin-openbysys": "file:../../target/ohos-arkts/openharmony-ability/plugins/openbysys",
     "@ohos-rs/ability-plugin-ime": "file:../../target/ohos-arkts/openharmony-ability/plugins/ime",
     "@ohos-rs/ability-plugin-url": "file:../../target/ohos-arkts/openharmony-ability/plugins/url",
-    "libhicodeer.so": "file:./src/main/cpp/types/libhicodeer"
+    "libcore.so": "file:./src/main/cpp/types/core"
   }
 }

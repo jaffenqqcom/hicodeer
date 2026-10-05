@@ -9,7 +9,7 @@ fn main() {
         // fails and then retries once. The redirection has to happen at link
         // time: a preload would only reach the processes this crate spawns, not
         // the app process itself. The list below is the set of path-taking libc
-        // symbols `libhicodeer.so` actually references.
+        // symbols `libcore.so` actually references.
         for symbol in [
             "open",
             "openat",

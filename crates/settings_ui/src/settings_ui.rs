@@ -1746,7 +1746,15 @@ struct ActionLink {
     title: SharedString,
     description: Option<SharedString>,
     button_text: SharedString,
-    on_click: Arc<dyn Fn(&mut SettingsWindow, &mut Window, &mut App) + Send + Sync>,
+    // ===== [OHOS PORT BEGIN] the handler needs the settings tab's entity id so
+    // it can close that tab instead of removing the platform's only window, and
+    // `&mut App` does not carry it. `Context<SettingsWindow>` is spelled out
+    // because `Self` inside this definition would mean `ActionLink`. To
+    // restore the upstream signature, delete this block.
+    on_click: Arc<
+        dyn Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + Send + Sync,
+    >,
+    // [OHOS PORT END]
     files: FileMask,
 }
 
@@ -4198,37 +4206,17 @@ impl SettingsWindow {
                 };
 
                 // ===== [OHOS PORT BEGIN] the settings page is a tab, not a window =====
-                // Deferring to the app queue keeps the workspace off the stack,
-                // and closing the tab replaces `window.remove_window()`, which
-                // would otherwise remove the platform's only window.
+                // The tab is closed rather than the window, which would take
+                // the platform's only window with it. To restore the upstream
+                // behaviour, delete this block and the one at its call site.
                 #[cfg(target_env = "ohos")]
                 {
-                    let settings_item_id = cx.entity_id();
-                    cx.defer(move |cx| {
-                        if let Err(err) =
-                            original_window.update(cx, |multi_workspace, window, cx| {
-                                multi_workspace.workspace().clone().update(cx, |workspace, cx| {
-                                    workspace
-                                        .with_local_or_wsl_workspace(
-                                            window,
-                                            cx,
-                                            open_user_settings_in_workspace,
-                                        )
-                                        .detach_and_log_err(cx);
-                                    close_settings_tab_in_workspace(
-                                        workspace,
-                                        settings_item_id,
-                                        window,
-                                        cx,
-                                    );
-                                });
-                            })
-                        {
-                            log::error!(
-                                "[ohos] open_current_settings_file: failed to update workspace: {err:?}"
-                            );
-                        }
-                    });
+                    open_in_workspace_then_close_settings_tab(
+                        original_window,
+                        cx.entity_id(),
+                        cx,
+                        open_user_settings_in_workspace,
+                    );
                     return;
                 }
                 // ===== [OHOS PORT END] =====
@@ -7113,6 +7101,43 @@ mod ohos_settings_tab {
             })
             .log_err();
     }
+}
+
+/// Opens `open` in the settings window's own workspace and then closes the
+/// settings tab.
+///
+/// Both the "Open Keymap" link and `open_current_settings_file` need this:
+/// the settings page is a tab here, so `window.remove_window()` would take
+/// the platform's only window with it, and `update` cannot dispatch an action
+/// from this context while the tab is still open. `cx.defer` keeps the
+/// workspace off the stack for the duration of the update, and the tab is
+/// closed instead of the window.
+///
+/// `open` runs inside the workspace's own context, which is why it is passed
+/// in rather than called here: both call sites already have a function of the
+/// shape `FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>)`.
+#[cfg(target_env = "ohos")]
+pub(crate) fn open_in_workspace_then_close_settings_tab<T, F>(
+    original_window: WindowHandle<MultiWorkspace>,
+    settings_item_id: EntityId,
+    cx: &mut App,
+    open: F,
+) where
+    T: 'static,
+    F: 'static + FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) -> T,
+{
+    cx.defer(move |cx| {
+        if let Err(err) = original_window.update(cx, |multi_workspace, window, cx| {
+            multi_workspace.workspace().clone().update(cx, |workspace, cx| {
+                workspace
+                    .with_local_or_wsl_workspace(window, cx, open)
+                    .detach_and_log_err(cx);
+                close_settings_tab_in_workspace(workspace, settings_item_id, window, cx);
+            });
+        }) {
+            log::error!("[ohos] failed to update the workspace: {err:?}");
+        }
+    });
 }
 
 /// Closes the settings tab identified by `settings_item_id`.

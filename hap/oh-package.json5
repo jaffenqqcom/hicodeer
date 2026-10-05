@@ -2,6 +2,6 @@
   "modelVersion": "6.1.0",
   "description": "Please describe the basic information.",
   "dependencies": {
-    "libhicodeer.so": "file:./entry/src/main/cpp/types/libhicodeer"
+    "libcore.so": "file:./entry/src/main/cpp/types/core"
   }
 }

@@ -1,4 +1,4 @@
-import 'libhicodeer.so';
+import 'libcore.so';
 import { BridgePlugin, LazyPlugin, MainPageRouteName, NativeAbility } from '@ohos-rs/ability';
 import { CursorPlugin } from '@ohos-rs/ability-plugin-cursor';
 import { FilePickerPlugin } from '@ohos-rs/ability-plugin-filepicker';
@@ -15,7 +15,7 @@ import window from '@ohos.window';
 import * as Setup from './Setup';
 
 // EntryAbility：鸿蒙 Ability 生命周期入口。
-// moduleName 与 native 库名一致（libhicodeer.so），NativeAbility 基类负责把窗口/surface/IME/
+// moduleName 与 native 库名一致（libcore.so），NativeAbility 基类负责把窗口/surface/IME/
 // 生命周期事件经 NAPI 路由到 Rust 侧（crates/zed 的 #[ability] openharmony_app 入口）。
 // defaultPage=false: the home directory is resolved here first (see prepareHomeDirectory),
 // and the main page is loaded explicitly afterwards; the base class must not load it twice.
@@ -28,7 +28,7 @@ const DOMAIN: number = 0x0001;
 const TAG: string = 'EntryAbility';
 
 export default class EntryAbility extends NativeAbility {
-  public moduleName: string = 'hicodeer';
+  public moduleName: string = 'core';
   public defaultPage: boolean = false;
   public loadMode: 'sync' | 'async' = 'sync';
   public bridgePlugins: LazyPlugin[] = [
@@ -45,7 +45,7 @@ export default class EntryAbility extends NativeAbility {
   // 冷启动：系统带 want（含要打开的文件 URI）启动。必须先让基类完成会话初始化，
   // 再把 want 交给 fileLaunch 处理（若插件尚未 onInstall，会在内部暂存）。
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    // Defer loading libhicodeer until the home directory is resolved: module.init runs
+    // Defer loading libcore until the home directory is resolved: module.init runs
     // launch_app -> start_zed_main, which must already know the user's data root.
     this.holdNativeLoad();
     super.onCreate(want, launchParam);

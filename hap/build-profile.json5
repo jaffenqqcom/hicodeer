@@ -32,7 +32,7 @@
             }
           },
           "strictMode": {
-            "caseSensitiveCheck": true,
+            "caseSensitiveCheck": false,
             "useNormalizedOHMUrl": true
           },
           "externalNativeOptions": {

@@ -22437,8 +22437,6 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi"
 version = "48.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84755f8ec915ba55f689529c4ee35aa16725c1e12610eaddce4c9091217289fd"
 dependencies = [
  "async-trait",
  "bitflags 2.13.1",

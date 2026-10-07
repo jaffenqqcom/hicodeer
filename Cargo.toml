@@ -1053,6 +1053,11 @@ rustix-openpty = { path = "patches/rustix-openpty" }
 # in (hicodeerd); the hook is cfg-gated to OHOS, so elsewhere this is upstream.
 which = { path = "patches/which" }
 wasmtime = { path = "patches/wasmtime" }
+# `wasmtime-wasi` bundles its own copy of the cap-primitives filesystem
+# primitives; on OpenHarmony `openat2` (syscall 437) is not in the app seccomp
+# allow-list and terminates the process with SIGSYS, so this patch makes its
+# `open_beneath` fall back to `manually::open` (openat).
+wasmtime-wasi = { path = "patches/wasmtime-wasi" }
 # Only reached by the OHOS QEMU management crate, which the default OHOS
 # configuration does not build; patched locally from the existing copy.
 virtiofsd = { path = "patches/virtiofsd" }

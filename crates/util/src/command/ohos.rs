@@ -463,12 +463,30 @@ impl Command {
             .current_dir
             .as_ref()
             .map(|dir| dir.to_string_lossy().into_owned());
-        // A remote command carries no environment: it starts from whatever the
-        // daemon itself was launched with. The two run under different uids, so
-        // the caller's own environment can name roots that only resolve inside
-        // its sandbox, and forwarding those would hand the child a path it
-        // cannot open. Explicit overrides are honoured only where the child runs
-        // on this device -- see `spawn_local`.
+        // A remote command starts from whatever the daemon itself was launched
+        // with. The two run under different uids, so the caller's own
+        // environment can name roots that only resolve inside its sandbox, and
+        // forwarding those would hand the child a path it cannot open.
+        //
+        // Only a key this process does not already have is forwarded: it is an
+        // addition, not a copy of the inherited environment, so it cannot
+        // displace a value the daemon prepared for its own uid (PATH,
+        // LD_PRELOAD, NODE_OPTIONS, TMPDIR). A caller that hands over its whole
+        // environment -- Zed does, for extension-provided commands -- therefore
+        // contributes exactly the keys it means to add, such as the
+        // ETS_LANG_SERVER path an ArkTS language-server wrapper reads.
+        for (key, value) in &self.envs {
+            let Some(value) = value else {
+                continue;
+            };
+            if std::env::var_os(key).is_some() {
+                continue;
+            }
+            spec.env.insert(
+                key.to_string_lossy().into_owned(),
+                value.to_string_lossy().into_owned(),
+            );
+        }
         spec.stdin_mode = fd_mode(self.stdin_cfg);
         spec.stdout_mode = fd_mode(self.stdout_cfg);
         spec.stderr_mode = fd_mode(self.stderr_cfg);

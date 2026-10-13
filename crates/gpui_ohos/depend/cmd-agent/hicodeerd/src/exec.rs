@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::os::unix::process::ExitStatusExt;
+use std::path::Path;
 use std::process::ExitStatus;
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -364,6 +365,69 @@ fn is_env_assignment(word: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Every absolute path a leading `exec` will replace the shell with, over the
+/// client's usual `... && [KEY=value] exec '<path>' '<args>' shape. All of the
+/// `&&`/`||`/`;`/`|` command segments are scanned, so a command that reaches
+/// `exec` through a conditional branch is covered too. Only absolute paths are
+/// returned: a bare name would have to be resolved by the shell in the daemon's
+/// own environment, and a program we cannot name is one we cannot prepare.
+fn exec_programs(shell_command: &str) -> Vec<String> {
+    let words = split_words(shell_command);
+    let mut programs = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    loop {
+        let boundary = index == words.len() || is_separator(&words[index].bare);
+        if boundary {
+            let mut at = start;
+            while at < index && is_env_assignment(&words[at].bare) {
+                at += 1;
+            }
+            if words.get(at).map(|word| word.bare.as_str()) == Some("exec") {
+                if let Some(program) = words.get(at + 1) {
+                    if program.bare.starts_with('/') && !programs.contains(&program.bare) {
+                        programs.push(program.bare.clone());
+                    }
+                }
+            }
+            start = index + 1;
+            if index == words.len() {
+                break;
+            }
+        }
+        index += 1;
+    }
+    programs
+}
+
+/// Makes the program the shell is about to exec usable on this device: rewrite
+/// a fatal startup probe first, then sign -- in that order, because a signature
+/// covers the bytes and would stop matching after a rewrite. Only a file that
+/// carries the probe is touched at all; every other program, system binaries
+/// included, is left exactly as it is.
+fn prepare_exec_program(program: &str) {
+    let path = Path::new(program);
+    match crate::fanotify_patch::patch_if_needed(path) {
+        crate::fanotify_patch::PatchOutcome::Rewritten => {
+            if crate::sign_elf::resign(path) {
+                log::info!("exec: rewrote and re-signed {}", path.display());
+            } else {
+                log::warn!("exec: rewrote {} but re-signing failed", path.display());
+            }
+        }
+        // The rewrite landed on an earlier run but the signature it needs may
+        // not have: signer availability can change between runs.
+        crate::fanotify_patch::PatchOutcome::AlreadyPatched => {
+            if crate::sign_elf::ensure_signed(path) {
+                log::info!("exec: signed {}", path.display());
+            }
+        }
+        crate::fanotify_patch::PatchOutcome::NotTarget => {
+            log::debug!("exec: no fanotify probe in {}", path.display());
+        }
+    }
+}
+
 /// Spawns `sh -c <command>` in a fresh process group and bridges its stdio to
 /// the channel until the child exits. A reserved signal command is intercepted
 /// instead of spawned. The bridging loop and exit reporting run to completion
@@ -399,6 +463,11 @@ pub async fn spawn_command(
     // Preview is captured before shell_command is moved into the Command below,
     // and is read by the start line here and by the exit reports below.
     let cmd_preview: String = shell_command.chars().take(CMD_LOG_PREVIEW_CHARS).collect();
+    // The programs the shell will exec are prepared on this device just before
+    // they run. Some installs never reach an install command the daemon sees --
+    // an extension fetched over HTTP, say -- so exec time is the only cover.
+    // Read the targets here, before `shell_command` moves into the Command below.
+    let exec_targets = exec_programs(&shell_command);
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(shell_command);
     // Scratch files belong to the instance that asked for this command, so the
@@ -415,6 +484,17 @@ pub async fn spawn_command(
     // Bin entries need nothing here: npm builds them itself, and the preload
     // (see `shim`) substitutes a real file wherever this filesystem refuses
     // the link.
+    if !exec_targets.is_empty() {
+        if let Err(err) = tokio::task::spawn_blocking(move || {
+            for program in &exec_targets {
+                prepare_exec_program(program);
+            }
+        })
+        .await
+        {
+            log::warn!("exec: preparing the target programs failed: {err}");
+        }
+    }
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(err) => {

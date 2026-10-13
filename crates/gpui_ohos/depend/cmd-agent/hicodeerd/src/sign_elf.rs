@@ -22,7 +22,9 @@
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// Signer program, resolved from PATH.
 const SIGNER: &str = "binary-sign-tool";
@@ -43,6 +45,15 @@ const SIGNED_SUFFIX: &str = ".signed";
 /// signer writes its output group-writable but WITHOUT execute, and the in-place
 /// move carries that over.
 const SIGNED_MODE: u32 = 0o775;
+/// How long one signer invocation may run before it is killed. A signer that
+/// never returns would otherwise block the command it is preparing for -- and
+/// that command's exit report -- indefinitely.
+const SIGNER_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often the wait re-checks whether the signer has exited.
+const SIGNER_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Distinguishes the output files of concurrent signer invocations within this
+/// process, so two prepares of the same program never write the same copy.
+static SIGN_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// ELF magic, and the `EI_CLASS`/`EI_DATA` values of the class and byte order
 /// this module can walk (native aarch64 objects).
 const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
@@ -74,6 +85,32 @@ pub fn sign_tree(root: &str) -> usize {
     let mut budget = MAX_FILES;
     walk(&base, &signer, 0, &mut budget, &mut signed);
     signed
+}
+
+/// Signs one file in place when it is an unsigned ELF, reporting whether it
+/// signed. A file that is already signed, is not an ELF, or cannot be read is
+/// left as it is.
+pub fn ensure_signed(path: &Path) -> bool {
+    if !matches!(signature_state(path), SignatureState::Unsigned) {
+        return false;
+    }
+    sign_now(path)
+}
+
+/// Signs one file in place regardless of any signature already present. Used
+/// after a rewrite: the bytes changed, so a signature the file carried no
+/// longer matches and must be replaced.
+pub fn resign(path: &Path) -> bool {
+    sign_now(path)
+}
+
+/// Resolves the signer and signs one file, or reports why it could not.
+fn sign_now(path: &Path) -> bool {
+    let Some(signer) = resolve_signer() else {
+        log::warn!("sign: {SIGNER} not found on PATH, skipping {}", path.display());
+        return false;
+    };
+    sign_file(path, &signer)
 }
 
 /// Resolves the signer from PATH, without executing it: a probe run would block
@@ -230,12 +267,18 @@ fn section_names(file: &mut fs::File, class: u8) -> Option<Vec<String>> {
 
 /// Runs `signer` on one file: writes a signed copy beside it, moves that over
 /// the original, and restores the execute bit the copy lacks.
+///
+/// The copy's name is unique per invocation, so two concurrent prepares of the
+/// same program -- two workspaces starting one language server, say -- cannot
+/// clobber each other's output: both sign the same bytes and the last rename
+/// wins.
 fn sign_file(path: &Path, signer: &Path) -> bool {
     let Some(text) = path.to_str() else {
         return false;
     };
-    let out = format!("{text}{SIGNED_SUFFIX}");
-    let outcome = Command::new(signer)
+    let unique = SIGN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let out = format!("{text}{SIGNED_SUFFIX}.{}.{unique}", std::process::id());
+    let Ok(mut child) = Command::new(signer)
         .arg("sign")
         .arg("-inFile")
         .arg(path)
@@ -244,9 +287,15 @@ fn sign_file(path: &Path, signer: &Path) -> bool {
         .arg("-selfSign")
         .arg("1")
         .stdin(Stdio::null())
-        .output();
-    let signed = matches!(outcome, Ok(ref output) if output.status.success());
-    if !signed {
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        let _ = fs::remove_file(&out);
+        log::warn!("sign: signer failed for {}", path.display());
+        return false;
+    };
+    if !wait_with_timeout(&mut child) {
         let _ = fs::remove_file(&out);
         log::warn!("sign: signer failed for {}", path.display());
         return false;
@@ -258,6 +307,27 @@ fn sign_file(path: &Path, signer: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
     let _ = fs::set_permissions(path, fs::Permissions::from_mode(SIGNED_MODE));
     true
+}
+
+/// Waits for `child` to exit, killing and reaping it once `SIGNER_TIMEOUT`
+/// passes. Reports whether it exited successfully.
+fn wait_with_timeout(child: &mut Child) -> bool {
+    let deadline = Instant::now() + SIGNER_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    log::warn!("sign: signer timed out after {SIGNER_TIMEOUT:?}");
+                    return false;
+                }
+                std::thread::sleep(SIGNER_POLL_INTERVAL);
+            }
+            Err(_) => return false,
+        }
+    }
 }
 
 /// Reads `buf.len()` bytes at `offset`, or `None` when the file is shorter.

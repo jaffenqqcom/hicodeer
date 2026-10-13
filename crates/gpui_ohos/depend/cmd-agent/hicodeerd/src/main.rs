@@ -13,6 +13,7 @@
 //! arbitrary OHOS command-line programs, removing the VM dependency.
 
 mod exec;
+mod fanotify_patch;
 mod keygen;
 mod keys;
 mod logger;

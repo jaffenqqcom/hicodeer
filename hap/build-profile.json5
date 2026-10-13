@@ -3,23 +3,23 @@
     "signingConfigs": [
       {
         "name": "default",
+        "type": "HarmonyOS",
         "material": {
-          "storePassword": "000000207EBC7D67BA0B4595EE3C3425E8048E4190BFCA792E08BD0F41E040436DFE462C234D2C91CD45B3908479AE9E",
-          "certpath": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.cer",
+          "certpath": "/storage/Users/currentUser/.ohos/config/default_hap_U6lCp1YTTw2BUQBRcFW18o1kGh34xD0nHKbO2TiRk=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "000000207EBC7D67BA0B4595EE3C3425E8048E4190BFCA792E08BD0F41E040436DFE462C234D2C91CD45B3908479AE9E",
-          "profile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p7b",
+          "keyPassword": "0000001ba8c9d5f1ae5b5ef67fd8d3bc4b2838f55d97f83585bd1972f4c4770c96b10bbef94c8f27c70ff9",
+          "profile": "/storage/Users/currentUser/.ohos/config/default_hap_U6lCp1YTTw2BUQBRcFW18o1kGh34xD0nHKbO2TiRk=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/storage/Users/currentUser/Documents/ohos/config/default_hapkU3mZpZLJ9phYXmtyO9beezJFywrepyowdFvjydbb6c.p12"
-        },
-        "type": "HarmonyOS"
+          "storeFile": "/storage/Users/currentUser/.ohos/config/default_hap_U6lCp1YTTw2BUQBRcFW18o1kGh34xD0nHKbO2TiRk=.p12",
+          "storePassword": "0000001ba8c9d5f1ae5b5ef67fd8d3bc4b2838f55d97f83585bd1972f4c4770c96b10bbef94c8f27c70ff9"
+        }
       }
     ],
     "products": [
       {
         "name": "default",
-        "targetSdkVersion": "6.1.0(23)",
-        "compatibleSdkVersion": "6.1.0(23)",
+        "targetSdkVersion": "26.0.0",
+        "compatibleSdkVersion": "26.0.0",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
           "packOptions": {

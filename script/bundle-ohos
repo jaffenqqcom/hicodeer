@@ -131,25 +131,28 @@ mkdir -p "$TMPDIR"
 # 所有编译器 / 打包工具 / SDK / 签名 / hnpcli / shim 的路径都集中在此，按
 # BUILD_PLATFORM 分流；其它段落只引用这里的变量，不在别处硬编码路径。
 if [ "$BUILD_PLATFORM" = "harmonyos" ]; then
-  # 本机：harmonybrew 提供 rustup/ohos-sdk 原生编译，commandline-ohos 提供打包工具
+  # 本机：harmonybrew 提供 rustup/ohos-sdk 原生编译，command-line-tools 提供打包工具
   BREW_PREFIX="$HOME/.harmonybrew"
   OHOS_SDK_ROOT="$("$BREW_PREFIX/bin/brew" --prefix ohos-sdk 2>/dev/null || echo "$BREW_PREFIX/opt/ohos-sdk")"
-  TOOLCHAIN="$HOME/workspace/commandline-ohos"
+  TOOLCHAIN="$HOME/workspace/command-line-tools"
+  SDK_HOME="$TOOLCHAIN/sdk"
   # 编译器 / 链接器（OHOS 原生 clang）
   SDK_LLVM_BIN="$OHOS_SDK_ROOT/native/llvm/bin"
   SDK_NATIVE="$OHOS_SDK_ROOT/native"
   # 打包工具
-  NODE_CMD="$TOOLCHAIN/node.org/node_22.7.0/bin/node"
-  HVIGORW_JS="$TOOLCHAIN/hvigor.org/hvigor_1.0.0/bin/hvigorw.js"
-  OHPM_CMD="$TOOLCHAIN/ohpm.org/ohpm_1.1/bin/ohpm"
-  NODE_BIN_DIR="$TOOLCHAIN/node.org/node_22.7.0/bin"
-  OHPM_BIN_DIR="$TOOLCHAIN/ohpm.org/ohpm_1.1/bin"
+  NODE_CMD="$TOOLCHAIN/node/bin/node"
+  HVIGORW_JS="$TOOLCHAIN/hvigor/bin/hvigorw.js"
+  OHPM_CMD="$TOOLCHAIN/ohpm/bin/ohpm"
+  NODE_BIN_DIR="$TOOLCHAIN/node/bin"
+  OHPM_BIN_DIR="$TOOLCHAIN/ohpm/bin"
   # SDK / 签名 / hnpcli
-  export DEVECO_SDK_HOME="$TOOLCHAIN/sdk.org/sdk_1.0.0"
-  export OHOS_BASE_SDK_HOME="$TOOLCHAIN/sdk.org/sdk_1.0.0"
-  export HARMONYBREW_SDK="$TOOLCHAIN/sdk.org/sdk_1.0.0"
-  SIGN_TOOL_JAR="$TOOLCHAIN/sdk.org/sdk_1.0.0/default/openharmony/toolchains/lib/hap-sign-tool.jar"
-  HNPCLI="$TOOLCHAIN/sdk.org/sdk_1.0.0/default/openharmony/toolchains/hnpcli"
+  export DEVECO_SDK_HOME="$SDK_HOME"
+  export OHOS_BASE_SDK_HOME="$SDK_HOME"
+  export HARMONYBREW_SDK="$SDK_HOME"
+  # 签名用 jar 而非同目录的 hap-sign-tool ELF：ELF 写的是新版 merkle-tree 格式，
+  # 设备侧 hnp 服务判定 signMap 为空而拒收（安装报 9568407）。
+  SIGN_TOOL_JAR="$SDK_HOME/default/openharmony/toolchains/lib/hap-sign-tool.jar"
+  HNPCLI="$SDK_HOME/default/openharmony/toolchains/hnpcli"
   # TLS shim（绕过 libc 128 pthread key 上限；rustc/cargo 编译期用）。
   # 源码入库在 $DAEMON_SHIM_DIR；产物先落 cargo 的 scratch 目录（路径在下方 SHIM 段
   # 拼出，与 target 同在 <项目根>/target/ohos 下），再同步一份入库充当 HNP 载荷。
@@ -592,12 +595,12 @@ if [ "$MODE" != "hap" ]; then
 JSON
 
   # 用官方 OpenHarmony 打包工具 hnpcli 装配 daemon HNP。hnpcli 路径已在平台分支设定
-  # （本机为 commandline-ohos 的 OHOS 原生版；VM 为交叉 SDK 的 box64 包装版），此处不再重定义。
+  # （本机为 command-line-tools 的 OHOS 原生版；VM 为交叉 SDK 的 box64 包装版），此处不再重定义。
   # hnpcli 从 staged hnp.json 读取包名/版本，向 -o 输出 <name>.hnp。
-  # HNPCLI 已在平台分支中按平台设定（本机用 commandline-ohos 的 OHOS 原生版，
+  # HNPCLI 已在平台分支中按平台设定（本机用 command-line-tools 的 OHOS 原生版，
   # VM 用交叉 SDK 的 box64 包装版），此处不再重定义。
   if [ ! -x "$HNPCLI" ]; then
-    echo "[hicodeer-ohos-build] ERROR: hnpcli 不可用 ($HNPCLI)；HarmonyOS 本机需先编译 OHOS 原生版 hnpcli 放入 commandline-ohos 对应目录" >&2
+    echo "[hicodeer-ohos-build] ERROR: hnpcli 不可用 ($HNPCLI)；HarmonyOS 本机需先编译 OHOS 原生版 hnpcli 放入 command-line-tools 对应目录" >&2
     exit 1
   fi
   echo "[hicodeer-ohos-build] Assembling hicodeerd.hnp (hnpcli) ..."
@@ -659,7 +662,7 @@ if [ "$MODE" != "hap" ]; then
 JSON
 
   if [ ! -x "$HNPCLI" ]; then
-    echo "[hicodeer-ohos-build] ERROR: hnpcli 不可用 ($HNPCLI)；HarmonyOS 本机需先编译 OHOS 原生版 hnpcli 放入 commandline-ohos 对应目录" >&2
+    echo "[hicodeer-ohos-build] ERROR: hnpcli 不可用 ($HNPCLI)；HarmonyOS 本机需先编译 OHOS 原生版 hnpcli 放入 command-line-tools 对应目录" >&2
     exit 1
   fi
   echo "[hicodeer-ohos-build] Assembling hishell.hnp (hnpcli) ..."

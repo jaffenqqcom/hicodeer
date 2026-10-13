@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use russh::ChannelMsg;
@@ -31,6 +31,14 @@ const IO_CHUNK_SIZE: usize = 8192;
 /// Upper bound on a program-resolution query. A `which` answer is only useful
 /// promptly, so a slow daemon must not stall the lookup any longer than this.
 const RESOLVE_PROGRAM_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Upper bound on waiting for the query worker's reply.
+///
+/// Sits above the worst case the query itself can take -- the pool's allocate
+/// budget plus [`RESOLVE_PROGRAM_TIMEOUT`] -- so a reply that does not arrive in
+/// this window means the worker is wedged rather than merely slow, and the
+/// caller is released instead of hanging forever.
+const RESOLVE_REPLY_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Per-session exit state, shared between the tokio pump task and waiters on
 /// the smol executor.
@@ -76,6 +84,9 @@ pub struct SshCommandExecutor {
     pool: Arc<Pool>,
     sessions: Mutex<HashMap<u64, Arc<SessionState>>>,
     next_session: AtomicU64,
+    /// Started on the first query that arrives from a tokio worker thread,
+    /// where the query cannot run in place; see [`ResolveQueryWorker`].
+    resolve_worker: OnceLock<ResolveQueryWorker>,
 }
 
 impl SshCommandExecutor {
@@ -95,6 +106,7 @@ impl SshCommandExecutor {
             pool: pool.clone(),
             sessions: Mutex::new(HashMap::new()),
             next_session: AtomicU64::new(1),
+            resolve_worker: OnceLock::new(),
         };
         let client_id = crate::protocol::new_client_id();
         // Bootstrap thread: re-fetch the dynamic command keys and reconfigure
@@ -214,36 +226,18 @@ impl RemoteCommandExecutor for SshCommandExecutor {
     }
 
     fn resolve_program(&self, name: &str) -> std::io::Result<Option<PathBuf>> {
-        // `block_on` below panics when called from inside a tokio runtime, so a
-        // caller already on a tokio worker gets an error instead of taking the
-        // process down. This guards future callers: the resolver that calls
-        // this runs on the GPUI thread or a plain background thread.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::WouldBlock,
-                "cannot resolve a program synchronously from a tokio runtime",
-            ));
+        // Off a tokio worker the query can run in place. On a tokio worker the
+        // `block_on` inside it would panic ("cannot start a runtime from within
+        // a runtime"), and the `which` resolver does call from one, so the
+        // query is handed to a thread that carries no tokio context instead of
+        // being refused.
+        if tokio::runtime::Handle::try_current().is_err() {
+            return resolve_program_query(&self.pool, name);
         }
-        let conn = self.pool.allocate()?;
-        let command = command::resolve_program_command(name);
-        // `block_on` on the pool's own runtime: the resolver that calls this
-        // runs on a thread that must not be a pool worker, and the pool runtime
-        // is separate from the GPUI executor, so driving it here is safe.
-        let output = self.pool.runtime().block_on(async {
-            match tokio::time::timeout(
-                RESOLVE_PROGRAM_TIMEOUT,
-                run_ssh_command_capture(conn, &command),
-            )
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "resolve program query timed out",
-                )),
-            }
-        })?;
-        Ok(parse_resolved_path(&output))
+        let worker = self
+            .resolve_worker
+            .get_or_init(|| ResolveQueryWorker::start(self.pool.clone()));
+        worker.resolve(name)
     }
 
     fn wait_exit_async(&self, session_id: u64) -> ExitFuture<'_> {
@@ -495,4 +489,119 @@ async fn pump(
     // Close the caller's ends so downstream readers see EOF.
     let _ = stdout_w.shutdown().await;
     let _ = stderr_w.shutdown().await;
+}
+
+/// Runs one program-resolution query against the daemon and parses the reply.
+///
+/// Drives the pool runtime with `block_on`, so it must not be called from a
+/// tokio worker thread; [`ResolveQueryWorker`] runs it on a thread that carries
+/// no tokio context, which is what makes it safe there.
+fn resolve_program_query(pool: &Pool, name: &str) -> std::io::Result<Option<PathBuf>> {
+    let conn = pool.allocate()?;
+    let command = command::resolve_program_command(name);
+    let output = pool.runtime().block_on(async {
+        match tokio::time::timeout(
+            RESOLVE_PROGRAM_TIMEOUT,
+            run_ssh_command_capture(conn, &command),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "resolve program query timed out",
+            )),
+        }
+    })?;
+    Ok(parse_resolved_path(&output))
+}
+
+/// Runs [`resolve_program_query`] off any tokio worker thread.
+///
+/// The `which` resolver runs on whatever thread the caller happens to be on,
+/// and on this platform that can be a tokio worker, where driving the pool
+/// runtime with `block_on` panics. The worker owns one plain thread that enters
+/// no runtime, so a query runs the way it would for a caller that was never on
+/// a runtime; the caller blocks on the reply, exactly as it would have blocked
+/// on the query itself.
+struct ResolveQueryWorker {
+    requests: std::sync::mpsc::Sender<ResolveRequest>,
+}
+
+/// One query, and the channel its result travels back on.
+struct ResolveRequest {
+    name: String,
+    reply: std::sync::mpsc::SyncSender<std::io::Result<Option<PathBuf>>>,
+}
+
+impl ResolveQueryWorker {
+    /// Starts the worker thread.
+    ///
+    /// A thread that cannot be started leaves the request channel with no
+    /// receiver, so every later query fails fast instead of blocking forever.
+    fn start(pool: Arc<Pool>) -> Self {
+        let (requests, incoming) = std::sync::mpsc::channel::<ResolveRequest>();
+        let spawned = std::thread::Builder::new()
+            .name("cmd-client-resolve".to_string())
+            .spawn(move || {
+                while let Ok(request) = incoming.recv() {
+                    let ResolveRequest { name, reply } = request;
+                    // A panic in one query must not take the worker down: the
+                    // request channel would close and every later lookup would
+                    // fail for the rest of the process. Contain it to this one
+                    // query and keep serving.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        resolve_program_query(&pool, &name)
+                    }))
+                    .unwrap_or_else(|_| {
+                        log::error!("cmd-client resolve: the query for {name} panicked");
+                        Err(std::io::Error::other("resolve query panicked"))
+                    });
+                    if reply.send(result).is_err() {
+                        log::debug!("cmd-client resolve: caller gone before the reply");
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            log::error!("cmd-client resolve: cannot start the query thread: {error}");
+        }
+        Self { requests }
+    }
+
+    /// Runs one query on the worker thread and waits for its result.
+    fn resolve(&self, name: &str) -> std::io::Result<Option<PathBuf>> {
+        let (reply, reply_receiver) = std::sync::mpsc::sync_channel(1);
+        self.requests
+            .send(ResolveRequest {
+                name: name.to_string(),
+                reply,
+            })
+            .map_err(|_| {
+                log::warn!("cmd-client resolve: the query thread is not running");
+                std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "resolve query thread is not running",
+                )
+            })?;
+        reply_receiver
+            .recv_timeout(RESOLVE_REPLY_TIMEOUT)
+            .map_err(|error| match error {
+                std::sync::mpsc::RecvTimeoutError::Timeout => {
+                    log::warn!(
+                        "cmd-client resolve: no reply within {RESOLVE_REPLY_TIMEOUT:?}; the query thread appears wedged"
+                    );
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "resolve query thread did not reply in time",
+                    )
+                }
+                std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                    log::warn!("cmd-client resolve: the query thread dropped the reply");
+                    std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "resolve query thread dropped the reply",
+                    )
+                }
+            })?
+    }
 }

@@ -7,7 +7,6 @@ pub struct PlanDefinitions;
 impl PlanDefinitions {
     pub fn free_plan(&self) -> impl IntoElement {
         List::new()
-            .child(ListBulletItem::new(localization::localized_str!("2,000 accepted edit predictions")))
             .child(ListBulletItem::new(
                 localization::localized_str!("Unlimited prompts with your AI API keys"),
             ))

@@ -15,7 +15,7 @@ doctest = false
 [dependencies]
 anyhow.workspace = true
 collections.workspace = true
-crossbeam.workspace = true
+crossbeam-queue.workspace = true
 gpui.workspace = true
 log.workspace = true
 parking_lot.workspace = true

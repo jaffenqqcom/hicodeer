@@ -24,6 +24,9 @@ parking_lot.workspace = true
 zstd.workspace = true
 # ===== [OHOS PORT END] =====
 
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+async-process.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
 

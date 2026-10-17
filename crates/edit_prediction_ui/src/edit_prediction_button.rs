@@ -356,6 +356,11 @@ impl Render for EditPredictionButton {
                 )
             }
             provider @ (EditPredictionProvider::Zed | EditPredictionProvider::Mercury) => {
+                if edit_prediction::zed_edit_predictions_off_for_plan(self.user_store.read(cx), cx)
+                {
+                    return div().hidden();
+                }
+
                 let enabled = self.editor_enabled.unwrap_or(true);
                 let file = self.file.clone();
                 let language = self.language.clone();
@@ -441,6 +446,10 @@ impl Render for EditPredictionButton {
 
                 let show_editor_predictions = self.editor_show_predictions;
                 let user = self.user_store.read(cx).current_user();
+                let excluded_from_plan = edit_prediction::zed_edit_predictions_excluded_from_plan(
+                    self.user_store.read(cx),
+                    cx,
+                );
 
                 let mercury_has_error = matches!(provider, EditPredictionProvider::Mercury)
                     && edit_prediction::EditPredictionStore::try_global(cx).is_some_and(
@@ -449,6 +458,8 @@ impl Render for EditPredictionButton {
 
                 let indicator_color = if missing_token || mercury_has_error {
                     Some(Color::Error)
+                } else if excluded_from_plan {
+                    Some(Color::Muted)
                 } else if enabled && (!show_editor_predictions || over_limit) {
                     Some(if over_limit {
                         Color::Error
@@ -478,6 +489,8 @@ impl Render for EditPredictionButton {
                                 localization::localized_str!("Disabled For This File")
                             } else if zed_cloud_needs_sign_in {
                                 localization::localized_str!("Sign In Or Configure a Provider")
+                            } else if excluded_from_plan {
+                                localization::localized_str!("Configure a Provider")
                             } else if provider_unavailable || show_editor_predictions {
                                 tooltip_meta
                             } else {
@@ -613,6 +626,9 @@ impl EditPredictionButton {
 
         let is_zed_provider_disabled = organization_configuration
             .is_some_and(|configuration| !configuration.edit_prediction.is_enabled);
+        let user_store = self.user_store.read(cx);
+        let is_zed_provider_unavailable = user_store.current_user().is_none()
+            || edit_prediction::zed_edit_predictions_excluded_from_plan(user_store, cx);
 
         let available_providers = get_available_providers(cx);
 
@@ -631,11 +647,18 @@ impl EditPredictionButton {
                 let is_current = provider == current_provider;
                 let is_disabled_zed_provider =
                     provider == EditPredictionProvider::Zed && is_zed_provider_disabled;
+                // Zed stays selected in settings, but checking it would imply predictions are
+                // working when the user still needs to sign in or upgrade.
+                let is_unavailable_zed_provider =
+                    provider == EditPredictionProvider::Zed && is_zed_provider_unavailable;
                 let fs = self.fs.clone();
 
                 menu = menu.item(
                     ContextMenuEntry::new(name)
-                        .toggleable(IconPosition::Start, is_current && !is_disabled_zed_provider)
+                        .toggleable(
+                            IconPosition::Start,
+                            is_current && !is_disabled_zed_provider && !is_unavailable_zed_provider,
+                        )
                         .disabled(is_disabled_zed_provider)
                         .when(is_disabled_zed_provider, |item| {
                             item.documentation_aside(DocumentationSide::Left, move |_cx| {
@@ -1051,14 +1074,11 @@ impl EditPredictionButton {
             .copilot
             .enable_next_edit_suggestions
             .unwrap_or(true);
-        let copilot_config = copilot_chat::CopilotChatConfiguration {
-            enterprise_uri: all_language_settings
-                .edit_predictions
-                .copilot
+        let settings_url = copilot_settings_url(
+            settings::CopilotSettings::get_global(cx)
                 .enterprise_uri
-                .clone(),
-        };
-        let settings_url = copilot_settings_url(copilot_config.enterprise_uri.as_deref());
+                .as_deref(),
+        );
 
         ContextMenu::build(window, cx, |menu, window, cx| {
             let menu = self.build_language_settings_menu(menu, window, cx);
@@ -1135,8 +1155,8 @@ impl EditPredictionButton {
             if needs_sign_in {
                 menu = menu
                     .custom_row(move |_window, cx| {
-                        let description = localization::translate_static(indoc!{"You get 2,000 accepted suggestions at every keystroke for free, \
-                            powered by Zeta, our open-source, open-data model"});
+                        let description = localization::translate_static(indoc!{"Suggestions at every keystroke, powered by Zeta, our open-source, \
+                            open-data model. Included with Zed Pro and the Pro trial."});
 
                         v_flex()
                             .max_w_64()
@@ -1151,7 +1171,7 @@ impl EditPredictionButton {
                             .into_any_element()
                     })
                     .separator()
-                    .entry(localization::localized_str!("Sign In & Start Using"), None, |window, cx| {
+                    .entry(localization::localized_str!("Sign In"), None, |window, cx| {
                         telemetry::event!(
                             "Edit Prediction Menu Action",
                             action = "sign_in",
@@ -1201,7 +1221,30 @@ impl EditPredictionButton {
                         .separator();
                 }
 
-                if let Some(usage) = self
+                if edit_prediction::zed_edit_predictions_excluded_from_plan(
+                    self.user_store.read(cx),
+                    cx,
+                ) {
+                    menu = menu
+                        .custom_entry(
+                            |_window, _cx| {
+                                Label::new("Zed's edit predictions not included in the Free plan.")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted)
+                                    .into_any_element()
+                            },
+                            |_window, cx| cx.open_url(&zed_urls::upgrade_to_zed_pro_url(cx)),
+                        )
+                        .entry("Upgrade to Pro", None, |_window, cx| {
+                            telemetry::event!(
+                                "Edit Prediction Menu Action",
+                                action = "upsell_clicked",
+                                reason = "excluded_from_plan",
+                            );
+                            cx.open_url(&zed_urls::upgrade_to_zed_pro_url(cx))
+                        })
+                        .separator();
+                } else if let Some(usage) = self
                     .edit_prediction_provider
                     .as_ref()
                     .and_then(|provider| provider.usage(cx))
@@ -1822,18 +1865,15 @@ mod tests {
         cx.update_global(|settings_store: &mut SettingsStore, cx| {
             settings_store
                 .set_user_settings(
-                    r#"{"edit_predictions":{"copilot":{"enterprise_uri":"https://my-company.ghe.com"}}}"#,
+                    r#"{"copilot":{"enterprise_uri":"https://my-company.ghe.com"}}"#,
                     cx,
                 )
                 .unwrap();
         });
 
         let url = cx.update(|cx| {
-            let all_language_settings = all_language_settings(None, cx);
             copilot_settings_url(
-                all_language_settings
-                    .edit_predictions
-                    .copilot
+                settings::CopilotSettings::get_global(cx)
                     .enterprise_uri
                     .as_deref(),
             )
@@ -1852,18 +1892,15 @@ mod tests {
         cx.update_global(|settings_store: &mut SettingsStore, cx| {
             settings_store
                 .set_user_settings(
-                    r#"{"edit_predictions":{"copilot":{"enterprise_uri":"https://my-company.ghe.com/"}}}"#,
+                    r#"{"copilot":{"enterprise_uri":"https://my-company.ghe.com/"}}"#,
                     cx,
                 )
                 .unwrap();
         });
 
         let url = cx.update(|cx| {
-            let all_language_settings = all_language_settings(None, cx);
             copilot_settings_url(
-                all_language_settings
-                    .edit_predictions
-                    .copilot
+                settings::CopilotSettings::get_global(cx)
                     .enterprise_uri
                     .as_deref(),
             )
@@ -1880,11 +1917,8 @@ mod tests {
         });
 
         let url = cx.update(|cx| {
-            let all_language_settings = all_language_settings(None, cx);
             copilot_settings_url(
-                all_language_settings
-                    .edit_predictions
-                    .copilot
+                settings::CopilotSettings::get_global(cx)
                     .enterprise_uri
                     .as_deref(),
             )

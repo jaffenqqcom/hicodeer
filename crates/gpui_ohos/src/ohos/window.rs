@@ -1342,6 +1342,8 @@ impl OhosWindow {
             callback(RequestFrameOptions {
                 require_presentation: force_render,
                 force_render,
+                signal_at: gpui::PlatformFrameSignal::capture(Instant::now),
+                signal_source: gpui::FrameRequestSource::LocalSchedule,
             });
         } else {
             let force_render = self

@@ -1717,7 +1717,7 @@ mod tests {
             language::LanguageConfig {
                 name: "TypeScript".into(),
                 matcher: (language::LanguageMatcher {
-                    path_suffixes: vec!["ts".to_string()],
+                    path_suffixes: vec!["ts".into()],
                     ..language::LanguageMatcher::default()
                 })
                 .into(),

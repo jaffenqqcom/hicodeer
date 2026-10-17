@@ -17,7 +17,7 @@ doctest = false
 name = "test_app"
 
 [features]
-test-support = ["collections/test-support", "gpui/test-support", "livekit_api/test-support"]
+test-support = ["collections/test-support", "gpui/test-support", "livekit_api/test-support", "dep:nanoid", "dep:postage"]
 
 [dependencies]
 anyhow.workspace = true
@@ -31,9 +31,9 @@ http_client_tls.workspace = true
 image.workspace = true
 livekit_api.workspace = true
 log.workspace = true
-nanoid.workspace = true
+nanoid = { workspace = true, optional = true }
 parking_lot.workspace = true
-postage.workspace = true
+postage = { workspace = true, optional = true, features = ["futures-traits", "logging", "blocking"] }
 serde.workspace = true
 serde_urlencoded.workspace = true
 settings.workspace = true
@@ -51,6 +51,11 @@ libwebrtc.workspace = true
 livekit.workspace = true
 # ===== [OHOS PORT END] =====
 
+[target.'cfg(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd"))'.dependencies]
+livekit_api.workspace = true
+nanoid.workspace = true
+postage = { workspace = true, features = ["futures-traits", "logging", "blocking"] }
+
 [target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
 tokio = { workspace = true, features = ["time"] }
 webrtc-sys.workspace = true
@@ -67,21 +72,30 @@ gpui = { workspace = true, features = ["screen-capture", "x11", "wayland"] }
 cpal.workspace = true
 rodio.workspace = true
 
+# ===== [OHOS PORT] `mock_client` re-exports `test::Room` and friends, so the
+# `test` module must compile on OHOS; it needs the channel and id helpers that
+# upstream only wires up for Windows and FreeBSD.
+[target.'cfg(target_env = "ohos")'.dependencies]
+nanoid.workspace = true
+postage = { workspace = true, features = ["futures-traits", "logging", "blocking"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation.workspace = true
 core-video.workspace = true
 objc2-core-foundation.workspace = true
-coreaudio-rs = "0.12.1"
+coreaudio-rs = { workspace = true, features = ["core_audio"] }
 
 [dev-dependencies]
 collections = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform.workspace = true
 livekit_api = { workspace = true, features = ["test-support"] }
+nanoid.workspace = true
+postage = { workspace = true, features = ["futures-traits", "logging"] }
 simplelog.workspace = true
 
 [build-dependencies]
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
 [package.metadata.cargo-shear]

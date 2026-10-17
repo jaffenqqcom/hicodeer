@@ -1059,7 +1059,7 @@ mod tests {
             LanguageConfig {
                 name: "Markdown".into(),
                 matcher: (LanguageMatcher {
-                    path_suffixes: vec!["md".to_string()],
+                    path_suffixes: vec!["md".into()],
                     ..LanguageMatcher::default()
                 })
                 .into(),

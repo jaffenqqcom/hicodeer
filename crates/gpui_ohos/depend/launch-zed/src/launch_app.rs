@@ -13,11 +13,10 @@ use openharmony_ability_derive::ability;
 const SANDBOX_FILES_DIR_ENV: &str = "SANDBOX_FILES_DIR";
 
 /// The process `$SHELL` every `Shell::System` caller inherits (ACP agents, MCP
-/// servers, project environment detection, git, tasks): the only shell the
-/// sandbox ships. The terminal's own shell is hishell, pinned separately through
-/// the `terminal.shell` default (see `crates/settings`), so that only the
-/// terminal is redirected to hicodeerd.
-const SYSTEM_SHELL_PATH: &str = "/bin/sh";
+/// servers, project environment detection, git, tasks): the bridge to
+/// hicodeerd, so those callers run with the daemon's reach instead of the
+/// sandbox's. The terminal pins the same program through its own default.
+const SYSTEM_SHELL_PATH: &str = "/data/app/bin/hishell";
 
 // Replaces the NAPI launch entry that used to live in crates/zed/src/lib.rs.
 // Dependency direction is now openharmony-ability -> zed: this entry depends on
@@ -27,7 +26,7 @@ pub fn launch_app(app: openharmony_ability::OpenHarmonyApp) {
     // Hand the app to the platform layer immediately; OhosPlatform picks it up from
     // the global on construction, so gpui never sees the OpenHarmonyApp type.
     openharmony_ability::set_global_app(app.clone());
-    // [ohos] Pin the process shell to /bin/sh before Zed starts. The app uid has
+    // [ohos] Pin the process shell to hishell before Zed starts. The app uid has
     // no /etc/passwd entry (every present entry resolves to /bin/false), so
     // alacritty's shell discovery would otherwise fail before spawn. See
     // ensure_shell_env.
@@ -140,12 +139,11 @@ fn write_home_directory_record(base_path: &str, home_directory: &str) {
 /// Why this is required on OHOS:
 ///   - `/etc/passwd` has no entry for the app uid, and every present entry
 ///     resolves its shell to `/bin/false`.
-///   - `SHELL` is pinned to `/bin/sh` (the only shell the sandbox ships) and not
-///     to hishell: the process-wide shell must not redirect ACP agents, MCP
-///     servers, project environment detection, git or tasks to hicodeerd. The
-///     terminal is the one caller that reaches hicodeerd, and it is pinned to
-///     hishell on its own through the `terminal.shell` default (see
-///     `crates/settings`).
+///   - `SHELL` is pinned to hishell (the bridge to hicodeerd) so every
+///     `Shell::System` caller -- ACP agents, MCP servers, project environment
+///     detection, git, tasks -- runs with the daemon's reach instead of the app
+///     sandbox's. The terminal pins the same program separately through the
+///     `terminal.shell` default (see `crates/settings`).
 /// Without `SHELL`/`USER`/`HOME` all set, alacritty's `ShellUser::from_env`
 /// errors out and opening a terminal fails before the child is even spawned.
 fn ensure_shell_env(base_path: Option<String>, home_directory: Option<String>) {

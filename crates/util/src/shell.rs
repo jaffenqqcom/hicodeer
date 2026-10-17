@@ -86,12 +86,19 @@ pub fn get_default_system_shell() -> String {
 
 /// Get the default system shell, preferring bash on Windows.
 pub fn get_default_system_shell_preferring_bash() -> String {
+    // [OHOS PORT BEGIN] The application pins `$SHELL` to the daemon bridge, so
+    // that is the system shell every caller should inherit here.
+    #[cfg(target_env = "ohos")]
+    {
+        get_system_shell()
+    }
+
     #[cfg(windows)]
     {
         get_windows_bash().unwrap_or_else(|| get_windows_system_shell())
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_env = "ohos")))]
     {
         "/bin/sh".to_string()
     }

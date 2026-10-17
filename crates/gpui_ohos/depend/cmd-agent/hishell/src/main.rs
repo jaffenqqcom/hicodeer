@@ -87,11 +87,15 @@ fn main() {
     }
     let logging = args.iter().any(|arg| arg == "--log");
     logger::init(logging);
-    finish(run(&args));
+    // A one-off command's output belongs to the program that asked for it, so
+    // the bridge keeps its own notices out of that stream; the interactive
+    // shell (the terminal's `$SHELL`) still reports why it fell back.
+    let quiet = matches!(requested_invocation(&args), Invocation::Command(_));
+    finish(run(&args), quiet);
 }
 
 /// Reports how a run ended and exits with its status.
-fn finish(result: Result<i32, String>) -> ! {
+fn finish(result: Result<i32, String>, quiet: bool) -> ! {
     match result {
         // The status is handed on rather than flattened: a caller that ran a
         // one-off command reads it to tell a command that ran from one that did
@@ -102,9 +106,11 @@ fn finish(result: Result<i32, String>) -> ! {
             // is no console this text reaches, so the failure has to be recorded
             // there too or nothing about it survives.
             log::error!("hishell: {err}");
-            // This is the whole output of a failed run, so it prints with or
-            // without --log.
-            eprintln!("hishell: {err}");
+            // A one-off command's caller reads its streams, so only the
+            // interactive shell prints the failure; the log always has it.
+            if !quiet {
+                eprintln!("hishell: {err}");
+            }
             std::process::exit(1);
         }
     }
@@ -223,8 +229,10 @@ fn run_command(shell_args: &[String]) -> Result<i32, String> {
     let executor = SshCommandExecutor::new(CommandEndpoint::ohos_default())
         .map_err(|err| format!("cannot start the bridge: {err}"))?;
     if let Err(err) = executor.wait_ready(READY_TIMEOUT) {
+        // A `-c` run's streams belong to its caller -- an agent's protocol
+        // channel in the worst case -- so the reason for the fallback goes to
+        // the log only. The fallback still runs the command.
         log::error!("hishell: hicodeerd is not ready for a command: {err}");
-        eprintln!("hishell: {DAEMON_NOT_READY_MESSAGE}");
         return exec_fallback_shell(None, shell_args);
     }
 
@@ -246,14 +254,28 @@ fn run_command(shell_args: &[String]) -> Result<i32, String> {
             log::warn!("hishell: no PATH to hand the command: {err}");
         }
     }
-    // A `-c` run is given no input by its caller (the terminal runs these with a
-    // null stdin), so the command is given none either.
-    spec.stdin_mode = FdMode::Null;
+    // A `-c` run inherits its caller's stdin: an agent's protocol channel
+    // arrives this way, and a command that reads input must see it.
+    spec.stdin_mode = FdMode::Piped;
 
     let mut child = executor
         .spawn(spec)
         .map_err(|err| format!("cannot run the command on hicodeerd: {err}"))?;
     let session_id = child.session_id;
+
+    // Forward the caller's stdin on a thread of its own: the caller may keep it
+    // open for the command's whole lifetime (an agent's protocol channel), so
+    // waiting for it here would never end.
+    if let Some(mut child_stdin) = child.stdin.take() {
+        std::thread::spawn(move || {
+            smol::block_on(async move {
+                let mut local_stdin = smol::Unblock::new(std::io::stdin());
+                if let Err(err) = relay_to_local(&mut local_stdin, &mut child_stdin).await {
+                    log::warn!("hishell: cannot forward the command's input: {err}");
+                }
+            });
+        });
+    }
 
     let copied: Result<(), String> = smol::block_on(async move {
         let mut child_stdout = child
@@ -339,16 +361,18 @@ fn requested_invocation(args: &[String]) -> Invocation {
         return Invocation::Interactive(default_shell_invocation());
     };
 
-    let mut words = split_shell_words(command).into_iter();
-    if words.next().as_deref() != Some("exec") {
+    let mut words = split_shell_words(command).into_iter().peekable();
+    // The terminal asks for an interactive shell with `exec -a <argv0>
+    // <program> ...`. Any other `exec ...` is a command to run -- notably the
+    // `exec </dev/null` prefix the terminal puts on a one-off command, which
+    // must not be mistaken for a request for an interactive shell.
+    if words.next().as_deref() != Some("exec")
+        || words.peek().map(String::as_str) != Some("-a")
+    {
         return Invocation::Command(forwarded_shell_args(args));
     }
-    let mut words = words.peekable();
-    let mut argv0 = None;
-    if words.peek().map(String::as_str) == Some("-a") {
-        words.next();
-        argv0 = words.next();
-    }
+    words.next();
+    let argv0 = words.next();
     // The next word is the program the terminal wanted to start, which is this
     // bridge itself. The shell is what has to run instead, so it is dropped
     // rather than forwarded.

@@ -285,6 +285,162 @@ pub fn rewrite_npm_para(command: &str) -> NpmRewrite {
     }
 }
 
+/// Appends the daemon's PATH after every caller-supplied PATH assignment.
+///
+/// The caller knows directories that exist only in the host application's
+/// environment; the daemon knows the system's own. Keeping both, caller first,
+/// lets a command resolve programs from either side. A command that carries no
+/// PATH assignment inherits the daemon environment unchanged.
+fn merge_path_assignments(command: &str, daemon_path: &str) -> String {
+    // An empty daemon PATH would only append an empty entry (the current
+    // directory) to the caller's, so there is nothing worth merging.
+    if daemon_path.is_empty() {
+        return command.to_string();
+    }
+    let bytes = command.as_bytes();
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+    let mut expecting_program = true;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' => {
+                // A word that starts with a quote is the command itself or an
+                // argument, never an assignment.
+                expecting_program = false;
+                index = skip_single_quoted(bytes, index);
+            }
+            b'"' => {
+                expecting_program = false;
+                index = skip_double_quoted(bytes, index);
+            }
+            b'\\' => index = skip_escaped(command, index),
+            b'&' | b'|' | b';' => {
+                expecting_program = true;
+                index += 1;
+            }
+            // A redirection operator is not a word: skip the operator itself so
+            // the scan always advances. Its target is left to the word path.
+            b'<' | b'>' => index += 1,
+            byte if byte.is_ascii_whitespace() => index += 1,
+            _ => {
+                let start = index;
+                while index < bytes.len() {
+                    match bytes[index] {
+                        b'\'' => index = skip_single_quoted(bytes, index),
+                        b'"' => index = skip_double_quoted(bytes, index),
+                        b'\\' => index = skip_escaped(command, index),
+                        byte if byte.is_ascii_whitespace()
+                            || matches!(byte, b'&' | b'|' | b';' | b'<' | b'>') =>
+                        {
+                            break;
+                        }
+                        _ => index += 1,
+                    }
+                }
+                let word = &command[start..index];
+                if expecting_program && is_assignment_word(word) {
+                    if let Some(value) = word.strip_prefix("PATH=") {
+                        let replacement = if is_empty_shell_value(value) {
+                            format!("PATH={}", sh_quote(daemon_path))
+                        } else {
+                            // The caller's spelling is kept verbatim and the
+                            // daemon's entry is appended as a neighbouring
+                            // quoted run, which the shell concatenates.
+                            format!("{}:{}", word, sh_quote(daemon_path))
+                        };
+                        replacements.push((start, index, replacement));
+                    }
+                } else {
+                    // The program word ends the assignment prefix; words after
+                    // it are arguments, where `PATH=` has no assignment meaning.
+                    expecting_program = false;
+                }
+            }
+        }
+    }
+
+    if replacements.is_empty() {
+        return command.to_string();
+    }
+    let mut kept = String::with_capacity(command.len() + daemon_path.len());
+    let mut copied = 0;
+    for (start, end, replacement) in replacements {
+        kept.push_str(&command[copied..start]);
+        kept.push_str(&replacement);
+        copied = end;
+    }
+    kept.push_str(&command[copied..]);
+    kept
+}
+
+/// `true` for a PATH value that names no directory at all, so the daemon's
+/// PATH is used alone rather than prefixed by an empty entry (which would put
+/// the current directory on the path).
+fn is_empty_shell_value(value: &str) -> bool {
+    value.is_empty() || value == "''" || value == "\"\""
+}
+
+/// Quotes a value for a POSIX shell: single quotes with `'\''` escaping.
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// `true` for a bare `NAME=...` word, the shell's form for an environment
+/// assignment that precedes a command word.
+fn is_assignment_word(word: &str) -> bool {
+    let Some(equals_sign) = word.find('=') else {
+        return false;
+    };
+    let name = &word[..equals_sign];
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+/// Skips a single-quoted shell word. `sh_quote` spells an embedded quote as
+/// `'\''`, so a closing quote followed by `\'` reopens the run.
+fn skip_single_quoted(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        if bytes[index] == b'\'' {
+            if index + 2 < bytes.len() && bytes[index + 1] == b'\\' && bytes[index + 2] == b'\'' {
+                index += 4;
+                continue;
+            }
+            return index + 1;
+        }
+        index += 1;
+    }
+    bytes.len()
+}
+
+/// Skips a backslash escape, advancing over the whole escaped character so the
+/// scan never stops inside a UTF-8 sequence.
+fn skip_escaped(command: &str, start: usize) -> usize {
+    let escaped = start + 1;
+    match command[escaped..].chars().next() {
+        Some(character) => escaped + character.len_utf8(),
+        None => escaped,
+    }
+}
+
+/// Skips a double-quoted shell word.
+fn skip_double_quoted(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
 /// One shell word of a command string: its value with quotes and escapes
 /// stripped, which is what the recognizer matches against. The original
 /// spelling is followed while splitting only because a word's extent is not
@@ -456,6 +612,15 @@ pub async fn spawn_command(
     // command itself goes out exactly as the client spelled it.
     let rewrite = rewrite_npm_para(&shell_command);
     let shell_command = rewrite.command;
+    // The caller's PATH knows the application's directories and the daemon's
+    // knows the system's; the command gets both, caller entries first.
+    let shell_command = match std::env::var("PATH") {
+        Ok(daemon_path) => merge_path_assignments(&shell_command, &daemon_path),
+        Err(err) => {
+            log::warn!("exec: no daemon PATH to merge into the caller's: {err}");
+            shell_command
+        }
+    };
     let install_root = rewrite.install_root;
     // Detect a plain `which` call so we can surface the missing program name(s)
     // on stdout when nothing is found (see the bridging task below).

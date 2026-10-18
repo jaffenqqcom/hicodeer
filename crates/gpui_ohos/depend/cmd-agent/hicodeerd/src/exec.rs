@@ -580,6 +580,16 @@ fn prepare_exec_program(program: &str) {
         }
         crate::fanotify_patch::PatchOutcome::NotTarget => {
             log::debug!("exec: no fanotify probe in {}", path.display());
+            // A program can also arrive with no installer at all: an extension
+            // fetched over HTTP lands unsigned, and exec time is the only point
+            // that sees it. Only the user storage sub-tree is signed -- system
+            // binaries carry their own integrity check and reject writes.
+            if crate::sign_elf::ensure_signed_under_root(
+                path,
+                crate::sign_elf::USER_STORAGE_ROOT,
+            ) {
+                log::info!("exec: signed {}", path.display());
+            }
         }
     }
 }

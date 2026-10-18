@@ -87,6 +87,27 @@ pub fn sign_tree(root: &str) -> usize {
     signed
 }
 
+/// Sub-tree that holds programs the application downloaded for itself --
+/// language servers and extension binaries. Only files under it are signed at
+/// exec time: the system partitions carry their own integrity mechanism and
+/// cannot be written to anyway.
+pub const USER_STORAGE_ROOT: &str = "/storage/Users/currentUser";
+
+/// Signs `path` in place when it is an unsigned ELF under `root`.
+///
+/// The path is resolved first, so a `..` component or a symlink that only
+/// looks local cannot reach a system binary. A file outside the root, one
+/// already signed, and one that cannot be resolved are all left untouched.
+pub fn ensure_signed_under_root(path: &Path, root: &str) -> bool {
+    let Ok(resolved) = fs::canonicalize(path) else {
+        return false;
+    };
+    if !resolved.starts_with(root) {
+        return false;
+    }
+    ensure_signed(&resolved)
+}
+
 /// Signs one file in place when it is an unsigned ELF, reporting whether it
 /// signed. A file that is already signed, is not an ELF, or cannot be read is
 /// left as it is.

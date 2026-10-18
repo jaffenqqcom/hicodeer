@@ -8,6 +8,7 @@ import { FileLaunchPlugin } from '@ohos-rs/ability-plugin-filelaunch';
 import { OpenBySysPlugin } from '@ohos-rs/ability-plugin-openbysys';
 import { ImePlugin } from '@ohos-rs/ability-plugin-ime';
 import { UrlPlugin } from '@ohos-rs/ability-plugin-url';
+import { PlayNotificationPlugin } from '@ohos-rs/ability-plugin-play-notification';
 import { Want, AbilityConstant, ConfigurationConstant } from '@kit.AbilityKit';
 import common from '@ohos.app.ability.common';
 import hilog from '@ohos.hilog';
@@ -40,6 +41,7 @@ export default class EntryAbility extends NativeAbility {
     new LazyPlugin((): BridgePlugin => new OpenBySysPlugin()),
     new LazyPlugin((): BridgePlugin => new ImePlugin()),
     new LazyPlugin((): BridgePlugin => new UrlPlugin()),
+    new LazyPlugin((): BridgePlugin => new PlayNotificationPlugin()),
   ];
 
   // 冷启动：系统带 want（含要打开的文件 URI）启动。必须先让基类完成会话初始化，

@@ -31,6 +31,9 @@ util.workspace = true
 # target keeps the dependencies it had before.
 [target.'cfg(target_env = "ohos")'.dependencies]
 rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", default-features = false }
+openharmony-ability = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
+openharmony-ability-plugin-play-notification = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
+paths.workspace = true
 
 [target.'cfg(not(target_env = "ohos"))'.dependencies]
 cpal.workspace = true

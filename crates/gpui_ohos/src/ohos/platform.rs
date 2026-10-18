@@ -20,6 +20,7 @@ use openharmony_ability_plugin_filepicker::{
 use openharmony_ability_plugin_ime::ImeBridgePlugin;
 use openharmony_ability_plugin_openbysys::{OpenBySysBridgePlugin, OpenBySysExt};
 use openharmony_ability_plugin_pinch::PinchBridgePlugin;
+use openharmony_ability_plugin_play_notification::PlayNotificationBridgePlugin;
 use openharmony_ability_plugin_url::{UrlBridgePlugin, UrlExt};
 
 use crate::{
@@ -130,6 +131,11 @@ impl OhosPlatform {
         if let Err(error) = app.register_plugin(PinchBridgePlugin) {
             log::error!(
                 "register_plugins: register_plugin(PinchBridgePlugin) failed: {error}"
+            );
+        }
+        if let Err(error) = app.register_plugin(PlayNotificationBridgePlugin) {
+            log::error!(
+                "register_plugins: register_plugin(PlayNotificationBridgePlugin) failed: {error}"
             );
         }
         if let Err(error) = app.register_plugin(FileDropInBridgePlugin) {

@@ -109,6 +109,10 @@
     {
       "name": "plugin_openbysys",
       "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/openbysys"
+    },
+    {
+      "name": "plugin_play_notification",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/play-notification"
     }
   ]
 }

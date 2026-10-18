@@ -2687,6 +2687,50 @@ impl AgentPanel {
             return;
         }
         let settings = AgentSettings::get_global(cx);
+
+        #[cfg(target_env = "ohos")]
+        {
+            if !matches!(
+                settings.notify_when_agent_waiting,
+                NotifyWhenAgentWaiting::Never
+            ) {
+                let workspace_handle = self.workspace.clone();
+                let toast = StatusToast::new(title.clone(), cx, move |this, _cx| {
+                    this.icon(Icon::new(IconName::Terminal).size(IconSize::Small))
+                        .action(
+                            localization::localized_str!("Open"),
+                            move |window, cx| {
+                                cx.activate(true);
+                                if let Some(workspace) = workspace_handle.upgrade() {
+                                    workspace.update(cx, |workspace, cx| {
+                                        workspace.reveal_panel::<AgentPanel>(window, cx);
+                                        if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                                            panel.update(cx, |panel, cx| {
+                                                panel.activate_terminal(
+                                                    terminal_id,
+                                                    true,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                        workspace.focus_panel::<AgentPanel>(window, cx);
+                                    });
+                                }
+                            },
+                        )
+                        .dismiss_button(true)
+                });
+                if let Some(workspace) = self.workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.toggle_status_toast(toast, cx);
+                    });
+                }
+            }
+            return;
+        }
+
+        #[cfg(not(target_env = "ohos"))]
         match settings.notify_when_agent_waiting {
             NotifyWhenAgentWaiting::PrimaryScreen => {
                 window.request_attention();

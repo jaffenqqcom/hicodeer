@@ -56,6 +56,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{rc::Rc, time::Duration};
+#[cfg(target_env = "ohos")]
+use notifications::status_toast::StatusToast;
 use terminal_view::terminal_panel::TerminalPanel;
 use text::Anchor;
 use theme_settings::{AgentBufferFontSize, AgentUiFontSize};
@@ -3209,6 +3211,17 @@ impl ConversationView {
     }
 
     fn agent_status_visible(&self, window: &Window, cx: &Context<Self>) -> bool {
+        // [OHOS PORT BEGIN] Only suppress the notification when this conversation is the one
+        // the user is actually looking at; the upstream sidebar check treats every conversation
+        // as visible while the threads list is open.
+        #[cfg(target_env = "ohos")]
+        {
+            return window.is_window_active()
+                && self.workspace.upgrade().is_some_and(|workspace| {
+                    self.is_visible_in_agent_panel(&workspace, cx)
+                });
+        }
+        // [OHOS PORT END]
         if !window.is_window_active() {
             return false;
         }
@@ -3269,6 +3282,88 @@ impl ConversationView {
             .clone()
             .unwrap_or_else(|| self.agent.agent_id().0);
 
+        #[cfg(target_env = "ohos")]
+        {
+            if !matches!(
+                settings.notify_when_agent_waiting,
+                NotifyWhenAgentWaiting::Never
+            ) {
+                let workspace_handle = self.workspace.clone();
+                let agent = self.connection_key.clone();
+                let caption: SharedString = caption.into();
+                let text = format!("{}: {}", title, caption);
+                let toast = StatusToast::new(text, cx, move |this, _cx| {
+                    this.icon(Icon::new(icon).size(IconSize::Small))
+                        .action(
+                            localization::localized_str!("Open"),
+                            move |window, cx| {
+                                let Some(handle) =
+                                    window.window_handle().downcast::<MultiWorkspace>()
+                                else {
+                                    log::error!("root view should be a MultiWorkspace");
+                                    return;
+                                };
+                                cx.activate(true);
+                                let workspace_handle = workspace_handle.clone();
+                                let agent = agent.clone();
+                                let root_work_dirs = root_work_dirs.clone();
+                                let root_title = root_title.clone();
+                                cx.defer(move |cx| {
+                                    handle
+                                        .update(
+                                            cx,
+                                            |multi_workspace, window, cx| {
+                                                window.activate_window();
+                                                if let Some(workspace) =
+                                                    workspace_handle.upgrade()
+                                                {
+                                                    multi_workspace.activate(
+                                                        workspace.clone(),
+                                                        None,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                    workspace.update(cx, |workspace, cx| {
+                                                        workspace
+                                                            .reveal_panel::<AgentPanel>(window, cx);
+                                                        if let Some(panel) =
+                                                            workspace.panel::<AgentPanel>(cx)
+                                                        {
+                                                            panel.update(cx, |panel, cx| {
+                                                                panel.load_agent_thread(
+                                                                    agent.clone(),
+                                                                    root_thread_id,
+                                                                    root_work_dirs.clone(),
+                                                                    root_title.clone(),
+                                                                    true,
+                                                                    AgentThreadSource::AgentPanel,
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            });
+                                                        }
+                                                        workspace
+                                                            .focus_panel::<AgentPanel>(window, cx);
+                                                    });
+                                                }
+                                            },
+                                        )
+                                        .log_err();
+                                });
+                            },
+                        )
+                        .dismiss_button(true)
+                });
+                if let Some(workspace) = self.workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.toggle_status_toast(toast, cx);
+                    });
+                }
+            }
+            return;
+        }
+
+        #[cfg(not(target_env = "ohos"))]
         match settings.notify_when_agent_waiting {
             NotifyWhenAgentWaiting::PrimaryScreen => {
                 window.request_attention();

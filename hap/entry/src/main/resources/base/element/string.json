@@ -27,6 +27,10 @@
     {
       "name": "perm_writable_code_memory_reason",
       "value": "allocate writable and executable memory for the wasmtime JIT compiler to run editor plugins"
+    },
+    {
+      "name": "perm_microphone_reason",
+      "value": "record audio in the audio input test panel"
     }
   ]
 }

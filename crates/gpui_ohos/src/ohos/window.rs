@@ -2767,11 +2767,19 @@ impl PlatformWindow for OhosWindowHandle {
     fn update_ime_position(&self, bounds: Bounds<Pixels>) {
         self.with_window(|window| window.update_ime_position(bounds))
     }
+
+    fn play_system_bell(&self) {
+        super::platform::play_system_bell();
+    }
 }
 
 impl PlatformWindow for OhosWindow {
     fn bounds(&self) -> Bounds<Pixels> {
         *self.bounds.borrow()
+    }
+
+    fn play_system_bell(&self) {
+        super::platform::play_system_bell();
     }
 
     fn is_maximized(&self) -> bool {

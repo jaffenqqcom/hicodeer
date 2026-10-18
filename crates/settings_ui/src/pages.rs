@@ -14,6 +14,8 @@ pub(crate) use audio_input_output_setup::{
     render_input_audio_device_dropdown, render_output_audio_device_dropdown,
 };
 pub(crate) use audio_test_window::open_audio_test_window;
+#[cfg(target_env = "ohos")]
+pub(crate) use audio_test_window::render_audio_test_page;
 pub(crate) use edit_prediction_provider_setup::render_edit_prediction_setup_page;
 pub(crate) use external_agents_page::{
     CustomAgentForm, render_add_agent_popover, render_external_agents_page,

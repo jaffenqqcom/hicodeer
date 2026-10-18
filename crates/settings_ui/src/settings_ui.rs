@@ -1043,6 +1043,10 @@ pub struct SettingsWindow {
     /// mouse, where `focus_visible` styling would otherwise be suppressed).
     pub(crate) external_agent_add_focus_handle: FocusHandle,
     skill_creator_page: Option<(Entity<pages::SkillCreatorPage>, Subscription)>,
+    /// Owns the inline audio test session on OHOS so closing the settings tab
+    /// drops it and stops the microphone and playback thread.
+    #[cfg(target_env = "ohos")]
+    pub(crate) audio_test_stop: Option<Box<dyn std::any::Any + Send>>,
 }
 
 struct SearchDocument {
@@ -2078,6 +2082,8 @@ impl SettingsWindow {
             custom_agent_form: None,
             external_agent_add_focus_handle: cx.focus_handle(),
             skill_creator_page: None,
+            #[cfg(target_env = "ohos")]
+            audio_test_stop: None,
         };
 
         // ===== [OHOS PORT BEGIN] a tab-hosted settings page defers its first load =====
@@ -5673,6 +5679,8 @@ pub mod test {
             custom_agent_form: None,
             external_agent_add_focus_handle: cx.focus_handle(),
             skill_creator_page: None,
+            #[cfg(target_env = "ohos")]
+            audio_test_stop: None,
         };
 
         settings_window.build_filter_table();

@@ -3,6 +3,8 @@ use gpui::{
     App, Context, Entity, FocusHandle, Focusable, Render, Size, Window, WindowBounds, WindowKind,
     WindowOptions, prelude::*, px,
 };
+#[cfg(target_env = "ohos")]
+use gpui::{AnyElement, BorrowAppContext};
 use platform_title_bar::PlatformTitleBar;
 use release_channel::ReleaseChannel;
 use rodio::Source;
@@ -304,3 +306,192 @@ pub fn open_audio_test_window(_window: &mut Window, cx: &mut App) {
     )
     .log_err();
 }
+
+// [OHOS PORT BEGIN] OHOS exposes a single window, so the audio test cannot be a
+// standalone window. It is rendered as a settings sub page instead.
+
+/// Selections of the inline audio test page. The running test session lives on
+/// `SettingsWindow` instead, so closing the settings tab stops the microphone.
+#[cfg(target_env = "ohos")]
+#[derive(Default)]
+pub(crate) struct AudioTestPageState {
+    input_device_id: Option<DeviceId>,
+    output_device_id: Option<DeviceId>,
+    /// Set while the microphone permission request is in flight, so a second
+    /// click cannot start another capture stream.
+    pending: bool,
+}
+
+#[cfg(target_env = "ohos")]
+impl gpui::Global for AudioTestPageState {}
+
+#[cfg(target_env = "ohos")]
+pub(crate) fn render_audio_test_page(
+    settings_window: &crate::SettingsWindow,
+    _scroll_handle: &gpui::ScrollHandle,
+    window: &mut Window,
+    cx: &mut Context<crate::SettingsWindow>,
+) -> AnyElement {
+    if !cx.has_global::<AudioTestPageState>() {
+        let settings = AudioSettings::get_global(cx);
+        cx.set_global(AudioTestPageState {
+            input_device_id: settings.input_audio_device.clone(),
+            output_device_id: settings.output_audio_device.clone(),
+            pending: false,
+        });
+    }
+
+    let (input_device_id, output_device_id) = cx.update_default_global(
+        |state: &mut AudioTestPageState, _cx| {
+            (
+                state.input_device_id.clone(),
+                state.output_device_id.clone(),
+            )
+        },
+    );
+    let pending = cx.update_default_global(|state: &mut AudioTestPageState, _cx| state.pending);
+    let is_testing = settings_window.audio_test_stop.is_some() || pending;
+
+    let button_text = if is_testing {
+        localization::localized_str!("Stop Testing")
+    } else {
+        localization::localized_str!("Start Testing")
+    };
+    let button_style = if is_testing {
+        ButtonStyle::Tinted(ui::TintColor::Error)
+    } else {
+        ButtonStyle::Filled
+    };
+
+    let input_dropdown = render_audio_device_dropdown(
+        "audio-test-input-dropdown",
+        input_device_id,
+        true,
+        move |device_id, window, cx| {
+            cx.update_default_global(|state: &mut AudioTestPageState, _cx| {
+                state.input_device_id = device_id.clone();
+            });
+            let value: Option<AudioInputDeviceName> =
+                device_id.map(|id| AudioInputDeviceName(Some(id.to_string())));
+            update_settings_file(
+                SettingsUiFile::User,
+                Some("audio.experimental.input_audio_device"),
+                window,
+                cx,
+                move |settings, _cx| {
+                    settings.audio.get_or_insert_default().input_audio_device = value;
+                },
+            )
+            .log_err();
+        },
+        None,
+        None,
+        window,
+        cx,
+    );
+
+    let output_dropdown = render_audio_device_dropdown(
+        "audio-test-output-dropdown",
+        output_device_id,
+        false,
+        move |device_id, window, cx| {
+            cx.update_default_global(|state: &mut AudioTestPageState, _cx| {
+                state.output_device_id = device_id.clone();
+            });
+            let value: Option<AudioOutputDeviceName> =
+                device_id.map(|id| AudioOutputDeviceName(Some(id.to_string())));
+            update_settings_file(
+                SettingsUiFile::User,
+                Some("audio.experimental.output_audio_device"),
+                window,
+                cx,
+                move |settings, _cx| {
+                    settings.audio.get_or_insert_default().output_audio_device = value;
+                },
+            )
+            .log_err();
+        },
+        None,
+        None,
+        window,
+        cx,
+    );
+
+    v_flex()
+        .id("audio-test-page")
+        .w_full()
+        .p_4()
+        .gap_4()
+        .child(
+            v_flex()
+                .gap_1()
+                .child(Label::new(localization::localized_str!("Output Device")))
+                .child(output_dropdown),
+        )
+        .child(
+            v_flex()
+                .gap_1()
+                .child(Label::new(localization::localized_str!("Input Device")))
+                .child(input_dropdown),
+        )
+        .child(
+            h_flex().w_full().justify_center().pt_4().child(
+                Button::new("test-audio-toggle", button_text)
+                    .style(button_style)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.audio_test_stop.take().is_some() {
+                            cx.notify();
+                            return;
+                        }
+                        let pending = cx.update_default_global(
+                            |state: &mut AudioTestPageState, _cx| {
+                                let pending = state.pending;
+                                state.pending = true;
+                                pending
+                            },
+                        );
+                        if pending {
+                            cx.notify();
+                            return;
+                        }
+                        let (input_device_id, output_device_id) = cx.update_default_global(
+                            |state: &mut AudioTestPageState, _cx| {
+                                (
+                                    state.input_device_id.clone(),
+                                    state.output_device_id.clone(),
+                                )
+                            },
+                        );
+                        let permission = audio::request_microphone_permission();
+                        cx.spawn(async move |this, cx| {
+                            match permission.await {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    log::warn!("audio test: microphone permission was denied")
+                                }
+                                Err(error) => log::warn!(
+                                    "audio test: microphone permission request failed: {error}"
+                                ),
+                            }
+                            let stop_playback =
+                                start_test_playback(input_device_id, output_device_id).ok();
+                            this.update(cx, |this, cx| {
+                                cx.update_default_global(
+                                    |state: &mut AudioTestPageState, _cx| {
+                                        state.pending = false;
+                                    },
+                                );
+                                this.audio_test_stop = stop_playback;
+                                cx.notify();
+                            })
+                            .ok();
+                        })
+                        .detach();
+                        cx.notify();
+                    })),
+            ),
+        )
+        .into_any_element()
+}
+
+// [OHOS PORT END]

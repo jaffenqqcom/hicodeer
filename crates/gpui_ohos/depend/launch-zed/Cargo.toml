@@ -22,6 +22,7 @@ qemu-agent = ["dep:qemu-manager", "dep:cmd-client"]
 
 [dependencies]
 zed = { path = "../../../zed" }
+audio = { path = "../../../audio" }
 workspace = { path = "../../../workspace" }
 zlog = { path = "../../../zlog" }
 gpui_ohos = { path = "../.." }

@@ -11,6 +11,7 @@
     "@ohos-rs/ability-plugin-filepicker": "file:../../target/ohos-arkts/openharmony-ability/plugins/filepicker",
     "@ohos-rs/ability-plugin-pinch": "file:../../target/ohos-arkts/openharmony-ability/plugins/pinch",
     "@ohos-rs/ability-plugin-play-notification": "file:../../target/ohos-arkts/openharmony-ability/plugins/play-notification",
+    "@ohos-rs/ability-plugin-permission": "file:../../target/ohos-arkts/openharmony-ability/plugins/permission",
     "@ohos-rs/ability-plugin-filedropin": "file:../../target/ohos-arkts/openharmony-ability/plugins/filedropin",
     "@ohos-rs/ability-plugin-filelaunch": "file:../../target/ohos-arkts/openharmony-ability/plugins/filelaunch",
     "@ohos-rs/ability-plugin-openbysys": "file:../../target/ohos-arkts/openharmony-ability/plugins/openbysys",

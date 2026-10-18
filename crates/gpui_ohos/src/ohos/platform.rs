@@ -5,7 +5,7 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     rc::{Rc, Weak},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use anyhow::Result;
@@ -20,6 +20,7 @@ use openharmony_ability_plugin_filepicker::{
 use openharmony_ability_plugin_ime::ImeBridgePlugin;
 use openharmony_ability_plugin_openbysys::{OpenBySysBridgePlugin, OpenBySysExt};
 use openharmony_ability_plugin_pinch::PinchBridgePlugin;
+use openharmony_ability_plugin_permission::PermissionBridgePlugin;
 use openharmony_ability_plugin_play_notification::PlayNotificationBridgePlugin;
 use openharmony_ability_plugin_url::{UrlBridgePlugin, UrlExt};
 
@@ -36,6 +37,21 @@ use super::{
     dispatcher::OhosDispatcher, display::OhosDisplay, text_system::OhosTextSystem,
     wgpu_context::WgpuContext, window::{OhosWindow, appearance_from_mode},
 };
+
+/// Plays the terminal bell through the application's audio pipeline. The audio
+/// crate cannot be a dependency of this crate (it depends on `gpui`), so the
+/// application installs the handler once at startup.
+static SYSTEM_BELL_HANDLER: OnceLock<fn()> = OnceLock::new();
+
+pub fn set_system_bell_handler(handler: fn()) {
+    let _ = SYSTEM_BELL_HANDLER.set(handler);
+}
+
+pub(crate) fn play_system_bell() {
+    if let Some(handler) = SYSTEM_BELL_HANDLER.get() {
+        handler();
+    }
+}
 
 pub(crate) struct OhosPlatform {
     app: Rc<RefCell<Option<OpenHarmonyApp>>>,
@@ -136,6 +152,11 @@ impl OhosPlatform {
         if let Err(error) = app.register_plugin(PlayNotificationBridgePlugin) {
             log::error!(
                 "register_plugins: register_plugin(PlayNotificationBridgePlugin) failed: {error}"
+            );
+        }
+        if let Err(error) = app.register_plugin(PermissionBridgePlugin) {
+            log::error!(
+                "register_plugins: register_plugin(PermissionBridgePlugin) failed: {error}"
             );
         }
         if let Err(error) = app.register_plugin(FileDropInBridgePlugin) {

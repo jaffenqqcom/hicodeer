@@ -13,11 +13,15 @@ use crate::{
     ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
     SettingsPage, SettingsPageItem, SubPageLink, USER, active_language, all_language_names,
     pages::{
-        open_audio_test_window, render_edit_prediction_setup_page, render_external_agents_page,
+        render_edit_prediction_setup_page, render_external_agents_page,
         render_llm_providers_page, render_mcp_servers_page, render_sandbox_settings_page,
         render_skills_setup_page, render_tool_permissions_setup_page,
     },
 };
+#[cfg(not(target_env = "ohos"))]
+use crate::pages::open_audio_test_window;
+#[cfg(target_env = "ohos")]
+use crate::pages::render_audio_test_page;
 
 const DEFAULT_STRING: String = String::new();
 /// A default empty string reference. Useful in `pick` functions for cases either in dynamic item fields, or when dealing with `settings::Maybe`
@@ -8699,6 +8703,22 @@ fn collaboration_page() -> SettingsPage {
 
     fn audio_settings() -> [SettingsPageItem; 3] {
         [
+            // [OHOS PORT BEGIN] OHOS has a single window, so the audio test is an
+            // inline sub page instead of a standalone test window.
+            #[cfg(target_env = "ohos")]
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: localization::localized_str!("Test Audio").into(),
+                r#type: Default::default(),
+                description: Some(
+                    localization::localized_str!("Test your microphone and speaker setup").into(),
+                ),
+                search_aliases: &[],
+                json_path: None,
+                in_json: false,
+                files: USER,
+                render: render_audio_test_page,
+            }),
+            #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::ActionLink(ActionLink {
                 title: localization::localized_str!("Test Audio").into(),
                 description: Some(localization::localized_str!("Test your microphone and speaker setup").into()),
@@ -8710,6 +8730,7 @@ fn collaboration_page() -> SettingsPage {
                 ),
                 files: USER,
             }),
+            // [OHOS PORT END]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Output Audio Device"),
                 description: localization::localized_str!("Select output audio device"),

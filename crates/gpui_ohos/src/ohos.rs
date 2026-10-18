@@ -12,6 +12,8 @@ mod window;
 use gpui::Platform;
 use std::rc::Rc;
 
+pub use platform::set_system_bell_handler;
+
 pub fn current_platform(_headless: bool) -> Rc<dyn Platform> {
     Rc::new(
         platform::OhosPlatform::new()

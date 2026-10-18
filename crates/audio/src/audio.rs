@@ -15,6 +15,8 @@ mod audio_pipeline;
 #[cfg(target_env = "ohos")]
 mod audio_pipeline_ohos;
 #[cfg(target_env = "ohos")]
+mod ohos_audio_sys;
+#[cfg(target_env = "ohos")]
 use audio_pipeline_ohos as audio_pipeline;
 pub use audio_pipeline::Audio;
 pub use audio_pipeline::{AudioDeviceInfo, AvailableAudioDevices};
@@ -22,6 +24,10 @@ pub use audio_pipeline::{ensure_devices_initialized, resolve_device};
 // TODO(audio) replace with input test functionality in the audio crate
 pub use audio_pipeline::RodioExt;
 pub use audio_pipeline::init;
+#[cfg(target_env = "ohos")]
+pub use audio_pipeline::play_system_bell;
+#[cfg(target_env = "ohos")]
+pub use audio_pipeline::request_microphone_permission;
 pub use audio_pipeline::{open_input_stream, open_test_output};
 
 #[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]

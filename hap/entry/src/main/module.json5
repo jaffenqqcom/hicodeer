@@ -140,6 +140,16 @@
         "name": "ohos.permission.RUNNING_LOCK"
       },
       {
+        "name": "ohos.permission.MICROPHONE",
+        "reason": "$string:perm_microphone_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
         "name": "ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY",
         "reason": "$string:perm_writable_code_memory_reason",
         "usedScene": {

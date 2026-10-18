@@ -48,4 +48,5 @@ openharmony-ability-plugin-openbysys = { git = "https://github.com/jaffenqqcom/o
 openharmony-ability-plugin-ime = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
 openharmony-ability-plugin-url = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
 openharmony-ability-plugin-play-notification = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
+openharmony-ability-plugin-permission = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
 worker-pool = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }

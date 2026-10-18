@@ -46,6 +46,9 @@ pub fn launch_app(app: openharmony_ability::OpenHarmonyApp) {
     // so remote command execution is ready before Zed starts issuing git/LSP
     // commands. The daemon replaces the retired openeuler-VM and QEMU backends.
     start_daemon_client(&app);
+    // Route the terminal bell through the same renderer notifications use: the
+    // platform layer cannot depend on the audio crate itself.
+    gpui_ohos::set_system_bell_handler(audio::play_system_bell);
     // Launch Zed with only the information it truly needs: the sandbox base path
     // and the home directory the ets side resolved before this native module loaded.
     start_zed_main(app.base_path(), app.home_directory());

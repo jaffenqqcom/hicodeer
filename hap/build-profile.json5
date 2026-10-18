@@ -3,16 +3,16 @@
     "signingConfigs": [
       {
         "name": "default",
-        "type": "HarmonyOS",
         "material": {
-          "certpath": "/storage/Users/currentUser/.ohos/config/default_hap_U6lCp1YTTw2BUQBRcFW18o1kGh34xD0nHKbO2TiRk=.cer",
+          "storePassword": "000000208F4B0B0E41DBA06C418C6AA238171063C0D5626D5D03E589EB652AD42BB3261F4052EB49EF11992CDC1E3F3B",
+          "certpath": "/storage/Users/currentUser/.ohos/config/default_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001ba8c9d5f1ae5b5ef67fd8d3bc4b2838f55d97f83585bd1972f4c4770c96b10bbef94c8f27c70ff9",
-          "profile": "/storage/Users/currentUser/.ohos/config/default_hap_U6lCp1YTTw2BUQBRcFW18o1kGh34xD0nHKbO2TiRk=.p7b",
+          "keyPassword": "000000208F4B0B0E41DBA06C418C6AA238171063C0D5626D5D03E589EB652AD42BB3261F4052EB49EF11992CDC1E3F3B",
+          "profile": "/storage/Users/currentUser/.ohos/config/default_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/storage/Users/currentUser/.ohos/config/default_hap_U6lCp1YTTw2BUQBRcFW18o1kGh34xD0nHKbO2TiRk=.p12",
-          "storePassword": "0000001ba8c9d5f1ae5b5ef67fd8d3bc4b2838f55d97f83585bd1972f4c4770c96b10bbef94c8f27c70ff9"
-        }
+          "storeFile": "/storage/Users/currentUser/.ohos/config/default_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.p12"
+        },
+        "type": "HarmonyOS"
       }
     ],
     "products": [
@@ -113,6 +113,10 @@
     {
       "name": "plugin_play_notification",
       "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/play-notification"
+    },
+    {
+      "name": "plugin_permission",
+      "srcPath": "../target/ohos-arkts/openharmony-ability/plugins/permission"
     }
   ]
 }

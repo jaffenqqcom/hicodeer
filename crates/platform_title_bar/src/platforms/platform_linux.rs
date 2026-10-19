@@ -89,6 +89,18 @@ pub enum WindowControlType {
     Close,
 }
 
+/// HarmonyOS draws window controls with a two-corner glyph of its own; other
+/// platforms keep the upstream full-square icons.
+#[cfg(target_env = "ohos")]
+const WINDOW_MAXIMIZE_ICON: IconName = IconName::OhosWindowMaximize;
+#[cfg(not(target_env = "ohos"))]
+const WINDOW_MAXIMIZE_ICON: IconName = IconName::GenericMaximize;
+
+#[cfg(target_env = "ohos")]
+const WINDOW_RESTORE_ICON: IconName = IconName::OhosWindowRestore;
+#[cfg(not(target_env = "ohos"))]
+const WINDOW_RESTORE_ICON: IconName = IconName::GenericRestore;
+
 impl WindowControlType {
     /// Returns the icon name for the window control type.
     ///
@@ -97,8 +109,8 @@ impl WindowControlType {
     pub fn icon(&self) -> IconName {
         match self {
             WindowControlType::Minimize => IconName::GenericMinimize,
-            WindowControlType::Restore => IconName::GenericRestore,
-            WindowControlType::Maximize => IconName::GenericMaximize,
+            WindowControlType::Restore => WINDOW_RESTORE_ICON,
+            WindowControlType::Maximize => WINDOW_MAXIMIZE_ICON,
             WindowControlType::Close => IconName::GenericClose,
         }
     }
@@ -248,13 +260,44 @@ impl RenderOnce for WindowControl {
                     WindowControlType::Minimize => window.minimize_window(),
                     WindowControlType::Restore => window.zoom_window(),
                     WindowControlType::Maximize => window.zoom_window(),
-                    WindowControlType::Close => window.dispatch_action(
-                        self.close_action
+                    WindowControlType::Close => {
+                        let action = self
+                            .close_action
                             .as_ref()
                             .expect("Use WindowControl::new_close() for close control.")
-                            .boxed_clone(),
-                        cx,
-                    ),
+                            .boxed_clone();
+                        // HiCodeer hides the system title bar, so this button is the only
+                        // window-close affordance; ask before tearing the whole app down.
+                        #[cfg(target_env = "ohos")]
+                        {
+                            let answer = window.prompt(
+                                gpui::PromptLevel::Info,
+                                localization::localized_str!(
+                                    "Are you sure you want to quit?"
+                                ),
+                                None,
+                                &[
+                                    localization::localized_str!("Quit"),
+                                    localization::localized_str!("Cancel"),
+                                ],
+                                cx,
+                            );
+                            let window_handle = window.window_handle();
+                            cx.spawn(async move |cx| {
+                                if answer.await.ok() != Some(0) {
+                                    return;
+                                }
+                                window_handle
+                                    .update(cx, |_, window, cx| {
+                                        window.dispatch_action(action, cx);
+                                    })
+                                    .ok();
+                            })
+                            .detach();
+                        }
+                        #[cfg(not(target_env = "ohos"))]
+                        window.dispatch_action(action, cx);
+                    }
                 }
             })
     }

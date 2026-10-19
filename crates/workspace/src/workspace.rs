@@ -12017,7 +12017,16 @@ pub fn client_side_decorations(
     };
 
     match decorations {
-        Decorations::Client { .. } => window.set_client_inset(theme::CLIENT_SIDE_DECORATION_SHADOW),
+        Decorations::Client { .. } => {
+            // OHOS clips the window to the system's own rounded corners and draws the
+            // free-window shadow around the surface, so the client-side shadow inset
+            // would only show up as a dark ring inside the window.
+            if cfg!(target_env = "ohos") {
+                window.set_client_inset(px(0.0));
+            } else {
+                window.set_client_inset(theme::CLIENT_SIDE_DECORATION_SHADOW);
+            }
+        }
         Decorations::Server => window.set_client_inset(px(0.0)),
     }
 
@@ -12029,6 +12038,9 @@ pub fn client_side_decorations(
         .bg(transparent_black())
         .map(|div| match decorations {
             Decorations::Server => div,
+            // OHOS: the system already draws the window shadow and rounds the surface;
+            // the client-side padding/frame would render as a black ring around the app.
+            Decorations::Client { .. } if cfg!(target_env = "ohos") => div,
             Decorations::Client { .. } => div
                 .rounded_client_corners(tiling)
                 .when(!tiling.top, |div| {
@@ -12085,6 +12097,8 @@ pub fn client_side_decorations(
                 .cursor(CursorStyle::Arrow)
                 .map(|div| match decorations {
                     Decorations::Server => div,
+                    // OHOS: no client-side border or shadow — the system owns the frame.
+                    Decorations::Client { .. } if cfg!(target_env = "ohos") => div,
                     Decorations::Client { .. } => div
                         .border_color(cx.theme().colors().border)
                         .rounded_client_corners(tiling)

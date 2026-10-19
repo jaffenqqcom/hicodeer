@@ -289,6 +289,9 @@ impl Render for PlatformTitleBar {
             })
             .map(|el| match decorations {
                 Decorations::Server => el,
+                // OHOS: the system clips the window to its own rounded corners and draws
+                // no client-side frame; adding one here leaves black corner slivers.
+                Decorations::Client { .. } if cfg!(target_env = "ohos") => el,
                 Decorations::Client { tiling, .. } => el
                     .when(
                         !(tiling.top || tiling.right)

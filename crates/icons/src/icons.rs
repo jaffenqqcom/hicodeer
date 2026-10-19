@@ -163,6 +163,9 @@ pub enum IconName {
     GenericMaximize,
     GenericMinimize,
     GenericRestore,
+    /// HarmonyOS window controls use a two-corner glyph instead of a full square.
+    OhosWindowMaximize,
+    OhosWindowRestore,
     Gerrit,
     GitBranch,
     GitBranchPlus,

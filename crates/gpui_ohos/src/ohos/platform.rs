@@ -30,7 +30,7 @@ use crate::{
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
     PlatformWindow, PriorityQueueReceiver, Result as GpuiResult, RunnableVariant,
     SystemNotification, SystemNotificationResponse, Task, ThermalState, WindowAppearance,
-    WindowParams,
+    WindowButton, WindowButtonLayout, WindowParams,
 };
 
 use super::{
@@ -83,6 +83,9 @@ pub(crate) struct OhosPlatform {
     path_prompt_busy: Rc<Cell<bool>>,
     /// Callback registered by gpui; invoked when the user activates a system notification.
     notification_response_callback: Rc<RefCell<Option<Box<dyn FnMut(SystemNotificationResponse)>>>>,
+    /// Callback registered by gpui (`App::on_quit`); running it performs `App::shutdown`,
+    /// which flushes agents, LSP servers, sessions and window state before termination.
+    quit_callback: Rc<RefCell<Option<Box<dyn FnMut() -> bool>>>>,
 }
 
 impl OhosPlatform {
@@ -109,6 +112,7 @@ impl OhosPlatform {
             open_urls_callback: Rc::new(RefCell::new(None)),
             path_prompt_busy: Rc::new(Cell::new(false)),
             notification_response_callback: Rc::new(RefCell::new(None)),
+            quit_callback: Rc::new(RefCell::new(None)),
         };
         // The ArkTS host provides the OpenHarmonyApp on the main thread before this
         // platform is constructed; own it from creation, mirroring how MacPlatform /
@@ -391,6 +395,7 @@ impl Clone for OhosPlatform {
             open_urls_callback: self.open_urls_callback.clone(),
             path_prompt_busy: self.path_prompt_busy.clone(),
             notification_response_callback: self.notification_response_callback.clone(),
+            quit_callback: self.quit_callback.clone(),
         }
     }
 }
@@ -477,9 +482,26 @@ impl Platform for OhosPlatform {
     }
 
     fn quit(&self) {
-        // OHOS app exit is managed by the system (Ability lifecycle); OpenHarmonyApp has no exit method.
-        // Here we only record the quit intent; actual termination is left to the system. This is consistent with on_quit's "Handled by OpenHarmonyApp lifecycle".
-        log::warn!("quit requested on OHOS; app exit is managed by the system");
+        // `App::quit` runs while the App is borrowed, so `on_quit`'s callback (which
+        // calls `App::shutdown`) cannot run inline. Defer it to the next main-loop turn,
+        // then finish the ability: without `terminateSelf` the window is gone from
+        // gpui's perspective while the process keeps running with a stale frame.
+        let callback = self.quit_callback.borrow_mut().take();
+        self.foreground_executor
+            .spawn(async move {
+                match callback {
+                    Some(mut callback) => {
+                        if !callback() {
+                            log::warn!("quit: gpui could not run the quit handlers synchronously");
+                        }
+                    }
+                    None => log::warn!("quit: no quit callback was registered"),
+                }
+                if !openharmony_ability::terminate_ability() {
+                    log::warn!("quit: the ability could not be terminated");
+                }
+            })
+            .detach();
     }
 
     // `Platform::restart` gained an `arguments` parameter after the 1.17 base
@@ -761,10 +783,10 @@ impl Platform for OhosPlatform {
             .detach();
     }
 
-    // Since 1.23 the callback may veto the quit by returning `true`; the OHOS
-    // app lifecycle owns termination, so the return value is ignored.
-    fn on_quit(&self, _callback: Box<dyn FnMut() -> bool>) {
-        // Handled by OpenHarmonyApp lifecycle
+    // `App::quit` runs the shutdown handlers through this callback; `quit` defers it
+    // to the next main-loop turn and then terminates the ability.
+    fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
+        *self.quit_callback.borrow_mut() = Some(callback);
     }
 
     fn on_reopen(&self, _callback: Box<dyn FnMut()>) {
@@ -785,6 +807,22 @@ impl Platform for OhosPlatform {
 
     fn set_menus(&self, menus: Vec<Menu>, _keymap: &Keymap) {
         *self.menus.borrow_mut() = menus.into_iter().map(|menu| menu.owned()).collect();
+    }
+
+    /// OHOS has no server-side title bar controls to inherit, so the window
+    /// draws them itself. They stay on the right in the system order:
+    /// maximize/restore, minimize, close. `PlatformTitleBar` hides the
+    /// left-side controls whenever the left sidebar is open, which would make
+    /// the buttons unreachable in the default layout.
+    fn button_layout(&self) -> Option<WindowButtonLayout> {
+        Some(WindowButtonLayout {
+            left: [None, None, None],
+            right: [
+                Some(WindowButton::Maximize),
+                Some(WindowButton::Minimize),
+                Some(WindowButton::Close),
+            ],
+        })
     }
 
     fn get_menus(&self) -> Option<Vec<OwnedMenu>> {

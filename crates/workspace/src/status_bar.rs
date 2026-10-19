@@ -154,6 +154,9 @@ impl Render for StatusBar {
             .bg(cx.theme().colors().status_bar_background)
             .map(|el| match window.window_decorations() {
                 Decorations::Server => el,
+                // OHOS: the system rounds the window; rounding the client content inside
+                // it would leave black slivers in the corners.
+                Decorations::Client { .. } if cfg!(target_env = "ohos") => el,
                 Decorations::Client { tiling, .. } => el
                     .when(
                         !(tiling.bottom || tiling.right)

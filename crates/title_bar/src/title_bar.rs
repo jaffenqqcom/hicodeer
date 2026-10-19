@@ -32,6 +32,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, TaskExt, WeakEntity, Window, actions, div,
     pulsating_between,
 };
+#[cfg(target_env = "ohos")]
+use gpui::img;
 use onboarding_banner::OnboardingBanner;
 use project::{
     Project, git_store::GitStoreEvent, project_settings::ProjectSettings,
@@ -243,7 +245,7 @@ impl Render for TitleBar {
 
         let show_menus = show_menus(cx);
 
-        let mut children = <ArrayVec<_, 5>>::new();
+        let mut children = <ArrayVec<_, 6>>::new();
 
         let mut project_name = None;
         let mut repository = None;
@@ -407,6 +409,19 @@ impl Render for TitleBar {
                 .when(TitleBarSettings::get_global(cx).show_user_menu, |this| {
                     this.child(self.render_user_menu_button(cx))
                 })
+                .into_any_element(),
+        );
+
+        // Application icon at the far left of the title bar. Only HiCodeer's OHOS
+        // title bar carries it; the asset is embedded through the asset source.
+        #[cfg(target_env = "ohos")]
+        children.insert(
+            0,
+            img("images/hicodeer.png")
+                .size_4()
+                .flex_none()
+                .rounded(px(3.0))
+                .mr_1()
                 .into_any_element(),
         );
 

@@ -2603,6 +2603,14 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.is_maximized())
     }
 
+    fn window_decorations(&self) -> crate::Decorations {
+        self.with_window(|window| window.window_decorations())
+    }
+
+    fn window_controls(&self) -> WindowControls {
+        self.with_window(|window| window.window_controls())
+    }
+
     fn window_bounds(&self) -> WindowBounds {
         self.with_window(|window| window.window_bounds())
     }
@@ -2783,7 +2791,7 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn is_maximized(&self) -> bool {
-        false
+        openharmony_ability::is_main_window_maximized()
     }
 
     fn window_bounds(&self) -> WindowBounds {
@@ -2881,11 +2889,13 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn minimize(&self) {
-        // Not supported on OHOS
+        openharmony_ability::minimize_main_window();
     }
 
     fn zoom(&self) {
-        // Not supported on OHOS
+        // ArkTS picks maximize or recover from the live window status; the mirrored
+        // state only drives the title-bar icon and can lag behind the window manager.
+        openharmony_ability::toggle_main_window_maximize();
     }
 
     fn toggle_fullscreen(&self) {
@@ -2994,7 +3004,11 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn window_decorations(&self) -> crate::Decorations {
-        crate::Decorations::Server
+        // ArkTS hides the system title bar; the app draws its own controls in the
+        // content area, so the title bar takes the client-side decoration path.
+        crate::Decorations::Client {
+            tiling: crate::Tiling::default(),
+        }
     }
 
     fn set_app_id(&mut self, _app_id: &str) {
@@ -3008,8 +3022,8 @@ impl PlatformWindow for OhosWindow {
     fn window_controls(&self) -> WindowControls {
         WindowControls {
             fullscreen: false,
-            maximize: false,
-            minimize: false,
+            maximize: true,
+            minimize: true,
             window_menu: false,
         }
     }

@@ -237,12 +237,14 @@ impl OhosTextSystemState {
         let db = self.font_system.db_mut();
         let initial_count = db.faces().count();
 
-        const FONT_DIRS: [&str; 5] = [
+        const FONT_DIRS: [&str; 6] = [
             "/system/fonts",
             "/system/font",
             "/vendor/fonts",
             "/system_ext/fonts",
             "/data/fonts",
+            // User-installed fonts, installed by the system font manager.
+            "/data/service/el1/public/for-all-app/fonts",
         ];
         for dir in FONT_DIRS {
             let path = Path::new(dir);

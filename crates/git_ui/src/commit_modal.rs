@@ -3,8 +3,7 @@ use crate::git_panel::{
     GitPanel, commit_message_editor, commit_title_exceeds_limit, git_commit_editor_style,
 };
 use crate::git_panel_settings::GitPanelSettings;
-use git::{Amend, Commit, GenerateCommitMessage, Signoff, SkipHooks};
-use project::DisableAiSettings;
+use git::{Amend, Commit, Signoff, SkipHooks};
 use settings::Settings;
 use ui::{
     ButtonLike, ContextMenu, ContextMenuEntry, DocumentationSide, ElevationIndex, KeybindingHint,
@@ -353,29 +352,23 @@ impl CommitModal {
             tooltip,
             commit_label,
             co_authors,
-            generate_commit_message,
             active_repo,
             commit_options,
             workspace,
-            is_generating,
         ) = self.git_panel.update(cx, |git_panel, cx| {
             let (can_commit, tooltip) = git_panel.configure_commit_button(cx);
             let title = git_panel.commit_button_title();
             let co_authors = git_panel.render_co_authors(cx);
-            let generate_commit_message = git_panel.render_generate_commit_message_button(cx);
             let active_repo = git_panel.active_repository.clone();
             let commit_options = git_panel.commit_options();
-            let is_generating = git_panel.is_generating_commit_message();
             (
                 can_commit,
                 tooltip,
                 title,
                 co_authors,
-                generate_commit_message,
                 active_repo,
                 commit_options,
                 git_panel.workspace.clone(),
-                is_generating,
             )
         });
 
@@ -442,7 +435,6 @@ impl CommitModal {
                             .overflow_x_hidden()
                             .child(branch_picker),
                     )
-                    .children(generate_commit_message)
                     .children(co_authors),
             )
             .child(
@@ -495,7 +487,7 @@ impl CommitModal {
                         self.render_git_commit_menu(
                             format!("split-button-right-{}", commit_label),
                             Some(focus_handle),
-                            is_generating,
+                            false,
                         )
                         .into_any_element(),
                     )),
@@ -618,13 +610,6 @@ impl Render for CommitModal {
             .on_action(cx.listener(Self::increase_font_size))
             .on_action(cx.listener(Self::decrease_font_size))
             .on_action(cx.listener(Self::reset_font_size))
-            .when(!DisableAiSettings::get_global(cx).disable_ai, |this| {
-                this.on_action(cx.listener(|this, _: &GenerateCommitMessage, _, cx| {
-                    this.git_panel.update(cx, |panel, cx| {
-                        panel.generate_commit_message(cx);
-                    })
-                }))
-            })
             .on_action(
                 cx.listener(|this, _: &zed_actions::git::Branch, window, cx| {
                     this.toggle_branch_selector(window, cx);

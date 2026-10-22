@@ -200,29 +200,7 @@ fn run_visual_tests(project_path: PathBuf, update_baseline: bool) -> Result<()> 
             },
             wrap_div_with_search_actions: search::buffer_search::register_pane_search_actions,
         });
-        prompt_store::init(cx);
-        let prompt_builder = prompt_store::PromptBuilder::load(app_state.fs.clone(), false, cx);
-        language_model::init(cx);
-        client::RefreshLlmTokenListener::register(
-            app_state.client.clone(),
-            app_state.user_store.clone(),
-            cx,
-        );
-        language_models::init(app_state.user_store.clone(), app_state.client.clone(), cx);
         git_ui::init(cx);
-        project::AgentRegistryStore::init_global(
-            cx,
-            app_state.fs.clone(),
-            app_state.client.http_client(),
-        );
-        agent_ui::init(
-            app_state.fs.clone(),
-            prompt_builder,
-            app_state.languages.clone(),
-            true,
-            false,
-            cx,
-        );
         settings_ui::init(cx);
 
         // Load default keymaps so tooltips can show keybindings like "f9" for ToggleBreakpoint
@@ -232,16 +210,6 @@ fn run_visual_tests(project_path: PathBuf, update_baseline: bool) -> Result<()> 
             editor::actions::ToggleBreakpoint,
             Some("Editor"),
         )]);
-
-        // Disable agent notifications during visual tests to avoid popup windows
-        agent_settings::AgentSettings::override_global(
-            agent_settings::AgentSettings {
-                notify_when_agent_waiting: NotifyWhenAgentWaiting::Never,
-                play_sound_when_agent_done: PlaySoundWhenAgentDone::Never,
-                ..agent_settings::AgentSettings::get_global(cx).clone()
-            },
-            cx,
-        );
     });
 
     // Run until all initialization tasks complete

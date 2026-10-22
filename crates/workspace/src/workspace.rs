@@ -35,7 +35,7 @@ pub use multi_workspace::{
     MoveProjectToNewWindow, MoveProjectUp, MultiWorkspace, MultiWorkspaceEvent, NewThread,
     NextProject, NextThread, PreviousProject, PreviousThread, ProjectGroup, ProjectGroupKey,
     RemovalIntent, SerializedProjectGroupState, Sidebar, SidebarEvent, SidebarHandle,
-    SidebarRenderState, SidebarSide, ToggleWorkspaceSidebar, sidebar_side_context_menu,
+    SidebarRenderState, SidebarSide, ToggleWorkspaceSidebar,
 };
 pub use path_list::{PathList, SerializedPathList};
 pub use remote::{
@@ -43,7 +43,6 @@ pub use remote::{
 };
 pub use toast_layer::{ToastAction, ToastLayer, ToastView};
 
-use agent_settings::AgentSettings;
 use anyhow::{Context as _, Result, anyhow};
 use client::{
     ChannelId, Client, ErrorExt, ParticipantIndex, Status, TypedEnvelope, User, UserStore,
@@ -1989,8 +1988,7 @@ impl Workspace {
             .flatten()
             .map(|mw| mw.downgrade());
         let status_bar = cx.new(|cx| {
-            let mut status_bar =
-                StatusBar::new(&center_pane.clone(), multi_workspace.clone(), window, cx);
+            let mut status_bar = StatusBar::new(&center_pane.clone(), window, cx);
             status_bar.add_left_item(left_dock_buttons, window, cx);
             status_bar.add_right_item(right_dock_buttons, window, cx);
             status_bar.add_right_item(bottom_dock_buttons, window, cx);
@@ -2903,11 +2901,8 @@ impl Workspace {
         &mut self,
         multi_workspace: WeakEntity<MultiWorkspace>,
         active_workspace_id: Rc<Cell<EntityId>>,
-        cx: &mut App,
+        _cx: &mut App,
     ) {
-        self.status_bar.update(cx, |status_bar, cx| {
-            status_bar.set_multi_workspace(multi_workspace.clone(), cx);
-        });
         self.multi_workspace = Some(multi_workspace);
         self.active_workspace_id = Some(active_workspace_id);
     }
@@ -4717,10 +4712,33 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // [OHOS PORT BEGIN] A closed dock is not showing its panel, even when
+        // focus was left on that panel as the dock was hidden. Without this
+        // the status bar button would only ever close the panel and never
+        // bring it back. The state is read here, not inside the callback: the
+        // callback runs while the dock is mutably borrowed, so reading the
+        // dock entity there would panic with a RefCell borrow conflict.
+        #[cfg(target_env = "ohos")]
+        let dock_is_open = self.all_docks().iter().any(|dock| {
+            let dock = dock.read(cx);
+            dock.panel_index_for_type::<T>().is_some() && dock.is_open()
+        });
+        // [OHOS PORT END]
         let mut did_focus_panel = false;
         self.focus_or_unfocus_panel::<T>(window, cx, &mut |panel, window, cx| {
-            did_focus_panel = !panel.panel_focus_handle(cx).contains_focused(window, cx);
-            did_focus_panel
+            let focused = panel.panel_focus_handle(cx).contains_focused(window, cx);
+            // [OHOS PORT BEGIN]
+            #[cfg(target_env = "ohos")]
+            {
+                did_focus_panel = !dock_is_open || !focused;
+                return did_focus_panel;
+            }
+            // [OHOS PORT END]
+            #[cfg(not(target_env = "ohos"))]
+            {
+                did_focus_panel = !focused;
+                did_focus_panel
+            }
         });
 
         if !did_focus_panel && WorkspaceSettings::get_global(cx).close_panel_on_toggle {
@@ -11262,14 +11280,7 @@ pub fn open_paths(
                     open_options.requesting_window = Some(window);
                     window
                         .update(cx, |multi_workspace, _, cx| {
-                            if AgentSettings::get_global(cx).threads_sidebar.auto_open {
-                                multi_workspace.open_sidebar(cx);
-                            } else {
-                                // Opening the sidebar is also what pins the
-                                // workspace we are about to navigate away from,
-                                // so pin it here to keep it in this window.
-                                multi_workspace.retain_active_workspace(cx);
-                            }
+                            multi_workspace.retain_active_workspace(cx);
                         })
                         .log_err();
                 }

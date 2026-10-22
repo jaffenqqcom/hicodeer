@@ -15,8 +15,6 @@ test = false
 
 [features]
 test-support = [
-    "channel/test-support",
-
     "gpui/test-support",
     "rpc/test-support",
 ]
@@ -24,7 +22,6 @@ test-support = [
 [dependencies]
 localization.workspace = true
 anyhow.workspace = true
-channel.workspace = true
 client.workspace = true
 futures-lite.workspace = true
 component.workspace = true

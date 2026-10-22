@@ -16,7 +16,6 @@ doctest = false
 default = []
 
 test-support = [
-    "call/test-support",
     "client/test-support",
 
     "gpui/test-support",
@@ -30,13 +29,10 @@ test-support = [
 
 [dependencies]
 localization.workspace = true
-agent_settings.workspace = true
 anyhow.workspace = true
 auto_update.workspace = true
 fs.workspace = true
 platform_title_bar.workspace = true
-call.workspace = true
-channel.workspace = true
 chrono.workspace = true
 client.workspace = true
 cloud_api_types.workspace = true
@@ -46,11 +42,9 @@ db.workspace = true
 git_ui_core.workspace = true
 gpui.workspace = true
 icons.workspace = true
-livekit_client.workspace = true
 project.workspace = true
 recent_projects.workspace = true
 remote.workspace = true
-remote_connection.workspace = true
 rpc.workspace = true
 semver.workspace = true
 schemars.workspace = true
@@ -71,7 +65,6 @@ arrayvec = "0.7.6"
 gpui = { workspace = true, features = ["screen-capture"] }
 
 [dev-dependencies]
-call = { workspace = true, features = ["test-support"] }
 client = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 project = { workspace = true, features = ["test-support"] }

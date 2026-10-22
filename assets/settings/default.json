@@ -582,13 +582,6 @@
     "space": "•",
     "tab": "→",
   },
-  // Settings related to calls in Zed
-  "calls": {
-    // Join calls with the microphone live by default
-    "mute_on_join": false,
-    // Share your project when you are the first to join a channel
-    "share_on_join": false,
-  },
   // Toolbar related settings
   "toolbar": {
     // Whether to show breadcrumbs.
@@ -598,7 +591,6 @@
     // Whether to show the Selections menu in the editor toolbar.
     "selections_menu": true,
     // Whether to show agent review buttons in the editor toolbar.
-    "agent_review": true,
     // Whether to show code action buttons in the editor toolbar.
     "code_actions": false,
   },
@@ -624,16 +616,8 @@
     "show_project_items": true,
     // Whether to show onboarding banners in the titlebar.
     "show_onboarding_banner": true,
-    // Whether to show user picture in the titlebar.
-    "show_user_picture": true,
     // Whether to show the user menu in the titlebar.
     "show_user_menu": true,
-    // Whether to show the sign in button in the titlebar.
-    "show_sign_in": true,
-    // Whether to show the menus in the titlebar.
-    "show_menus": false,
-    // Whether to open the menus in the titlebar on hover.
-    "open_menus_on_hover": false,
     // The layout of window control buttons in the title bar (Linux only).
     "button_layout": "platform_default",
   },
@@ -1067,14 +1051,6 @@
     // Does not affect single-file views.
     "multi_buffer_hide_symbols": false,
   },
-  "collaboration_panel": {
-    // Whether to show the collaboration panel button in the status bar.
-    "button": true,
-    // Where to dock the collaboration panel. Can be 'left' or 'right'.
-    "dock": "right",
-    // Default width of the collaboration panel.
-    "default_width": 240,
-  },
   "git_panel": {
     // Whether to show the git panel button in the status bar.
     "button": true,
@@ -1156,264 +1132,6 @@
     // Choices: expanded, collapsed
     // Default: expanded
     "commit_editor": "expanded",
-  },
-  "agent": {
-    // Whether the inline assistant should use streaming tools, when available
-    "inline_assistant_use_streaming_tools": true,
-    // Whether to include project rules files (AGENTS.md, CLAUDE.md, .rules, etc.)
-    // in the prompt when generating git commit messages.
-    "commit_message_include_project_rules": true,
-    // Whether the agent is enabled.
-    "enabled": true,
-    // Whether to show the agent panel button in the status bar.
-    "button": true,
-    // Where to dock the agent panel. Can be 'left', 'right' or 'bottom'.
-    "dock": "left",
-    // Whether the agent panel should use flexible (proportional) sizing when docked
-    // to the left or right. When enabled, `default_width` does not control the panel
-    // width, and resetting the panel restores the default proportion.
-    //
-    // Default: true
-    "flexible": true,
-    // Maximum number of idle threads with loadable sessions to retain in the
-    // agent panel. Set to 0 to unload every eligible idle thread when it is
-    // no longer active.
-    "max_idle_retained_threads": 5,
-    // Settings for the sidebar holding the agent panel and the list of agent threads.
-    "threads_sidebar": {
-      // Where to position the Threads Sidebar. Can be 'left' or 'right'.
-      "position": "left",
-      // Default width of the Threads Sidebar.
-      "default_width": 300,
-      // Automatically open the Threads Sidebar when opening a folder in an existing window.
-      "auto_open": true,
-    },
-    // Default fixed width when the agent panel is docked to the left or right and
-    // `flexible` is false.
-    "default_width": 640,
-    // Default height when the agent panel is docked to the bottom.
-    "default_height": 320,
-    // Whether to limit the content width in the agent panel. When enabled,
-    // content will be constrained to `max_content_width` and centered when
-    // the panel is wider, for optimal readability.
-    "limit_content_width": false,
-    // Maximum content width in pixels when limit_content_width is enabled.
-    // Content will be centered within the panel.
-    "max_content_width": 850,
-    // The default model to use when creating new threads.
-    "default_model": {
-      // The provider to use.
-      "provider": "zed.dev",
-      // The model to use.
-      "model": "claude-sonnet-4",
-      // Whether thinking is enabled.
-      "enable_thinking": false,
-    },
-    // Favorite models to show at the top of the model selector.
-    "favorite_models": [],
-    // Additional parameters for language model requests. When making a request to a model, parameters will be taken
-    // from the last entry in this list that matches the model's provider and name. In each entry, both provider
-    // and model are optional, so that you can specify parameters for either one.
-    "model_parameters": [
-      // To set parameters for all requests to OpenAI models:
-      // {
-      //   "provider": "openai",
-      //   "temperature": 0.5
-      // }
-      //
-      // To set parameters for all requests in general:
-      // {
-      //   "temperature": 0
-      // }
-      //
-      // To set parameters for a specific provider and model:
-      // {
-      //   "provider": "zed.dev",
-      //   "model": "claude-sonnet-4",
-      //   "temperature": 1.0
-      // }
-    ],
-    // Permission rules for tool actions.
-    //
-    // The "default" setting applies when no tool-specific rules match.
-    // For external agents that define their own permission modes,
-    // "deny" and "confirm" still take precedence — the external agent's
-    // permission system is only used when Zed would allow the action.
-    //
-    // Per-tool regex patterns ("tools" below) match against tool input text
-    // (commands, paths, URLs, etc.). For `copy_path` and `move_path`,
-    // patterns are matched independently against each path (source and
-    // destination).
-    "tool_permissions": {
-      // Global default permission when no tool-specific rules match.
-      // "allow" - Auto-approve without prompting
-      // "deny" - Auto-reject
-      // "confirm" - Always prompt (default)
-      "default": "confirm",
-      // Per-tool permission rules. Regex patterns match against tool input text.
-      // The per-tool "default" also applies to MCP tools.
-      // Each tool can have its own default and regex patterns.
-      "tools": {
-        // "terminal": {
-        //   "default": "confirm",
-        //   "always_confirm": [
-        //     // Destructive git operations
-        //     { "pattern": "git\\s+(reset|clean)\\s+--hard" },
-        //     { "pattern": "git\\s+push\\s+(-f|--force)" },
-        //   ],
-        // },
-        // "edit_file": {
-        //   "default": "confirm",
-        //   "always_deny": [
-        //     // Secrets and credentials
-        //     { "pattern": "\\.env($|\\.)" },
-        //     { "pattern": "secrets?/" },
-        //     { "pattern": "\\.pem$" },
-        //     { "pattern": "\\.key$" },
-        //   ],
-        // },
-      },
-    },
-    // When enabled, agent edits will be displayed in single-file editors for review
-    "single_file_review": false,
-    // Settings for automatic agent context compaction, which summarizes earlier
-    // messages to free up room in the model's context window once it grows too
-    // large.
-    "auto_compact": {
-      // Whether to automatically compact the agent's context near the limit.
-      "enabled": true,
-      // The threshold at which auto-compaction runs. One of:
-      //   - A percentage string ending in "%" (e.g. "90%"), measured against
-      //     the model's context window. Decimals are allowed (e.g. "95.5%").
-      //   - A positive integer: compact after that many tokens have been used
-      //     (e.g. 100000 compacts after 100,000 tokens are used).
-      //   - A negative integer: compact once that many tokens remain in the
-      //     context window (e.g. -20000 compacts once fewer than 20,000 remain).
-      // 0 is not a valid threshold.
-      "threshold": "90%",
-    },
-    // When enabled, show voting thumbs for feedback on agent edits.
-    "enable_feedback": true,
-    "default_profile": "write",
-    "profiles": {
-      "write": {
-        "name": "Write",
-        "enable_all_context_servers": true,
-        "tools": {
-          "apply_code_action": true,
-          "ask_user": false,
-          "copy_path": true,
-          "create_directory": true,
-          "create_thread": true,
-          "delete_path": true,
-          "diagnostics": true,
-          "edit_file": true,
-          "fetch": true,
-          "find_path": true,
-          "find_references": true,
-          "get_code_actions": true,
-          "go_to_definition": true,
-          "grep": true,
-          "list_agents_and_models": true,
-          "list_directory": true,
-          "move_path": true,
-          "read_file": true,
-          "rename_symbol": true,
-          "search_web": true,
-          "skill": true,
-          "spawn_agent": true,
-          "terminal": true,
-          "write_file": true,
-        },
-      },
-      "ask": {
-        "name": "Ask",
-        // We don't know which of the context server tools are safe for the "Ask" profile, so we don't enable them by default.
-        // "enable_all_context_servers": true,
-        "tools": {
-          "ask_user": false,
-          "create_thread": true,
-          "diagnostics": true,
-          "fetch": true,
-          "find_path": true,
-          "find_references": true,
-          "get_code_actions": true,
-          "go_to_definition": true,
-          "grep": true,
-          "list_agents_and_models": true,
-          "list_directory": true,
-          "read_file": true,
-          "search_web": true,
-          "skill": true,
-          "spawn_agent": true,
-        },
-      },
-      "minimal": {
-        "name": "Minimal",
-        "enable_all_context_servers": false,
-        "tools": {},
-      },
-    },
-    // Where to show notifications when the agent has either completed
-    // its response, or else needs confirmation before it can run a
-    // tool action.
-    // "primary_screen" - Show the notification only on your primary screen (default)
-    // "all_screens" - Show these notifications on all screens
-    // "never" - Never show these notifications
-    "notify_when_agent_waiting": "primary_screen",
-    // When to play a sound when the agent has either completed
-    // its response, or needs user input.
-    // "never" - Never play the sound
-    // "when_hidden" - Only play the sound when the agent panel is not visible
-    // "always" - Always play the sound
-    //
-    // Default: never
-    "play_sound_when_agent_done": "never",
-    // Whether to keep the system awake while agent threads are running.
-    //
-    // Default: true
-    "prevent_idle_sleep": true,
-    // Whether to have edit cards in the agent panel expanded, showing a preview of the full diff.
-    //
-    // Default: true
-    "expand_edit_card": true,
-    // Whether to have terminal cards in the agent panel expanded, showing the whole command output.
-    //
-    // Default: true
-    "expand_terminal_card": true,
-    // Command to automatically run when Zed creates a Terminal Thread shell in the agent panel.
-    // The command is sent to the shell as if typed, so it is interpreted by your
-    // configured shell (including on Windows and remote/WSL projects).
-    // Set to "" to disable.
-    //
-    // Example: "terminal_init_command": "claude"
-    "terminal_init_command": "",
-    // How thinking blocks should be displayed by default in the agent panel.
-    //
-    // Default: auto
-    "thinking_display": "auto",
-    // Whether clicking the stop button on a running terminal tool should also cancel the agent's generation.
-    // Note that this only applies to the stop button, not to ctrl+c inside the terminal.
-    //
-    // Default: true
-    "cancel_generation_on_terminal_stop": true,
-    // Whether to always use cmd-enter (or ctrl-enter on Linux or Windows) to send messages in the agent panel.
-    //
-    // Default: false
-    "use_modifier_to_send": false,
-    // Minimum number of lines to display in the agent message editor.
-    //
-    // Default: 4
-    "message_editor_min_lines": 4,
-    // Whether to show turn statistics (elapsed time during generation, final turn duration).
-    //
-    // Default: false
-    "show_turn_stats": false,
-    // Whether to show the merge conflict indicator in the status bar
-    // that offers to resolve conflicts using the agent.
-    //
-    // Default: true
-    "show_merge_conflict_indicator": true,
   },
   // Whether the screen sharing icon is shown in the os status bar.
   "show_call_status_icon": true,
@@ -2656,53 +2374,7 @@
       "language_servers": ["zls", "..."],
     },
   },
-  // Settings shared by Copilot Chat and edit predictions.
-  "copilot": {
-    "enterprise_uri": null,
-  },
   // Different settings for specific language models.
-  "language_models": {
-    "anthropic": {
-      "api_url": "https://api.anthropic.com",
-    },
-    "anthropic_compatible": {},
-    "bedrock": {},
-    "google": {
-      "api_url": "https://generativelanguage.googleapis.com",
-    },
-    "ollama": {
-      "api_url": "http://localhost:11434",
-    },
-    "llama.cpp": {
-      "api_url": "http://localhost:8080",
-    },
-    "openai": {
-      "api_url": "https://api.openai.com/v1",
-    },
-    "openai_compatible": {},
-    "opencode": {
-      "api_url": "https://opencode.ai/zen",
-    },
-    "open_router": {
-      "api_url": "https://openrouter.ai/api/v1",
-    },
-    "lmstudio": {
-      "api_url": "http://localhost:1234/api/v0",
-    },
-    "deepseek": {
-      "api_url": "https://api.deepseek.com/v1",
-    },
-    "mistral": {
-      "api_url": "https://api.mistral.ai/v1",
-    },
-    "vercel_ai_gateway": {
-      "api_url": "https://ai-gateway.vercel.sh/v1",
-    },
-    "x_ai": {
-      "api_url": "https://api.x.ai/v1",
-    },
-    "zed.dev": {},
-  },
   "session": {
     // Whether or not to restore unsaved buffers on restart.
     //
@@ -2961,30 +2633,6 @@
   "ssh_connections": [],
   // Whether to read ~/.ssh/config for ssh connection sources.
   "read_ssh_config": true,
-  // Default timeout in seconds for all context server tool calls.
-  // Individual servers can override this in their configuration.
-  // Examples:
-  // "context_servers": {
-  //   "my-stdio-server": {
-  //     "command": "/path/to/server",
-  //     "timeout": 120  // Override: 2 minutes for this server
-  //   },
-  // }
-  // Default: 60
-  "context_server_timeout": 60,
-  // Configures context servers for use by the agent.
-  "context_servers": {},
-  // Configures agent servers available in the agent panel.
-  "agent_servers": {},
-  "debugger": {
-    "stepping_granularity": "line",
-    "save_breakpoints": true,
-    "timeout": 2000,
-    "dock": "bottom",
-    "log_dap_communications": true,
-    "format_dap_log_messages": true,
-    "button": true,
-  },
   // Configures any number of settings profiles that are temporarily applied
   // when selected from `settings profile selector: toggle`.
   //

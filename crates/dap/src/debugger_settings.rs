@@ -33,29 +33,23 @@ pub struct DebuggerSettings {
     pub dock: settings::DockPosition,
 }
 
+// [OHOS PORT BEGIN] The debugger settings section is not compiled on OHOS, so the
+// values that used to come from `settings.json` are fixed to the previous defaults.
+// Restore `from_settings` from upstream to bring the section back.
+const DEFAULT_DAP_TIMEOUT_MS: u64 = 2000;
+
 impl Settings for DebuggerSettings {
-    fn from_settings(content: &SettingsContent) -> Self {
-        let content = content.debugger.clone().unwrap();
+    fn from_settings(_content: &SettingsContent) -> Self {
         Self {
-            stepping_granularity: dap_granularity_from_settings(
-                content.stepping_granularity.unwrap(),
-            ),
-            save_breakpoints: content.save_breakpoints.unwrap(),
-            button: content.button.unwrap(),
-            timeout: content.timeout.unwrap(),
-            log_dap_communications: content.log_dap_communications.unwrap(),
-            format_dap_log_messages: content.format_dap_log_messages.unwrap(),
-            dock: content.dock.unwrap(),
+            stepping_granularity: dap_types::SteppingGranularity::Line,
+            save_breakpoints: true,
+            button: false,
+            timeout: DEFAULT_DAP_TIMEOUT_MS,
+            log_dap_communications: true,
+            format_dap_log_messages: true,
+            dock: settings::DockPosition::Bottom,
         }
     }
 }
+// [OHOS PORT END]
 
-fn dap_granularity_from_settings(
-    granularity: settings::SteppingGranularity,
-) -> dap_types::SteppingGranularity {
-    match granularity {
-        settings::SteppingGranularity::Instruction => dap_types::SteppingGranularity::Instruction,
-        settings::SteppingGranularity::Line => dap_types::SteppingGranularity::Line,
-        settings::SteppingGranularity::Statement => dap_types::SteppingGranularity::Statement,
-    }
-}

@@ -91,10 +91,6 @@ pub struct TitleBarSettingsContent {
     ///
     /// Default: true
     pub show_onboarding_banner: Option<bool>,
-    /// Whether to show user avatar in the title bar.
-    ///
-    /// Default: true
-    pub show_user_picture: Option<bool>,
     /// Whether to show the branch name button in the titlebar.
     ///
     /// Default: true
@@ -107,22 +103,10 @@ pub struct TitleBarSettingsContent {
     ///
     /// Default: true
     pub show_project_items: Option<bool>,
-    /// Whether to show the sign in button in the title bar.
-    ///
-    /// Default: true
-    pub show_sign_in: Option<bool>,
     /// Whether to show the user menu button in the title bar.
     ///
     /// Default: true
     pub show_user_menu: Option<bool>,
-    /// Whether to show the menus in the title bar.
-    ///
-    /// Default: false
-    pub show_menus: Option<bool>,
-    /// Whether to automatically open the menus in the title bar on hover.
-    ///
-    /// Default: false
-    pub open_menus_on_hover: Option<bool>,
     /// The layout of window control buttons in the title bar (Linux only).
     ///
     /// This can be set to "platform_default" to follow the system configuration, or

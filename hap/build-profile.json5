@@ -4,10 +4,10 @@
       {
         "name": "default",
         "material": {
-          "storePassword": "000000208F4B0B0E41DBA06C418C6AA238171063C0D5626D5D03E589EB652AD42BB3261F4052EB49EF11992CDC1E3F3B",
+          "storePassword": "0000002098BF9B60A35F0A7FBD33FCCDCE6CB8DF699F75AD8CDF42ECD13856052D0F46FE79F86D21BC8F6177CDB08D4D",
           "certpath": "/storage/Users/currentUser/.ohos/config/default_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "000000208F4B0B0E41DBA06C418C6AA238171063C0D5626D5D03E589EB652AD42BB3261F4052EB49EF11992CDC1E3F3B",
+          "keyPassword": "0000002098BF9B60A35F0A7FBD33FCCDCE6CB8DF699F75AD8CDF42ECD13856052D0F46FE79F86D21BC8F6177CDB08D4D",
           "profile": "/storage/Users/currentUser/.ohos/config/default_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "/storage/Users/currentUser/.ohos/config/default_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.p12"

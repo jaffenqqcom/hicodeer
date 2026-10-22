@@ -186,6 +186,14 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
     /// Returns the textual contents of the tab.
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString;
 
+    /// Whether the user may close this item's tab.
+    ///
+    /// Items that stand for a fixed part of the workspace return false: their
+    /// tab carries no close control, and the close actions leave them alone.
+    fn is_closable(&self, _cx: &App) -> bool {
+        true
+    }
+
     /// Returns the suggested filename for saving this item.
     /// By default, returns the tab content text.
     fn suggested_filename(&self, cx: &App) -> SharedString {
@@ -434,6 +442,15 @@ pub trait SerializableItem: Item {
     ) -> Option<Task<Result<()>>>;
 
     fn should_serialize(&self, event: &Self::Event) -> bool;
+
+    /// Whether this item belongs in the saved pane layout.
+    ///
+    /// Items whose lifetime is owned by another part of the app opt out: the
+    /// saved copy would come back as a different thing, so restoring it just
+    /// duplicates the one the owner creates. Defaults to true.
+    fn include_in_saved_layout(&self, _cx: &App) -> bool {
+        true
+    }
 }
 
 pub trait SerializableItemHandle: ItemHandle {
@@ -445,6 +462,10 @@ pub trait SerializableItemHandle: ItemHandle {
         cx: &mut App,
     ) -> Option<Task<Result<()>>>;
     fn should_serialize(&self, event: &dyn Any, cx: &App) -> bool;
+    /// See [`Item::include_in_saved_layout`].
+    fn include_in_saved_layout(&self, _cx: &App) -> bool {
+        true
+    }
 }
 
 impl<T> SerializableItemHandle for Entity<T>
@@ -471,6 +492,10 @@ where
             .downcast_ref::<T::Event>()
             .is_some_and(|event| self.read(cx).should_serialize(event))
     }
+
+    fn include_in_saved_layout(&self, cx: &App) -> bool {
+        self.read(cx).include_in_saved_layout(cx)
+    }
 }
 
 pub trait ItemHandle: 'static + Send {
@@ -483,6 +508,8 @@ pub trait ItemHandle: 'static + Send {
     ) -> gpui::Subscription;
     fn tab_content(&self, params: TabContentParams, window: &Window, cx: &App) -> AnyElement;
     fn tab_content_text(&self, detail: usize, cx: &App) -> SharedString;
+    /// See [`Item::is_closable`].
+    fn is_closable(&self, cx: &App) -> bool;
     fn suggested_filename(&self, cx: &App) -> SharedString;
     fn tab_icon(&self, window: &Window, cx: &App) -> Option<Icon>;
     fn tab_tooltip_text(&self, cx: &App) -> Option<SharedString>;
@@ -631,6 +658,10 @@ impl<T: Item> ItemHandle for Entity<T> {
     }
     fn tab_content_text(&self, detail: usize, cx: &App) -> SharedString {
         self.read(cx).tab_content_text(detail, cx)
+    }
+
+    fn is_closable(&self, cx: &App) -> bool {
+        self.read(cx).is_closable(cx)
     }
 
     fn suggested_filename(&self, cx: &App) -> SharedString {

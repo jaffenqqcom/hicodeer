@@ -10685,6 +10685,13 @@ fn serialize_pane_handle(
                     return None;
                 };
 
+                if !handle.include_in_saved_layout(cx) {
+                    if pinned_region.contains(&index) {
+                        pinned_count -= 1;
+                    }
+                    return None;
+                }
+
                 Some(SerializedItem {
                     kind: Arc::from(handle.serialized_item_kind()),
                     item_id: handle.item_id().as_u64(),

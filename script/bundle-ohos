@@ -581,6 +581,12 @@ if [ "$MODE" != "hap" ]; then
   rm -f "$STAGE_DIR/hicodeerd/conf/mgmt_host_key"
   cp "$KEYS_DIR/mgmt_host_key" "$STAGE_DIR/hicodeerd/conf/mgmt_host_key"
   chmod 600 "$STAGE_DIR/hicodeerd/conf/mgmt_host_key"
+  # Agent server settings this build runs with: the editor's Agent panel
+  # replaces the server's own sidebar, so the packaged config starts it
+  # collapsed to nothing.
+  rm -f "$STAGE_DIR/hicodeerd/conf/agent-config.toml"
+  cp "$PROJECT_ROOT/crates/gpui_ohos/depend/cmd-agent/hicodeerd/conf/agent-config.toml" \
+    "$STAGE_DIR/hicodeerd/conf/agent-config.toml"
   # The preloads travel inside the package so the system installs them: the
   # daemon addresses them at <pkg>/shim/ from its own /proc/self/exe, and nothing
   # is written at runtime. Only the read bit matters -- the mode they land with is

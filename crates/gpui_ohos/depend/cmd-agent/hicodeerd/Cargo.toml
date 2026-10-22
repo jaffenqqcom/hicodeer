@@ -15,6 +15,11 @@ name = "hicodeerd"
 path = "src/main.rs"
 
 [dependencies]
+# The agent server and TUI client, hosted in this process (see `run`). The
+# crate lives in a sibling checkout because it vendors a prebuilt
+# libghostty-vt tree that must not be duplicated inside this repository. It is
+# renamed here so this daemon's own code does not carry the upstream name.
+agent_server = { package = "hicodeer-agent", path = "../../../../../../agent-server-ohos" }
 # Same russh configuration as the OpenEuler cmd-agent: ring backend (pure Rust,
 # fast compile) instead of the default aws-lc-rs. Serves both the dynamic
 # command SSH listener and the fixed-key management listener.
@@ -29,3 +34,8 @@ rand_core = "0.6"
 [build-dependencies]
 # `flock` for the shared management-key generation in build.rs.
 libc = "0.2"
+
+[patch.crates-io]
+# The agent-server crate patches portable-pty; `[patch]` is only read from the
+# top-level workspace manifest, so the same patch has to be restated here.
+portable-pty = { path = "../../../../../../agent-server-ohos/vendor/portable-pty" }

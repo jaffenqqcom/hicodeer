@@ -101,6 +101,7 @@ pub fn start(
             {
                 Ok(info) => {
                     reported_failure = false;
+                    crate::set_agent_control(info.agent.clone());
                     // The command port is fixed by the endpoint (host-side
                     // hostfwd rule in QEMU mode); only key changes matter.
                     let changed = match pool.config() {
@@ -129,6 +130,7 @@ pub fn start(
                     // Disable the pool: its config and its ready connections
                     // both come from this channel, so with the channel gone they
                     // can only be stale.
+                    crate::set_agent_control(None);
                     let pool_disabled = pool.clear_config();
                     if pool_disabled {
                         reported_failure = true;

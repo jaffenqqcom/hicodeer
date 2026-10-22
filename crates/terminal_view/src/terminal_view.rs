@@ -11,8 +11,8 @@ use editor::{
 use gpui::{
     Action, AnyElement, App, ClipboardEntry, Corners, DismissEvent, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, Font, KeyContext, KeyDownEvent, Keystroke, MouseButton,
-    MouseDownEvent, Pixels, Point as GpuiPoint, Rems, Render, ScrollWheelEvent, Styled,
-    Subscription, Task, TaskExt, WeakEntity, actions, anchored, deferred, div,
+    MouseDownEvent, Pixels, Point as GpuiPoint, Rems, Render, ScrollWheelEvent, SharedString,
+    Styled, Subscription, Task, TaskExt, WeakEntity, actions, anchored, deferred, div,
 };
 use menu;
 use persistence::TerminalDb;
@@ -31,7 +31,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use task::TaskId;
+use task::{HideStrategy, RevealStrategy, RevealTarget, SpawnInTerminal, TaskId};
 use terminal::{
     Clear, Copy, Event, HoveredWord, MaybeNavigationTarget, Modes, MouseInputMode, Paste,
     PasteText, Point, Range, ScrollLineDown, ScrollLineUp, ScrollPageDown, ScrollPageUp,
@@ -153,6 +153,10 @@ pub struct TerminalView {
     blinking_terminal_enabled: bool,
     needs_serialize: bool,
     custom_title: Option<String>,
+    /// Title that outranks both the shell's own title and `custom_title`.
+    /// A terminal carrying one stands for a fixed part of the workspace, so it
+    /// cannot be closed either.
+    pinned_title: Option<SharedString>,
     hover: Option<HoverTarget>,
     hover_tooltip_update: Task<()>,
     workspace_id: Option<WorkspaceId>,
@@ -209,6 +213,27 @@ struct HoverTarget {
     hovered_word: HoveredWord,
 }
 
+/// Task identity of the Agent terminal. One per workspace, and never reused for
+/// anything the user starts, so its tab affinity stays with the Agent tab.
+const AGENT_TERMINAL_TASK_ID: &str = "hicodeer-agent-terminal";
+/// Title of the Agent terminal's tab.
+///
+/// Fixed English rather than a localized string: the tab names a control surface
+/// for the agent client, and the same name has to be recognizable in a
+/// screenshot or a bug report regardless of the editor's UI language.
+const AGENT_TERMINAL_TITLE: &str = "Agents TUI";
+/// The daemon binary as it is installed: a public HNP, so it is on `PATH`.
+const AGENT_TERMINAL_PROGRAM: &str = "hicodeerd";
+/// Hidden subcommand that runs the agent TUI client against the embedded server.
+const AGENT_TERMINAL_ARGUMENT: &str = "agent-tui";
+/// Argument carrying the socket path the daemon reported. The terminal command
+/// does not inherit the daemon's environment, and the two processes do not
+/// share a home directory, so the path has to travel on the command line.
+const AGENT_TERMINAL_SOCKET_ARGUMENT: &str = "--socket";
+/// Variable the client reads its config path from. The client process does not
+/// inherit the daemon's environment, so the path has to be handed to it.
+const AGENT_TERMINAL_CONFIG_ENV: &str = "HICODEER_AGENT_CONFIG_PATH";
+
 impl EventEmitter<Event> for TerminalView {}
 impl EventEmitter<ItemEvent> for TerminalView {}
 impl EventEmitter<SearchEvent> for TerminalView {}
@@ -237,6 +262,96 @@ impl TerminalView {
             }
         })
         .detach_and_log_err(cx);
+    }
+
+    /// Inserts the Agent terminal: a fixed tab, first in the active pane, running
+    /// the daemon's agent TUI client. `socket_path` is the endpoint that client
+    /// attaches to; it is fixed for the life of the tab, like the tab itself.
+    pub fn deploy_agent_terminal(
+        workspace: &mut Workspace,
+        socket_path: String,
+        config_path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> Task<anyhow::Result<()>> {
+        let project = workspace.project().downgrade();
+        cx.spawn_in(window, async move |workspace, cx| {
+            let label = AGENT_TERMINAL_TITLE.to_string();
+            let mut env = collections::HashMap::default();
+            if let Some(config_path) = config_path {
+                // The client renders its own chrome (tab row, sidebar), and its
+                // settings are read in the client process, not the server's.
+                // Without this it falls back to the defaults.
+                env.insert(AGENT_TERMINAL_CONFIG_ENV.to_string(), config_path);
+            }
+            let spawn_task = SpawnInTerminal {
+                id: TaskId(AGENT_TERMINAL_TASK_ID.to_string()),
+                full_label: label.clone(),
+                label,
+                command: Some(AGENT_TERMINAL_PROGRAM.to_string()),
+                args: vec![
+                    AGENT_TERMINAL_ARGUMENT.to_string(),
+                    AGENT_TERMINAL_SOCKET_ARGUMENT.to_string(),
+                    socket_path,
+                ],
+                command_label: format!("{AGENT_TERMINAL_PROGRAM} {AGENT_TERMINAL_ARGUMENT}"),
+                env,
+                reveal: RevealStrategy::Always,
+                reveal_target: RevealTarget::Center,
+                use_new_terminal: true,
+                allow_concurrent_runs: true,
+                hide: HideStrategy::Never,
+                ..Default::default()
+            };
+            let terminal = project
+                .update(cx, |project, cx| project.create_terminal_task(spawn_task, cx))?
+                .await?;
+
+            workspace.update_in(cx, |workspace, window, cx| {
+                let view = cx.new(|cx| {
+                    let mut view = TerminalView::new(
+                        terminal,
+                        workspace.weak_handle(),
+                        workspace.database_id(),
+                        workspace.project().downgrade(),
+                        window,
+                        cx,
+                    );
+                    view.set_pinned_title(AGENT_TERMINAL_TITLE.into(), cx);
+                    view
+                });
+                workspace.add_item_to_active_pane(Box::new(view), Some(0), false, window, cx);
+            })?;
+            anyhow::Ok(())
+        })
+    }
+
+    /// Gives the tab a title that outranks the shell's own, and makes the tab
+    /// refuse to close: the terminal stands for a fixed part of the workspace.
+    pub fn set_pinned_title(&mut self, title: SharedString, cx: &mut Context<Self>) {
+        self.pinned_title = Some(title);
+        cx.notify();
+    }
+
+    /// Whether this is the fixed Agent terminal rather than one the user opened.
+    pub fn is_agent_terminal(&self) -> bool {
+        self.pinned_title.is_some()
+    }
+
+    /// Sends raw bytes to this terminal's pty, as if they had been typed.
+    ///
+    /// Used by the code that owns the Agent terminal to drive the client it
+    /// hosts (for example, to ask it to open its own settings screen).
+    pub fn send_input(&mut self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>, cx: &mut Context<Self>) {
+        self.terminal.update(cx, |terminal, _| terminal.input(bytes));
+    }
+
+    /// Drops the pinned title, letting the terminal be closed by the code that
+    /// owns it. Users still cannot close it: `is_closable` stays false while the
+    /// title is set, and only the Agent panel clears it.
+    pub fn clear_pinned_title(&mut self, cx: &mut Context<Self>) {
+        self.pinned_title = None;
+        cx.notify();
     }
 
     pub fn new(
@@ -309,6 +424,7 @@ impl TerminalView {
             scroll_handle,
             needs_serialize: false,
             custom_title: None,
+            pinned_title: None,
             ime_state: None,
             self_handle: cx.entity().downgrade(),
             rename_editor: None,
@@ -1583,7 +1699,20 @@ impl Item for TerminalView {
             .cloned()
             .unwrap_or_else(|| terminal.title(true));
 
-        let (icon, icon_color, rerun_button) = match terminal.task() {
+        // [OHOS PORT BEGIN] The Agent terminal is a long-running client rather
+        // than a task the user started, so it keeps the plain terminal icon
+        // instead of a play button with a rerun affordance.
+        #[cfg(target_env = "ohos")]
+        let monitored_task = if self.is_agent_terminal() {
+            None
+        } else {
+            terminal.task()
+        };
+        #[cfg(not(target_env = "ohos"))]
+        let monitored_task = terminal.task();
+
+        let (icon, icon_color, rerun_button) = match monitored_task {
+            // [OHOS PORT END]
             Some(terminal_task) => match &terminal_task.status {
                 TaskStatus::Running => (
                     IconName::PlayFilled,
@@ -1678,7 +1807,14 @@ impl Item for TerminalView {
             .into_any()
     }
 
+    fn is_closable(&self, _cx: &App) -> bool {
+        self.pinned_title.is_none()
+    }
+
     fn tab_content_text(&self, detail: usize, cx: &App) -> SharedString {
+        if let Some(pinned_title) = self.pinned_title.as_ref() {
+            return pinned_title.clone();
+        }
         if let Some(custom_title) = self.custom_title.as_ref().filter(|l| !l.trim().is_empty()) {
             return custom_title.clone().into();
         }
@@ -2013,6 +2149,23 @@ impl SerializableItem for TerminalView {
     fn should_serialize(&self, _: &Self::Event) -> bool {
         self.needs_serialize
     }
+
+    fn include_in_saved_layout(&self, _cx: &App) -> bool {
+        // [OHOS PORT BEGIN] The Agent terminal is owned by the Agent panel.
+        //
+        // The panel adds it when the server answers and closes it when the
+        // server goes away, so it must not be part of the saved pane layout: a
+        // restored copy comes back as a plain shell tab with no pinned title,
+        // and the panel then adds its own on top of it, which is one extra tab
+        // on every start.
+        #[cfg(target_env = "ohos")]
+        if self.is_agent_terminal() {
+            return false;
+        }
+        // [OHOS PORT END]
+        true
+    }
+
 
     fn deserialize(
         project: Entity<Project>,

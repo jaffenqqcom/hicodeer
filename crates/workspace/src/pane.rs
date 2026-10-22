@@ -1958,10 +1958,11 @@ impl Pane {
         mut save_intent: SaveIntent,
         should_close: &dyn Fn(EntityId) -> bool,
     ) -> Task<Result<()>> {
-        // Find the items to close.
+        // Find the items to close. Items that back a fixed part of the
+        // workspace refuse to be closed, whatever the caller asked for.
         let mut items_to_close = Vec::new();
         for item in &self.items {
-            if should_close(item.item_id()) {
+            if should_close(item.item_id()) && item.is_closable(cx) {
                 items_to_close.push(item.boxed_clone());
             }
         }
@@ -3006,6 +3007,10 @@ impl Pane {
             }))
             .start_slot::<Indicator>(indicator)
             .map(|this| {
+                if !item.is_closable(cx) {
+                    return this;
+                }
+
                 let end_slot_action: &'static dyn Action;
                 let end_slot_tooltip_text: &'static str;
                 let end_slot = if is_pinned {

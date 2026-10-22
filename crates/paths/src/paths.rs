@@ -242,16 +242,27 @@ pub fn remote_server_state_dir() -> &'static PathBuf {
     REMOTE_SERVER_STATE.get_or_init(|| data_dir().join("server_state"))
 }
 
-/// Returns the path to the `Zed.log` file.
+/// Stem of the log file's name.
+///
+/// HiCodeer writes its own log rather than borrowing the upstream application
+/// name, so the file a user is asked to attach to a report is named after the
+/// product they are running.
+#[cfg(target_env = "ohos")]
+const LOG_FILE_STEM: &str = "hicodeer";
+/// Stem of the log file's name on platforms that keep the upstream name.
+#[cfg(not(target_env = "ohos"))]
+const LOG_FILE_STEM: &str = APP_NAME;
+
+/// Returns the path to the log file.
 pub fn log_file() -> &'static PathBuf {
     static LOG_FILE: OnceLock<PathBuf> = OnceLock::new();
-    LOG_FILE.get_or_init(|| logs_dir().join(format!("{}.log", APP_NAME)))
+    LOG_FILE.get_or_init(|| logs_dir().join(format!("{}.log", LOG_FILE_STEM)))
 }
 
 /// Returns the path to the `Zed.log.old` file.
 pub fn old_log_file() -> &'static PathBuf {
     static OLD_LOG_FILE: OnceLock<PathBuf> = OnceLock::new();
-    OLD_LOG_FILE.get_or_init(|| logs_dir().join(format!("{}.log.old", APP_NAME)))
+    OLD_LOG_FILE.get_or_init(|| logs_dir().join(format!("{}.log.old", LOG_FILE_STEM)))
 }
 
 /// Returns the path to the database directory.

@@ -35,7 +35,6 @@ visual-tests = [
     "dep:image",
     "dep:tempfile",
     "dep:action_log",
-    "dep:agent_servers",
     "dep:env_logger",
     "workspace/test-support",
     "project/test-support",
@@ -43,12 +42,8 @@ visual-tests = [
     "terminal_view/test-support",
     "image_viewer/test-support",
     "clock/test-support",
-    "acp_thread/test-support",
     "action_log/test-support",
-    "agent_ui/test-support",
     "db/test-support",
-    "agent/test-support",
-    "language_model/test-support",
     "fs/test-support",
     "recent_projects/test-support",
     "title_bar/test-support",
@@ -75,16 +70,8 @@ crate-type = ["rlib"]
 
 [dependencies]
 localization.workspace = true
-acp_thread.workspace = true
-acp_tools.workspace = true
 action_log = { workspace = true, optional = true }
 activity_indicator.workspace = true
-agent-client-protocol.workspace = true
-agent.workspace = true
-agent_servers = { workspace = true, optional = true }
-agent_settings.workspace = true
-agent_skills.workspace = true
-agent_ui = { workspace = true, features = ["audio"] }
 anyhow.workspace = true
 askpass.workspace = true
 assets.workspace = true
@@ -92,30 +79,18 @@ audio.workspace = true
 auto_update.workspace = true
 auto_update_ui.workspace = true
 breadcrumbs.workspace = true
-call.workspace = true
 call_hierarchy.workspace = true
-channel.workspace = true
 chrono.workspace = true
 clap.workspace = true
 cli.workspace = true
 client.workspace = true
 clock = { workspace = true, optional = true }
-codestral.workspace = true
-collab_ui.workspace = true
 collections.workspace = true
 command_palette.workspace = true
 component_preview.workspace = true
-copilot.workspace = true
-copilot_chat.workspace = true
-copilot_ui.workspace = true
 crashes.workspace = true
-dap_adapters.workspace = true
 db.workspace = true
-debug_adapter_extension.workspace = true
-debugger_tools.workspace = true
-debugger_ui.workspace = true
 dev_container.workspace = true
-diagnostics.workspace = true
 editor.workspace = true
 encoding_selector.workspace = true
 env_logger = { workspace = true, optional = true }
@@ -129,7 +104,7 @@ fs.workspace = true
 futures.workspace = true
 git.workspace = true
 git_hosting_providers.workspace = true
-git_ui = { workspace = true, features = ["call"] }
+git_ui.workspace = true
 git_ui_core.workspace = true
 go_to_line.workspace = true
 gpui = { workspace = true, features = ["profiler", "stacker"] }
@@ -148,8 +123,6 @@ system_specs.workspace = true
 tabular_data_preview.workspace = true
 tempfile = { workspace = true, optional = true }
 
-edit_prediction.workspace = true
-edit_prediction_ui.workspace = true
 http_client.workspace = true
 image_viewer.workspace = true
 input_latency_ui.workspace = true
@@ -160,8 +133,6 @@ json_schema_store.workspace = true
 keymap_editor.workspace = true
 language.workspace = true
 language_extension.workspace = true
-language_model.workspace = true
-language_models.workspace = true
 language_onboarding.workspace = true
 language_selector.workspace = true
 language_tools.workspace = true
@@ -188,7 +159,6 @@ profiling.workspace = true
 project.workspace = true
 project_panel.workspace = true
 project_symbols.workspace = true
-prompt_store.workspace = true
 proto.workspace = true
 recent_projects.workspace = true
 release_channel.workspace = true
@@ -206,7 +176,6 @@ settings.workspace = true
 settings_profile_selector.workspace = true
 settings_ui.workspace = true
 shellexpand.workspace = true
-sidebar.workspace = true
 smol.workspace = true
 snippet_provider.workspace = true
 snippets_ui.workspace = true
@@ -235,8 +204,6 @@ uuid.workspace = true
 vim.workspace = true
 vim_mode_setting.workspace = true
 watch.workspace = true
-web_search.workspace = true
-web_search_providers.workspace = true
 which_key.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true
@@ -269,6 +236,11 @@ image.workspace = true
 # Every platform except OHOS keeps the screenshot and Wayland/X11 features that
 # used to be unconditional; only OHOS drops them (see the note next to the
 # `gpui_platform` entry in `[dependencies]` further up).
+[target.'cfg(target_env = "ohos")'.dependencies]
+agent_panel = { path = "../agent_panel" }
+# Reaches the endpoint hicodeerd published for its embedded agent server.
+cmd-client = { path = "../gpui_ohos/depend/cmd-agent/cmd-client" }
+
 [target.'cfg(not(target_env = "ohos"))'.dependencies]
 gpui_platform = { workspace = true, features = ["screen-capture", "font-kit", "wayland", "x11"] }
 
@@ -282,7 +254,6 @@ pkg-config = "0.3.22"
 
 [dev-dependencies]
 activity_indicator = { workspace = true, features = ["test-support"] }
-call = { workspace = true, features = ["test-support"] }
 editor = { workspace = true, features = ["test-support"] }
 env_logger.workspace = true
 fs = { workspace = true, features = ["test-support"] }
@@ -293,13 +264,11 @@ language = { workspace = true, features = ["test-support"] }
 pretty_assertions.workspace = true
 project = { workspace = true, features = ["test-support"] }
 remote = { workspace = true, features = ["test-support"] }
-remote_server = { workspace = true, features = ["test-support"] }
 semver.workspace = true
 terminal_view = { workspace = true, features = ["test-support"] }
 title_bar = { workspace = true, features = ["test-support"] }
 workspace = { workspace = true, features = ["test-support"] }
 image.workspace = true
-agent_ui = { workspace = true, features = ["test-support"] }
 search = { workspace = true, features = ["test-support"] }
 repl = { workspace = true, features = ["test-support"] }
 

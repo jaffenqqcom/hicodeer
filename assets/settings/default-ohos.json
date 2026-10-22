@@ -5,13 +5,10 @@
       "program": "/data/app/bin/hishell"
     }
   },
-  "collaboration_panel": {
-    "button": false
-  },
-  "edit_predictions": {
-    "allow_data_collection": "no"
-  },
-  "agent": {
-    "max_content_width": 1128
+  "agent_panel": {
+    "button": true,
+    "dock": "left",
+    "default_width": 224,
+    "starts_open": true
   }
 }

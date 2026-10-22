@@ -700,6 +700,21 @@ enum RemovalKind {
 }
 
 impl ProjectPanel {
+    /// The row the title bar draws on other platforms: the project name, its
+    /// host, and the git branch.
+    ///
+    /// OHOS shows that row at the top of this panel instead of in the title bar.
+    /// It is rendered by the title bar itself rather than copied, so the
+    /// entries, the recent-projects popover, and the branch display stay one
+    /// implementation and cannot drift apart between the two placements.
+    #[cfg(target_env = "ohos")]
+    fn render_title_bar_project_items(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let workspace = self.workspace.upgrade()?;
+        let title_bar = workspace.read(cx).titlebar_item()?;
+        let title_bar = title_bar.downcast::<title_bar::TitleBar>().ok()?;
+        Some(title_bar.update(cx, |title_bar, cx| title_bar.render_project_items(cx)))
+    }
+
     fn new(
         workspace: &mut Workspace,
         window: &mut Window,
@@ -7490,6 +7505,13 @@ impl Render for ProjectPanel {
             self.clear_drag_state(cx);
         }
 
+        // Built before the project is borrowed: rendering it updates the title
+        // bar entity, which needs exclusive access to the context.
+        #[cfg(target_env = "ohos")]
+        let project_items = self.render_title_bar_project_items(cx);
+        #[cfg(not(target_env = "ohos"))]
+        let project_items: Option<AnyElement> = None;
+
         let has_worktree = !self.state.visible_entries.is_empty();
         let project = self.project.read(cx);
         let panel_settings = ProjectPanelSettings::get_global(cx);
@@ -7686,6 +7708,25 @@ impl Render for ProjectPanel {
                 .track_focus(&self.focus_handle(cx))
                 .child(
                     v_flex()
+                        // [OHOS PORT BEGIN] The project name, its host, and the
+                        // git branch live here instead of the title bar. The row
+                        // is rendered by the title bar itself, so both
+                        // placements stay one implementation. The wrapper fixes
+                        // its height: the row itself stretches to its parent,
+                        // which is the title bar's height elsewhere.
+                        .children(project_items.map(|items| {
+                            div()
+                                .flex_none()
+                                .h_8()
+                                .px_1()
+                                // Same 1px rule the thread sidebar draws between
+                                // its groups, so the header reads as its own band
+                                // rather than running into the file tree.
+                                .border_b_1()
+                                .border_color(cx.theme().colors().border)
+                                .child(items)
+                        }))
+                        // [OHOS PORT END]
                         .child(
                             uniform_list("entries", item_count, {
                                 cx.processor(|this, range: Range<usize>, window, cx| {

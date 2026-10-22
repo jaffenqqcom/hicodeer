@@ -8,6 +8,15 @@ use std::{any::TypeId, sync::Arc};
 use theme::CLIENT_SIDE_DECORATION_ROUNDING;
 use ui::{ContextMenu, IconPosition, prelude::*, right_click_menu};
 
+/// [OHOS PORT BEGIN] Inset of the two status-bar groups.
+///
+/// The bar's own padding only keeps the first and last icon off the very edge;
+/// on a device the outermost icons still read as glued to the sides. Half an
+/// icon of extra inset on each end centres the two groups within the bar.
+#[cfg(target_env = "ohos")]
+const OHOS_STATUS_BAR_EDGE_INSET: gpui::Pixels = gpui::px(8.0);
+// [OHOS PORT END]
+
 /// Describes how a status-bar item can be hidden by the user.
 ///
 /// Every [`StatusItemView`] must either provide this (so that the user gets a
@@ -158,6 +167,11 @@ impl StatusBar {
             .gap_1()
             .min_w_0()
             .overflow_x_hidden()
+            // [OHOS PORT BEGIN] nudge the group in by half an icon
+            .when(cfg!(target_env = "ohos"), |this| {
+                this.pl(OHOS_STATUS_BAR_EDGE_INSET)
+            })
+            // [OHOS PORT END]
             .children(self.left_items.iter().enumerate().map(|(index, item)| {
                 render_hideable_item("status-bar-left", index, item.as_ref(), cx)
             }))
@@ -168,6 +182,11 @@ impl StatusBar {
             .flex_shrink_0()
             .gap_1()
             .overflow_x_hidden()
+            // [OHOS PORT BEGIN] same inset on the trailing end
+            .when(cfg!(target_env = "ohos"), |this| {
+                this.pr(OHOS_STATUS_BAR_EDGE_INSET)
+            })
+            // [OHOS PORT END]
             .children(
                 self.right_items
                     .iter()

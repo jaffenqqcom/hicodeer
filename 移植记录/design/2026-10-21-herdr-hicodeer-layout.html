@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>hezed + herdr 界面原型</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --panel: #252526;
+    --panel-2: #2d2d30;
+    --border: #3c3c3c;
+    --text: #d4d4d4;
+    --muted: #8b8b8b;
+    --accent: #4a9eff;
+    --working: #d7ba7d;
+    --blocked: #f14c4c;
+    --done: #56b6c2;
+    --idle: #98c379;
+    --unknown: #6b6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #111214;
+    color: var(--text);
+    font-family: "HarmonyOS Sans SC", "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .window {
+    width: 1280px;
+    height: 800px;
+    background: var(--bg);
+    border: 1px solid #000;
+    box-shadow: 0 18px 60px rgba(0,0,0,.55);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* title bar */
+  .titlebar {
+    height: 38px; flex: 0 0 38px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 8px 0 10px;
+    font-size: 12.5px;
+  }
+  .logo { width: 18px; height: 18px; border-radius: 4px; background: linear-gradient(135deg, #4a9eff, #7b61ff); }
+  .appname { color: var(--muted); }
+  .branch { color: var(--muted); font-size: 11.5px; display: flex; align-items: center; gap: 4px; }
+  .branch .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); }
+  .titlebar .spacer { flex: 1; }
+  .tb-btn { width: 30px; height: 26px; display: flex; align-items: center; justify-content: center; border-radius: 5px; color: var(--muted); }
+  .tb-btn:hover { background: #3a3a3d; color: var(--text); }
+  .hamburger { display: flex; flex-direction: column; gap: 3px; }
+  .hamburger i { display: block; width: 14px; height: 1.5px; background: currentColor; }
+  .winbtns { display: flex; gap: 2px; margin-left: 4px; }
+  .winbtn { width: 34px; height: 26px; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+  .winbtn:hover { background: #3a3a3d; }
+  .winbtn.close:hover { background: #c42b1c; color: #fff; }
+
+  /* body: left dock + center + right dock */
+  .body { flex: 1; display: flex; min-height: 0; }
+
+  /* left dock: Agent panel */
+  .agent-panel {
+    width: 224px; flex: 0 0 224px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .group-head {
+    height: 30px; flex: 0 0 30px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 10px;
+    font-size: 10.5px; letter-spacing: .1em; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .group-head .add { width: 18px; height: 18px; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; }
+  .group-head .add:hover { background: #3a3a3d; color: var(--text); }
+  .spaces { padding: 4px 0; overflow: hidden; }
+  .space { display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12.5px; color: #d8d8d8; }
+  .space:hover { background: #303033; }
+  .space .caret { width: 9px; color: var(--muted); font-size: 9px; }
+  .space .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .space .count { color: var(--muted); font-size: 10.5px; }
+  .agent { display: flex; align-items: center; gap: 7px; padding: 4px 10px 4px 30px; font-size: 12px; color: #c0c0c0; border-radius: 4px; margin: 1px 6px; }
+  .agent:hover { background: #303033; }
+  .agent.active { background: #2f3a4a; color: #fff; }
+  .agent .status { width: 8px; flex: 0 0 8px; text-align: center; font-size: 10px; }
+  .agent .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent .state { font-size: 10px; }
+  .st-working { color: var(--working); }
+  .st-blocked { color: var(--blocked); }
+  .st-done { color: var(--done); }
+  .st-idle { color: var(--idle); }
+  .st-unknown { color: var(--unknown); }
+  .tree-foot { margin-top: auto; padding: 8px 10px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 11.5px; }
+  .tree-foot .left { display: flex; align-items: center; gap: 5px; }
+  .tree-foot .right { display: flex; align-items: center; gap: 4px; }
+  .tree-foot .attn { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+  .tree-foot .left:hover, .tree-foot .right:hover { color: var(--text); }
+
+  /* center */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #181818; }
+  .tabbar {
+    height: 34px; flex: 0 0 34px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: flex-end; gap: 2px;
+    padding: 0 8px;
+  }
+  .tab {
+    height: 29px; padding: 0 12px;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; color: var(--muted);
+    border-radius: 5px 5px 0 0;
+    position: relative;
+  }
+  .tab.active {
+    background: #181818; color: var(--text);
+    border: 1px solid var(--border); border-bottom-color: #181818;
+  }
+  .tab .ico { font-size: 10px; }
+  .tab .pin { font-size: 9px; color: var(--accent); }
+  .tab .x { width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; border-radius: 3px; font-size: 10px; color: var(--muted); }
+  .tab .x:hover { background: #444; color: var(--text); }
+  .tabbar .plus { margin-left: 4px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--muted); padding-bottom: 3px; }
+
+  .term {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    background: #141414;
+  }
+  .term-head {
+    height: 26px; flex: 0 0 26px;
+    background: #202020; border-bottom: 1px solid #333;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 10px; font-size: 11px; color: var(--muted);
+  }
+  .term-head .right { margin-left: auto; display: flex; gap: 10px; }
+  .term-body {
+    flex: 1; padding: 10px 12px;
+    font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
+    font-size: 11.5px; line-height: 1.65; color: #c8c8c8; overflow: hidden;
+  }
+  .term-body .dim { color: #777; }
+  .term-body .green { color: var(--idle); }
+  .term-body .yellow { color: var(--working); }
+  .term-body .blue { color: #6cb6ff; }
+  .term-body .purple { color: #c586c0; }
+  .cursor { display: inline-block; width: 7px; height: 13px; background: #c8c8c8; vertical-align: -2px; opacity: .8; }
+
+  /* right dock: Git panel (Project/Outline are alternates behind buttons) */
+  .gitpanel {
+    width: 286px; flex: 0 0 286px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .git-tabs { height: 32px; flex: 0 0 32px; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); }
+  .git-tab { padding: 0 14px; display: flex; align-items: center; font-size: 11.5px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .git-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .git-branch { padding: 8px 12px; font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .git-branch .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); }
+  .git-section { padding: 6px 12px 4px; font-size: 10.5px; letter-spacing: .08em; color: var(--muted); display: flex; justify-content: space-between; }
+  .git-file { display: flex; align-items: center; gap: 8px; padding: 4px 12px; font-size: 12px; font-family: ui-monospace, monospace; color: #c8c8c8; }
+  .git-file:hover { background: #303033; }
+  .git-file .m { color: var(--working); width: 10px; }
+  .git-file .a { color: var(--idle); width: 10px; }
+  .git-file .d { color: var(--blocked); width: 10px; }
+  .git-file .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .git-file .dir { color: var(--muted); }
+
+  /* status bar */
+  .statusbar {
+    height: 24px; flex: 0 0 24px;
+    background: var(--panel-2);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 6px;
+    font-size: 11px; color: var(--muted);
+    gap: 4px;
+  }
+  .statusbar .item { display: flex; align-items: center; gap: 5px; padding: 0 6px; height: 20px; border-radius: 4px; }
+  .statusbar .item:hover { background: #3a3a3d; color: var(--text); }
+  .statusbar .item.on { color: var(--text); }
+  .statusbar .item .ico { font-size: 11px; }
+  .statusbar .spacer { flex: 1; }
+  .statusbar .ok { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); }
+  .statusbar .vdiv { width: 1px; height: 14px; background: var(--border); margin: 0 4px; }
+  .statusbar .lbl { color: var(--muted); font-size: 10.5px; }
+  .statusbar .item.on .lbl { color: #c8c8c8; }
+  .statusbar .badge-num { background: #3a3a3d; color: #c8c8c8; border-radius: 7px; padding: 0 5px; font-size: 9.5px; margin-left: 2px; }
+
+  /* annotation */
+  .legend {
+    position: absolute; right: 300px; bottom: 34px;
+    background: rgba(20,20,22,.94);
+    border: 1px solid #3a3a3d; border-radius: 8px;
+    padding: 10px 12px; font-size: 11px; line-height: 1.9;
+    color: #bdbdbd; box-shadow: 0 10px 30px rgba(0,0,0,.45);
+    max-width: 340px;
+  }
+  .legend b { color: #e8e8e8; font-weight: 600; }
+  .legend .k { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 7px; }
+  .legend .k.new { background: #56b6c2; }
+  .legend .k.herdr { background: #c586c0; }
+  .legend .k.old { background: #6f6f6f; }
+  .legend .note { color: #8b8b8b; font-size: 10.5px; }
+</style>
+</head>
+<body>
+<div class="window">
+
+  <div class="titlebar">
+    <div class="logo"></div>
+    <span class="appname">hicodeer</span>
+    <span class="project">hicodeer</span>
+    <span class="branch"><i class="dot"></i>hezed</span>
+    <div class="spacer"></div>
+    <div class="tb-btn"><div class="hamburger"><i></i><i></i><i></i></div></div>
+    <div class="winbtns">
+      <div class="winbtn">—</div><div class="winbtn">□</div><div class="winbtn close">×</div>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <!-- 左 dock：Agent panel，只放 space/agent 树 -->
+    <aside class="agent-panel">
+      <div class="group-head"><span>AGENT</span><span class="add">+</span></div>
+
+      <div class="spaces">
+        <div class="space">
+          <span class="caret">▾</span><span class="name">hicodeer</span><span class="count">3</span>
+        </div>
+        <div class="agent active">
+          <span class="status st-working">●</span><span class="name">claude · refactor</span><span class="state st-working">working</span>
+        </div>
+        <div class="agent">
+          <span class="status st-blocked">●</span><span class="name">codex · tests</span><span class="state st-blocked">blocked</span>
+        </div>
+        <div class="agent">
+          <span class="status st-idle">○</span><span class="name">shell</span><span class="state st-idle">idle</span>
+        </div>
+
+        <div class="space">
+          <span class="caret">▾</span><span class="name">warp-ohos</span><span class="count">2</span>
+        </div>
+        <div class="agent">
+          <span class="status st-done">●</span><span class="name">claude · review</span><span class="state st-done">done</span>
+        </div>
+        <div class="agent">
+          <span class="status st-unknown">·</span><span class="name">shell</span><span class="state st-unknown">unknown</span>
+        </div>
+
+        <div class="space">
+          <span class="caret">▸</span><span class="name">herdr-ohos</span><span class="count">1</span>
+        </div>
+      </div>
+
+      <div class="tree-foot">
+        <span class="left"><span>+</span> new</span>
+      </div>
+    </aside>
+
+    <!-- 中央：Agent 固定标签 + 打开的文件 -->
+    <main class="main">
+      <div class="tabbar">
+        <div class="tab active">
+          <span class="pin">◆</span>
+          <span class="ico">▣</span>
+          <span>Agent</span>
+        </div>
+        <div class="tab">
+          <span class="ico">▤</span>
+          <span>title_bar.rs</span>
+          <span class="x">×</span>
+        </div>
+        <div class="tab">
+          <span class="ico">▤</span>
+          <span>bootstrap.rs</span>
+          <span class="x">×</span>
+        </div>
+        <div class="plus">+</div>
+      </div>
+
+      <div class="term">
+        <div class="term-head">
+          <span class="st-working">●</span>
+          <span>claude · refactor</span>
+          <span class="right"><span>hicodeer</span><span>pane 1</span><span>herdr TUI</span></span>
+        </div>
+        <div class="term-body">
+<span class="dim">✻</span> <span class="purple">claude</span> <span class="dim">· refactor</span><br />
+<span class="blue">&gt;</span> 把 herdr 的 server 合进 hicodeerd<br />
+<br />
+<span class="green">●</span> 读取 crates/gpui_ohos/depend/cmd-agent/hicodeerd<br />
+<span class="green">●</span> 读取 herdr/src/server/headless/bootstrap.rs<br />
+<span class="green">●</span> 对比两个 runtime 的启动顺序<br />
+<br />
+<span class="dim">正在整理方案：</span><br />
+1. server 作为第三个 future 加入 select!<br />
+2. 新增 loopback 控制端口给 GPUI<br />
+3. client 侧栏改 hidden 模式<br />
+<br />
+<span class="dim">────────────────────</span><br />
+<span class="yellow">?</span> 需要确认：hicodeerd 重启时 pane 是否保留<br />
+<span class="cursor"></span>
+        </div>
+      </div>
+    </main>
+
+    <!-- 右 dock：当前显示 Git panel（Project / Outline 通过状态栏按钮切换） -->
+    <aside class="gitpanel">
+      <div class="git-tabs">
+        <div class="git-tab active">更改</div>
+        <div class="git-tab">历史记录</div>
+      </div>
+      <div class="git-branch"><i class="dot"></i>hezed</div>
+
+      <div class="git-section"><span>暂存的更改</span><span>2</span></div>
+      <div class="git-file"><span class="m">M</span><span class="path"><span class="dir">crates/title_bar/src/</span>title_bar.rs</span></div>
+      <div class="git-file"><span class="a">A</span><span class="path"><span class="dir">crates/title_bar/src/</span>panel_layout.rs</span></div>
+
+      <div class="git-section"><span>更改</span><span>3</span></div>
+      <div class="git-file"><span class="m">M</span><span class="path"><span class="dir">assets/keymaps/</span>default-ohos.json</span></div>
+      <div class="git-file"><span class="m">M</span><span class="path"><span class="dir">assets/settings/</span>default.json</span></div>
+      <div class="git-file"><span class="d">D</span><span class="path"><span class="dir">crates/title_bar/src/</span>application_menu.rs</span></div>
+    </aside>
+
+  </div>
+
+  <!-- 状态栏：面板按钮按 dock 分组 -->
+  <div class="statusbar">
+    <span class="item on" title="Agent panel（左 dock）"><span class="ico">☰</span><span class="lbl">Agent</span></span>
+    <span class="vdiv"></span>
+    <span class="item"><i class="ok"></i>rust-analyzer</span>
+    <span class="item">hezed</span>
+    <span class="item">UTF-8</span>
+    <span class="item">Rust</span>
+    <span class="spacer"></span>
+    <span class="item">Ln 12, Col 3</span>
+    <span class="item">Spaces: 4</span>
+    <span class="vdiv"></span>
+    <span class="item on" title="Project panel（右 dock，与 Git 相邻）"><span class="ico">▤</span><span class="lbl">Project</span></span>
+    <span class="item on" title="Git panel（右 dock）"><span class="ico">⑂</span><span class="lbl">Git</span><span class="badge-num">3</span></span>
+    <span class="item on" title="Outline panel（右 dock）"><span class="ico">◫</span><span class="lbl">Outline</span></span>
+    <span class="item on" title="Terminal panel（底部 dock）"><span class="ico">▣</span><span class="lbl">Terminal</span></span>
+  </div>
+
+  <div class="legend">
+    <div><span class="k new"></span><b>GPUI 新增</b> <span class="note">Agent panel 的 space/agent 树</span></div>
+    <div><span class="k herdr"></span><b>herdr TUI</b> <span class="note">中央固定的 Agent 标签</span></div>
+    <div><span class="k old"></span><b>hicodeer 原有</b> <span class="note">Project / Git / 状态栏</span></div>
+    <div class="note" style="margin-top:6px">Agent 标签固定第一、无关闭按钮；打开文件排在它后面</div>
+    <div class="note">状态：working 黄 ● / blocked 红 ● / done 青 ● / idle 绿 ○ / unknown 灰 ·</div>
+    <div class="note">Agent panel 底部先只做 new；menu 暂缓，保持 herdr 原样</div>
+    <div class="note">默认智能体模式：Agent 左、Project/Git 右；切经典模式则两组互换</div>
+  </div>
+
+</div>
+</body>
+</html>

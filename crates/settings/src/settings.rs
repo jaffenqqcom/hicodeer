@@ -144,9 +144,8 @@ pub fn default_settings() -> Cow<'static, str> {
 // without these deltas the terminal would open a plain sandbox shell; the delta
 // pins `terminal.shell` to hishell - the private HNP bridge that runs an
 // interactive shell on hicodeerd and falls back to `/bin/sh` without it. It also
-// turns on copy-on-select, drops the absent collaboration button, disables
-// edit-prediction data collection, and widens the agent panel to 0.8 of the
-// window width.
+// turns on copy-on-select and gives the Agent panel its 224 px default width,
+// which is narrow enough for the status-bar-driven layout this build uses.
 #[cfg(target_env = "ohos")]
 pub fn default_settings() -> Cow<'static, str> {
     let base = asset_str::<SettingsAssets>("settings/default.json");

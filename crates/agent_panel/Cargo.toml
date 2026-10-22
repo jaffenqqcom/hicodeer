@@ -1,0 +1,30 @@
+[package]
+name = "agent_panel"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+name = "agent_panel"
+path = "src/agent_panel.rs"
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+cmd-client = { path = "../gpui_ohos/depend/cmd-agent/cmd-client" }
+editor.workspace = true
+fs.workspace = true
+gpui.workspace = true
+localization.workspace = true
+log.workspace = true
+menu.workspace = true
+serde_json.workspace = true
+settings.workspace = true
+terminal_view = { path = "../terminal_view" }
+theme.workspace = true
+ui.workspace = true
+workspace.workspace = true

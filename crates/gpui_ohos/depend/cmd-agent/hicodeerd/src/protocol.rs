@@ -22,6 +22,13 @@ pub const SESSION_ID_PREFIX: &str = "__hicodeerd_sid__";
 /// Reserved command-channel command for signaling a running session group:
 /// `SIGNAL_PREFIX <session_id> <signal>`.
 pub const SIGNAL_PREFIX: &str = "__hicodeerd_signal__";
+/// Port of the loopback bridge the host front end uses to reach the embedded
+/// agent JSON API socket.
+pub const AGENT_CONTROL_PORT: u16 = 40240;
+/// First line of a control connection: `AGENT_CONTROL_TOKEN_PREFIX <token>`.
+/// Anything else, or a token that does not match this run, closes the stream.
+pub const AGENT_CONTROL_TOKEN_PREFIX: &str = "hicodeerd-agent";
+
 /// Prefix of the identity a client presents as its SSH user name: every
 /// connection one instance opens carries `CLIENT_ID_PREFIX<random>`.
 ///
@@ -44,6 +51,29 @@ pub struct SshInfo {
     pub command_host_key_pem: String,
     /// OpenSSH-formatted private half of this run's command client key.
     pub client_private_key_pem: String,
+    /// Present once this run's embedded agent server is up; absent in a build
+    /// without one and in older daemons, hence the default.
+    #[serde(default)]
+    pub agent: Option<AgentControl>,
+}
+
+/// How a host reaches the agent server embedded in this daemon run.
+///
+/// The JSON API socket lives inside the daemon's own tree, so the host cannot
+/// derive its path; the bridge is the only way in from another account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentControl {
+    /// Absolute path of the agent JSON API socket this run bound.
+    pub socket_path: String,
+    /// Loopback port of the token-guarded bridge onto that socket.
+    pub control_port: u16,
+    /// Token this run generated; the bridge requires it as its first line.
+    pub token: String,
+    /// Config file this run's agent server loaded. The TUI client runs under the
+    /// account and does not inherit the daemon's environment, so it has to be
+    /// told where the same settings live; absent when the package ships none.
+    #[serde(default)]
+    pub config_path: Option<String>,
 }
 
 /// Parses a management bootstrap request, returning the directory the client

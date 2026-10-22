@@ -14,6 +14,7 @@
 
 mod exec;
 mod fanotify_patch;
+mod agent_control;
 mod keygen;
 mod keys;
 mod logger;
@@ -66,9 +67,106 @@ const REKEY_BYTE_LIMIT: usize = 1 << 30;
 /// effectively "never" for a connection that only ever carries a few kilobytes.
 const REKEY_TIME_LIMIT: std::time::Duration =
     std::time::Duration::from_secs(365 * 24 * 60 * 60);
+/// Directory under the host application's home holding the embedded agent
+/// server's state.
+const AGENT_STATE_DIR: &str = ".hicodeer";
+/// Subdirectory of [`AGENT_STATE_DIR`] that holds the sockets.
+const AGENT_RUN_DIR: &str = "agent";
+/// Variable the agent server reads for its JSON API socket; the client socket
+/// path derives from it, so one value places both. The name itself belongs to
+/// the embedded server's protocol and cannot be renamed here.
+const AGENT_SOCKET_PATH_ENV: &str = "HICODEER_AGENT_SOCKET_PATH";
+/// File name of the JSON API socket inside the agent run directory.
+const AGENT_API_SOCKET_FILE: &str = "agent.sock";
+/// Variable the agent server reads for the client protocol socket's mode.
+const AGENT_CLIENT_SOCKET_MODE_ENV: &str = "HICODEER_AGENT_SOCKET_MODE";
+/// Mode the Agent terminal's client needs: it connects from the application
+/// account, not this daemon's.
+const AGENT_CLIENT_SOCKET_MODE: &str = "0666";
+/// Variable that overrides the config file the agent server reads.
+const AGENT_CONFIG_PATH_ENV: &str = "HICODEER_AGENT_CONFIG_PATH";
+/// Config file shipped in the package's `conf` directory.
+const AGENT_CONFIG_FILE: &str = "agent-config.toml";
+/// Records which packaged config the writable copy was made from.
+const AGENT_CONFIG_STAMP_FILE: &str = "agent-config.stamp";
+/// FNV-1a parameters, used to fingerprint the packaged config.
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+/// Argument that carries the socket path the daemon reported to the host
+/// application. The two processes run under different accounts and do not
+/// share a home directory, and the terminal command does not inherit the
+/// daemon's environment, so the path travels on the command line.
+const AGENT_SOCKET_ARGUMENT: &str = "--socket";
+/// Hidden subcommand: run the agent TUI client in the calling terminal against
+/// this daemon's embedded server. Not a listener mode; it exits with the TUI.
+const AGENT_TUI_SUBCOMMAND: &str = "agent-tui";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some(AGENT_TUI_SUBCOMMAND) {
+        let Some(socket_path) = socket_path_argument(&args[1..]).map(str::to_string) else {
+            // The socket path is the only link to the daemon: without it the
+            // client would fall back to a default the application account
+            // cannot reach, so fail here instead of inside the TUI.
+            tui_report(&format!(
+                "missing {AGENT_SOCKET_ARGUMENT} <path>; start this subcommand from the host application"
+            ));
+            std::process::exit(1);
+        };
+        // The client names its protocol socket from the API socket path it is
+        // given. That name must be unique to this process: the terminal shell
+        // (hishell) runs on the daemon side, so this process usually shares the
+        // daemon's filesystem view -- binding the derived name directly would
+        // replace the socket the daemon's own client bridge forwards to, and
+        // two windows would replace each other's proxy. Deriving a per-process
+        // name keeps every client on its own path; the proxy still reaches the
+        // daemon's loopback bridge.
+        let unique_api_socket_path = unique_api_socket_path(Path::new(&socket_path));
+        let client_path = client_socket_path(&unique_api_socket_path);
+        if let Err(err) = agent_control::serve_local_client_proxy(
+            &client_path,
+            agent_control::AGENT_CLIENT_PORT,
+        ) {
+            tui_report(&format!(
+                "cannot publish the client socket at {}: {err}",
+                client_path.display()
+            ));
+            std::process::exit(1);
+        }
+        std::env::set_var(AGENT_SOCKET_PATH_ENV, &unique_api_socket_path);
+        // The packaged config is read-only, and the client rewrites the file it
+        // loaded to record first-run state (its onboarding flag), so pointing it
+        // at the package fails with EACCES. Put a writable copy beside the
+        // sockets instead -- inside the application's own sandbox, which this
+        // process can write -- and let the client load that.
+        if let Some(package_config) = std::env::var_os(AGENT_CONFIG_PATH_ENV) {
+            let state_dir = Path::new(&socket_path).parent().and_then(Path::parent);
+            match state_dir {
+                Some(state_dir) => {
+                    match writable_agent_config(state_dir, Path::new(&package_config)) {
+                        Ok(local_config) => std::env::set_var(AGENT_CONFIG_PATH_ENV, local_config),
+                        Err(err) => {
+                            std::env::remove_var(AGENT_CONFIG_PATH_ENV);
+                            tui_report(&format!(
+                                "cannot prepare the config from {}: {err}",
+                                package_config.to_string_lossy()
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    std::env::remove_var(AGENT_CONFIG_PATH_ENV);
+                    tui_report("cannot prepare the config: the socket path has no state directory");
+                }
+            }
+        }
+        let result = agent_server::run_client_entry();
+        if let Err(err) = result {
+            tui_report(&format!("client stopped: {err}"));
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.iter().any(|arg| arg == "--help") {
         print_help();
         return;
@@ -83,6 +181,21 @@ fn main() {
     }
 }
 
+/// Reports why the TUI client could not start, on the terminal.
+fn tui_report(line: &str) {
+    eprintln!("hicodeerd {AGENT_TUI_SUBCOMMAND}: {line}");
+}
+
+/// Reads `--socket <path>` from the arguments that follow the TUI subcommand.
+/// The host application passes the path the daemon reported, so the client
+/// never has to rediscover it: the two processes run under different accounts
+/// and do not share a home directory, and the terminal command does not inherit
+/// the daemon's environment.
+fn socket_path_argument(args: &[String]) -> Option<&str> {
+    let index = args.iter().position(|arg| arg == AGENT_SOCKET_ARGUMENT)?;
+    args.get(index + 1).map(String::as_str)
+}
+
 /// Prints what this binary accepts. Runs before any listener is bound and
 /// before a logger is installed, so `--help` reads the same whatever else is
 /// on the command line.
@@ -90,10 +203,13 @@ fn print_help() {
     println!("hicodeerd - on-device command server for the host application");
     println!();
     println!("Usage: hicodeerd [--log] [--help]");
+    println!("       hicodeerd {AGENT_TUI_SUBCOMMAND} {AGENT_SOCKET_ARGUMENT} <path>");
     println!();
     println!("Listens on the loopback ports {COMMAND_PORT} (command) and {MANAGEMENT_PORT} (management). The");
     println!("management listener hands a fresh client the keys this run's command");
-    println!("listener accepts.");
+    println!("listener accepts. The embedded agent server is hosted in the same copy");
+    println!("of the process; its terminal client is the {AGENT_TUI_SUBCOMMAND}");
+    println!("subcommand, started by the host application inside an editor terminal.");
     println!();
     println!("Options:");
     println!("  --log   Enable logging. Without it the daemon is silent: no logger is");
@@ -101,6 +217,10 @@ fn print_help() {
     println!("          hilog on the device and to stdout on a plain host. Only");
     println!("          failures are recorded either way.");
     println!("  --help  Print this help and exit.");
+    println!();
+    println!("Subcommands:");
+    println!("  {AGENT_TUI_SUBCOMMAND}  Run the agent TUI client in the calling terminal, attached to");
+    println!("                this daemon's embedded server. Internal: not a listener mode.");
 }
 
 /// Root of the package this executable was installed into: the directory that
@@ -155,10 +275,53 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Dynamic keys for this run's command listener (never persisted).
     let dynamic = keygen::generate()?;
+    // The server binds one socket and the bridge forwards to it, so the path is
+    // decided once, before either starts. See `agent_socket_path` for where it
+    // lives: the application's home is on a shared filesystem that cannot bind
+    // a UNIX socket, so the path is not derived from it.
+    let agent_socket_path = agent_socket_path();
+    std::env::set_var(AGENT_SOCKET_PATH_ENV, &agent_socket_path);
+    // The agent server reads its settings from this file. It ships inside the
+    // package, so the defaults this build needs (no server sidebar: the Agent panel
+    // in the editor shows the same tree) do not depend on the user's home or on the
+    // writable state directory.
+    let agent_config_path = conf.join(AGENT_CONFIG_FILE);
+    if std::env::var_os(AGENT_CONFIG_PATH_ENV).is_none() && agent_config_path.is_file() {
+        std::env::set_var(AGENT_CONFIG_PATH_ENV, &agent_config_path);
+    }
+    // The host application cannot open the server's owner-only API socket, so it
+    // is published on loopback instead; the endpoint and this run's token travel
+    // in the bootstrap payload below. A failure here costs the Agent panel, not the
+    // command service, so it is reported and start-up continues.
+    let agent_control = match agent_control::start(agent_socket_path.clone()) {
+        Ok(mut control) => {
+            // The TUI client runs under the application account and does not
+            // inherit this environment, so it would fall back to the defaults
+            // for everything this file sets. Hand it the path instead: the
+            // package directory is world-readable.
+            if agent_config_path.is_file() {
+                control.config_path = Some(agent_config_path.to_string_lossy().into_owned());
+            }
+            Some(control)
+        }
+        Err(err) => {
+            log::warn!("daemon: agent control listener did not start: {err}");
+            None
+        }
+    };
+    // The TUI client runs under the application account, which cannot see this
+    // daemon's socket tree, so its protocol socket is republished on loopback
+    // too. Failure costs the Agent terminal only.
+    if let Err(err) =
+        agent_control::start_client_bridge(client_socket_path(&agent_socket_path))
+    {
+        log::warn!("daemon: agent client bridge did not start: {err}");
+    }
     let ssh_info = protocol::SshInfo {
         command_port: COMMAND_PORT,
         command_host_key_pem: keygen::public_openssh(dynamic.host_key.public_key())?,
         client_private_key_pem: keygen::private_openssh(&dynamic.client_private)?,
+        agent: agent_control,
     };
     // Never log any key material (host key, client key, PEMs) in any mode.
 
@@ -198,6 +361,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         maybe_spawn_drop_caches();
+        let mut agent_server_task = start_agent_server().map(|server| tokio::spawn(server.run()));
         let mut shutdown = ShutdownSignals::new()?;
         tokio::select! {
             result = async {
@@ -211,6 +375,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             name = shutdown.recv() => {
                 log::warn!("daemon: {name} received; shutting down");
             }
+            _ = wait_agent_server(&mut agent_server_task) => {
+                log::error!("daemon: embedded agent server stopped unexpectedly");
+            }
+        }
+        if let Some(task) = agent_server_task {
+            task.abort();
+            let _ = task.await;
         }
         // Both ways out converge here: nothing a client started may outlive the
         // daemon that owns it.
@@ -236,6 +407,118 @@ fn maybe_spawn_drop_caches() {
             }
         }
     });
+}
+
+/// Builds the in-process agent server. A failure is not fatal: the daemon keeps
+/// serving commands (the editor stays usable, only the Agent panel backend is
+/// missing), so the reason is recorded and start-up continues.
+fn start_agent_server() -> Option<agent_server::EmbeddedServer> {
+    // The Agent terminal runs the TUI client under the application account,
+    // while this server runs under the daemon's. The client socket is
+    // owner-only by default, which that account cannot open, so it is widened
+    // for this build; the API socket stays owner-only and is reached through
+    // the token-guarded bridge instead.
+    std::env::set_var(AGENT_CLIENT_SOCKET_MODE_ENV, AGENT_CLIENT_SOCKET_MODE);
+
+    match agent_server::build_embedded() {
+        Ok(server) => Some(server),
+        Err(err) => {
+            log::warn!("daemon: agent server did not start: {err}");
+            None
+        }
+    }
+}
+
+/// Path of the agent server's API socket.
+///
+/// It lives under the bundle's shared files root, the one directory both this
+/// daemon and the host application can reach. It deliberately does not follow
+/// the application's home: that home lives on a shared user filesystem which
+/// does not support binding a UNIX socket at all (the bind fails with EPERM),
+/// so a socket placed there could never be opened.
+fn agent_socket_path() -> PathBuf {
+    let config_root = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/data/storage/el2/base/haps/entry/files"));
+    config_root
+        .join(AGENT_STATE_DIR)
+        .join(AGENT_RUN_DIR)
+        .join(AGENT_API_SOCKET_FILE)
+}
+
+/// Per-process stand-in for the API socket path, used only to derive the local
+/// client socket name.
+///
+/// The TUI client never opens this path. It reads it as the API socket and
+/// derives its protocol socket from it, so a per-process stem gives every client
+/// a protocol socket of its own. The parent directory is kept: it is the one
+/// directory this process can bind a socket in, whether it runs beside the
+/// daemon or inside the application's sandbox.
+fn unique_api_socket_path(api_socket_path: &Path) -> PathBuf {
+    let stem = api_socket_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("agent");
+    let parent = api_socket_path.parent().unwrap_or_else(|| Path::new(""));
+    parent.join(format!("{stem}-{}.sock", std::process::id()))
+}
+
+/// Client protocol socket the server derives from its API socket: the same
+/// directory, with `-client` inserted before the extension. Mirrored here
+/// because the TUI client, which runs in a different process, has to name the
+/// path the server bound.
+fn client_socket_path(api_socket_path: &Path) -> PathBuf {
+    let stem = api_socket_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("agent");
+    let parent = api_socket_path.parent().unwrap_or_else(|| Path::new(""));
+    parent.join(format!("{stem}-client.sock"))
+}
+
+/// Copies the packaged config into `state_dir` and returns the copy.
+///
+/// The package directory is read-only, but the client saves its first-run state
+/// back into the config it loaded, so the client has to load a file it can
+/// write. The copy is refreshed only when the packaged file changes: between
+/// package updates it carries the client's own edits.
+fn writable_agent_config(state_dir: &Path, package_config: &Path) -> std::io::Result<PathBuf> {
+    let local_config = state_dir.join(AGENT_CONFIG_FILE);
+    let stamp = state_dir.join(AGENT_CONFIG_STAMP_FILE);
+    let fingerprint = config_fingerprint(package_config)?;
+    let unchanged = std::fs::read_to_string(&stamp)
+        .map(|saved| saved == fingerprint)
+        .unwrap_or(false);
+    if local_config.is_file() && unchanged {
+        return Ok(local_config);
+    }
+    std::fs::create_dir_all(state_dir)?;
+    std::fs::copy(package_config, &local_config)?;
+    std::fs::write(&stamp, fingerprint)?;
+    Ok(local_config)
+}
+
+/// Identifies one build's packaged config, so a new package refreshes the copy
+/// while a running client's own edits survive.
+fn config_fingerprint(path: &Path) -> std::io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in &bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    Ok(format!("{hash:016x}-{}", bytes.len()))
+}
+
+/// Resolves when the embedded agent-server task finishes. With no task it stays
+/// forever so it never short-circuits the daemon's `select!`.
+async fn wait_agent_server(task: &mut Option<tokio::task::JoinHandle<std::io::Result<()>>>) {
+    match task {
+        Some(handle) => {
+            let _ = handle.await;
+        }
+        None => std::future::pending().await,
+    }
 }
 
 /// Accepts command-listener connections and serves each with a fresh handler.

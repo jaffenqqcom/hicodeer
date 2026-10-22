@@ -1,0 +1,21 @@
+# Agent server settings for the build that runs inside HiCodeer.
+#
+# The editor's Agent panel is the visible front end for spaces and agents, so
+# The server's own sidebar starts collapsed into nothing: no rail, no arrow.
+# The TUI keeps everything else (panes, tabs, keybindings) unchanged.
+
+[ui]
+sidebar_start_collapsed = true
+sidebar_collapsed_mode = "hidden"
+# The tab row stays. It is the server's own tab switcher, and the space name it
+# repeat is not the thing to remove -- that is the narrow-screen header below.
+hide_tab_bar_when_single_tab = false
+# Leave the terminal title alone. Any format here is picked up by the server as
+# the pane's title and drawn on its top border, which costs a row and only
+# repeats the space name the editor's Agent panel already shows.
+window_title = ""
+# Never switch to the narrow-screen layout. It reserves the top one or two rows
+# for a header that names the space, which is the same information the Agent
+# panel already shows, and the editor never hands this terminal a phone-sized
+# surface. 0 disables the threshold entirely.
+mobile_width_threshold = 0

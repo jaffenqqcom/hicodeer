@@ -80,6 +80,16 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     fn starts_open(&self, _window: &Window, _cx: &App) -> bool {
         false
     }
+
+    /// Whether [`Panel::starts_open`] outranks a saved layout that kept this
+    /// panel's dock closed.
+    ///
+    /// A panel introduced after layouts were already being saved returns true:
+    /// those layouts predate it, so their closed dock says nothing about it.
+    /// Every other panel returns false and keeps obeying the saved layout.
+    fn starts_open_overrides_restore(&self, _cx: &App) -> bool {
+        false
+    }
     fn set_zoomed(&mut self, _zoomed: bool, _window: &mut Window, _cx: &mut Context<Self>) {}
     fn set_active(&mut self, _active: bool, _window: &mut Window, _cx: &mut Context<Self>) {}
     fn pane(&self) -> Option<Entity<Pane>> {
@@ -133,6 +143,7 @@ pub trait PanelHandle: Send + Sync {
     fn activation_priority(&self, cx: &App) -> u32;
     fn enabled(&self, cx: &App) -> bool;
     fn is_agent_panel(&self, cx: &App) -> bool;
+    fn starts_open_overrides_restore(&self, cx: &App) -> bool;
     fn hide_button_setting(&self, cx: &App) -> Option<HideStatusItem>;
     fn move_to_next_position(&self, window: &mut Window, cx: &mut App) {
         let current_position = self.position(window, cx);
@@ -257,6 +268,10 @@ where
 
     fn activation_priority(&self, cx: &App) -> u32 {
         self.read(cx).activation_priority()
+    }
+
+    fn starts_open_overrides_restore(&self, cx: &App) -> bool {
+        self.read(cx).starts_open_overrides_restore(cx)
     }
 
     fn enabled(&self, cx: &App) -> bool {
@@ -814,9 +829,23 @@ impl Dock {
             },
         );
 
+        // [OHOS PORT BEGIN] Honor a saved layout that names this panel.
+        // Without this the panel's `starts_open` reopens a dock the user
+        // closed, which breaks the Agent panel's "closed stays closed".
+        // The non-OHOS build keeps the previous behavior unchanged.
+        #[cfg(target_env = "ohos")]
+        let restored_state_names_panel = self
+            .restoration
+            .pending()
+            .and_then(|serialized| serialized.active_panel.as_deref())
+            == Some(T::persistent_name());
+        #[cfg(not(target_env = "ohos"))]
+        let restored_state_names_panel = false;
+        // [OHOS PORT END]
+
         self.replay_pending_serialized_state(window, cx);
 
-        if panel.read(cx).starts_open(window, cx) {
+        if !restored_state_names_panel && panel.read(cx).starts_open(window, cx) {
             self.activate_panel_internal(index, window, cx);
             self.set_open_internal(true, window, cx);
         }
@@ -853,11 +882,23 @@ impl Dock {
         let Some(serialized) = self.restoration.pending().cloned() else {
             return;
         };
+        // [OHOS PORT BEGIN] Wait even when the saved dock is closed: the
+        // layout's active panel is what tells `add_panel` whether the layout
+        // already knew about that panel. Dropping the pending state before the
+        // panel exists would let `Panel::starts_open` reopen a closed dock.
+        // The non-OHOS build keeps the previous behavior unchanged.
+        #[cfg(target_env = "ohos")]
+        let waiting_for_active_panel = serialized
+            .active_panel
+            .as_deref()
+            .is_some_and(|name| self.panel_index_for_persistent_name(name, cx).is_none());
+        #[cfg(not(target_env = "ohos"))]
         let waiting_for_active_panel = serialized
             .active_panel
             .as_deref()
             .filter(|_| serialized.visible)
             .is_some_and(|name| self.panel_index_for_persistent_name(name, cx).is_none());
+        // [OHOS PORT END]
         if waiting_for_active_panel {
             self.set_open_internal(serialized.visible, window, cx);
         } else {
@@ -872,6 +913,15 @@ impl Dock {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A panel introduced after this layout was saved overrides the dock's
+        // saved visibility; see `Panel::starts_open_overrides_restore`. A saved
+        // layout that names the panel as its active one already knows about it,
+        // so its visible flag is obeyed: otherwise closing the panel could never
+        // be made to stick.
+        let opened_by_new_panel = self.panel_entries.iter().any(|entry| {
+            entry.panel.starts_open_overrides_restore(cx)
+                && serialized.active_panel.as_deref() != Some(entry.panel.persistent_name())
+        });
         if let Some(active_panel) = serialized
             .active_panel
             .as_deref()
@@ -885,7 +935,9 @@ impl Dock {
         {
             panel.set_zoomed(true, window, cx)
         }
-        self.set_open_internal(serialized.visible, window, cx);
+        if !opened_by_new_panel {
+            self.set_open_internal(serialized.visible, window, cx);
+        }
     }
 
     pub(crate) fn finish_restoration(&mut self) {

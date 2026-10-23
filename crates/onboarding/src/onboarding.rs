@@ -2,6 +2,8 @@ use crate::multibuffer_hint::MultibufferHint;
 use client::{Client, UserStore, zed_urls};
 use db::kvp::KeyValueStore;
 use fs::Fs;
+#[cfg(target_env = "ohos")]
+use gpui::img;
 use gpui::{
     Action, AnyElement, App, AppContext, AsyncWindowContext, Context, Entity, EventEmitter,
     FocusHandle, Focusable, Global, IntoElement, KeyContext, Render, ScrollHandle, SharedString,
@@ -12,9 +14,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use settings::{SettingsStore, VsCodeSettingsSource};
 use std::sync::Arc;
+#[cfg(not(target_env = "ohos"))]
+use ui::{Vector, VectorName};
 use ui::{
-    Divider, KeyBinding, ParentElement as _, StatefulInteractiveElement, Vector, VectorName,
-    WithScrollbar as _, prelude::*, rems_from_px,
+    Divider, KeyBinding, ParentElement as _, StatefulInteractiveElement, WithScrollbar as _,
+    prelude::*, rems_from_px,
 };
 
 pub use workspace::welcome::ShowWelcome;
@@ -52,6 +56,44 @@ pub struct ImportCursorSettings {
 }
 
 pub const FIRST_OPEN: &str = "first_open";
+
+// [OHOS PORT BEGIN] HiCodeer shows its own product name and tagline at the top
+// of the onboarding page. Other platforms keep the upstream strings.
+#[cfg(target_env = "ohos")]
+fn onboarding_title() -> &'static str {
+    "HiCodeer"
+}
+
+#[cfg(not(target_env = "ohos"))]
+fn onboarding_title() -> &'static str {
+    localization::localized_str!("Welcome to Zed")
+}
+
+#[cfg(target_env = "ohos")]
+fn onboarding_tagline() -> &'static str {
+    localization::localized_str!("Great to use, easy to read")
+}
+
+#[cfg(not(target_env = "ohos"))]
+fn onboarding_tagline() -> &'static str {
+    localization::localized_str!("The editor for what's next")
+}
+
+#[cfg(target_env = "ohos")]
+fn onboarding_logo(size: Rems) -> AnyElement {
+    img("images/hicodeer.png")
+        .flex_none()
+        .w(size)
+        .h(size)
+        .rounded(px(6.0))
+        .into_any_element()
+}
+
+#[cfg(not(target_env = "ohos"))]
+fn onboarding_logo(size: Rems) -> AnyElement {
+    Vector::square(VectorName::ZedLogo, size).into_any_element()
+}
+// [OHOS PORT END]
 
 actions!(
     onboarding,
@@ -129,6 +171,10 @@ pub fn init(cx: &mut App) {
         });
     });
 
+    // [OHOS PORT BEGIN] Importing settings from VS Code or Cursor is not
+    // supported here, so neither action is registered and neither shows up in
+    // the command palette.
+    #[cfg(not(target_env = "ohos"))]
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(|_workspace, action: &ImportVsCodeSettings, window, cx| {
             let fs = <dyn Fs>::global(cx);
@@ -171,6 +217,7 @@ pub fn init(cx: &mut App) {
         });
     })
     .detach();
+    // [OHOS PORT END]
 
     base_keymap_picker::init(cx);
 
@@ -238,6 +285,13 @@ impl Onboarding {
 
     fn on_finish(_: &Finish, _: &mut Window, cx: &mut App) {
         telemetry::event!("Finish Setup");
+        // [OHOS PORT BEGIN] The Agent panel stays closed while setup is on
+        // screen, so finishing setup is what opens it.
+        #[cfg(target_env = "ohos")]
+        with_active_or_new_workspace(cx, |workspace, window, cx| {
+            workspace.open_panel::<agent_panel::AgentPanel>(window, cx);
+        });
+        // [OHOS PORT END]
         go_to_welcome_page(cx);
     }
 
@@ -310,15 +364,15 @@ impl Render for Onboarding {
                                     .child(
                                         h_flex()
                                             .gap_4()
-                                            .child(Vector::square(VectorName::ZedLogo, rems(2.5)))
+                                            .child(onboarding_logo(rems(2.5)))
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        Headline::new(localization::localized_str!("Welcome to Zed"))
+                                                        Headline::new(onboarding_title())
                                                             .size(HeadlineSize::Small),
                                                     )
                                                     .child(
-                                                        Label::new(localization::localized_str!("The editor for what's next"))
+                                                        Label::new(onboarding_tagline())
                                                             .color(Color::Muted)
                                                             .size(LabelSize::Small)
                                                             .italic(),

@@ -74,8 +74,33 @@ const AGENT_SETTINGS_KEY_SEQUENCE: &[u8] = &[0x02, b's'];
 /// small, so a space reads as the heading of its block.
 const SPACE_LABEL_SIZE: LabelSize = LabelSize::Default;
 /// Width used when neither the user's settings nor the packaged defaults give
-/// the panel one. The OHOS defaults set the same value.
-const DEFAULT_PANEL_WIDTH: Pixels = px(224.0);
+/// the panel one. The OHOS defaults set the same value. It is one full-width
+/// (CJK) character wider than upstream's 224px, so a Chinese label plus its
+/// row padding does not get truncated.
+const DEFAULT_PANEL_WIDTH: Pixels = px(238.0);
+/// Key the onboarding flow writes once the user finishes it. Mirrors
+/// `onboarding::FIRST_OPEN`; spelled out here so this crate does not depend on
+/// the onboarding crate.
+#[cfg(target_env = "ohos")]
+const ONBOARDING_FIRST_OPEN_KEY: &str = "first_open";
+
+// [OHOS PORT BEGIN] Until the first-run onboarding flow is completed the panel
+// does not open itself, so the setup page owns the whole window. The status bar
+// entry stays available, and the flag is read on demand rather than cached, so
+// finishing onboarding in the same session takes effect immediately.
+#[cfg(target_env = "ohos")]
+fn hidden_until_onboarding() -> bool {
+    !matches!(
+        db::kvp::GlobalKeyValueStore::global().read_kvp(ONBOARDING_FIRST_OPEN_KEY),
+        Ok(Some(_))
+    )
+}
+
+#[cfg(not(target_env = "ohos"))]
+fn hidden_until_onboarding() -> bool {
+    false
+}
+// [OHOS PORT END]
 
 actions!(
     agent_panel,
@@ -795,9 +820,12 @@ impl AgentPanel {
             .items_center()
             .px_3()
             .child(
+                // Same type as the Project Panel's empty-state "Open Project"
+                // text: the default label size and text colour, not the small
+                // muted variant used for secondary metadata.
                 Label::new(message)
-                    .size(LabelSize::Small)
-                    .color(Color::Muted)
+                    .size(LabelSize::Default)
+                    .color(Color::Default)
                     .text_center(),
             )
             .into_any_element()
@@ -1040,11 +1068,11 @@ impl Panel for AgentPanel {
     }
 
     fn starts_open(&self, _window: &Window, cx: &App) -> bool {
-        AgentPanelSettings::get_global(cx).starts_open
+        !hidden_until_onboarding() && AgentPanelSettings::get_global(cx).starts_open
     }
 
     fn starts_open_overrides_restore(&self, cx: &App) -> bool {
-        AgentPanelSettings::get_global(cx).starts_open
+        !hidden_until_onboarding() && AgentPanelSettings::get_global(cx).starts_open
     }
 
     fn activation_priority(&self) -> u32 {

@@ -16,6 +16,7 @@ doctest = false
 [dependencies]
 anyhow.workspace = true
 cmd-client = { path = "../gpui_ohos/depend/cmd-agent/cmd-client" }
+db.workspace = true
 editor.workspace = true
 fs.workspace = true
 gpui.workspace = true

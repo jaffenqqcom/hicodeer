@@ -17,6 +17,7 @@ doctest = false
 default = []
 
 [dependencies]
+agent_panel = { path = "../agent_panel" }
 localization.workspace = true
 anyhow.workspace = true
 client.workspace = true

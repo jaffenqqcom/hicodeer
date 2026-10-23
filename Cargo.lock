@@ -203,6 +203,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cmd-client",
+ "db",
  "editor",
  "fs",
  "gpui",
@@ -10553,6 +10554,7 @@ dependencies = [
 name = "onboarding"
 version = "0.1.0"
 dependencies = [
+ "agent_panel",
  "anyhow",
  "client",
  "cloud_api_types",

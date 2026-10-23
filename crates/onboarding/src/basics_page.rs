@@ -1,22 +1,29 @@
 use std::sync::Arc;
 
-use client::{TelemetrySettings, UserStore};
+#[cfg(not(target_env = "ohos"))]
+use client::TelemetrySettings;
+use client::UserStore;
 use fs::Fs;
 use gpui::{Action, App, Entity, IntoElement};
 use project::project_settings::ProjectSettings;
 use settings::{BaseKeymap, Settings, update_settings_file};
 use theme::{Appearance, SystemAppearance, ThemeRegistry};
 use theme_settings::{ThemeAppearanceMode, ThemeName, ThemeSelection, ThemeSettings};
+#[cfg(not(target_env = "ohos"))]
+use ui::Divider;
 use ui::{
-    Divider, StatefulInteractiveElement, SwitchField, TintColor, ToggleButtonGroup,
+    StatefulInteractiveElement, SwitchField, TintColor, ToggleButtonGroup,
     ToggleButtonGroupSize, ToggleButtonSimple, ToggleButtonWithIcon, Tooltip, prelude::*,
 };
 use vim_mode_setting::VimModeSetting;
 
+#[cfg(not(target_env = "ohos"))]
 use crate::{
     ImportCursorSettings, ImportVsCodeSettings, SettingsImportState,
     theme_preview::{ThemePreviewStyle, ThemePreviewTile},
 };
+#[cfg(target_env = "ohos")]
+use crate::theme_preview::{ThemePreviewStyle, ThemePreviewTile};
 
 const LIGHT_THEMES: [&str; 3] = ["One Light", "Ayu Light", "Gruvbox Light"];
 const DARK_THEMES: [&str; 3] = ["One Dark", "Ayu Dark", "Gruvbox Dark"];
@@ -233,6 +240,7 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
     }
 }
 
+#[cfg(not(target_env = "ohos"))]
 fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement {
     let fs = <dyn Fs>::global(cx);
 
@@ -242,7 +250,7 @@ fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement
             SwitchField::new(
                 "onboarding-telemetry-metrics",
                 None::<&str>,
-                Some(localization::localized_str!("Help improve Zed by sending anonymous usage data").into()),
+                Some(localization::localized_str!("Help improve HiCodeer by sending anonymous usage data").into()),
                 if TelemetrySettings::get_global(cx).metrics {
                     ui::ToggleState::Selected
                 } else {
@@ -282,7 +290,7 @@ fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement
                 "onboarding-telemetry-crash-reports",
                 None::<&str>,
                 Some(
-                    localization::localized_str!("Help fix Zed by sending crash reports so we can fix critical issues fast")
+                    localization::localized_str!("Help fix HiCodeer by sending crash reports so we can fix critical issues fast")
                         .into(),
                 ),
                 if TelemetrySettings::get_global(cx).diagnostics {
@@ -338,7 +346,7 @@ fn render_base_keymap_section(tab_index: &mut isize, cx: &mut App) -> impl IntoE
         ToggleButtonGroup::two_rows(
             "base_keymap_selection",
             [
-                ToggleButtonWithIcon::new("Zed", IconName::AiZed, |_, _, cx| {
+                ToggleButtonWithIcon::new("Default", IconName::AiZed, |_, _, cx| {
                     write_keymap_base(BaseKeymap::Zed, cx);
                 }),
                 ToggleButtonWithIcon::new("VS Code", IconName::EditorVsCode, |_, _, cx| {
@@ -431,12 +439,12 @@ fn render_worktree_auto_trust_switch(tab_index: &mut isize, cx: &mut App) -> imp
         ui::ToggleState::Unselected
     };
 
-    let tooltip_description = localization::localized_str!("Zed can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.");
+    let tooltip_description = localization::localized_str!("HiCodeer can only allow services like language servers, project settings, and MCP servers to run after you mark a new project as trusted.");
 
     SwitchField::new(
         "onboarding-auto-trust-worktrees",
         Some(localization::localized_str!("Trust All Projects By Default")),
-        Some(localization::localized_str!("Automatically mark all new projects as trusted to unlock all Zed's features").into()),
+        Some(localization::localized_str!("Automatically mark all new projects as trusted to unlock all HiCodeer's features").into()),
         toggle_state,
         {
             let fs = <dyn Fs>::global(cx);
@@ -466,6 +474,7 @@ fn render_worktree_auto_trust_switch(tab_index: &mut isize, cx: &mut App) -> imp
     .tooltip(Tooltip::text(tooltip_description))
 }
 
+#[cfg(not(target_env = "ohos"))]
 fn render_setting_import_button(
     tab_index: isize,
     label: SharedString,
@@ -491,6 +500,7 @@ fn render_setting_import_button(
         })
 }
 
+#[cfg(not(target_env = "ohos"))]
 fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement {
     let import_state = SettingsImportState::global(cx);
     let imports: [(SharedString, &dyn Action, bool); 2] = [
@@ -531,14 +541,31 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
 pub(crate) fn render_basics_page(_user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoElement {
     let mut tab_index = 0;
 
-    v_flex()
+    let page = v_flex()
         .id("basics-page")
         .gap_6()
         .child(render_theme_section(&mut tab_index, cx))
-        .child(render_base_keymap_section(&mut tab_index, cx))
-        .child(render_import_settings_section(&mut tab_index, cx))
+        .child(render_base_keymap_section(&mut tab_index, cx));
+
+    // [OHOS PORT BEGIN] Importing settings from VS Code or Cursor reads another
+    // editor's configuration from paths this build cannot reach, so the
+    // section is not offered.
+    #[cfg(not(target_env = "ohos"))]
+    let page = page.child(render_import_settings_section(&mut tab_index, cx));
+    // [OHOS PORT END]
+
+    let page = page
         .child(render_vim_mode_switch(&mut tab_index, cx))
-        .child(render_worktree_auto_trust_switch(&mut tab_index, cx))
+        .child(render_worktree_auto_trust_switch(&mut tab_index, cx));
+
+    // [OHOS PORT BEGIN] HiCodeer collects no usage data or crash reports, so the
+    // onboarding page offers no telemetry switches and the section that hosts
+    // them is not built at all.
+    #[cfg(not(target_env = "ohos"))]
+    let page = page
         .child(Divider::horizontal().color(ui::DividerColor::BorderVariant))
-        .child(render_telemetry_section(&mut tab_index, cx))
+        .child(render_telemetry_section(&mut tab_index, cx));
+    // [OHOS PORT END]
+
+    page
 }

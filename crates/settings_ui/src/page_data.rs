@@ -53,7 +53,7 @@ macro_rules! concat_sections {
 }
 
 pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
-    vec![
+    let mut pages = vec![
         general_page(cx),
         appearance_page(),
         keymap_page(),
@@ -63,10 +63,18 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         window_and_layout_page(),
         panels_page(),
         terminal_page(),
+    ];
+    // [OHOS PORT] The agent terminal's settings have no upstream counterpart.
+    // The page sits right after Terminal because it configures that panel's
+    // terminal.
+    #[cfg(target_env = "ohos")]
+    pages.push(crate::ohos_agent_settings::page());
+    pages.extend([
         version_control_page(),
         network_page(),
         developer_page(cx),
-    ]
+    ]);
+    pages
 }
 
 fn developer_page(cx: &App) -> SettingsPage {

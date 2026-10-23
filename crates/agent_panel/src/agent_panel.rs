@@ -6,7 +6,9 @@
 //! with its agents nested one level underneath, in the server's order, carrying
 //! the server's own status for each agent.
 
+pub mod agent_display;
 mod client;
+pub mod herdr_settings;
 mod snapshot;
 
 use std::sync::Arc;
@@ -144,6 +146,9 @@ pub struct AgentPanelSettings {
     pub dock: DockPosition,
     pub default_width: Pixels,
     pub starts_open: bool,
+    /// Whether agent integrations are installed as soon as the endpoint can
+    /// answer for them. Written by the settings page.
+    pub auto_install_integrations: bool,
 }
 
 impl Settings for AgentPanelSettings {
@@ -157,12 +162,18 @@ impl Settings for AgentPanelSettings {
                 .map(IntoGpui::into_gpui)
                 .unwrap_or(DEFAULT_PANEL_WIDTH),
             starts_open: panel.starts_open.unwrap_or(true),
+            auto_install_integrations: panel.auto_install_integrations.unwrap_or(true),
         }
     }
 }
 
 pub fn init(cx: &mut App) {
     AgentPanelSettings::register(cx);
+    #[cfg(target_env = "ohos")]
+    {
+        cx.set_global(herdr_settings::AgentIntegrations::default());
+        cx.set_global(herdr_settings::TerminalSettingsCache::default());
+    }
 
     cx.observe_new(|workspace: &mut Workspace, _, cx| {
         register(workspace, cx);
@@ -284,6 +295,8 @@ impl AgentPanel {
                 self.wanted = true;
                 self.needs_sync = true;
                 self.reconcile_pending_focus();
+                #[cfg(target_env = "ohos")]
+                self.ensure_integrations(cx);
             }
             Err(ClientError::NotReady) => {
                 // No endpoint at all: the daemon went away and the bootstrap
@@ -304,6 +317,20 @@ impl AgentPanel {
             }
         }
         cx.notify();
+    }
+
+    /// Installs missing agent integrations once the endpoint can answer, and
+    /// re-checks after a while so an agent installed later is picked up. The
+    /// switch belongs to the settings page; this loop only reacts to it.
+    #[cfg(target_env = "ohos")]
+    fn ensure_integrations(&mut self, cx: &mut Context<Self>) {
+        if !AgentPanelSettings::get_global(cx).auto_install_integrations {
+            return;
+        }
+        if !herdr_settings::automatic_check_due(cx) {
+            return;
+        }
+        herdr_settings::refresh_integrations(cx, true);
     }
 
     /// Drops a click claim once the server agrees with it, or once it is old
@@ -770,12 +797,19 @@ impl AgentPanel {
                 .w_full()
                 .gap_1p5()
                 .child(status_slot(marker, marker_color))
+                .when(!agent.kind.is_empty(), |this| {
+                    this.child(
+                        Icon::new(agent_display::agent_icon(&agent.kind))
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
+                })
                 .child(
                     h_flex()
                         .flex_1()
                         .min_w_0()
                         .h_6()
-                        .child(Label::new(agent.name.clone())),
+                        .child(Label::new(agent_display::capitalize(&agent.name))),
                 ),
         )
         .on_click(move |_, window, cx| {
@@ -915,16 +949,15 @@ fn log_client_error(action: &str, err: ClientError) {
 /// The marker drawn before a row, in the same slot the sidebar uses for a
 /// thread's icon.
 ///
-/// Shape carries the state and colour repeats it: filled for an agent that is
-/// working, blocked, or done-but-unread, hollow for an idle one, and a tiny dot
-/// when nothing has been detected yet. Collapsing done, idle, and unknown into
-/// one "completed" row -- which is all the sidebar's own status enum offers --
-/// would make three different states look identical.
+/// These are the terminal's "distinct symbols" indicators: one glyph per state,
+/// so the row reads the same way in the panel as in the terminal, and the shape
+/// alone already separates blocked, working, done, and idle. Colour repeats the
+/// state but is not what carries it.
 fn status_marker(status: AgentStatus) -> (SharedString, Color) {
     match status {
-        AgentStatus::Working => ("●".into(), Color::Warning),
-        AgentStatus::Blocked => ("●".into(), Color::Error),
-        AgentStatus::Done => ("●".into(), Color::Created),
+        AgentStatus::Blocked => ("×".into(), Color::Error),
+        AgentStatus::Working => ("◐".into(), Color::Warning),
+        AgentStatus::Done => ("✓".into(), Color::Created),
         AgentStatus::Idle => ("○".into(), Color::Success),
         AgentStatus::Unknown => ("·".into(), Color::Disabled),
     }

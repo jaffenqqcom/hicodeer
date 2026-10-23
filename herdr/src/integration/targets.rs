@@ -16,8 +16,9 @@ use super::config_edit::{
     build_codex_config_with_hooks, build_kimi_config_with_hooks, ensure_command_hook,
     ensure_direct_command_hook, ensure_flat_command_hook, ensure_hermes_plugin_enabled,
     ensure_hooks_object, ensure_simple_command_hook, hooks_object_if_present,
-    remove_direct_hook_commands, remove_flat_command_hook, remove_hermes_plugin_enabled,
-    remove_hook_commands, remove_kimi_config_block, remove_simple_command_hook,
+    remove_direct_hook_commands, remove_flat_command_hook, remove_hermes_legacy_plugin,
+    remove_hermes_plugin_enabled, remove_hook_commands, remove_kimi_config_block,
+    remove_simple_command_hook,
 };
 use super::config_file::{check_config_targets, write_config};
 use super::env::{
@@ -56,7 +57,12 @@ use super::{
     GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME, HERMES_PLUGIN_INIT_ASSET,
     HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
     HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
-    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, LETTA_HOOK_ASSET, LETTA_HOOK_INSTALL_NAME,
+    LEGACY_HERMES_PLUGIN_NAME, LEGACY_KILO_PLUGIN_INSTALL_NAME,
+    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, LEGACY_OMP_EXTENSION_INSTALL_NAME,
+    LEGACY_OPENCODE_PLUGIN_INSTALL_NAME, LEGACY_OPENCODE_TUI_PLUGIN_INSTALL_NAME,
+    LEGACY_OPENCODE_TUI_PLUGIN_SPEC, LEGACY_OPENCODE_V2_TUI_PLUGIN_DIR,
+    LEGACY_OPENCODE_V2_TUI_PLUGIN_SPEC, LEGACY_PI_EXTENSION_INSTALL_NAME, LETTA_HOOK_ASSET,
+    LETTA_HOOK_INSTALL_NAME,
     LETTA_HOOK_TIMEOUT_MS, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
     MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
     OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET,
@@ -79,10 +85,42 @@ fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
     )))
 }
 
+/// Removes a plugin directory this integration created.
+///
+/// The entry point it always writes there proves the directory is ours, so a
+/// directory of the user's own that happens to share the name survives.
+fn remove_legacy_plugin_dir(dir: &Path) -> io::Result<bool> {
+    if !dir.join("tui.js").is_file() {
+        return Ok(false);
+    }
+    remove_dir_all_if_exists(dir)
+}
+
+/// Removes a file an integration installed under its previous name.
+///
+/// The marker line proves the file is ours, so a file that merely shares the
+/// name is left alone. Returns whether a file was removed.
+fn remove_legacy_integration_file(path: &Path, marker: &str) -> io::Result<bool> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    if !content.contains(marker) {
+        return Ok(false);
+    }
+    fs::remove_file(path)?;
+    Ok(true)
+}
+
 pub(crate) fn install_pi() -> io::Result<PathBuf> {
     let dir = pi_extension_dir()?;
     ensure_extension_dir(&dir, "pi")?;
 
+    remove_legacy_integration_file(
+        &dir.join(LEGACY_PI_EXTENSION_INSTALL_NAME),
+        "HERDR_INTEGRATION_ID=pi",
+    )?;
     let path = dir.join(PI_EXTENSION_INSTALL_NAME);
     fs::write(&path, PI_EXTENSION_ASSET)?;
     Ok(path)
@@ -100,6 +138,10 @@ pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
     ensure_extension_dir(&dir, "omp")?;
 
     let removed_legacy_pi_extension = remove_legacy_pi_extension_from_omp_dir(&dir)?;
+    remove_legacy_integration_file(
+        &dir.join(LEGACY_OMP_EXTENSION_INSTALL_NAME),
+        "HERDR_INTEGRATION_ID=omp",
+    )?;
     let extension_path = dir.join(OMP_EXTENSION_INSTALL_NAME);
     fs::write(&extension_path, OMP_EXTENSION_ASSET)?;
     Ok(OmpInstallPaths {
@@ -109,7 +151,7 @@ pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
 }
 
 pub(crate) fn remove_legacy_pi_extension_from_omp_dir(dir: &Path) -> io::Result<bool> {
-    let legacy_path = dir.join(PI_EXTENSION_INSTALL_NAME);
+    let legacy_path = dir.join(LEGACY_PI_EXTENSION_INSTALL_NAME);
     if !legacy_path.is_file() {
         return Ok(false);
     }
@@ -476,6 +518,18 @@ pub(crate) fn install_opencode() -> io::Result<OpenCodeInstallPaths> {
     let plugins_dir = dir.join("plugins");
     fs::create_dir_all(&plugins_dir)?;
 
+    remove_legacy_integration_file(
+        &plugins_dir.join(LEGACY_OPENCODE_PLUGIN_INSTALL_NAME),
+        "HERDR_INTEGRATION_ID=opencode",
+    )?;
+    remove_legacy_integration_file(
+        &dir.join(LEGACY_OPENCODE_TUI_PLUGIN_INSTALL_NAME),
+        "HERDR_INTEGRATION_ID=opencode-tui",
+    )?;
+    remove_tui_plugin(&dir, LEGACY_OPENCODE_TUI_PLUGIN_SPEC)?;
+    remove_cli_plugin(&dir, LEGACY_OPENCODE_V2_TUI_PLUGIN_SPEC)?;
+    remove_legacy_plugin_dir(&dir.join(LEGACY_OPENCODE_V2_TUI_PLUGIN_DIR))?;
+
     let plugin_path = plugins_dir.join(OPENCODE_PLUGIN_INSTALL_NAME);
     fs::write(&plugin_path, OPENCODE_PLUGIN_ASSET)?;
     let tui_plugin_path = dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME);
@@ -510,6 +564,10 @@ pub(crate) fn install_kilo() -> io::Result<KiloInstallPaths> {
     let plugins_dir = dir.join("plugin");
     fs::create_dir_all(&plugins_dir)?;
 
+    remove_legacy_integration_file(
+        &plugins_dir.join(LEGACY_KILO_PLUGIN_INSTALL_NAME),
+        "HERDR_INTEGRATION_ID=kilo",
+    )?;
     let plugin_path = plugins_dir.join(KILO_PLUGIN_INSTALL_NAME);
     fs::write(&plugin_path, KILO_PLUGIN_ASSET)?;
 
@@ -527,6 +585,7 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
     }
 
     let plugin_dir = hermes_plugin_dir()?;
+    remove_dir_all_if_exists(&plugin_dir.with_file_name(LEGACY_HERMES_PLUGIN_NAME))?;
     fs::create_dir_all(&plugin_dir)?;
     fs::write(
         plugin_dir.join(HERMES_PLUGIN_MANIFEST_INSTALL_NAME),
@@ -543,7 +602,7 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
     } else {
         String::new()
     };
-    let new_config = ensure_hermes_plugin_enabled(&existing_config);
+    let new_config = remove_hermes_legacy_plugin(&ensure_hermes_plugin_enabled(&existing_config));
     if new_config != existing_config {
         write_config(&config_path, new_config)?;
     }
@@ -555,8 +614,10 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
 }
 
 pub(crate) fn uninstall_pi() -> io::Result<PiUninstallResult> {
-    let extension_path = pi_extension_dir()?.join(PI_EXTENSION_INSTALL_NAME);
-    let removed_extension = remove_file_if_exists(&extension_path)?;
+    let dir = pi_extension_dir()?;
+    let extension_path = dir.join(PI_EXTENSION_INSTALL_NAME);
+    let removed_extension = remove_file_if_exists(&extension_path)?
+        | remove_file_if_exists(&dir.join(LEGACY_PI_EXTENSION_INSTALL_NAME))?;
 
     Ok(PiUninstallResult {
         extension_path,
@@ -565,8 +626,10 @@ pub(crate) fn uninstall_pi() -> io::Result<PiUninstallResult> {
 }
 
 pub(crate) fn uninstall_omp() -> io::Result<OmpUninstallResult> {
-    let extension_path = omp_extension_dir()?.join(OMP_EXTENSION_INSTALL_NAME);
-    let removed_extension = remove_file_if_exists(&extension_path)?;
+    let dir = omp_extension_dir()?;
+    let extension_path = dir.join(OMP_EXTENSION_INSTALL_NAME);
+    let removed_extension = remove_file_if_exists(&extension_path)?
+        | remove_file_if_exists(&dir.join(LEGACY_OMP_EXTENSION_INSTALL_NAME))?;
 
     Ok(OmpUninstallResult {
         extension_path,
@@ -966,6 +1029,40 @@ pub(crate) fn uninstall_opencode() -> io::Result<OpenCodeUninstallResult> {
             errors.push(err.to_string());
             Vec::new()
         });
+    remove_tui_plugin(&dir, LEGACY_OPENCODE_TUI_PLUGIN_SPEC).unwrap_or_else(|err| {
+        errors.push(err.to_string());
+        Vec::new()
+    });
+    remove_cli_plugin(&dir, LEGACY_OPENCODE_V2_TUI_PLUGIN_SPEC).unwrap_or_else(|err| {
+        errors.push(err.to_string());
+        false
+    });
+    let legacy_v2_dir = dir.join(LEGACY_OPENCODE_V2_TUI_PLUGIN_DIR);
+    remove_legacy_plugin_dir(&legacy_v2_dir).unwrap_or_else(|err| {
+        errors.push(format!(
+            "failed to remove {}: {err}",
+            legacy_v2_dir.display()
+        ));
+        false
+    });
+    let legacy_plugin_path = dir
+        .join("plugins")
+        .join(LEGACY_OPENCODE_PLUGIN_INSTALL_NAME);
+    remove_file_if_exists(&legacy_plugin_path).unwrap_or_else(|err| {
+        errors.push(format!(
+            "failed to remove {}: {err}",
+            legacy_plugin_path.display()
+        ));
+        false
+    });
+    let legacy_tui_plugin_path = dir.join(LEGACY_OPENCODE_TUI_PLUGIN_INSTALL_NAME);
+    remove_file_if_exists(&legacy_tui_plugin_path).unwrap_or_else(|err| {
+        errors.push(format!(
+            "failed to remove {}: {err}",
+            legacy_tui_plugin_path.display()
+        ));
+        false
+    });
     let removed_plugin = remove_file_if_exists(&plugin_path).unwrap_or_else(|err| {
         errors.push(format!("failed to remove {}: {err}", plugin_path.display()));
         false
@@ -991,8 +1088,10 @@ pub(crate) fn uninstall_opencode() -> io::Result<OpenCodeUninstallResult> {
 }
 
 pub(crate) fn uninstall_kilo() -> io::Result<KiloUninstallResult> {
-    let plugin_path = kilo_dir()?.join("plugin").join(KILO_PLUGIN_INSTALL_NAME);
-    let removed_plugin = remove_file_if_exists(&plugin_path)?;
+    let plugins_dir = kilo_dir()?.join("plugin");
+    let plugin_path = plugins_dir.join(KILO_PLUGIN_INSTALL_NAME);
+    let removed_plugin = remove_file_if_exists(&plugin_path)?
+        | remove_file_if_exists(&plugins_dir.join(LEGACY_KILO_PLUGIN_INSTALL_NAME))?;
 
     Ok(KiloUninstallResult {
         plugin_path,
@@ -1007,10 +1106,12 @@ pub(crate) fn uninstall_hermes() -> io::Result<HermesUninstallResult> {
     let config_path = dir.join("config.yaml");
 
     let removed_plugin_dir = remove_dir_all_if_exists(&plugin_dir)?;
+    remove_dir_all_if_exists(&plugin_dir.with_file_name(LEGACY_HERMES_PLUGIN_NAME))?;
     let mut updated_config = false;
     if config_path.is_file() {
         let existing_config = fs::read_to_string(&config_path)?;
-        let new_config = remove_hermes_plugin_enabled(&existing_config);
+        let new_config =
+            remove_hermes_legacy_plugin(&remove_hermes_plugin_enabled(&existing_config));
         if new_config != existing_config {
             write_config(&config_path, new_config)?;
             updated_config = true;

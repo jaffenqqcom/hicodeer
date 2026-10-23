@@ -4,6 +4,12 @@
 # The server's own sidebar starts collapsed into nothing: no rail, no arrow.
 # The TUI keeps everything else (panes, tabs, keybindings) unchanged.
 
+# Fixed theme: this build does not expose a theme choice, and the default
+# `catppuccin` was never picked for HiCodeer. `auto_switch` stays off (its own
+# default), so the host appearance cannot override this.
+[theme]
+name = "dracula"
+
 [ui]
 sidebar_start_collapsed = true
 sidebar_collapsed_mode = "hidden"

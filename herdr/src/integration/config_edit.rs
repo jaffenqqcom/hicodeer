@@ -8,6 +8,7 @@ use super::command::{hook_command, legacy_bash_hook_command};
 use super::file_ops::legacy_bash_hook_path;
 use super::{
     HERMES_PLUGIN_INSTALL_NAME, KIMI_CONFIG_BLOCK_BEGIN, KIMI_CONFIG_BLOCK_END, KIMI_HOOK_EVENTS,
+    LEGACY_HERMES_PLUGIN_NAME,
 };
 
 pub(crate) fn ensure_hooks_object<'a>(
@@ -346,8 +347,11 @@ pub(crate) fn remove_hook_commands(
     action: Option<&str>,
 ) -> io::Result<bool> {
     let mut removed = false;
-    for command in hook_command_variants(hook_path, action) {
-        removed |= remove_command_hook(hooks, event, &command)?;
+    let paths = std::iter::once(hook_path.to_path_buf()).chain(super::legacy_hook_paths(hook_path));
+    for path in paths {
+        for command in hook_command_variants(&path, action) {
+            removed |= remove_command_hook(hooks, event, &command)?;
+        }
     }
     Ok(removed)
 }
@@ -359,8 +363,11 @@ pub(crate) fn remove_direct_hook_commands(
     action: Option<&str>,
 ) -> io::Result<bool> {
     let mut removed = false;
-    for command in hook_command_variants(hook_path, action) {
-        removed |= remove_direct_command_hook(hooks, event, &command)?;
+    let paths = std::iter::once(hook_path.to_path_buf()).chain(super::legacy_hook_paths(hook_path));
+    for path in paths {
+        for command in hook_command_variants(&path, action) {
+            removed |= remove_direct_command_hook(hooks, event, &command)?;
+        }
     }
     Ok(removed)
 }
@@ -403,6 +410,15 @@ pub(crate) fn remove_hermes_plugin_enabled(content: &str) -> String {
 /// Unrelated sibling entries and comments are retained, and repeating the same
 /// enable or disable operation leaves the result unchanged.
 pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> String {
+    update_hermes_named_plugin(content, HERMES_PLUGIN_INSTALL_NAME, enabled)
+}
+
+/// Disables the plugin entry the integration used before it was renamed.
+pub(crate) fn remove_hermes_legacy_plugin(content: &str) -> String {
+    update_hermes_named_plugin(content, LEGACY_HERMES_PLUGIN_NAME, false)
+}
+
+fn update_hermes_named_plugin(content: &str, plugin_name: &str, enabled: bool) -> String {
     let trailing_newline = content.ends_with('\n');
     let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
     let Some(plugins_index) = top_level_yaml_key_index(&lines, "plugins") else {
@@ -413,7 +429,9 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
         if !result.is_empty() {
             result.push('\n');
         }
-        result.push_str("plugins:\n  enabled:\n    - herdr-agent-state\n");
+        result.push_str(&format!(
+            "plugins:\n  enabled:\n    - {plugin_name}\n"
+        ));
         return result;
     };
 
@@ -450,7 +468,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
             lines.insert(plugins_index + 1, format!("{indent}enabled:"));
             lines.insert(
                 plugins_index + 2,
-                format!("{indent}  - {HERMES_PLUGIN_INSTALL_NAME}"),
+                format!("{indent}  - {plugin_name}"),
             );
             return join_yaml_lines(lines, trailing_newline);
         }
@@ -460,12 +478,12 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
     if let Some(mut items) = flow_items {
         let contains_plugin = items
             .iter()
-            .any(|item| yaml_scalar_value(item) == HERMES_PLUGIN_INSTALL_NAME);
+            .any(|item| yaml_scalar_value(item) == plugin_name);
         match (enabled, contains_plugin) {
             (true, true) | (false, false) => return content.to_string(),
-            (true, false) => items.insert(0, HERMES_PLUGIN_INSTALL_NAME.to_string()),
+            (true, false) => items.insert(0, plugin_name.to_string()),
             (false, true) => {
-                items.retain(|item| yaml_scalar_value(item) != HERMES_PLUGIN_INSTALL_NAME)
+                items.retain(|item| yaml_scalar_value(item) != plugin_name)
             }
         }
         let comment = yaml_inline_comment(&lines[key_index]);
@@ -486,7 +504,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
                 yaml_list_item_matches_at_indent(
                     &lines[(*item).clone()],
                     sequence.indent,
-                    HERMES_PLUGIN_INSTALL_NAME,
+                    plugin_name,
                 )
             })
             .cloned()
@@ -495,10 +513,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
             (true, false) | (false, true) => return content.to_string(),
             (true, true) => lines.insert(
                 key_index + 1,
-                format!(
-                    "{}- {HERMES_PLUGIN_INSTALL_NAME}",
-                    " ".repeat(sequence.indent)
-                ),
+                format!("{}- {plugin_name}", " ".repeat(sequence.indent)),
             ),
             (false, false) => {
                 // Preserve both node properties and the sequence type, so aliases

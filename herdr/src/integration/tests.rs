@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 fn windows_powershell_encoded_hook_command_preserves_script_invocation() {
     use base64::Engine;
 
-    let hook_path = Path::new(r"C:\Users\O'Neil λ\App Data\hooks\herdr-agent-state.ps1");
+    let hook_path = Path::new(r"C:\Users\O'Neil λ\App Data\hooks\hicodeer-agent-state.ps1");
     let command = powershell_encoded_hook_command(hook_path, "session");
     let encoded = command
         .strip_prefix("powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ")
@@ -35,14 +35,14 @@ fn windows_powershell_encoded_hook_command_preserves_script_invocation() {
     assert!(chunks.remainder().is_empty(), "UTF-16LE payload");
     assert_eq!(
         String::from_utf16(&utf16).expect("PowerShell script"),
-        r"& 'C:\Users\O''Neil λ\App Data\hooks\herdr-agent-state.ps1' session"
+        r"& 'C:\Users\O''Neil λ\App Data\hooks\hicodeer-agent-state.ps1' session"
     );
 }
 
 #[cfg(windows)]
 #[test]
 fn windows_antigravity_cli_hook_command_uses_encoded_powershell() {
-    let hook_path = Path::new(r"C:\Users\reporter\.gemini\config\hooks\herdr-agent-state.ps1");
+    let hook_path = Path::new(r"C:\Users\reporter\.gemini\config\hooks\hicodeer-agent-state.ps1");
     assert_eq!(
         antigravity_cli_hook_command(hook_path, "session"),
         powershell_encoded_hook_command(hook_path, "session")
@@ -514,7 +514,7 @@ fn integration_recommendation_installs_available_or_outdated_targets() {
         label: "claude",
         command: "claude",
         available: false,
-        path: PathBuf::from("/tmp/herdr-agent-state.sh"),
+        path: PathBuf::from("/tmp/hicodeer-agent-state.sh"),
         state: IntegrationStatusKind::NotInstalled,
     };
     assert!(!recommendation.needs_install());
@@ -637,7 +637,7 @@ fn install_omp_removes_legacy_pi_integration_from_omp_extensions_dir() {
     let home = base.join("home");
     let ext_dir = home.join(".omp/agent/extensions");
     fs::create_dir_all(&ext_dir).unwrap();
-    let legacy_path = ext_dir.join(PI_EXTENSION_INSTALL_NAME);
+    let legacy_path = ext_dir.join(LEGACY_PI_EXTENSION_INSTALL_NAME);
     fs::write(&legacy_path, PI_EXTENSION_ASSET).unwrap();
     std::env::set_var("HOME", &home);
 
@@ -1188,38 +1188,38 @@ fn windows_hooks_decode_stdin_as_utf8() {
     for (name, asset) in [
         (
             "antigravity_cli",
-            include_str!("assets/antigravity_cli/herdr-agent-state.ps1"),
+            include_str!("assets/antigravity_cli/hicodeer-agent-state.ps1"),
         ),
         (
             "claude",
-            include_str!("assets/claude/herdr-agent-state.ps1"),
+            include_str!("assets/claude/hicodeer-agent-state.ps1"),
         ),
-        ("codex", include_str!("assets/codex/herdr-agent-state.ps1")),
+        ("codex", include_str!("assets/codex/hicodeer-agent-state.ps1")),
         (
             "copilot",
-            include_str!("assets/copilot/herdr-agent-state.ps1"),
+            include_str!("assets/copilot/hicodeer-agent-state.ps1"),
         ),
         (
             "cursor",
-            include_str!("assets/cursor/herdr-agent-state.ps1"),
+            include_str!("assets/cursor/hicodeer-agent-state.ps1"),
         ),
-        ("devin", include_str!("assets/devin/herdr-agent-state.ps1")),
-        ("droid", include_str!("assets/droid/herdr-agent-state.ps1")),
-        ("grok", include_str!("assets/grok/herdr-agent-state.ps1")),
-        ("kimi", include_str!("assets/kimi/herdr-agent-state.ps1")),
+        ("devin", include_str!("assets/devin/hicodeer-agent-state.ps1")),
+        ("droid", include_str!("assets/droid/hicodeer-agent-state.ps1")),
+        ("grok", include_str!("assets/grok/hicodeer-agent-state.ps1")),
+        ("kimi", include_str!("assets/kimi/hicodeer-agent-state.ps1")),
         (
             "letta",
-            include_str!("assets/letta/herdr-agent-session.ps1"),
+            include_str!("assets/letta/hicodeer-agent-session.ps1"),
         ),
         (
             "mastracode",
-            include_str!("assets/mastracode/herdr-agent-state.ps1"),
+            include_str!("assets/mastracode/hicodeer-agent-state.ps1"),
         ),
         (
             "qodercli",
-            include_str!("assets/qodercli/herdr-agent-state.ps1"),
+            include_str!("assets/qodercli/hicodeer-agent-state.ps1"),
         ),
-        ("qwen", include_str!("assets/qwen/herdr-agent-session.ps1")),
+        ("qwen", include_str!("assets/qwen/hicodeer-agent-session.ps1")),
     ] {
         assert!(
             !asset.contains("[Console]::In.ReadToEnd()"),
@@ -2514,7 +2514,7 @@ fn opencode_reuses_json_registration_in_symlinked_config_directory() {
     std::os::unix::fs::symlink(&dotfiles, &dir).unwrap();
     std::env::set_var("HOME", &home);
     let json_path = dir.join("tui.json");
-    let original = "{\n  // User preferences\n  \"theme\":\"system\",\n  \"plugin\":[\"other\",[\"./herdr-tui-session.js\",{\"enabled\":true}]]\n}\n";
+    let original = "{\n  // User preferences\n  \"theme\":\"system\",\n  \"plugin\":[\"other\",[\"./hicodeer-tui-session.js\",{\"enabled\":true}]]\n}\n";
     fs::write(&json_path, original).unwrap();
 
     for _ in 0..2 {
@@ -2538,7 +2538,7 @@ fn opencode_reuses_json_registration_in_symlinked_config_directory() {
     let jsonc_path = dir.join("tui.jsonc");
     fs::write(
         &jsonc_path,
-        r#"{"plugin":["./herdr-tui-session.js","another"]}"#,
+        r#"{"plugin":["./hicodeer-tui-session.js","another"]}"#,
     )
     .unwrap();
     assert_eq!(install_opencode().unwrap().tui_config_path, jsonc_path);
@@ -2549,7 +2549,7 @@ fn opencode_reuses_json_registration_in_symlinked_config_directory() {
     );
     let json = fs::read_to_string(&json_path).unwrap();
     assert!(json.contains("// User preferences"));
-    assert!(!json.contains("herdr-tui-session.js"));
+    assert!(!json.contains("hicodeer-tui-session.js"));
     assert!(json.contains("\"other\""));
     assert!(json.contains("\"system\""));
     assert_eq!(
@@ -2682,7 +2682,7 @@ fn opencode_json_config_validation_precedes_asset_changes() {
         .to_string()
         .contains("plugin list"));
     assert_eq!(fs::read_to_string(&plugin).unwrap(), "previous integration");
-    let original = r#"{"plugin":["./herdr-tui-session.js"]}"#;
+    let original = r#"{"plugin":["./hicodeer-tui-session.js"]}"#;
     fs::write(&config, original).unwrap();
     let alias = base.join("linked-config");
     fs::hard_link(&config, &alias).unwrap();
@@ -2869,7 +2869,7 @@ fn uninstall_opencode_removes_plugins_when_tui_config_is_invalid() {
     let json_path = opencode_dir.join("tui.json");
     fs::write(
         &json_path,
-        r#"{"plugin":["./herdr-tui-session.js","other"]}"#,
+        r#"{"plugin":["./hicodeer-tui-session.js","other"]}"#,
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -2992,7 +2992,7 @@ fn install_hermes_writes_plugin_and_enables_it() {
     );
     assert_eq!(manifest, HERMES_PLUGIN_MANIFEST_ASSET);
     assert_eq!(init, HERMES_PLUGIN_INIT_ASSET);
-    assert!(config.contains("plugins:\n  enabled:\n    - herdr-agent-state"));
+    assert!(config.contains("plugins:\n  enabled:\n    - hicodeer-agent-state"));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -3007,7 +3007,7 @@ fn install_hermes_is_idempotent_for_enabled_entry() {
     fs::create_dir_all(&hermes_dir).unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  enabled:\n    - herdr-agent-state\n",
+        "plugins:\n  enabled:\n    - hicodeer-agent-state\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3016,7 +3016,7 @@ fn install_hermes_is_idempotent_for_enabled_entry() {
     install_hermes().unwrap();
 
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
-    assert_eq!(config.matches("herdr-agent-state").count(), 1);
+    assert_eq!(config.matches("hicodeer-agent-state").count(), 1);
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -3041,7 +3041,7 @@ fn install_hermes_preserves_flat_plugin_list() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - herdr-agent-state\n  - platforms/discord\n"
+        "plugins:\n  - hicodeer-agent-state\n  - platforms/discord\n"
     );
 
     std::env::remove_var("HOME");
@@ -3067,7 +3067,7 @@ fn install_hermes_converts_flow_plugin_list_to_block_list() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - herdr-agent-state\n  - platforms/discord\n"
+        "plugins:\n  - hicodeer-agent-state\n  - platforms/discord\n"
     );
 
     std::env::remove_var("HOME");
@@ -3079,7 +3079,7 @@ fn install_hermes_converts_inline_enabled_list_to_block_list() {
     let config = update_hermes_enabled_plugin("plugins:\n  enabled: [example-plugin]\n", true);
     assert_eq!(
         config,
-        "plugins:\n  enabled:\n    - herdr-agent-state\n    - example-plugin\n"
+        "plugins:\n  enabled:\n    - hicodeer-agent-state\n    - example-plugin\n"
     );
 }
 
@@ -3089,7 +3089,7 @@ fn install_hermes_preserves_indentless_enabled_list() {
     let actual = update_hermes_enabled_plugin(input, true);
     assert_eq!(
         actual,
-        "plugins:\n  enabled:\n  - herdr-agent-state\n  - example-plugin\n  disabled:\n  - other-plugin\n",
+        "plugins:\n  enabled:\n  - hicodeer-agent-state\n  - example-plugin\n  disabled:\n  - other-plugin\n",
         "new plugin must share the existing sequence indentation"
     );
 }
@@ -3102,10 +3102,10 @@ fn hermes_block_sequences_preserve_indentation_comments_and_siblings() {
             let item_padding = " ".repeat(item_indent);
             let header = format!("plugins:\n{key_padding}enabled: # selected plugins\n");
             let tail = format!(
-                "{item_padding}# existing plugin\n{item_padding}- 'example-plugin' # keep\n\n{key_padding}disabled:\n{key_padding}- herdr-agent-state\nmodel: example"
+                "{item_padding}# existing plugin\n{item_padding}- 'example-plugin' # keep\n\n{key_padding}disabled:\n{key_padding}- hicodeer-agent-state\nmodel: example"
             );
             let input = format!("{header}{tail}");
-            let expected = format!("{header}{item_padding}- herdr-agent-state\n{tail}");
+            let expected = format!("{header}{item_padding}- hicodeer-agent-state\n{tail}");
             let installed = update_hermes_enabled_plugin(&input, true);
             assert_eq!(installed, expected);
             assert_eq!(update_hermes_enabled_plugin(&installed, true), installed);
@@ -3119,7 +3119,7 @@ fn hermes_block_sequences_preserve_indentation_comments_and_siblings() {
             "plugins: # selected\n# keep comment\n{padding}- other-plugin\nmodel: example\n"
         );
         let installed = update_hermes_enabled_plugin(&input, true);
-        assert_eq!(installed, format!("plugins: # selected\n{padding}- herdr-agent-state\n# keep comment\n{padding}- other-plugin\nmodel: example\n"));
+        assert_eq!(installed, format!("plugins: # selected\n{padding}- hicodeer-agent-state\n# keep comment\n{padding}- other-plugin\nmodel: example\n"));
         assert_eq!(update_hermes_enabled_plugin(&installed, true), installed);
         assert_eq!(update_hermes_enabled_plugin(&installed, false), input);
     }
@@ -3128,15 +3128,15 @@ fn hermes_block_sequences_preserve_indentation_comments_and_siblings() {
 #[test]
 fn hermes_sequence_membership_is_scoped_to_direct_enabled_items() {
     for input in [
-        "plugins:\n  disabled:\n  - herdr-agent-state\n  enabled:\n  - other\n",
-        "plugins:\n  enabled:\n    - options:\n        - herdr-agent-state\n",
+        "plugins:\n  disabled:\n  - hicodeer-agent-state\n  enabled:\n  - other\n",
+        "plugins:\n  enabled:\n    - options:\n        - hicodeer-agent-state\n",
     ] {
         let expected = input.replacen(
             "  enabled:\n",
             if input.contains("options:") {
-                "  enabled:\n    - herdr-agent-state\n"
+                "  enabled:\n    - hicodeer-agent-state\n"
             } else {
-                "  enabled:\n  - herdr-agent-state\n"
+                "  enabled:\n  - hicodeer-agent-state\n"
             },
             1,
         );
@@ -3149,14 +3149,14 @@ fn hermes_sequence_membership_is_scoped_to_direct_enabled_items() {
 
 #[test]
 fn install_hermes_does_not_treat_disabled_as_a_flat_plugin_list() {
-    let input = "plugins:\n    disabled:\n    - herdr-agent-state\nmodel: example\n";
+    let input = "plugins:\n    disabled:\n    - hicodeer-agent-state\nmodel: example\n";
     let installed = update_hermes_enabled_plugin(input, true);
-    assert_eq!(installed, "plugins:\n    enabled:\n      - herdr-agent-state\n    disabled:\n    - herdr-agent-state\nmodel: example\n");
+    assert_eq!(installed, "plugins:\n    enabled:\n      - hicodeer-agent-state\n    disabled:\n    - hicodeer-agent-state\nmodel: example\n");
     assert_eq!(update_hermes_enabled_plugin(&installed, true), installed);
     let uninstalled = update_hermes_enabled_plugin(&installed, false);
     assert_eq!(
         uninstalled,
-        "plugins:\n    enabled: []\n    disabled:\n    - herdr-agent-state\nmodel: example\n"
+        "plugins:\n    enabled: []\n    disabled:\n    - hicodeer-agent-state\nmodel: example\n"
     );
     assert_eq!(
         update_hermes_enabled_plugin(&uninstalled, false),
@@ -3167,9 +3167,9 @@ fn install_hermes_does_not_treat_disabled_as_a_flat_plugin_list() {
 #[test]
 fn uninstall_hermes_keeps_empty_sequences_and_removes_duplicate_direct_items() {
     for (input, expected) in [
-        ("plugins:\n  enabled: # keep\n  - 'herdr-agent-state'\n  - herdr-agent-state # duplicate\n  disabled: []\n", "plugins:\n  enabled: [] # keep\n  disabled: []\n"),
-        ("plugins: # keep\n- herdr-agent-state\n", "plugins: [] # keep\n"),
-        ("plugins:\n    enabled: [herdr-agent-state, herdr-agent-state] # keep\n", "plugins:\n    enabled: [] # keep\n"),
+        ("plugins:\n  enabled: # keep\n  - 'hicodeer-agent-state'\n  - hicodeer-agent-state # duplicate\n  disabled: []\n", "plugins:\n  enabled: [] # keep\n  disabled: []\n"),
+        ("plugins: # keep\n- hicodeer-agent-state\n", "plugins: [] # keep\n"),
+        ("plugins:\n    enabled: [hicodeer-agent-state, hicodeer-agent-state] # keep\n", "plugins:\n    enabled: [] # keep\n"),
     ] {
         let uninstalled = update_hermes_enabled_plugin(input, false);
         assert_eq!(uninstalled, expected);
@@ -3188,7 +3188,7 @@ fn uninstall_hermes_preserves_bare_sequence_items() {
         for indicator in ["-", "-   ", "- # keep"] {
             let remaining = format!("{indent}{indicator}\n{indent}  other-plugin\n");
             for plugin_first in [true, false] {
-                let plugin = format!("{indent}- herdr-agent-state\n");
+                let plugin = format!("{indent}- hicodeer-agent-state\n");
                 let input = if plugin_first {
                     format!("{header}{plugin}{remaining}model: example\n")
                 } else {
@@ -3243,7 +3243,7 @@ fn uninstall_hermes_preserves_empty_sequence_node_properties() {
             ("plugins:\n  enabled:", "    ", "  disabled: *selected\n"),
         ] {
             let input =
-                format!("{header} {properties} # keep\n{indent}- herdr-agent-state\n{alias}");
+                format!("{header} {properties} # keep\n{indent}- hicodeer-agent-state\n{alias}");
             let expected = format!("{header} {properties} [] # keep\n{alias}");
             let uninstalled = update_hermes_enabled_plugin(&input, false);
             assert_eq!(uninstalled, expected);
@@ -3251,7 +3251,7 @@ fn uninstall_hermes_preserves_empty_sequence_node_properties() {
             assert_eq!(update_hermes_enabled_plugin(&uninstalled, true), input);
 
             let flow =
-                format!("{header} {properties} [herdr-agent-state, other-plugin] # keep\n{alias}");
+                format!("{header} {properties} [hicodeer-agent-state, other-plugin] # keep\n{alias}");
             assert_eq!(
                 update_hermes_enabled_plugin(&flow, false),
                 format!("{header} {properties} # keep\n{indent}- other-plugin\n{alias}")
@@ -3270,9 +3270,9 @@ fn hermes_bare_plugin_items_use_the_continued_scalar() {
     ] {
         for indicator in ["-", "-   ", "- # plugin"] {
             for value in [
-                "herdr-agent-state",
-                "'herdr-agent-state'",
-                "\"herdr-agent-state\" # installed",
+                "hicodeer-agent-state",
+                "'hicodeer-agent-state'",
+                "\"hicodeer-agent-state\" # installed",
             ] {
                 let plugin = format!("{indent}{indicator}\n{indent}  {value}\n");
                 let other = format!("{indent}-\n{indent}  other-plugin\n");
@@ -3291,7 +3291,7 @@ fn hermes_bare_plugin_items_use_the_continued_scalar() {
             }
         }
     }
-    let input = "plugins:\n  enabled:\n  - # plugin\n    # keep comment\n\n    herdr-agent-state\n  - herdr-agent-state # duplicate\n  # keep trailing comment\n  disabled: []\n";
+    let input = "plugins:\n  enabled:\n  - # plugin\n    # keep comment\n\n    hicodeer-agent-state\n  - hicodeer-agent-state # duplicate\n  # keep trailing comment\n  disabled: []\n";
     assert_eq!(
         update_hermes_enabled_plugin(input, false),
         "plugins:\n  enabled: []\n    # keep comment\n\n  # keep trailing comment\n  disabled: []\n"
@@ -3301,16 +3301,16 @@ fn hermes_bare_plugin_items_use_the_continued_scalar() {
 #[test]
 fn hermes_does_not_match_scalar_prefixes_or_nested_continuations() {
     for item in [
-        "  - herdr-agent-state\n    other\n",
-        "  -\n    herdr-agent-state\n    other\n",
-        "  -\n    - herdr-agent-state\n",
+        "  - hicodeer-agent-state\n    other\n",
+        "  -\n    hicodeer-agent-state\n    other\n",
+        "  -\n    - hicodeer-agent-state\n",
     ] {
         let input = format!("plugins:\n  enabled:\n{item}  disabled: []\n");
         assert_eq!(update_hermes_enabled_plugin(&input, false), input);
         let installed = update_hermes_enabled_plugin(&input, true);
         assert_eq!(
             installed,
-            format!("plugins:\n  enabled:\n  - herdr-agent-state\n{item}  disabled: []\n")
+            format!("plugins:\n  enabled:\n  - hicodeer-agent-state\n{item}  disabled: []\n")
         );
         assert_eq!(update_hermes_enabled_plugin(&installed, false), input);
     }
@@ -3319,8 +3319,8 @@ fn hermes_does_not_match_scalar_prefixes_or_nested_continuations() {
 #[test]
 fn hermes_flow_sequence_edits_keep_following_comments() {
     for (input, expected) in [
-        ("plugins: [other] # selected\n# keep following comment\nmodel: example\n", "plugins: # selected\n  - herdr-agent-state\n  - other\n# keep following comment\nmodel: example\n"),
-        ("plugins:\n    enabled: [other] # selected\n    # keep following comment\n    disabled: []\n", "plugins:\n    enabled: # selected\n      - herdr-agent-state\n      - other\n    # keep following comment\n    disabled: []\n"),
+        ("plugins: [other] # selected\n# keep following comment\nmodel: example\n", "plugins: # selected\n  - hicodeer-agent-state\n  - other\n# keep following comment\nmodel: example\n"),
+        ("plugins:\n    enabled: [other] # selected\n    # keep following comment\n    disabled: []\n", "plugins:\n    enabled: # selected\n      - hicodeer-agent-state\n      - other\n    # keep following comment\n    disabled: []\n"),
     ] {
         assert_eq!(update_hermes_enabled_plugin(input, true), expected);
         assert_eq!(update_hermes_enabled_plugin(expected, true), expected);
@@ -3339,7 +3339,7 @@ fn hermes_install_and_uninstall_are_idempotent_with_indentless_config() {
 
     let installed = install_hermes().unwrap();
     let first = fs::read_to_string(&config_path).unwrap();
-    assert_eq!(first, "plugins:\n  enabled:\n  - herdr-agent-state\n  - example-plugin\n  disabled:\n  - other-plugin\n");
+    assert_eq!(first, "plugins:\n  enabled:\n  - hicodeer-agent-state\n  - example-plugin\n  disabled:\n  - other-plugin\n");
     assert!(installed
         .plugin_dir
         .join(HERMES_PLUGIN_INIT_INSTALL_NAME)
@@ -3366,7 +3366,7 @@ fn install_hermes_preserves_quoted_inline_enabled_items() {
         update_hermes_enabled_plugin("plugins:\n  enabled: [\"null\", 'foo: bar']\n", true);
     assert_eq!(
         config,
-        "plugins:\n  enabled:\n    - herdr-agent-state\n    - \"null\"\n    - 'foo: bar'\n"
+        "plugins:\n  enabled:\n    - hicodeer-agent-state\n    - \"null\"\n    - 'foo: bar'\n"
     );
 }
 
@@ -3378,7 +3378,7 @@ fn install_hermes_preserves_inline_enabled_comment() {
     );
     assert_eq!(
         config,
-        "plugins:\n  enabled: # managed locally\n    - herdr-agent-state\n    - example-plugin\n"
+        "plugins:\n  enabled: # managed locally\n    - hicodeer-agent-state\n    - example-plugin\n"
     );
 }
 
@@ -3388,19 +3388,19 @@ fn install_hermes_preserves_inline_plugins_comment() {
         update_hermes_enabled_plugin("plugins: [platforms/discord] # managed locally\n", true);
     assert_eq!(
         config,
-        "plugins: # managed locally\n  - herdr-agent-state\n  - platforms/discord\n"
+        "plugins: # managed locally\n  - hicodeer-agent-state\n  - platforms/discord\n"
     );
 }
 
 #[test]
 fn install_hermes_is_idempotent_for_inline_enabled_list_entry() {
     let config = update_hermes_enabled_plugin(
-        "plugins:\n  enabled: [herdr-agent-state, example-plugin]\n",
+        "plugins:\n  enabled: [hicodeer-agent-state, example-plugin]\n",
         true,
     );
     assert_eq!(
         config,
-        "plugins:\n  enabled: [herdr-agent-state, example-plugin]\n"
+        "plugins:\n  enabled: [hicodeer-agent-state, example-plugin]\n"
     );
 }
 
@@ -3413,7 +3413,7 @@ fn install_hermes_is_idempotent_for_quoted_flat_plugin_entry() {
     fs::create_dir_all(&hermes_dir).unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  - \"herdr-agent-state\" # installed by herdr\n",
+        "plugins:\n  - \"hicodeer-agent-state\" # installed by herdr\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3423,7 +3423,7 @@ fn install_hermes_is_idempotent_for_quoted_flat_plugin_entry() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - \"herdr-agent-state\" # installed by herdr\n"
+        "plugins:\n  - \"hicodeer-agent-state\" # installed by herdr\n"
     );
 
     std::env::remove_var("HOME");
@@ -3445,7 +3445,7 @@ fn uninstall_hermes_removes_plugin_and_enabled_entry() {
     .unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  enabled:\n    - other-plugin\n    - herdr-agent-state\n",
+        "plugins:\n  enabled:\n    - other-plugin\n    - hicodeer-agent-state\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3457,7 +3457,7 @@ fn uninstall_hermes_removes_plugin_and_enabled_entry() {
     assert!(result.updated_config);
     assert!(!plugin_dir.exists());
     assert!(config.contains("    - other-plugin"));
-    assert!(!config.contains("herdr-agent-state"));
+    assert!(!config.contains("hicodeer-agent-state"));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -3478,7 +3478,7 @@ fn uninstall_hermes_preserves_flat_plugin_list() {
     .unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  - other-plugin\n  - herdr-agent-state\n",
+        "plugins:\n  - other-plugin\n  - hicodeer-agent-state\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3509,7 +3509,7 @@ fn uninstall_hermes_removes_flow_plugin_list_entry() {
     .unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins: [other-plugin, herdr-agent-state]\n",
+        "plugins: [other-plugin, hicodeer-agent-state]\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3528,7 +3528,7 @@ fn uninstall_hermes_removes_flow_plugin_list_entry() {
 #[test]
 fn uninstall_hermes_removes_inline_enabled_list_entry() {
     let config = update_hermes_enabled_plugin(
-        "plugins:\n  enabled: [example-plugin, herdr-agent-state]\n",
+        "plugins:\n  enabled: [example-plugin, hicodeer-agent-state]\n",
         false,
     );
     assert_eq!(config, "plugins:\n  enabled:\n    - example-plugin\n");
@@ -3537,7 +3537,7 @@ fn uninstall_hermes_removes_inline_enabled_list_entry() {
 #[test]
 fn uninstall_hermes_preserves_quoted_inline_enabled_items() {
     let config = update_hermes_enabled_plugin(
-        "plugins:\n  enabled: ['foo: bar', herdr-agent-state]\n",
+        "plugins:\n  enabled: ['foo: bar', hicodeer-agent-state]\n",
         false,
     );
     assert_eq!(config, "plugins:\n  enabled:\n    - 'foo: bar'\n");
@@ -3545,7 +3545,7 @@ fn uninstall_hermes_preserves_quoted_inline_enabled_items() {
 
 #[test]
 fn uninstall_hermes_converts_single_inline_enabled_entry_to_empty_list() {
-    let config = update_hermes_enabled_plugin("plugins:\n  enabled: [herdr-agent-state]\n", false);
+    let config = update_hermes_enabled_plugin("plugins:\n  enabled: [hicodeer-agent-state]\n", false);
     assert_eq!(config, "plugins:\n  enabled: []\n");
 }
 
@@ -3564,7 +3564,7 @@ fn uninstall_hermes_removes_commented_flat_plugin_entry() {
     .unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  - other-plugin\n  - herdr-agent-state # installed by herdr\n",
+        "plugins:\n  - other-plugin\n  - hicodeer-agent-state # installed by herdr\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -4523,7 +4523,7 @@ fn install_grok_writes_hook_and_config() {
     #[cfg(not(windows))]
     {
         assert!(command.starts_with("sh "));
-        assert!(command.contains("herdr-agent-state.sh"));
+        assert!(command.contains("hicodeer-agent-state.sh"));
         assert!(command.ends_with(" session"));
     }
 
@@ -5075,7 +5075,7 @@ fn grok_status_reports_outdated_when_hook_config_missing_or_broken() {
     // nonfunctional, so neither may report current.
     fs::write(
         &config_path,
-        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo herdr-agent-state.sh"}]}]}}"#,
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo hicodeer-agent-state.sh"}]}]}}"#,
     )
     .unwrap();
     assert_eq!(grok_state(), IntegrationStatusKind::Outdated);

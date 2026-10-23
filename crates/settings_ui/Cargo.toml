@@ -73,6 +73,8 @@ zed_credentials_provider.workspace = true
 rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", default-features = false }
 # The keymap page opens the editor by calling it; see `open_keymap_editor`.
 keymap_editor.workspace = true
+# The agent terminal settings page reads and writes the terminal's own settings.
+agent_panel = { path = "../agent_panel" }
 
 [target.'cfg(not(target_env = "ohos"))'.dependencies]
 cpal.workspace = true

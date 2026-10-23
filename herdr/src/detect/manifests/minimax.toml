@@ -1,0 +1,30 @@
+id = "minimax"
+version = "2026.10.23.2"
+min_engine_version = 2
+updated_at = "2026-10-23T00:00:00Z"
+aliases = ["minimax-code", "mcode"]
+
+# Only wording confirmed in the shipped `@minimax-ai/code` bundle is matched
+# here: the permission gate projects "Waiting for permission" /
+# "Waiting for approval" / "Waiting for your answer", and a running turn asks
+# the user to "press Esc to interrupt". Anything not confirmed is left out, so
+# an unobserved screen stays "unknown" instead of being guessed at.
+
+[[rules]]
+id = "waiting_for_permission_blocked"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+regex = ['(?i)waiting\s+for\s+(?:permission|approval|your\s+answer)']
+
+[[rules]]
+id = "interrupt_hint_working"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(20)"
+visible_working = true
+regex = ['(?i)esc\s+to\s+interrupt']
+not = [
+  { regex = '(?i)waiting\s+for\s+(?:permission|approval|your\s+answer)' },
+]

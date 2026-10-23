@@ -66,10 +66,14 @@ pub enum Agent {
     Maki,
     Muse,
     CodeBuddy,
+    DeepSeek,
+    ZCode,
+    MiniMax,
+    Trae,
 }
 
 impl Agent {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 29] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -95,9 +99,13 @@ impl Agent {
         Self::Maki,
         Self::Muse,
         Self::CodeBuddy,
+        Self::MiniMax,
+        Self::DeepSeek,
+        Self::ZCode,
+        Self::Trae,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 23] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 24] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -121,6 +129,7 @@ impl Agent {
         Self::Maki,
         Self::Muse,
         Self::CodeBuddy,
+        Self::MiniMax,
     ];
 }
 
@@ -151,6 +160,10 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Maki => "maki",
         Agent::Muse => "muse",
         Agent::CodeBuddy => "codebuddy",
+        Agent::DeepSeek => "deepseek",
+        Agent::ZCode => "zcode",
+        Agent::MiniMax => "minimax",
+        Agent::Trae => "trae",
     }
 }
 
@@ -187,6 +200,10 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Maki => "maki",
         Agent::Muse => "muse",
         Agent::CodeBuddy => "codebuddy",
+        Agent::DeepSeek => "dsh",
+        Agent::ZCode => "zcode",
+        Agent::MiniMax => "mcode",
+        Agent::Trae => "traecli",
     }
 }
 
@@ -228,6 +245,10 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
         "codebuddy" | "codebuddy-code" | "codebuddy-cli" => Some(Agent::CodeBuddy),
+        "deepseek" | "deepseek-harness" | "dsh" => Some(Agent::DeepSeek),
+        "zcode" | "z-code" => Some(Agent::ZCode),
+        "minimax" | "minimax-code" | "mcode" => Some(Agent::MiniMax),
+        "trae" | "trae-cli" | "traecli" => Some(Agent::Trae),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }
@@ -1102,6 +1123,10 @@ mod tests {
             (Agent::Maki, "maki"),
             (Agent::Muse, "muse"),
             (Agent::CodeBuddy, "codebuddy"),
+            (Agent::DeepSeek, "dsh"),
+            (Agent::ZCode, "zcode"),
+            (Agent::MiniMax, "mcode"),
+            (Agent::Trae, "traecli"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {

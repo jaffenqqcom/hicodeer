@@ -254,6 +254,7 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
     ("kiro", include_str!("manifests/kiro.toml")),
     ("letta", include_str!("manifests/letta.toml")),
     ("maki", include_str!("manifests/maki.toml")),
+    ("minimax", include_str!("manifests/minimax.toml")),
     ("muse", include_str!("manifests/muse.toml")),
     ("codebuddy", include_str!("manifests/codebuddy.toml")),
     ("opencode", include_str!("manifests/opencode.toml")),

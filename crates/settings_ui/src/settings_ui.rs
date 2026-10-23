@@ -1044,6 +1044,33 @@ enum SettingsPageItem {
     SubPageLink(SubPageLink),
     DynamicItem(DynamicItem),
     ActionLink(ActionLink),
+    /// A block the page renders itself, for settings that do not live in
+    /// settings.json. Such a block owns its own layout and dividers.
+    // [OHOS PORT BEGIN] Built only by the OHOS agent page; keep the variant off
+    // other platforms so their item tree is unchanged.
+    #[cfg(target_env = "ohos")]
+    Custom(CustomItem),
+    // [OHOS PORT END]
+}
+
+/// A page item that draws arbitrary content in place, without a sub-page.
+#[cfg(target_env = "ohos")]
+#[derive(Clone)]
+struct CustomItem {
+    render: fn(&SettingsWindow, &mut Window, &mut Context<SettingsWindow>) -> AnyElement,
+    /// Words the search index should match for this block. The block draws its
+    /// own labels, so they cannot be read back from the item tree.
+    keywords: &'static [&'static str],
+}
+
+#[cfg(target_env = "ohos")]
+impl PartialEq for CustomItem {
+    /// Function pointers cannot be compared, and the page uses equality only to
+    /// decide whether two item lists are the same; a block has no state of its
+    /// own, so any two blocks are interchangeable.
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
 }
 
 impl std::fmt::Debug for SettingsPageItem {
@@ -1062,6 +1089,8 @@ impl std::fmt::Debug for SettingsPageItem {
             SettingsPageItem::ActionLink(action_link) => {
                 write!(f, "ActionLink({})", action_link.title)
             }
+            #[cfg(target_env = "ohos")]
+            SettingsPageItem::Custom(_) => write!(f, "CustomItem"),
         }
     }
 }
@@ -1361,6 +1390,11 @@ impl SettingsPageItem {
                 )
                 .when(bottom_border, |this| this.child(Divider::horizontal()))
                 .into_any_element(),
+            #[cfg(target_env = "ohos")]
+            SettingsPageItem::Custom(custom) => {
+                let _ = (bottom_border, extra_bottom_padding);
+                (custom.render)(settings_window, window, cx)
+            }
         }
     }
 }
@@ -2208,6 +2242,10 @@ impl SettingsWindow {
                             any_found_since_last_header = true;
                         }
                     }
+                    #[cfg(target_env = "ohos")]
+                    SettingsPageItem::Custom(_) => {
+                        any_found_since_last_header = true;
+                    }
                 }
             }
             if let Some(last_header) = page_filter.get_mut(header_index)
@@ -2456,6 +2494,17 @@ impl SettingsWindow {
                             key_index,
                             action_link.title.as_ref(),
                         );
+                    }
+                    #[cfg(target_env = "ohos")]
+                    SettingsPageItem::Custom(custom) => {
+                        let mut words = split_into_words(&[page.title]);
+                        for keyword in custom.keywords {
+                            words.extend(split_into_words(&[*keyword]));
+                        }
+                        documents.push(SearchDocument {
+                            id: key_index,
+                            words,
+                        });
                     }
                 }
                 push_candidates(&mut fuzzy_match_candidates, key_index, page.title);
@@ -6519,5 +6568,380 @@ fn close_settings_tab_in_workspace(
         pane.close_item_by_id(settings_item_id, SaveIntent::Close, window, cx)
     });
     task.detach_and_log_err(cx);
+}
+// ===== [OHOS PORT END] =====
+
+// ===== [OHOS PORT BEGIN] Agent terminal settings page =====
+// The agent terminal keeps its own settings file, and its own settings screen
+// is hard to reach in this build because the menu that opens it lives on a
+// sidebar this build hides. This page edits the settings that still matter and
+// writes the same file the terminal reads. Its titles, descriptions and choice
+// labels are the terminal's own wording, so both screens describe a setting the
+// same way.
+#[cfg(target_env = "ohos")]
+mod ohos_agent_settings {
+    use agent_panel::herdr_settings::{self, ToastDelivery};
+    use ui::{
+        Button, ButtonSize, ButtonStyle, Color, Divider, DividerColor, Icon, IconSize, Label,
+        LabelSize, Switch, ToggleState,
+    };
+
+    use super::*;
+
+    // Wording copied from the terminal client's settings screen, with the
+    // capitalisation the editor's other settings pages use. Each string goes
+    // through the localization channel, which falls back to the English source
+    // when the catalog has no entry for it.
+    fn sound_title() -> &'static str {
+        localization::localized_str!("Sound Alerts")
+    }
+    fn sound_description() -> &'static str {
+        localization::localized_str!("Play sounds when agents change state in background.")
+    }
+    fn toast_title() -> &'static str {
+        localization::localized_str!("Notification Popups")
+    }
+    fn toast_description() -> &'static str {
+        localization::localized_str!("Choose where background popup notifications should appear.")
+    }
+    /// The choices are matched by index, so their order is what matters. They
+    /// keep the client's own wording; the values are resolved on first use
+    /// because the dropdown holds a slice that outlives the call.
+    fn toast_choices() -> &'static [&'static str] {
+        static CHOICES: std::sync::OnceLock<[&'static str; 4]> = std::sync::OnceLock::new();
+        CHOICES.get_or_init(|| {
+            [
+                localization::localized_str!("Off"),
+                localization::localized_str!("Inside herdr"),
+                localization::localized_str!("Via terminal"),
+                localization::localized_str!("Via system"),
+            ]
+        })
+    }
+    fn integrations_title() -> &'static str {
+        localization::localized_str!("Agent Integrations")
+    }
+    fn integrations_description() -> &'static str {
+        localization::localized_str!("Enable session restore and, where supported, direct status updates.")
+    }
+    fn check_title() -> &'static str {
+        localization::localized_str!("Check Now")
+    }
+    fn checking_title() -> &'static str {
+        localization::localized_str!("Checking…")
+    }
+    fn auto_install_title() -> &'static str {
+        localization::localized_str!("Install Automatically")
+    }
+    fn auto_install_description() -> &'static str {
+        localization::localized_str!("Install an integration as soon as its agent command is present.")
+    }
+    /// Height of one grid cell, matching the medium button height the base
+    /// keymap selector uses.
+    const AGENT_CELL_HEIGHT_PX: f32 = 28.;
+    /// Width allowed for an agent's name: thirteen characters at the small
+    /// label size, which covers the longest target the terminal reports.
+    const AGENT_NAME_WIDTH_PX: f32 = 92.;
+    /// One character of inset between a cell's border and its content.
+    const AGENT_CELL_INSET_PX: f32 = 8.;
+    /// Width of one cell: the inset on both sides, the agent's mark, the gaps
+    /// between the three parts, the name, and the installed check.
+    const AGENT_CELL_WIDTH_PX: f32 = 140.;
+    /// Mark shown for an installed integration.
+    const INSTALLED_MARK: &str = "✓";
+
+    /// Builds the page. The controls are a custom block rather than settings
+    /// rows because they live in the terminal's file, not in settings.json.
+    pub(crate) fn page() -> SettingsPage {
+        SettingsPage {
+            title: localization::localized_str!("Agent Terminal"),
+            items: vec![SettingsPageItem::Custom(CustomItem {
+                render: render_page,
+                keywords: &["sound", "notification", "toast", "integration", "agent"],
+            })]
+            .into_boxed_slice(),
+        }
+    }
+
+    fn render_page(
+        _settings_window: &SettingsWindow,
+        _window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+    ) -> AnyElement {
+        let settings = herdr_settings::snapshot(cx);
+
+        // The panel is what usually performs the first check; opening this page
+        // on its own would otherwise sit on "Not checked yet" until the user
+        // presses Check Now.
+        if !settings.integrations_checked && !cx.global::<agent_panel::herdr_settings::AgentIntegrations>().checking {
+            herdr_settings::refresh_integrations(cx, settings.auto_install_integrations);
+        }
+
+        let sound = Switch::new(
+            "agent-terminal-sound",
+            if settings.sound_enabled {
+                ToggleState::Selected
+            } else {
+                ToggleState::Unselected
+            },
+        )
+        .tab_index(0_isize)
+        .aria_label(sound_title())
+        .aria_description(sound_description())
+        .on_click({
+            move |state, _window, cx| {
+                let enabled = *state == ToggleState::Selected;
+                if let Err(error) = herdr_settings::set_sound_enabled(enabled, cx) {
+                    log::warn!("agent settings: {error}");
+                }
+                cx.refresh_windows();
+            }
+        })
+        .into_any_element();
+
+        let toast_index = ToastDelivery::ALL
+            .iter()
+            .position(|delivery| *delivery == settings.toast)
+            .unwrap_or(0);
+        let toast = EnumVariantDropdown::new_indexed(
+            "agent-terminal-toast",
+            toast_index,
+            toast_choices(),
+            {
+                move |index, window, cx| {
+                    let delivery = ToastDelivery::ALL[index];
+                    if let Err(error) = herdr_settings::set_toast_delivery(delivery, cx) {
+                        log::warn!("agent settings: {error}");
+                        window.refresh();
+                    }
+                    cx.refresh_windows();
+                }
+            },
+        )
+        .title_case(false)
+        .tab_index(0_isize)
+        .aria_label(toast_title())
+        .into_any_element();
+
+        let auto_install = Switch::new(
+            "agent-terminal-auto-install",
+            if settings.auto_install_integrations {
+                ToggleState::Selected
+            } else {
+                ToggleState::Unselected
+            },
+        )
+        .tab_index(0_isize)
+        .aria_label(auto_install_title())
+        .aria_description(auto_install_description())
+        .on_click(move |state, window, cx| {
+            let enabled = *state == ToggleState::Selected;
+            if let Err(error) = update_settings_file(
+                SettingsUiFile::User,
+                None,
+                window,
+                cx,
+                move |settings, _| {
+                    settings
+                        .agent_panel
+                        .get_or_insert_with(Default::default)
+                        .auto_install_integrations = Some(enabled);
+                },
+            ) {
+                log::warn!("agent settings: cannot save auto install: {error}");
+            }
+        })
+        .into_any_element();
+
+        // A check installs one target at a time, so it can take a while; the
+        // button says so instead of swallowing the next click silently.
+        let checking = cx
+            .global::<agent_panel::herdr_settings::AgentIntegrations>()
+            .checking;
+        let check_now = Button::new(
+            "agent-terminal-check",
+            if checking {
+                checking_title()
+            } else {
+                check_title()
+            },
+        )
+        .style(ButtonStyle::Outlined)
+        .size(ButtonSize::Default)
+        .disabled(checking)
+        .on_click({
+            let auto_install = settings.auto_install_integrations;
+            move |_, _window, cx| {
+                herdr_settings::refresh_integrations(cx, auto_install);
+                cx.refresh_windows();
+            }
+        })
+        .into_any_element();
+
+        let agents = agent_grid(&settings.integrations, cx.theme().colors().border, cx.theme().colors().element_hover);
+
+        let mut content = v_flex()
+            .id("agent-terminal-settings")
+            .w_full()
+            .child(block(setting_row(sound_title(), sound_description(), sound)))
+            .child(divider())
+            .child(block(setting_row(toast_title(), toast_description(), toast)))
+            .child(divider())
+            .child(block(setting_row(
+                integrations_title(),
+                integrations_description(),
+                check_now,
+            )))
+            .child(divider())
+            .child(block(setting_row(
+                auto_install_title(),
+                auto_install_description(),
+                auto_install,
+            )))
+            .child(divider());
+
+        if settings.integrations.is_empty() {
+            content = content.child(block(
+                Label::new(if settings.integrations_checked {
+                    localization::localized_str!("No integration targets are available.")
+                } else {
+                    localization::localized_str!("Not checked yet.")
+                })
+                .size(LabelSize::Small)
+                .color(Color::Muted)
+                .into_any_element(),
+            ));
+        } else {
+            content = content.child(block(agents.into_any_element()));
+        }
+
+        content.into_any_element()
+    }
+
+    /// The agent grid: one square-cornered cell per target, sharing its borders
+    /// with its neighbours so the block reads as a table. Cells wrap instead of
+    /// stretching, so a narrow pane shows fewer columns rather than drawing the
+    /// table past its right edge.
+    fn agent_grid(
+        integrations: &[herdr_settings::Integration],
+        border: gpui::Hsla,
+        hover: gpui::Hsla,
+    ) -> AnyElement {
+        let mut grid = h_flex()
+            .w_full()
+            .flex_wrap()
+            .border_t_1()
+            .border_l_1()
+            .border_color(border);
+        for (cell_index, integration) in integrations.iter().enumerate() {
+            grid = grid.child(agent_cell(integration, cell_index, border, hover));
+        }
+        grid.into_any_element()
+    }
+
+    /// One target's cell. An installed integration shows a check after its
+    /// name; nothing else about the cell changes, because a filled or tinted
+    /// cell would read as a selection.
+    fn agent_cell(
+        integration: &herdr_settings::Integration,
+        cell_index: usize,
+        border: gpui::Hsla,
+        hover: gpui::Hsla,
+    ) -> AnyElement {
+        let installed = integration.installed();
+        let name = agent_panel::agent_display::integration_name(&integration.label);
+        let needs_install = integration.needs_install;
+        let target = integration.target.clone();
+        h_flex()
+            .id(("agent-cell", cell_index))
+            .flex_none()
+            .w(rems_from_px(AGENT_CELL_WIDTH_PX))
+            .items_center()
+            .justify_start()
+            .gap_1p5()
+            .h(rems_from_px(AGENT_CELL_HEIGHT_PX))
+            .px(rems_from_px(AGENT_CELL_INSET_PX))
+            .min_w_0()
+            .overflow_hidden()
+            .border_b_1()
+            .border_r_1()
+            .border_color(border)
+            .when(needs_install, |this| {
+                this.cursor_pointer().hover(move |style| style.bg(hover))
+            })
+            .on_click(move |_, _, cx| {
+                if needs_install {
+                    herdr_settings::install_integration(target.clone(), cx);
+                    cx.refresh_windows();
+                }
+            })
+            .child(
+                Icon::new(agent_panel::agent_display::agent_icon(&integration.target))
+                    .size(IconSize::XSmall)
+                    .color(Color::Muted),
+            )
+            .child(
+                div()
+                    .w(rems_from_px(AGENT_NAME_WIDTH_PX))
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(Label::new(name).size(LabelSize::Small).truncate()),
+            )
+            .when(installed, |this| {
+                this.child(
+                    Label::new(INSTALLED_MARK)
+                        .size(LabelSize::Small)
+                        .color(Color::Success),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// One settings row: title and description on the left, control on the
+    /// right, matching the rows the rest of the settings pages draw.
+    fn setting_row(
+        title: &'static str,
+        description: &'static str,
+        control: AnyElement,
+    ) -> AnyElement {
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .justify_between()
+            .gap_4()
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w_2_3()
+                    .min_w_0()
+                    .child(Label::new(title))
+                    .child(
+                        Label::new(description)
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+            .child(control)
+            .into_any_element()
+    }
+
+    fn block(child: AnyElement) -> AnyElement {
+        v_flex()
+            .w_full()
+            .px_8()
+            .pt_4()
+            .pb_4()
+            .child(child)
+            .into_any_element()
+    }
+
+    fn divider() -> AnyElement {
+        h_flex()
+            .w_full()
+            .px_8()
+            .child(Divider::horizontal().color(DividerColor::BorderFaded))
+            .into_any_element()
+    }
+
 }
 // ===== [OHOS PORT END] =====

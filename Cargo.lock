@@ -14797,6 +14797,7 @@ dependencies = [
 name = "settings_ui"
 version = "0.1.0"
 dependencies = [
+ "agent_panel",
  "anyhow",
  "audio",
  "client",

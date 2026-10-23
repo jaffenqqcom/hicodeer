@@ -87,11 +87,6 @@ const AGENT_CLIENT_SOCKET_MODE: &str = "0666";
 const AGENT_CONFIG_PATH_ENV: &str = "HICODEER_AGENT_CONFIG_PATH";
 /// Config file shipped in the package's `conf` directory.
 const AGENT_CONFIG_FILE: &str = "agent-config.toml";
-/// Records which packaged config the writable copy was made from.
-const AGENT_CONFIG_STAMP_FILE: &str = "agent-config.stamp";
-/// FNV-1a parameters, used to fingerprint the packaged config.
-const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// Argument that carries the socket path the daemon reported to the host
 /// application. The two processes run under different accounts and do not
 /// share a home directory, and the terminal command does not inherit the
@@ -478,36 +473,103 @@ fn client_socket_path(api_socket_path: &Path) -> PathBuf {
 
 /// Copies the packaged config into `state_dir` and returns the copy.
 ///
-/// The package directory is read-only, but the client saves its first-run state
-/// back into the config it loaded, so the client has to load a file it can
-/// write. The copy is refreshed only when the packaged file changes: between
-/// package updates it carries the client's own edits.
+/// The package directory is read-only, so a writable file has to exist before
+/// the client can save into the config it loaded. That file is also what the
+/// host application's settings page edits, which makes it the user's
+/// configuration rather than a copy of the package: once it exists its values
+/// win, and a package update never replaces them. The packaged config seeds a
+/// state directory that has none and supplies the tables an existing file is
+/// missing.
 fn writable_agent_config(state_dir: &Path, package_config: &Path) -> std::io::Result<PathBuf> {
     let local_config = state_dir.join(AGENT_CONFIG_FILE);
-    let stamp = state_dir.join(AGENT_CONFIG_STAMP_FILE);
-    let fingerprint = config_fingerprint(package_config)?;
-    let unchanged = std::fs::read_to_string(&stamp)
-        .map(|saved| saved == fingerprint)
-        .unwrap_or(false);
-    if local_config.is_file() && unchanged {
+    if local_config.is_file() {
+        // The host application's settings page edits this file directly and can
+        // create it before the server has ever run. It only writes the keys it
+        // owns, so a file created that way starts without the packaged tables.
+        // Add the ones it lacks instead of leaving the packaged defaults out.
+        if let Err(err) = add_missing_config_tables(&local_config, package_config) {
+            log::warn!(
+                "daemon: cannot complete {} from {}: {err}",
+                local_config.display(),
+                package_config.display()
+            );
+        }
         return Ok(local_config);
     }
     std::fs::create_dir_all(state_dir)?;
     std::fs::copy(package_config, &local_config)?;
-    std::fs::write(&stamp, fingerprint)?;
     Ok(local_config)
 }
 
-/// Identifies one build's packaged config, so a new package refreshes the copy
-/// while a running client's own edits survive.
-fn config_fingerprint(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    let mut hash = FNV_OFFSET_BASIS;
-    for byte in &bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
+/// Appends the tables `template` defines and `path` does not.
+///
+/// A table is copied whole, with the comments between its keys, and only when
+/// the file has no table of that name: no existing line is replaced, so a value
+/// the user set is never overwritten. Tables are compared by name, so a header
+/// written with a trailing comment or indentation still counts as present -- a
+/// second `[ui]` would make the whole file unparsable.
+fn add_missing_config_tables(path: &Path, template: &Path) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(path)?;
+    let template = std::fs::read_to_string(template)?;
+    let lines: Vec<&str> = template.lines().collect();
+    let Some(start) = lines.iter().position(|line| config_table_name(line).is_some()) else {
+        return Ok(());
+    };
+
+    let mut missing = String::new();
+    let mut index = start;
+    while index < lines.len() {
+        let Some(name) = config_table_name(lines[index]) else {
+            break;
+        };
+        let end = (index + 1..lines.len())
+            .find(|&next| config_table_name(lines[next]).is_some())
+            .unwrap_or(lines.len());
+        let present = existing
+            .lines()
+            .any(|line| config_table_name(line) == Some(name));
+        if !present {
+            missing.push('\n');
+            for line in &lines[index..end] {
+                missing.push_str(line);
+                missing.push('\n');
+            }
+        }
+        index = end;
     }
-    Ok(format!("{hash:016x}-{}", bytes.len()))
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut content = existing;
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&missing);
+    write_config_atomically(path, &content)
+}
+
+/// The name inside a table header, with indentation and any trailing comment
+/// removed. A commented-out header has no content before the `#` and is not a
+/// header.
+fn config_table_name(line: &str) -> Option<&str> {
+    let line = line.trim().split('#').next()?.trim_end();
+    if !line.starts_with('[') || !line.ends_with(']') {
+        return None;
+    }
+    Some(line.trim_matches(&['[', ']'][..]).trim())
+}
+
+/// Replaces the file in one step, so a reader never sees a half-written config
+/// while the settings page is saving the same file.
+fn write_config_atomically(path: &Path, content: &str) -> std::io::Result<()> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Err(std::io::Error::other("config path has no file name"));
+    };
+    let temporary = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
+    std::fs::write(&temporary, content)?;
+    std::fs::rename(&temporary, path)
 }
 
 /// Resolves when the embedded agent-server task finishes. With no task it stays

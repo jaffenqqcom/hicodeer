@@ -23,64 +23,94 @@ pub(crate) use registry::{
     experimental_letta_integration_status, installed_integration_statuses,
     integration_recommendations, integration_target_label, print_outdated_update_notice,
 };
+use std::path::{Path, PathBuf};
+
 pub(crate) use types::{
     ExperimentalIntegrationStatus, IntegrationRecommendation, IntegrationStatus,
     IntegrationStatusKind,
 };
+
+/// Hook file names this integration used before it was renamed. Commands that
+/// still point at them are removed on install, so an upgraded install cannot
+/// leave behind a hook that fails on every tool call.
+pub(crate) const LEGACY_HOOK_FILE_NAMES: &[&str] = &[
+    "herdr-agent-state.sh",
+    "herdr-agent-state.ps1",
+    "herdr-agent-session.sh",
+    "herdr-agent-session.ps1",
+];
+
+/// The Hermes plugin directory and enable-list entry used before the rename.
+pub(crate) const LEGACY_HERMES_PLUGIN_NAME: &str = "herdr-agent-state";
+
+/// The paths this integration's hook may have been installed at before the
+/// rename. Every removal walks them too, so an upgrade cannot leave a hook that
+/// keeps reporting a second time.
+pub(crate) fn legacy_hook_paths(hook_path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+    LEGACY_HOOK_FILE_NAMES
+        .iter()
+        .map(move |name| hook_path.with_file_name(name))
+}
 
 /// CLI labels for experimental integrations that are intentionally not part of
 /// the frozen client endpoint `IntegrationTarget` enum. Empty this list once the
 /// agent registry provides first-class target registration.
 pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta"];
 
-const PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
-const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/herdr-agent-state.ts");
+const PI_EXTENSION_INSTALL_NAME: &str = "hicodeer-agent-state.ts";
+/// The Pi extension file name used before the rename; still cleaned from the omp
+/// extensions directory so an upgrade does not leave a second reporter behind.
+pub(crate) const LEGACY_PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
+const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/hicodeer-agent-state.ts");
 const PI_INTEGRATION_VERSION: u32 = 9;
-const OMP_EXTENSION_INSTALL_NAME: &str = "herdr-omp-agent-state.ts";
-const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/herdr-agent-state.ts");
+const OMP_EXTENSION_INSTALL_NAME: &str = "hicodeer-omp-agent-state.ts";
+/// The OMP extension file name used before the rename. Install removes it, so an
+/// upgrade cannot run the previous copy beside the current one.
+pub(crate) const LEGACY_OMP_EXTENSION_INSTALL_NAME: &str = "herdr-omp-agent-state.ts";
+const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/hicodeer-agent-state.ts");
 const OMP_INTEGRATION_VERSION: u32 = 10;
 const CLAUDE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const CLAUDE_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/claude/herdr-agent-state.ps1")
+    include_str!("assets/claude/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/claude/herdr-agent-state.sh")
+    include_str!("assets/claude/hicodeer-agent-state.sh")
 };
 const CLAUDE_INTEGRATION_VERSION: u32 = 11;
 const CODEBUDDY_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const CODEBUDDY_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/codebuddy/herdr-agent-state.ps1")
+    include_str!("assets/codebuddy/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/codebuddy/herdr-agent-state.sh")
+    include_str!("assets/codebuddy/hicodeer-agent-state.sh")
 };
 const CODEBUDDY_INTEGRATION_VERSION: u32 = 2;
 const CODEX_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const CODEX_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/codex/herdr-agent-state.ps1")
+    include_str!("assets/codex/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/codex/herdr-agent-state.sh")
+    include_str!("assets/codex/hicodeer-agent-state.sh")
 };
 const CODEX_INTEGRATION_VERSION: u32 = 10;
 const KIMI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const KIMI_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/kimi/herdr-agent-state.ps1")
+    include_str!("assets/kimi/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/kimi/herdr-agent-state.sh")
+    include_str!("assets/kimi/hicodeer-agent-state.sh")
 };
 const KIMI_INTEGRATION_VERSION: u32 = 8;
 const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> herdr kimi integration";
@@ -115,14 +145,14 @@ const KIMI_HOOK_EVENTS: [(&str, Option<&str>, &str); 12] = [
     ("Interrupt", None, "idle"),
 ];
 const COPILOT_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const COPILOT_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/copilot/herdr-agent-state.ps1")
+    include_str!("assets/copilot/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/copilot/herdr-agent-state.sh")
+    include_str!("assets/copilot/hicodeer-agent-state.sh")
 };
 const COPILOT_INTEGRATION_VERSION: u32 = 4;
 const COPILOT_HOOK_EVENTS: [&str; 1] = ["SessionStart"];
@@ -138,14 +168,14 @@ const COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS: [&str; 9] = [
     "sessionStart",
 ];
 const DEVIN_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const DEVIN_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/devin/herdr-agent-state.ps1")
+    include_str!("assets/devin/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/devin/herdr-agent-state.sh")
+    include_str!("assets/devin/hicodeer-agent-state.sh")
 };
 const DEVIN_INTEGRATION_VERSION: u32 = 3;
 const DEVIN_HOOK_EVENTS: [(&str, &str); 6] = [
@@ -165,14 +195,14 @@ const DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 6] = [
     ("SessionEnd", "release"),
 ];
 const DROID_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const DROID_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/droid/herdr-agent-state.ps1")
+    include_str!("assets/droid/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/droid/herdr-agent-state.sh")
+    include_str!("assets/droid/hicodeer-agent-state.sh")
 };
 const DROID_INTEGRATION_VERSION: u32 = 4;
 const DROID_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
@@ -187,57 +217,66 @@ const DROID_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 9] = [
     ("PreCompact", "working"),
     ("SessionEnd", "release"),
 ];
-const OPENCODE_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
-const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-agent-state.js");
-const OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "herdr-tui-session.js";
-const OPENCODE_TUI_PLUGIN_SPEC: &str = "./herdr-tui-session.js";
-const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-tui-session.js");
-const OPENCODE_V2_TUI_PLUGIN_DIR: &str = "herdr-opencode";
-const OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./herdr-opencode";
+const OPENCODE_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
+const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/hicodeer-agent-state.js");
+const OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "hicodeer-tui-session.js";
+const OPENCODE_TUI_PLUGIN_SPEC: &str = "./hicodeer-tui-session.js";
+const OPENCODE_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/hicodeer-tui-session.js");
+const OPENCODE_V2_TUI_PLUGIN_DIR: &str = "hicodeer-opencode";
+const OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./hicodeer-opencode";
 const OPENCODE_V2_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/tui.js");
 const OPENCODE_INTEGRATION_VERSION: u32 = 13;
-const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
-const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
+/// The OpenCode plugin files and plugin entries used before the rename. Install
+/// removes them, so an upgraded install keeps a single reporter.
+pub(crate) const LEGACY_OPENCODE_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
+pub(crate) const LEGACY_OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "herdr-tui-session.js";
+pub(crate) const LEGACY_OPENCODE_TUI_PLUGIN_SPEC: &str = "./herdr-tui-session.js";
+pub(crate) const LEGACY_OPENCODE_V2_TUI_PLUGIN_DIR: &str = "herdr-opencode";
+pub(crate) const LEGACY_OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./herdr-opencode";
+const KILO_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
+/// The Kilo plugin file name used before the rename.
+pub(crate) const LEGACY_KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
+const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/hicodeer-agent-state.js");
 const KILO_INTEGRATION_VERSION: u32 = 4;
-const HERMES_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state";
+const HERMES_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state";
 const HERMES_PLUGIN_MANIFEST_INSTALL_NAME: &str = "plugin.yaml";
 const HERMES_PLUGIN_INIT_INSTALL_NAME: &str = "__init__.py";
 const HERMES_PLUGIN_MANIFEST_ASSET: &str = include_str!("assets/hermes/plugin.yaml");
 const HERMES_PLUGIN_INIT_ASSET: &str = include_str!("assets/hermes/__init__.py");
 const HERMES_INTEGRATION_VERSION: u32 = 5;
 const QODERCLI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const QODERCLI_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/qodercli/herdr-agent-state.ps1")
+    include_str!("assets/qodercli/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/qodercli/herdr-agent-state.sh")
+    include_str!("assets/qodercli/hicodeer-agent-state.sh")
 };
 const QODERCLI_INTEGRATION_VERSION: u32 = 4;
 const QODERCLI_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
 const QWEN_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-session.ps1"
+    "hicodeer-agent-session.ps1"
 } else {
-    "herdr-agent-session.sh"
+    "hicodeer-agent-session.sh"
 };
 const QWEN_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/qwen/herdr-agent-session.ps1")
+    include_str!("assets/qwen/hicodeer-agent-session.ps1")
 } else {
-    include_str!("assets/qwen/herdr-agent-session.sh")
+    include_str!("assets/qwen/hicodeer-agent-session.sh")
 };
 const QWEN_INTEGRATION_VERSION: u32 = 2;
 const QWEN_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
 const LETTA_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-session.ps1"
+    "hicodeer-agent-session.ps1"
 } else {
-    "herdr-agent-session.sh"
+    "hicodeer-agent-session.sh"
 };
 const LETTA_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/letta/herdr-agent-session.ps1")
+    include_str!("assets/letta/hicodeer-agent-session.ps1")
 } else {
-    include_str!("assets/letta/herdr-agent-session.sh")
+    include_str!("assets/letta/hicodeer-agent-session.sh")
 };
 const LETTA_INTEGRATION_VERSION: u32 = 2;
 const LETTA_HOOK_TIMEOUT_MS: u64 = 10_000;
@@ -256,26 +295,26 @@ const QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 12] = [
     ("SessionEnd", "release"),
 ];
 const CURSOR_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const CURSOR_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/cursor/herdr-agent-state.ps1")
+    include_str!("assets/cursor/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/cursor/herdr-agent-state.sh")
+    include_str!("assets/cursor/hicodeer-agent-state.sh")
 };
 const CURSOR_INTEGRATION_VERSION: u32 = 2;
 #[cfg(windows)]
-const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.ps1";
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "hicodeer-agent-state.ps1";
 #[cfg(not(windows))]
-const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "hicodeer-agent-state.sh";
 #[cfg(windows)]
 const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
-    include_str!("assets/antigravity_cli/herdr-agent-state.ps1");
+    include_str!("assets/antigravity_cli/hicodeer-agent-state.ps1");
 #[cfg(not(windows))]
 const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
-    include_str!("assets/antigravity_cli/herdr-agent-state.sh");
+    include_str!("assets/antigravity_cli/hicodeer-agent-state.sh");
 const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 4;
 /// Antigravity CLI keys `hooks.json` by hook name, so every Herdr entry lives
 /// under one Herdr-owned block that install rewrites and uninstall removes.
@@ -293,14 +332,14 @@ const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
 const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str); 1] = [("PreInvocation", "session")];
 const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const MASTRACODE_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/mastracode/herdr-agent-state.ps1")
+    include_str!("assets/mastracode/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/mastracode/herdr-agent-state.sh")
+    include_str!("assets/mastracode/hicodeer-agent-state.sh")
 };
 const MASTRACODE_INTEGRATION_VERSION: u32 = 3;
 const MASTRACODE_HOOK_TIMEOUT_MS: u64 = 10_000;
@@ -320,15 +359,15 @@ const MASTRACODE_HOOK_EVENTS: [(&str, &str); 11] = [
     ("Stop", "idle"),
 ];
 const GROK_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "herdr-agent-state.sh"
+    "hicodeer-agent-state.sh"
 };
 const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "herdr.json";
 const GROK_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/grok/herdr-agent-state.ps1")
+    include_str!("assets/grok/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/grok/herdr-agent-state.sh")
+    include_str!("assets/grok/hicodeer-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 3;
 

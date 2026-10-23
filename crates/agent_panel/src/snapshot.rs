@@ -45,6 +45,9 @@ pub(crate) struct Agent {
     /// accepts a public pane id or an agent name, never a terminal id.
     pub pane_id: String,
     pub name: String,
+    /// The agent type the detector reported (`claude`, `agy`, `codebuddy`).
+    /// Empty when the server could not identify the program in the pane.
+    pub kind: String,
     pub status: AgentStatus,
     pub focused: bool,
 }
@@ -91,6 +94,7 @@ impl Snapshot {
                 id: text(entry, "terminal_id"),
                 pane_id: text(entry, "pane_id"),
                 name: agent_name(entry),
+                kind: text(entry, "agent"),
                 status: AgentStatus::parse(entry.get("agent_status")),
                 focused: flag(entry, "focused"),
             });

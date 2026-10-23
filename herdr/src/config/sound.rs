@@ -47,6 +47,13 @@ pub struct AgentSoundOverrides {
     pub letta: AgentSoundSetting,
     pub maki: AgentSoundSetting,
     pub muse: AgentSoundSetting,
+    pub omp: AgentSoundSetting,
+    pub mastracode: AgentSoundSetting,
+    pub code_buddy: AgentSoundSetting,
+    pub deepseek: AgentSoundSetting,
+    pub zcode: AgentSoundSetting,
+    pub minimax: AgentSoundSetting,
+    pub trae: AgentSoundSetting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -130,8 +137,8 @@ impl AgentSoundOverrides {
             Some(Agent::Devin) => self.devin,
             Some(Agent::Antigravity) => self.agy,
             Some(Agent::Cline) => self.cline,
-            Some(Agent::Omp) => AgentSoundSetting::Default,
-            Some(Agent::Mastracode) => AgentSoundSetting::Default,
+            Some(Agent::Omp) => self.omp,
+            Some(Agent::Mastracode) => self.mastracode,
             Some(Agent::OpenCode) => self.open_code,
             Some(Agent::GithubCopilot) => self.github_copilot,
             Some(Agent::Kimi) => self.kimi,
@@ -146,7 +153,11 @@ impl AgentSoundOverrides {
             Some(Agent::Letta) => self.letta,
             Some(Agent::Maki) => self.maki,
             Some(Agent::Muse) => self.muse,
-            Some(Agent::CodeBuddy) => AgentSoundSetting::Default,
+            Some(Agent::CodeBuddy) => self.code_buddy,
+            Some(Agent::DeepSeek) => self.deepseek,
+            Some(Agent::ZCode) => self.zcode,
+            Some(Agent::MiniMax) => self.minimax,
+            Some(Agent::Trae) => self.trae,
             None => AgentSoundSetting::Default,
         }
     }
@@ -189,6 +200,13 @@ impl Default for AgentSoundOverrides {
             letta: AgentSoundSetting::Default,
             maki: AgentSoundSetting::Default,
             muse: AgentSoundSetting::Default,
+            omp: AgentSoundSetting::Default,
+            mastracode: AgentSoundSetting::Default,
+            code_buddy: AgentSoundSetting::Default,
+            deepseek: AgentSoundSetting::Default,
+            zcode: AgentSoundSetting::Default,
+            minimax: AgentSoundSetting::Default,
+            trae: AgentSoundSetting::Default,
         }
     }
 }

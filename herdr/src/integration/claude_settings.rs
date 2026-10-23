@@ -340,11 +340,21 @@ fn remove_event_commands(
 }
 
 fn removal_commands(policy: &HookRemoval, hook_path: &Path) -> Vec<String> {
-    policy
+    let mut commands: Vec<String> = policy
         .actions
         .iter()
         .flat_map(|action| hook_command_variants(hook_path, Some(action)))
-        .collect()
+        .collect();
+    for legacy_name in super::LEGACY_HOOK_FILE_NAMES {
+        let legacy_path = hook_path.with_file_name(legacy_name);
+        commands.extend(
+            policy
+                .actions
+                .iter()
+                .flat_map(|action| hook_command_variants(&legacy_path, Some(action))),
+        );
+    }
+    commands
 }
 
 fn canonical_hook_value(hook_path: &Path) -> Value {

@@ -765,6 +765,11 @@ pub struct AgentPanelSettingsContent {
     ///
     /// Default: true
     pub starts_open: Option<bool>,
+    /// Whether agent integrations (the hooks that report agent activity) are
+    /// installed automatically whenever a matching agent command is present.
+    ///
+    /// Default: true
+    pub auto_install_integrations: Option<bool>,
 }
 // [OHOS PORT END]
 

@@ -1,0 +1,6893 @@
+use std::cell::Cell;
+use std::io;
+use std::path::Path;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
+
+use bytes::Bytes;
+use portable_pty::CommandBuilder;
+#[cfg(all(test, unix))]
+use portable_pty::{native_pty_system, PtySize};
+use ratatui::{layout::Rect, Frame};
+#[cfg(test)]
+use tokio::sync::watch;
+use tokio::sync::{mpsc, Notify};
+#[cfg(not(windows))]
+use tracing::debug;
+use tracing::{error, info, warn};
+
+use crate::detect::{Agent, AgentState};
+use crate::events::AppEvent;
+use crate::layout::PaneId;
+use crate::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyIoActorHandle, PtyReadResult};
+use crate::render_signal::RenderSignal;
+
+mod agent_detection;
+mod background_agent;
+mod cursor;
+mod input;
+mod kitty_keyboard;
+mod osc;
+mod state;
+mod terminal;
+mod xtgettcap;
+
+use self::agent_detection::{
+    codex_prompt_ready, decide_detection_screen_read, decide_screen_detection_publish,
+    detection_update_for_publish_with_osc, mark_detection_content_changed,
+    observe_detection_content_change, DetectionPublishDecision, DetectionScreenReadDecision,
+    DetectionScreenReadInput, DetectionTextCache, PendingIdleConfirmation,
+    ScreenDetectionPublishInput, AGENT_PENDING_IDLE_RECHECK, AGENT_STARTUP_GRACE_WINDOW,
+};
+use self::background_agent::{AgentJobStatus, AgentJobTracker};
+#[cfg(test)]
+pub(crate) use self::terminal::test_encode_key_for_app;
+#[cfg(unix)]
+pub use self::terminal::InputState;
+use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
+pub(crate) use self::terminal::{
+    TerminalCompressionStep, TerminalDirtyPatch, TerminalDirtyPatchOutcome, TerminalReadSnapshot,
+    TerminalSearchDirection, TerminalSearchWindow, TerminalTextPoint, TerminalWordMotion,
+};
+pub use self::{
+    state::PaneState,
+    terminal::{ScrollMetrics, TerminalCursorState},
+};
+
+pub(crate) struct TerminalDirtyPatchSnapshot {
+    pub patch: TerminalDirtyPatchOutcome,
+    pub content_revision: u64,
+    pub scroll_metrics: Option<ScrollMetrics>,
+    pub mouse_reporting: bool,
+    pub sgr_pixel_mouse: bool,
+    pub alternate_screen_active: bool,
+    pub graphics_may_have_placements: bool,
+}
+
+const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::from_secs(1);
+const TERMINAL_COMPRESSION_IDLE: std::time::Duration = std::time::Duration::from_millis(250);
+const TERMINAL_COMPRESSION_STEP: std::time::Duration = std::time::Duration::from_millis(1);
+pub(crate) const PANE_TERM: &str = crate::ghostty::TERM;
+/// Smallest terminal grid a pane is resized to.
+pub(crate) const MIN_PANE_ROWS: u16 = 2;
+pub(crate) const MIN_PANE_COLS: u16 = 4;
+const PANE_COLORTERM: &str = "truecolor";
+const FISH_HANDLE_REFLOW_ENV_VAR: &str = "fish_handle_reflow";
+
+fn terminal_compression_permits() -> Arc<tokio::sync::Semaphore> {
+    static PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    PERMITS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
+        .clone()
+}
+
+fn spawn_blocking_with_compression_permit<T, F>(
+    permit: tokio::sync::OwnedSemaphorePermit,
+    operation: F,
+) -> tokio::task::JoinHandle<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        operation()
+    })
+}
+
+fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
+    // Each pane is rendered by herdr's own terminal layer, not the outer terminal
+    // that launched the app. Advertising the inherited TERM leaks the host terminal
+    // identity into shells and across SSH, which breaks redraw and cursor movement
+    // when the remote side lacks matching terminfo entries.
+    cmd.env("TERM", PANE_TERM);
+    cmd.env("COLORTERM", PANE_COLORTERM);
+    cmd.env("TERM_PROGRAM", "herdr");
+    cmd.env("TERM_PROGRAM_VERSION", crate::build_info::version());
+    // fish only skips its own resize repaint for terminals it recognizes as
+    // reflowing. Herdr reflows too, and the competing repaint glues prompt copies.
+    // Match the exact casing: Windows env keys are case-insensitive here, but
+    // MSYS/Cygwin fish only reads the lowercase name.
+    if !cmd
+        .iter_full_env_as_str()
+        .any(|(key, _)| key == FISH_HANDLE_REFLOW_ENV_VAR)
+    {
+        cmd.env(FISH_HANDLE_REFLOW_ENV_VAR, "0");
+    }
+    // Host handles refer to the outer terminal, never to this pane.
+    for key in [
+        "ITERM_SESSION_ID",
+        "LC_TERMINAL",
+        "LC_TERMINAL_VERSION",
+        "WEZTERM_PANE",
+        "KITTY_WINDOW_ID",
+        "WT_SESSION",
+        "TMUX",
+        "TMUX_PANE",
+        "STY",
+        "ZELLIJ",
+        "ZELLIJ_SESSION_NAME",
+        "ZELLIJ_PANE_ID",
+    ] {
+        cmd.env_remove(key);
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PaneLaunchEnv {
+    extra: Vec<(String, String)>,
+    identity: PaneLaunchIdentity,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum PaneLaunchIdentity {
+    #[default]
+    Inherit,
+    Managed {
+        workspace_id: String,
+        tab_id: String,
+        pane_id: String,
+    },
+    OmitPane,
+}
+
+impl PaneLaunchEnv {
+    pub(crate) fn from_extra(extra: Vec<(String, String)>) -> Self {
+        Self {
+            extra,
+            identity: PaneLaunchIdentity::Inherit,
+        }
+    }
+
+    pub(crate) fn with_identity(
+        mut self,
+        workspace_id: String,
+        tab_id: String,
+        pane_id: String,
+    ) -> Self {
+        self.identity = PaneLaunchIdentity::Managed {
+            workspace_id,
+            tab_id,
+            pane_id,
+        };
+        self
+    }
+
+    pub(crate) fn without_pane_identity(mut self) -> Self {
+        self.identity = PaneLaunchIdentity::OmitPane;
+        self
+    }
+}
+
+fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
+    #[cfg(unix)]
+    crate::platform::ssh_agent::apply_pane_env(cmd);
+    // A new pane is not a child agent of the process that started the server.
+    // Explicit launch env below can opt back into an intentional child session.
+    for key in [
+        "CODEX_THREAD_ID",
+        "OMPCODE",
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+    ] {
+        cmd.env_remove(key);
+    }
+    for (key, value) in &launch_env.extra {
+        cmd.env(key, value);
+    }
+    cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
+    crate::integration::apply_pane_base_env(cmd);
+    crate::platform::apply_pane_runtime_marker(cmd);
+    match &launch_env.identity {
+        PaneLaunchIdentity::Inherit => {}
+        PaneLaunchIdentity::Managed {
+            workspace_id,
+            tab_id,
+            pane_id,
+        } => {
+            cmd.env(crate::integration::HERDR_WORKSPACE_ID_ENV_VAR, workspace_id);
+            cmd.env(crate::integration::HERDR_TAB_ID_ENV_VAR, tab_id);
+            cmd.env(crate::integration::HERDR_PANE_ID_ENV_VAR, pane_id);
+        }
+        PaneLaunchIdentity::OmitPane => {
+            cmd.env_remove(crate::integration::HERDR_PANE_ID_ENV_VAR);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingAgentRelease {
+    agent: Agent,
+    until: std::time::Instant,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SpawnInitialState<'a> {
+    detected_agent: Option<Agent>,
+    history_ansi: Option<&'a str>,
+    windows_powershell_prompt_cwd_reporting: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentDetection {
+    Enabled,
+    Disabled,
+}
+
+fn active_pending_release(
+    pending_release: &Mutex<Option<PendingAgentRelease>>,
+    now: std::time::Instant,
+) -> Option<Agent> {
+    let mut pending_release = pending_release.lock().ok()?;
+    match *pending_release {
+        Some(pending) if now < pending.until => Some(pending.agent),
+        Some(_) => {
+            *pending_release = None;
+            None
+        }
+        None => None,
+    }
+}
+
+async fn publish_state_changed_event(
+    state_events: mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent: Option<Agent>,
+    state: AgentState,
+    visible_blocker: bool,
+    visible_working: bool,
+    process_exited: bool,
+    observed_at: std::time::Instant,
+) {
+    // This runs on the async detector task, not the PTY reader thread.
+    // Waiting for queue space here preserves correctness-critical state transitions
+    // without blocking pane I/O.
+    if let Err(e) = state_events
+        .send(AppEvent::StateChanged {
+            pane_id,
+            agent,
+            state,
+            visible_blocker,
+            visible_working,
+            process_exited,
+            observed_at,
+        })
+        .await
+    {
+        warn!(
+            pane = pane_id.raw(),
+            err = %e,
+            "failed to deliver StateChanged event"
+        );
+    }
+}
+
+async fn publish_agent_process_detected_event(
+    state_events: mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent: Agent,
+    observed_at: std::time::Instant,
+) {
+    if let Err(e) = state_events
+        .send(AppEvent::AgentProcessDetected {
+            pane_id,
+            agent,
+            observed_at,
+        })
+        .await
+    {
+        warn!(
+            pane = pane_id.raw(),
+            err = %e,
+            "failed to deliver AgentProcessDetected event"
+        );
+    }
+}
+
+async fn publish_codex_prompt_observation(
+    state_events: &mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent: Option<Agent>,
+    content: &str,
+    detection: Option<&crate::detect::AgentDetection>,
+    process_exited: bool,
+    last_ready: &mut bool,
+) {
+    let ready = agent == Some(Agent::Codex)
+        && !process_exited
+        && detection.is_some_and(|detection| detection.state == AgentState::Unknown)
+        && codex_prompt_ready(content);
+    if ready == *last_ready {
+        return;
+    }
+    *last_ready = ready;
+    if let Err(err) = state_events
+        .send(AppEvent::CodexPromptObserved { pane_id, ready })
+        .await
+    {
+        warn!(pane = pane_id.raw(), %err, "failed to deliver Codex prompt observation");
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AgentDetectionPublishUpdate {
+    state: AgentState,
+    visible_idle: bool,
+    visible_blocker: bool,
+    visible_working: bool,
+    process_exited: bool,
+}
+
+async fn apply_agent_detection_publish_update(
+    state_events: mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent: Option<Agent>,
+    update: AgentDetectionPublishUpdate,
+    observed_at: std::time::Instant,
+    state: &mut AgentState,
+    last_visible_idle: &mut bool,
+    last_visible_blocker: &mut bool,
+    last_visible_working: &mut bool,
+    last_visible_signal_refresh: &mut Option<std::time::Instant>,
+    foreground_shell_exit_reported: &mut bool,
+) {
+    *state = update.state;
+    *last_visible_idle = update.visible_idle;
+    *last_visible_blocker = update.visible_blocker;
+    *last_visible_working = update.visible_working;
+    *last_visible_signal_refresh = if update.visible_blocker || update.visible_working {
+        Some(observed_at)
+    } else {
+        None
+    };
+    if update.process_exited {
+        *foreground_shell_exit_reported = true;
+    }
+    publish_state_changed_event(
+        state_events,
+        pane_id,
+        agent,
+        update.state,
+        update.visible_blocker,
+        update.visible_working,
+        update.process_exited,
+        observed_at,
+    )
+    .await;
+}
+
+const AGENT_MISS_CONFIRMATION_ATTEMPTS: u8 = 6;
+const SELF_REPORTED_AGENT_SHELL_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Herdr cannot identify a self-reported agent's process, so the pane's shell
+/// returning to an idle prompt is the only sign that the agent exited.
+async fn report_self_reported_agent_shell_return(
+    active: &AtomicBool,
+    pid: u32,
+    now: std::time::Instant,
+    last_check: &mut Option<std::time::Instant>,
+    state_events: &mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+) {
+    if pid == 0 || !active.load(Ordering::Acquire) {
+        *last_check = None;
+        return;
+    }
+    if last_check.is_some_and(|last| now.duration_since(last) < SELF_REPORTED_AGENT_SHELL_RECHECK) {
+        return;
+    }
+    *last_check = Some(now);
+    if crate::detect::pane_shell_is_idle(pid) {
+        let _ = state_events
+            .send(AppEvent::ReportedAgentShellReturned {
+                pane_id,
+                observed_at: now,
+            })
+            .await;
+    }
+}
+const PROCESS_RECHECK_IDENTIFIED: std::time::Duration = std::time::Duration::from_secs(5);
+const PROCESS_RECHECK_MISSING_FOREGROUND_GROUP: std::time::Duration =
+    std::time::Duration::from_secs(30);
+const PROCESS_ACQUISITION_WINDOW: std::time::Duration = std::time::Duration::from_secs(8);
+const PROCESS_ACQUISITION_FAST_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
+const PROCESS_ACQUISITION_FAST_RECHECK: std::time::Duration = std::time::Duration::from_millis(500);
+const PROCESS_ACQUISITION_SLOW_RECHECK: std::time::Duration = std::time::Duration::from_secs(2);
+const PROCESS_ACQUISITION_IDLE_RESET: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy)]
+struct AgentDetectionPresence {
+    current_agent: Option<Agent>,
+    consecutive_misses: u8,
+}
+
+#[cfg(unix)]
+fn absolute_process_cwd(pid: u32) -> Option<std::path::PathBuf> {
+    crate::platform::process_cwd(pid).filter(|cwd| cwd.is_absolute())
+}
+
+#[cfg(unix)]
+fn usable_process_cwd(pid: u32) -> Option<std::path::PathBuf> {
+    absolute_process_cwd(pid).filter(|cwd| cwd.is_dir())
+}
+
+#[cfg(unix)]
+fn foreground_member_cwd_different_from_shell(
+    shell_pid: u32,
+    shell_cwd: Option<&std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    let job = crate::detect::foreground_job(shell_pid)?;
+    for process in job.processes {
+        if process.pid == shell_pid {
+            continue;
+        }
+        let Some(cwd) = absolute_process_cwd(process.pid) else {
+            continue;
+        };
+        if shell_cwd != Some(&cwd) {
+            return Some(cwd);
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForegroundShellAgentAction {
+    ObserveProbe,
+    HoldBackgroundAgent,
+    ReportProcessExit,
+    ReportReplacementProcess,
+    ClearAgent,
+}
+
+fn foreground_shell_agent_action(
+    previous_agent: Option<Agent>,
+    new_agent: Option<Agent>,
+    foreground_is_pane_shell: bool,
+    process_exit_reported: bool,
+    agent_job: AgentJobStatus,
+) -> ForegroundShellAgentAction {
+    let Some(previous_agent) = previous_agent else {
+        return ForegroundShellAgentAction::ObserveProbe;
+    };
+    if process_exit_reported {
+        return if new_agent == Some(previous_agent) {
+            ForegroundShellAgentAction::ReportReplacementProcess
+        } else if new_agent.is_none() {
+            ForegroundShellAgentAction::ClearAgent
+        } else {
+            ForegroundShellAgentAction::ObserveProbe
+        };
+    }
+    if agent_job == AgentJobStatus::ReplacedInFront {
+        // The held agent's identity must not pass to the new process.
+        return ForegroundShellAgentAction::ReportProcessExit;
+    }
+    if new_agent.is_some() {
+        return ForegroundShellAgentAction::ObserveProbe;
+    }
+    match agent_job {
+        AgentJobStatus::Background => return ForegroundShellAgentAction::HoldBackgroundAgent,
+        AgentJobStatus::ExitedInBackground => return ForegroundShellAgentAction::ReportProcessExit,
+        AgentJobStatus::Unknown | AgentJobStatus::ReplacedInFront => {}
+    }
+
+    if foreground_is_pane_shell {
+        // Do not clear identity immediately. First publish an idle process-exit
+        // transition for the previous agent so notifications and wait-agent callers
+        // observe completion before the pane becomes unknown.
+        return ForegroundShellAgentAction::ReportProcessExit;
+    }
+
+    ForegroundShellAgentAction::ObserveProbe
+}
+
+/// Drops retained OSC evidence when changing away from an identified agent.
+/// First acquisition keeps bytes that the newly identified process may have
+/// emitted before the process probe recognized it.
+fn clear_osc_evidence_for_agent_transition(terminal: &PaneTerminal, previous_agent: Option<Agent>) {
+    if previous_agent.is_some() {
+        terminal.clear_agent_osc_state();
+    }
+}
+
+fn apply_foreground_shell_agent_action(
+    agent_presence: &mut AgentDetectionPresence,
+    action: ForegroundShellAgentAction,
+    previous_agent: Option<Agent>,
+    new_agent: Option<Agent>,
+    pending_foreground_shell_clear: &mut bool,
+    foreground_shell_exit_reported: &mut bool,
+) -> bool {
+    match action {
+        ForegroundShellAgentAction::ReportReplacementProcess => {
+            *pending_foreground_shell_clear = false;
+            *foreground_shell_exit_reported = false;
+            agent_presence.observe_process_probe(previous_agent);
+            true
+        }
+        ForegroundShellAgentAction::HoldBackgroundAgent => {
+            *pending_foreground_shell_clear = false;
+            *foreground_shell_exit_reported = false;
+            agent_presence.observe_process_probe(previous_agent)
+        }
+        ForegroundShellAgentAction::ReportProcessExit => {
+            *pending_foreground_shell_clear = true;
+            false
+        }
+        ForegroundShellAgentAction::ClearAgent => {
+            *pending_foreground_shell_clear = false;
+            *foreground_shell_exit_reported = false;
+            agent_presence.clear_current_agent()
+        }
+        ForegroundShellAgentAction::ObserveProbe => {
+            *pending_foreground_shell_clear = false;
+            *foreground_shell_exit_reported = false;
+            agent_presence.observe_process_probe(new_agent)
+        }
+    }
+}
+
+/// Process facts used to tell a backgrounded agent from an exited one.
+trait AgentProcessLiveness {
+    fn start_token(&self, pid: u32) -> Option<u64>;
+    fn live_process_group(&self, shell_pid: u32, pid: u32, start_token: u64) -> Option<u32>;
+}
+
+struct PlatformAgentProcesses;
+
+impl AgentProcessLiveness for PlatformAgentProcesses {
+    fn start_token(&self, pid: u32) -> Option<u64> {
+        crate::platform::process_start_token(pid)
+    }
+
+    fn live_process_group(&self, shell_pid: u32, pid: u32, start_token: u64) -> Option<u32> {
+        crate::platform::live_pane_process_group(shell_pid, pid, start_token)
+    }
+}
+
+/// One foreground probe result, after a suppressed agent has been filtered out.
+#[derive(Debug, Clone, Copy)]
+struct ForegroundAgentObservation {
+    shell_pid: u32,
+    agent: Option<Agent>,
+    agent_pid: Option<u32>,
+    process_group_id: Option<u32>,
+    foreground_is_pane_shell: bool,
+}
+
+/// Applies one foreground probe to the pane's agent presence. Returns the
+/// chosen action and whether the current agent changed.
+fn observe_foreground_agent(
+    agent_presence: &mut AgentDetectionPresence,
+    agent_job: &mut AgentJobTracker,
+    pending_foreground_shell_clear: &mut bool,
+    foreground_shell_exit_reported: &mut bool,
+    observation: ForegroundAgentObservation,
+    processes: &impl AgentProcessLiveness,
+    pane_id: PaneId,
+) -> (ForegroundShellAgentAction, bool) {
+    let previous_agent = agent_presence.current_agent();
+    let same_agent_in_front = previous_agent.is_some()
+        && observation.agent == previous_agent
+        && !*foreground_shell_exit_reported;
+    let agent_job_status = if same_agent_in_front
+        && agent_job.replaced_in_front(observation.agent_pid, |pid| processes.start_token(pid))
+    {
+        AgentJobStatus::ReplacedInFront
+    } else {
+        agent_job.status(
+            previous_agent.is_some()
+                && observation.agent.is_none()
+                && !*foreground_shell_exit_reported,
+            observation.shell_pid,
+            observation.process_group_id,
+            |shell_pid, pid, start_token| processes.live_process_group(shell_pid, pid, start_token),
+        )
+    };
+    let action = foreground_shell_agent_action(
+        previous_agent,
+        observation.agent,
+        observation.foreground_is_pane_shell,
+        *foreground_shell_exit_reported,
+        agent_job_status,
+    );
+    let changed = apply_foreground_shell_agent_action(
+        agent_presence,
+        action,
+        previous_agent,
+        observation.agent,
+        pending_foreground_shell_clear,
+        foreground_shell_exit_reported,
+    );
+    let was_in_background = agent_job.in_background();
+    agent_job.observe(
+        agent_job_status,
+        agent_presence.current_agent(),
+        observation.agent,
+        observation.agent_pid,
+        |pid| processes.start_token(pid),
+    );
+    if was_in_background != agent_job.in_background() {
+        info!(
+            pane = pane_id.raw(),
+            agent = ?agent_presence.current_agent(),
+            in_background = agent_job.in_background(),
+            "agent job foreground changed"
+        );
+    }
+    (action, changed)
+}
+
+/// Lifecycle-hook authority normally skips steady-state probes, but a held
+/// agent is invisible to its hooks once killed, so it keeps the probe cadence.
+fn should_check_foreground_process(
+    lifecycle_authority_active: bool,
+    agent_held_in_background: bool,
+    input: ProcessProbeInput,
+) -> bool {
+    (agent_held_in_background
+        || !should_skip_process_probe_for_lifecycle_authority(lifecycle_authority_active, input))
+        && should_probe_foreground_job(input)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProcessProbeInput {
+    current_agent: Option<Agent>,
+    suppressed_agent: Option<Agent>,
+    foreground_pgid: Option<u32>,
+    last_foreground_pgid: Option<u32>,
+    has_process_probe: bool,
+    acquisition_age: Option<std::time::Duration>,
+    pending_foreground_shell_clear: bool,
+    pending_restore_probe: bool,
+    elapsed_since_process_check: std::time::Duration,
+}
+
+fn foreground_group_changed(
+    foreground_pgid: Option<u32>,
+    last_foreground_pgid: Option<u32>,
+) -> bool {
+    foreground_pgid != last_foreground_pgid
+        && (foreground_pgid.is_some() || last_foreground_pgid.is_some())
+}
+
+// Only kernel-observed foreground groups drive change detection. Remembering an
+// inferred group would look like a change on every tick while the kernel stays silent.
+fn process_group_for_change_tracking(
+    observed_foreground_pgid: Option<u32>,
+    probed_process_group_id: Option<u32>,
+) -> Option<u32> {
+    observed_foreground_pgid?;
+    probed_process_group_id.or(observed_foreground_pgid)
+}
+
+fn should_skip_process_probe_for_lifecycle_authority(
+    full_lifecycle_authority_active: bool,
+    input: ProcessProbeInput,
+) -> bool {
+    full_lifecycle_authority_active
+        && input.foreground_pgid.is_some()
+        && !input.pending_foreground_shell_clear
+        && input.suppressed_agent.is_none()
+        && input.has_process_probe
+        && !foreground_group_changed(input.foreground_pgid, input.last_foreground_pgid)
+}
+
+#[cfg(any(windows, test))]
+fn should_observe_foreground_process_group(
+    lifecycle_authority: bool,
+    content_changed: bool,
+    elapsed: std::time::Duration,
+    input: ProcessProbeInput,
+) -> bool {
+    !input.has_process_probe
+        || input.current_agent.is_none()
+        || input.suppressed_agent.is_some()
+        || input.pending_foreground_shell_clear
+        || input.pending_restore_probe
+        || content_changed
+        || (lifecycle_authority && elapsed >= PROCESS_RECHECK_IDENTIFIED)
+        || (!lifecycle_authority && input.elapsed_since_process_check >= PROCESS_RECHECK_IDENTIFIED)
+}
+
+fn should_probe_foreground_job(input: ProcessProbeInput) -> bool {
+    if input.pending_foreground_shell_clear || input.pending_restore_probe {
+        return true;
+    }
+
+    let foreground_group_changed =
+        foreground_group_changed(input.foreground_pgid, input.last_foreground_pgid);
+
+    if input.suppressed_agent.is_some() {
+        return !input.has_process_probe || foreground_group_changed;
+    }
+
+    if let Some(acquisition_age) = input.acquisition_age {
+        let acquisition_interval = if acquisition_age <= PROCESS_ACQUISITION_FAST_WINDOW {
+            PROCESS_ACQUISITION_FAST_RECHECK
+        } else {
+            PROCESS_ACQUISITION_SLOW_RECHECK
+        };
+        if acquisition_age <= PROCESS_ACQUISITION_WINDOW
+            && input.elapsed_since_process_check >= acquisition_interval
+        {
+            return true;
+        }
+    }
+
+    if input.current_agent.is_none() {
+        return !input.has_process_probe
+            || foreground_group_changed
+            || (input.foreground_pgid.is_none()
+                && input.elapsed_since_process_check >= PROCESS_RECHECK_MISSING_FOREGROUND_GROUP);
+    }
+
+    foreground_group_changed || input.elapsed_since_process_check >= PROCESS_RECHECK_IDENTIFIED
+}
+
+fn sync_content_change_acquisition(
+    current_agent: Option<Agent>,
+    suppressed_agent: Option<Agent>,
+    process_group_changed: bool,
+    content_changed: bool,
+    now: std::time::Instant,
+    acquisition_started_at: &mut Option<std::time::Instant>,
+    last_content_change_at: &mut Option<std::time::Instant>,
+) {
+    if current_agent.is_some() || suppressed_agent.is_some() || process_group_changed {
+        return;
+    }
+
+    if content_changed {
+        let should_start = acquisition_started_at.is_none_or(|started| {
+            now.duration_since(started) > PROCESS_ACQUISITION_WINDOW
+                && last_content_change_at.is_none_or(|last_change| {
+                    now.duration_since(last_change) >= PROCESS_ACQUISITION_IDLE_RESET
+                })
+        });
+        if should_start {
+            *acquisition_started_at = Some(now);
+        }
+        *last_content_change_at = Some(now);
+        return;
+    }
+
+    let Some(acquisition_started) = *acquisition_started_at else {
+        return;
+    };
+    let Some(last_content_change) = *last_content_change_at else {
+        return;
+    };
+
+    if now.duration_since(acquisition_started) > PROCESS_ACQUISITION_WINDOW
+        && now.duration_since(last_content_change) >= PROCESS_ACQUISITION_IDLE_RESET
+    {
+        *acquisition_started_at = None;
+        *last_content_change_at = None;
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ProcessProbeResult {
+    process_group_id: Option<u32>,
+    foreground_is_pane_shell: bool,
+    agent: Option<Agent>,
+    /// The process that identified as `agent`, which need not lead its job.
+    agent_pid: Option<u32>,
+    process_name: Option<String>,
+}
+
+fn agent_hint_for_foreground_job_members(
+    job: &crate::platform::ForegroundJob,
+    read_hint: impl Fn(u32) -> Option<Agent>,
+) -> Option<(Agent, u32)> {
+    read_hint(job.process_group_id)
+        .map(|agent| (agent, job.process_group_id))
+        .or_else(|| agent_hint_for_non_leader_foreground_job_members(job, read_hint))
+}
+
+fn agent_hint_for_non_leader_foreground_job_members(
+    job: &crate::platform::ForegroundJob,
+    read_hint: impl Fn(u32) -> Option<Agent>,
+) -> Option<(Agent, u32)> {
+    job.processes
+        .iter()
+        .filter(|process| process.pid != job.process_group_id)
+        .find_map(|process| read_hint(process.pid).map(|agent| (agent, process.pid)))
+}
+
+fn identify_process_group_leader_in_job(
+    job: &crate::platform::ForegroundJob,
+) -> Option<(Agent, String)> {
+    let leader = job
+        .processes
+        .iter()
+        .find(|process| process.pid == job.process_group_id)?;
+    let leader_job = crate::platform::ForegroundJob {
+        process_group_id: job.process_group_id,
+        processes: vec![leader.clone()],
+    };
+    crate::detect::identify_agent_in_job(&leader_job)
+}
+
+fn process_probe_result(
+    job: &crate::platform::ForegroundJob,
+    pid: u32,
+    (agent, process_name, agent_pid): (Agent, String, u32),
+) -> ProcessProbeResult {
+    ProcessProbeResult {
+        process_group_id: Some(job.process_group_id),
+        foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
+        agent: Some(agent),
+        agent_pid: Some(agent_pid),
+        process_name: Some(process_name),
+    }
+}
+
+fn hinted_process_probe_result(
+    job: &crate::platform::ForegroundJob,
+    pid: u32,
+    (agent, agent_pid): (Agent, u32),
+) -> ProcessProbeResult {
+    process_probe_result(
+        job,
+        pid,
+        (
+            agent,
+            crate::detect::agent_label(agent).to_string(),
+            agent_pid,
+        ),
+    )
+}
+
+fn probe_foreground_process_from_jobs(
+    pid: u32,
+    foreground_pgid: Option<u32>,
+    leader_job: Option<crate::platform::ForegroundJob>,
+    foreground_job: impl FnOnce() -> Option<crate::platform::ForegroundJob>,
+    read_hint: impl Fn(u32) -> Option<Agent> + Copy,
+) -> ProcessProbeResult {
+    if let Some(job) = leader_job.as_ref() {
+        if let Some(hinted) = agent_hint_for_foreground_job_members(job, read_hint) {
+            return hinted_process_probe_result(job, pid, hinted);
+        }
+        if let Some(identified) = crate::detect::identify_agent_process_in_job(job) {
+            return process_probe_result(job, pid, identified);
+        }
+    }
+
+    let foreground_job = foreground_job();
+    if let Some(job) = foreground_job.as_ref() {
+        if let Some(agent) = read_hint(job.process_group_id) {
+            return hinted_process_probe_result(job, pid, (agent, job.process_group_id));
+        }
+        if let Some((agent, process_name)) = identify_process_group_leader_in_job(job) {
+            return process_probe_result(job, pid, (agent, process_name, job.process_group_id));
+        }
+        if let Some(hinted) = agent_hint_for_non_leader_foreground_job_members(job, read_hint) {
+            return hinted_process_probe_result(job, pid, hinted);
+        }
+        if let Some(identified) = crate::detect::identify_agent_process_in_job(job) {
+            return process_probe_result(job, pid, identified);
+        }
+        return ProcessProbeResult {
+            process_group_id: Some(job.process_group_id),
+            foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
+            agent: None,
+            agent_pid: None,
+            process_name: None,
+        };
+    }
+
+    ProcessProbeResult {
+        process_group_id: foreground_pgid,
+        foreground_is_pane_shell: false,
+        agent: None,
+        agent_pid: None,
+        process_name: None,
+    }
+}
+
+fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessProbeResult {
+    probe_foreground_process_from_jobs(
+        pid,
+        foreground_pgid,
+        foreground_pgid.and_then(crate::detect::foreground_group_leader_job),
+        || crate::detect::foreground_job(pid),
+        crate::platform::process_agent_hint,
+    )
+}
+
+// OHOS: procfs reports tpgid as 0 for every process and lacks
+// /proc/<pid>/task/<tid>/children, so neither the native foreground
+// process-group lookup nor the child-groups fallback can identify pane
+// agents. The pane's own PTY master fd still answers tcgetpgrp(); use it
+// as a fallback. Job membership degrades to the group leader, which is
+// enough for comm/argv matching and HERDR_AGENT environment hints.
+#[cfg(unix)]
+fn detection_pty_actor(io: &PaneRuntimeIo) -> Option<PtyIoActorHandle> {
+    match io {
+        PaneRuntimeIo::Actor(actor) => Some(actor.clone()),
+        #[cfg(test)]
+        PaneRuntimeIo::TestChannel { .. } => None,
+    }
+}
+
+#[cfg(not(unix))]
+fn detection_pty_actor(_io: &PaneRuntimeIo) -> Option<PtyIoActorHandle> {
+    None
+}
+
+#[cfg(unix)]
+fn pty_actor_foreground_process_group(actor: &Option<PtyIoActorHandle>) -> Option<u32> {
+    actor
+        .as_ref()
+        .and_then(PtyIoActorHandle::foreground_process_group_id)
+}
+
+#[cfg(not(unix))]
+fn pty_actor_foreground_process_group(_actor: &Option<PtyIoActorHandle>) -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+// Handoff detection needs both the write-bracketed text revision and detection epoch.
+#[allow(clippy::too_many_arguments)]
+fn spawn_basic_detection_task(
+    pane_id: PaneId,
+    child_pid: Arc<AtomicU32>,
+    terminal: Arc<PaneTerminal>,
+    pty_actor: Option<PtyIoActorHandle>,
+    content_seq: Arc<AtomicU64>,
+    detection_content_seq: Arc<AtomicU64>,
+    full_lifecycle_authority_active: Arc<AtomicBool>,
+    self_reported_agent_active: Arc<AtomicBool>,
+    state_events: mpsc::Sender<AppEvent>,
+) -> (
+    tokio::task::AbortHandle,
+    Arc<Notify>,
+    Arc<Mutex<Option<PendingAgentRelease>>>,
+) {
+    let detect_reset_notify = Arc::new(Notify::new());
+    let detect_reset = detect_reset_notify.clone();
+    let pending_release = Arc::new(Mutex::new(None));
+    let pending_release_for_task = pending_release.clone();
+
+    let handle = tokio::spawn(async move {
+        let mut agent_presence = AgentDetectionPresence::from_agent(None);
+        let mut state = AgentState::Unknown;
+        let mut last_visible_idle = false;
+        let mut last_visible_blocker = false;
+        let mut last_visible_working = false;
+        let mut last_visible_signal_refresh = None;
+        let mut last_process_check = std::time::Instant::now();
+        let mut last_foreground_pgid = None;
+        let mut has_process_probe = false;
+        let mut acquisition_started_at = None;
+        let mut last_content_change_at = None;
+        let mut pending_foreground_shell_clear = false;
+        let mut foreground_shell_exit_reported = false;
+        let mut release_was_active = false;
+        let mut last_detection_text = DetectionTextCache::default();
+        let mut last_screen_scan_detection_content_seq = None;
+        let mut agent_startup_grace_until = None;
+        let mut pending_idle = PendingIdleConfirmation::default();
+        let mut last_codex_prompt_ready = false;
+        let mut last_self_reported_shell_check = None;
+        let mut agent_job = AgentJobTracker::default();
+
+        loop {
+            let sleep_duration = if pending_idle.active() {
+                AGENT_PENDING_IDLE_RECHECK
+            } else {
+                std::time::Duration::from_millis(300)
+            };
+            tokio::select! {
+                _ = tokio::time::sleep(sleep_duration) => {}
+                _ = detect_reset.notified() => {
+                    publish_codex_prompt_observation(
+                        &state_events, pane_id, Some(Agent::Codex), "", None, false,
+                        &mut last_codex_prompt_ready,
+                    ).await;
+                    agent_presence = AgentDetectionPresence::from_agent(None);
+                    state = AgentState::Unknown;
+                    last_visible_idle = false;
+                    last_visible_blocker = false;
+                    last_visible_working = false;
+                    last_visible_signal_refresh = None;
+                    last_process_check = std::time::Instant::now();
+                    last_foreground_pgid = None;
+                    has_process_probe = false;
+                    acquisition_started_at = None;
+                    last_content_change_at = None;
+                    pending_foreground_shell_clear = false;
+                    foreground_shell_exit_reported = false;
+                    release_was_active = false;
+                    last_detection_text.clear();
+                    last_screen_scan_detection_content_seq = None;
+                    agent_startup_grace_until = None;
+                    pending_idle.clear();
+                    agent_job = AgentJobTracker::default();
+                }
+            }
+
+            let now = std::time::Instant::now();
+            let suppressed_agent = active_pending_release(&pending_release_for_task, now);
+            if suppressed_agent.is_none() && release_was_active {
+                has_process_probe = false;
+                acquisition_started_at = None;
+                last_content_change_at = None;
+            }
+            release_was_active = suppressed_agent.is_some();
+            let pid = child_pid.load(Ordering::Acquire);
+            let mut agent_changed = false;
+            let mut agent = agent_presence.current_agent();
+            let lifecycle_authority_active =
+                full_lifecycle_authority_active.load(Ordering::Acquire);
+            report_self_reported_agent_shell_return(
+                &self_reported_agent_active,
+                pid,
+                now,
+                &mut last_self_reported_shell_check,
+                &state_events,
+                pane_id,
+            )
+            .await;
+            let foreground_pgid = (pid > 0)
+                .then(|| crate::detect::foreground_process_group_id(pid))
+                .flatten()
+                .or_else(|| pty_actor_foreground_process_group(&pty_actor));
+            let process_group_changed =
+                foreground_group_changed(foreground_pgid, last_foreground_pgid);
+            let should_check_process = pid > 0 && {
+                let process_probe_input = ProcessProbeInput {
+                    current_agent: agent,
+                    suppressed_agent,
+                    foreground_pgid,
+                    last_foreground_pgid,
+                    has_process_probe,
+                    acquisition_age: acquisition_started_at
+                        .map(|started| now.duration_since(started)),
+                    pending_foreground_shell_clear,
+                    pending_restore_probe: false,
+                    elapsed_since_process_check: now.duration_since(last_process_check),
+                };
+                should_check_foreground_process(
+                    lifecycle_authority_active,
+                    agent_job.in_background(),
+                    process_probe_input,
+                )
+            };
+
+            if should_check_process {
+                last_process_check = now;
+                let had_process_probe = has_process_probe;
+                has_process_probe = true;
+                let probe = probe_foreground_process(pid, foreground_pgid);
+                let process_group_id = probe.process_group_id;
+                let tracked_process_group_id =
+                    process_group_for_change_tracking(foreground_pgid, process_group_id);
+                let foreground_is_pane_shell = probe.foreground_is_pane_shell;
+                let mut new_agent = probe.agent;
+                if let Some(suppressed_agent) = suppressed_agent {
+                    if new_agent == Some(suppressed_agent) {
+                        new_agent = None;
+                    } else if let Ok(mut pending_release) = pending_release_for_task.lock() {
+                        *pending_release = None;
+                    }
+                }
+                let previous_agent = agent_presence.current_agent();
+                let (foreground_action, changed) = observe_foreground_agent(
+                    &mut agent_presence,
+                    &mut agent_job,
+                    &mut pending_foreground_shell_clear,
+                    &mut foreground_shell_exit_reported,
+                    ForegroundAgentObservation {
+                        shell_pid: pid,
+                        agent: new_agent,
+                        agent_pid: new_agent.and(probe.agent_pid),
+                        process_group_id,
+                        foreground_is_pane_shell,
+                    },
+                    &PlatformAgentProcesses,
+                    pane_id,
+                );
+                last_foreground_pgid = tracked_process_group_id;
+                if new_agent.is_some() {
+                    acquisition_started_at = None;
+                    last_content_change_at = None;
+                } else if agent_presence.current_agent().is_none()
+                    && had_process_probe
+                    && process_group_changed
+                {
+                    acquisition_started_at = Some(now);
+                }
+                if changed {
+                    agent = agent_presence.current_agent();
+                    agent_changed = previous_agent != agent
+                        || foreground_action
+                            == ForegroundShellAgentAction::ReportReplacementProcess;
+                    if agent_changed {
+                        pending_idle.clear();
+                        last_codex_prompt_ready = false;
+                        last_screen_scan_detection_content_seq = None;
+                        // A replacement agent must not inherit OSC evidence
+                        // from the previous process; a first acquisition keeps
+                        // the evidence its own process already emitted.
+                        clear_osc_evidence_for_agent_transition(&terminal, previous_agent);
+                        if let Some(agent) = agent {
+                            agent_startup_grace_until = Some(now + AGENT_STARTUP_GRACE_WINDOW);
+                            state = AgentState::Unknown;
+                            last_visible_idle = false;
+                            last_visible_blocker = false;
+                            last_visible_working = false;
+                            last_visible_signal_refresh = None;
+                            publish_agent_process_detected_event(
+                                state_events.clone(),
+                                pane_id,
+                                agent,
+                                now,
+                            )
+                            .await;
+                        } else {
+                            agent_startup_grace_until = None;
+                        }
+                    }
+                }
+            }
+
+            let process_exited = pending_foreground_shell_clear
+                && agent.is_some()
+                && !foreground_shell_exit_reported;
+
+            // The visible screen belongs to another job while the agent waits
+            // in the background, so it says nothing about the agent's state.
+            if (lifecycle_authority_active || agent_job.in_background()) && !process_exited {
+                pending_idle.clear();
+                continue;
+            }
+
+            if let Some(until) = agent_startup_grace_until {
+                if process_exited {
+                    agent_startup_grace_until = None;
+                    pending_idle.clear();
+                } else {
+                    if now < until {
+                        pending_idle.clear();
+                        continue;
+                    }
+                    agent_startup_grace_until = None;
+                    last_screen_scan_detection_content_seq = None;
+                    pending_idle.clear();
+                    continue;
+                }
+            }
+
+            let current_detection_content_seq = if agent.is_some() {
+                Some(detection_content_seq.load(Ordering::Relaxed))
+            } else {
+                None
+            };
+            match decide_detection_screen_read(DetectionScreenReadInput {
+                state,
+                agent,
+                pending_idle_active: pending_idle.active(),
+                agent_changed,
+                process_exited,
+                current_detection_content_seq,
+                last_screen_scan_detection_content_seq,
+            }) {
+                DetectionScreenReadDecision::Read => {}
+                DetectionScreenReadDecision::Skip => continue,
+            }
+
+            let content_changed = last_detection_text
+                .refresh(agent, &content_seq, || terminal.detection_text_for_cache());
+            let content = &last_detection_text.text;
+            last_screen_scan_detection_content_seq = current_detection_content_seq;
+            let osc_title = terminal.agent_osc_title();
+            let osc_progress = terminal.agent_osc_progress();
+            let screen_detection = detection_update_for_publish_with_osc(
+                agent,
+                content,
+                &osc_title,
+                &osc_progress,
+                process_exited,
+            );
+            publish_codex_prompt_observation(
+                &state_events,
+                pane_id,
+                agent,
+                content,
+                screen_detection.as_ref(),
+                process_exited,
+                &mut last_codex_prompt_ready,
+            )
+            .await;
+            let Some(screen_detection) = screen_detection else {
+                pending_idle.clear();
+                continue;
+            };
+            sync_content_change_acquisition(
+                agent_presence.current_agent(),
+                suppressed_agent,
+                process_group_changed,
+                content_changed,
+                now,
+                &mut acquisition_started_at,
+                &mut last_content_change_at,
+            );
+            match decide_screen_detection_publish(
+                ScreenDetectionPublishInput {
+                    screen_detection,
+                    current_state: state,
+                    last_visible_idle,
+                    last_visible_blocker,
+                    last_visible_working,
+                    last_visible_signal_refresh,
+                    process_exited,
+                    agent_changed,
+                    now,
+                },
+                &mut pending_idle,
+            ) {
+                DetectionPublishDecision::NoPublish => {}
+                DetectionPublishDecision::Publish {
+                    state: new_state,
+                    visible_idle,
+                    visible_blocker,
+                    visible_working,
+                    process_exited: publish_process_exited,
+                } => {
+                    apply_agent_detection_publish_update(
+                        state_events.clone(),
+                        pane_id,
+                        agent,
+                        AgentDetectionPublishUpdate {
+                            state: new_state,
+                            visible_idle,
+                            visible_blocker,
+                            visible_working,
+                            process_exited: publish_process_exited,
+                        },
+                        now,
+                        &mut state,
+                        &mut last_visible_idle,
+                        &mut last_visible_blocker,
+                        &mut last_visible_working,
+                        &mut last_visible_signal_refresh,
+                        &mut foreground_shell_exit_reported,
+                    )
+                    .await;
+                }
+            }
+        }
+    });
+
+    (handle.abort_handle(), detect_reset_notify, pending_release)
+}
+
+impl AgentDetectionPresence {
+    fn from_agent(current_agent: Option<Agent>) -> Self {
+        Self {
+            current_agent,
+            consecutive_misses: 0,
+        }
+    }
+
+    fn current_agent(&self) -> Option<Agent> {
+        self.current_agent
+    }
+
+    fn clear_current_agent(&mut self) -> bool {
+        if self.current_agent.is_none() {
+            self.consecutive_misses = 0;
+            return false;
+        }
+        self.current_agent = None;
+        self.consecutive_misses = 0;
+        true
+    }
+
+    fn observe_process_probe(&mut self, identified_agent: Option<Agent>) -> bool {
+        match identified_agent {
+            Some(agent) => {
+                self.consecutive_misses = 0;
+                if Some(agent) == self.current_agent {
+                    return false;
+                }
+                self.current_agent = Some(agent);
+                true
+            }
+            None => {
+                if self.current_agent.is_none() {
+                    self.consecutive_misses = 0;
+                    return false;
+                }
+                self.consecutive_misses = self.consecutive_misses.saturating_add(1);
+                if self.consecutive_misses < AGENT_MISS_CONFIRMATION_ATTEMPTS {
+                    return false;
+                }
+                self.current_agent = None;
+                self.consecutive_misses = 0;
+                true
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PaneRuntime — PTY, parser, channels, background tasks
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct TerminalCompressionWake {
+    notify: Arc<Notify>,
+    generation: Arc<AtomicU64>,
+}
+
+impl TerminalCompressionWake {
+    fn wake(&self) {
+        self.generation.fetch_add(1, Ordering::Release);
+        self.notify.notify_one();
+    }
+}
+
+/// Drives libghostty-vt's caller-owned compression after terminal activity settles.
+struct TerminalCompressionTask {
+    wake: TerminalCompressionWake,
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    completed_passes: Arc<AtomicU64>,
+    handle: tokio::task::AbortHandle,
+}
+
+impl Drop for TerminalCompressionTask {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+impl TerminalCompressionTask {
+    fn spawn(pane_id: PaneId, terminal: Arc<PaneTerminal>) -> Self {
+        let wake = TerminalCompressionWake {
+            notify: Arc::new(Notify::new()),
+            generation: Arc::new(AtomicU64::new(0)),
+        };
+        let task_notify = wake.notify.clone();
+        let task_generation = wake.generation.clone();
+        #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+        let completed_passes = Arc::new(AtomicU64::new(0));
+        #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+        let task_completed_passes = completed_passes.clone();
+        let handle = tokio::spawn(async move {
+            run_terminal_compression_task(
+                pane_id,
+                terminal,
+                task_notify,
+                task_generation,
+                #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+                task_completed_passes,
+            )
+            .await;
+        })
+        .abort_handle();
+        Self {
+            wake,
+            #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+            completed_passes,
+            handle,
+        }
+    }
+
+    fn wake(&self) {
+        self.wake.wake();
+    }
+
+    fn notifier(&self) -> TerminalCompressionWake {
+        self.wake.clone()
+    }
+
+    fn abort(&self) {
+        self.handle.abort();
+    }
+
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    fn completed_passes(&self) -> u64 {
+        self.completed_passes.load(Ordering::Acquire)
+    }
+}
+
+async fn run_terminal_compression_task(
+    pane_id: PaneId,
+    terminal: Arc<PaneTerminal>,
+    notify: Arc<Notify>,
+    generation: Arc<AtomicU64>,
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))] completed_passes: Arc<
+        AtomicU64,
+    >,
+) {
+    let mut observed_generation = generation.load(Ordering::Acquire);
+    let mut activity = loop {
+        match terminal.try_compression_activity() {
+            Ok(Some(activity)) => break activity,
+            Ok(None) => tokio::time::sleep(TERMINAL_COMPRESSION_IDLE).await,
+            Err(err) => {
+                warn!(pane = pane_id.raw(), err = %err, "failed to read terminal compression activity");
+                return;
+            }
+        }
+    };
+
+    'schedule: loop {
+        loop {
+            tokio::time::sleep(TERMINAL_COMPRESSION_IDLE).await;
+            let current = match terminal.try_compression_activity() {
+                Ok(Some(current)) => current,
+                Ok(None) => continue,
+                Err(err) => {
+                    warn!(pane = pane_id.raw(), err = %err, "failed to read terminal compression activity");
+                    return;
+                }
+            };
+            let current_generation = generation.load(Ordering::Acquire);
+            if activity == current && observed_generation == current_generation {
+                break;
+            }
+            activity = current;
+            observed_generation = current_generation;
+        }
+
+        loop {
+            let current_generation = generation.load(Ordering::Acquire);
+            if observed_generation != current_generation {
+                observed_generation = current_generation;
+                continue 'schedule;
+            }
+
+            let permit = match terminal_compression_permits().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => return,
+            };
+            let current_generation = generation.load(Ordering::Acquire);
+            if observed_generation != current_generation {
+                observed_generation = current_generation;
+                continue 'schedule;
+            }
+
+            let terminal_for_step = terminal.clone();
+            let step = spawn_blocking_with_compression_permit(permit, move || {
+                terminal_for_step.try_compress_incremental_if_activity(activity)
+            })
+            .await;
+            let step = match step {
+                Ok(Ok(step)) => step,
+                Ok(Err(err)) => {
+                    warn!(pane = pane_id.raw(), err = %err, "failed to compress terminal scrollback");
+                    return;
+                }
+                Err(err) => {
+                    warn!(pane = pane_id.raw(), err = %err, "terminal compression worker failed");
+                    return;
+                }
+            };
+
+            match step {
+                TerminalCompressionStep::Busy => continue 'schedule,
+                TerminalCompressionStep::ActivityChanged(current) => {
+                    activity = current;
+                    observed_generation = generation.load(Ordering::Acquire);
+                    continue 'schedule;
+                }
+                TerminalCompressionStep::Compressed(
+                    crate::ghostty::TerminalCompressionResult::Unsupported,
+                ) => return,
+                TerminalCompressionStep::Compressed(
+                    crate::ghostty::TerminalCompressionResult::Pending,
+                ) => tokio::time::sleep(TERMINAL_COMPRESSION_STEP).await,
+                TerminalCompressionStep::Compressed(
+                    crate::ghostty::TerminalCompressionResult::Complete,
+                ) => {
+                    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+                    completed_passes.fetch_add(1, Ordering::Release);
+                    loop {
+                        notify.notified().await;
+                        let current_generation = generation.load(Ordering::Acquire);
+                        if observed_generation != current_generation {
+                            observed_generation = current_generation;
+                            continue 'schedule;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// PTY runtime for a pane. Owns the terminal, I/O channels, and background tasks.
+/// Dropping this aborts async tasks and closes the PTY. An already-running bounded
+/// compression step may finish before releasing its terminal reference.
+pub struct PaneRuntime {
+    pane_id: PaneId,
+    terminal: Arc<PaneTerminal>,
+    io: PaneRuntimeIo,
+    current_size: Cell<(u16, u16, u32, u32)>,
+    child_pid: Arc<AtomicU32>,
+    reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
+    persistence_cwd: Mutex<Option<std::path::PathBuf>>,
+    cwd_process_exited: Arc<AtomicBool>,
+    child_wait_completed: Option<Arc<AtomicBool>>,
+    kitty_keyboard_flags: Arc<AtomicU16>,
+    content_seq: Arc<AtomicU64>,
+    content_write_lock: Arc<Mutex<()>>,
+    detection_content_seq: Arc<AtomicU64>,
+    full_lifecycle_authority_active: Arc<AtomicBool>,
+    self_reported_agent_active: Arc<AtomicBool>,
+    detect_reset_notify: Arc<Notify>,
+    pending_release: Arc<Mutex<Option<PendingAgentRelease>>>,
+    preserve_processes_on_drop: bool,
+    // Task handles for deterministic shutdown
+    compression: TerminalCompressionTask,
+    detect_handle: Option<tokio::task::AbortHandle>,
+}
+
+enum PaneRuntimeIo {
+    Actor(PtyIoActorHandle),
+    #[cfg(test)]
+    TestChannel {
+        sender: mpsc::Sender<Bytes>,
+        resize_tx: watch::Sender<(u16, u16, u32, u32)>,
+    },
+}
+
+impl PaneRuntimeIo {
+    fn shutdown(&self) {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.shutdown(),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => {}
+        }
+    }
+
+    #[cfg(unix)]
+    fn duplicate_handoff_fd(&self) -> std::io::Result<std::os::fd::RawFd> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.duplicate_for_handoff(),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => {
+                Err(std::io::Error::other("test runtime has no PTY master fd"))
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn foreground_process_group_id(&self) -> Option<u32> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.foreground_process_group_id(),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn begin_handoff(&self, timeout: std::time::Duration) -> std::io::Result<()> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.begin_handoff(timeout),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => Ok(()),
+        }
+    }
+
+    #[cfg(unix)]
+    fn set_handoff_paused(&self, paused: bool) -> std::io::Result<()> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => {
+                if paused {
+                    actor.begin_handoff(std::time::Duration::from_secs(1))
+                } else {
+                    actor.rollback_handoff()
+                }
+            }
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => Ok(()),
+        }
+    }
+
+    #[cfg(unix)]
+    fn release_after_commit(&self) -> std::io::Result<()> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.release_after_commit(),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => Ok(()),
+        }
+    }
+
+    fn resize(
+        &self,
+        rows: u16,
+        cols: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+        terminal_responses: Vec<Bytes>,
+    ) {
+        match self {
+            PaneRuntimeIo::Actor(actor) => {
+                actor.resize(
+                    rows,
+                    cols,
+                    cell_width_px,
+                    cell_height_px,
+                    terminal_responses,
+                );
+            }
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { resize_tx, .. } => {
+                let _ = resize_tx.send((rows, cols, cell_width_px, cell_height_px));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn nudge_child_redraw_after_handoff(
+        &self,
+        rows: u16,
+        cols: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) {
+        match self {
+            PaneRuntimeIo::Actor(actor) => {
+                actor.nudge_child_redraw_after_handoff(rows, cols, cell_width_px, cell_height_px);
+            }
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => {}
+        }
+    }
+
+    fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.try_write_user_input(bytes),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { sender, .. } => sender.try_send(bytes),
+        }
+    }
+
+    fn write_terminal_response(&self, response: impl FnOnce() -> Option<Bytes>) {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.write_terminal_response(response),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { sender, .. } => {
+                if let Some(bytes) = response() {
+                    let _ = sender.try_send(bytes);
+                }
+            }
+        }
+    }
+
+    fn queue_user_input_submission(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+        deadline: Option<std::time::Instant>,
+    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => {
+                #[cfg(windows)]
+                return actor.queue_user_input_submission(text, enter, delay, deadline);
+                #[cfg(unix)]
+                {
+                    let _ = deadline;
+                    actor.queue_user_input_submission(text, enter, delay)
+                }
+            }
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { sender, .. } => {
+                let _ = deadline;
+                let sender = sender.clone();
+                let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = sender
+                        .try_send(text)
+                        .map_err(std::io::Error::other)
+                        .and_then(|()| {
+                            std::thread::sleep(delay);
+                            sender.try_send(enter).map_err(std::io::Error::other)
+                        });
+                    let _ = reply_tx.send(result);
+                });
+                Ok(reply_rx)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WheelRouting {
+    HostScroll,
+    MouseReport,
+    AlternateScroll,
+}
+
+impl Drop for PaneRuntime {
+    fn drop(&mut self) {
+        // Abort detection task immediately and terminate the owned session.
+        // The PTY actor shuts down before the process/session policy runs.
+        if let Some(handle) = &self.detect_handle {
+            handle.abort();
+        }
+        self.compression.abort();
+        self.io.shutdown();
+        if !self.preserve_processes_on_drop {
+            shutdown_pane_processes(
+                self.pane_id,
+                self.child_pid.load(Ordering::Acquire),
+                self.child_wait_completed.as_deref(),
+            );
+        }
+    }
+}
+
+fn process_alive_for_shutdown(
+    pid: u32,
+    child_pid: u32,
+    child_wait_completed: bool,
+    process_exists: impl FnOnce(u32) -> bool,
+) -> bool {
+    if pid == child_pid && child_wait_completed {
+        return false;
+    }
+    process_exists(pid)
+}
+
+fn wait_for_processes_to_exit(
+    pids: &[u32],
+    child_pid: u32,
+    child_wait_completed: Option<&AtomicBool>,
+    timeout: std::time::Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let child_wait_completed =
+            child_wait_completed.is_some_and(|flag| flag.load(Ordering::Acquire));
+        if pids.iter().all(|pid| {
+            !process_alive_for_shutdown(
+                *pid,
+                child_pid,
+                child_wait_completed,
+                crate::platform::process_exists,
+            )
+        }) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn shutdown_pane_processes(
+    pane_id: PaneId,
+    child_pid: u32,
+    child_wait_completed: Option<&AtomicBool>,
+) {
+    if child_pid == 0 {
+        return;
+    }
+
+    let mut pids = crate::platform::session_processes(child_pid);
+    if pids.is_empty() {
+        pids.push(child_pid);
+    }
+    pids.sort_unstable();
+    pids.dedup();
+
+    for (signal, grace) in [
+        (
+            crate::platform::Signal::Hangup,
+            std::time::Duration::from_millis(250),
+        ),
+        (
+            crate::platform::Signal::Terminate,
+            std::time::Duration::from_millis(250),
+        ),
+        (
+            crate::platform::Signal::Kill,
+            std::time::Duration::from_millis(250),
+        ),
+    ] {
+        crate::platform::signal_processes(&pids, signal);
+        if wait_for_processes_to_exit(&pids, child_pid, child_wait_completed, grace) {
+            info!(
+                pane = pane_id.raw(),
+                pid = child_pid,
+                ?signal,
+                "pane session terminated"
+            );
+            return;
+        }
+    }
+
+    warn!(
+        pane = pane_id.raw(),
+        pid = child_pid,
+        pids = ?pids,
+        "pane session still alive after forced shutdown"
+    );
+}
+
+#[cfg(unix)]
+fn truncate_handoff_history(history: String, max_bytes: usize) -> String {
+    if history.len() <= max_bytes {
+        return history;
+    }
+    let mut start = history.len().saturating_sub(max_bytes);
+    while !history.is_char_boundary(start) {
+        start += 1;
+    }
+    let Some(newline_offset) = history[start..].find('\n') else {
+        return String::new();
+    };
+    start += newline_offset + 1;
+    history[start..].to_owned()
+}
+
+fn pane_shell(configured_shell: &str) -> String {
+    pane_shell_from(configured_shell, std::env::var("SHELL").ok())
+}
+
+fn pane_shell_from(configured_shell: &str, env_shell: Option<String>) -> String {
+    let configured_shell = configured_shell.trim();
+    if !configured_shell.is_empty() {
+        return configured_shell.to_string();
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = env_shell;
+        default_pane_shell()
+    }
+
+    #[cfg(not(windows))]
+    env_shell
+        .map(|shell| shell.trim().to_string())
+        .filter(|shell| !shell.is_empty())
+        .unwrap_or_else(default_pane_shell)
+}
+
+#[cfg(windows)]
+fn default_pane_shell() -> String {
+    default_windows_pane_shell(std::env::var_os("PATH"))
+}
+
+/// Windows has no `$SHELL`, so an unset `[terminal] default_shell` has to name
+/// a concrete executable. `powershell.exe` (5.1) is the only one guaranteed to
+/// exist, but `pwsh` (7+) is what every other Windows terminal prefers when it
+/// is installed. Return the first launchable `pwsh.exe` on `PATH` as a full
+/// path so the pane launches exactly the binary that was validated; keep the
+/// inbox shell when none is found. An explicit `default_shell` still wins.
+#[cfg(any(windows, test))]
+fn default_windows_pane_shell(path: Option<std::ffi::OsString>) -> String {
+    path.as_deref()
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join("pwsh.exe"))
+        .find(|candidate| is_windows_executable_file(candidate))
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .unwrap_or_else(|| "powershell.exe".into())
+}
+
+/// Validate that `path` looks like a Windows executable image the current
+/// machine can launch: a DOS `MZ` header whose `e_lfanew` points at a `PE\0\0`
+/// signature with a non-empty, executable-image COFF header for a compatible
+/// machine and a PE32/PE32+ optional header that fits in the file.
+///
+/// `portable-pty` resolves the configured shell with `Path::exists` and hands
+/// it straight to `CreateProcessW`, which does not fall back to later `PATH`
+/// entries, so a malformed, DLL, or foreign-architecture `pwsh.exe` must be
+/// skipped here instead of selected. Actually launching the candidate is the
+/// only way to prove it loads, and this deliberately does not do that.
+#[cfg(any(windows, test))]
+fn is_windows_executable_file(path: &std::path::Path) -> bool {
+    is_windows_executable_file_for_host(path, windows_host_native_machine())
+}
+
+/// Native processor architecture of the host. Non-Windows builds only reach
+/// this from the cross-platform unit tests, which model an x64 host.
+#[cfg(any(windows, test))]
+fn windows_host_native_machine() -> u16 {
+    #[cfg(windows)]
+    {
+        crate::platform::native_machine_type()
+    }
+    #[cfg(not(windows))]
+    {
+        0x8664
+    }
+}
+
+#[cfg(any(windows, test))]
+fn is_windows_executable_file_for_host(path: &std::path::Path, native_machine: u16) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const PE_OFFSET_FIELD: usize = 0x3c;
+    const DOS_HEADER_LEN: u64 = 0x40;
+    const PE_SIGNATURE: &[u8; 4] = b"PE\0\0";
+    const COFF_HEADER_LEN: usize = 20;
+    const SECTION_HEADER_LEN: u64 = 40;
+    const OPTIONAL_HEADER_MAGIC_LEN: u64 = 2;
+    const IMAGE_FILE_EXECUTABLE_IMAGE: u16 = 0x0002;
+    const IMAGE_FILE_DLL: u16 = 0x2000;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(len) = file.metadata().map(|metadata| metadata.len()) else {
+        return false;
+    };
+
+    let mut dos_header = [0u8; DOS_HEADER_LEN as usize];
+    if file.read_exact(&mut dos_header).is_err() || &dos_header[..2] != b"MZ" {
+        return false;
+    }
+    let pe_offset = u32::from_le_bytes([
+        dos_header[PE_OFFSET_FIELD],
+        dos_header[PE_OFFSET_FIELD + 1],
+        dos_header[PE_OFFSET_FIELD + 2],
+        dos_header[PE_OFFSET_FIELD + 3],
+    ]) as u64;
+    let pe_header_len = PE_SIGNATURE.len() as u64 + COFF_HEADER_LEN as u64;
+    if pe_offset < DOS_HEADER_LEN || pe_offset.saturating_add(pe_header_len) > len {
+        return false;
+    }
+    if file.seek(SeekFrom::Start(pe_offset)).is_err() {
+        return false;
+    }
+
+    let mut header = [0u8; 4 + COFF_HEADER_LEN];
+    if file.read_exact(&mut header).is_err() || &header[..4] != PE_SIGNATURE {
+        return false;
+    }
+    let machine = u16::from_le_bytes([header[4], header[5]]);
+    let number_of_sections = u16::from_le_bytes([header[4 + 2], header[4 + 3]]);
+    let optional_header_len = u16::from_le_bytes([header[4 + 16], header[4 + 17]]) as u64;
+    let characteristics = u16::from_le_bytes([header[4 + 18], header[4 + 19]]);
+
+    if !windows_executable_machine_is_compatible(machine, native_machine)
+        || number_of_sections == 0
+        || characteristics & IMAGE_FILE_EXECUTABLE_IMAGE == 0
+        || characteristics & IMAGE_FILE_DLL != 0
+        || optional_header_len < OPTIONAL_HEADER_MAGIC_LEN
+        || pe_offset.saturating_add(
+            pe_header_len + optional_header_len + number_of_sections as u64 * SECTION_HEADER_LEN,
+        ) > len
+    {
+        return false;
+    }
+
+    let mut magic = [0u8; 2];
+    file.read_exact(&mut magic).is_ok() && matches!(u16::from_le_bytes(magic), 0x010b | 0x020b)
+}
+
+/// Whether a Windows host can launch a given `IMAGE_FILE_MACHINE_*` image.
+/// A native host runs its own architecture; ARM64 Windows also runs x64 and
+/// x86 through emulation, and x64 Windows runs x86 through WOW64. An unknown
+/// host (detection failed) is treated as the x64 build Herdr ships.
+#[cfg(any(windows, test))]
+fn windows_executable_machine_is_compatible(machine: u16, native_machine: u16) -> bool {
+    const MACHINE_I386: u16 = 0x014c;
+    const MACHINE_AMD64: u16 = 0x8664;
+    const MACHINE_ARM64: u16 = 0xaa64;
+
+    match native_machine {
+        MACHINE_ARM64 => matches!(machine, MACHINE_I386 | MACHINE_AMD64 | MACHINE_ARM64),
+        MACHINE_I386 => machine == MACHINE_I386,
+        _ => matches!(machine, MACHINE_I386 | MACHINE_AMD64),
+    }
+}
+
+#[cfg(not(windows))]
+fn default_pane_shell() -> String {
+    "/bin/sh".into()
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PaneShellConfig<'a> {
+    pub(crate) default_shell: &'a str,
+    pub(crate) mode: crate::config::ShellModeConfig,
+}
+
+impl<'a> PaneShellConfig<'a> {
+    pub(crate) fn new(default_shell: &'a str, mode: crate::config::ShellModeConfig) -> Self {
+        Self {
+            default_shell,
+            mode,
+        }
+    }
+}
+
+/// Target platform for shell launch policy. Parameterized (instead of raw
+/// `cfg!` checks at each decision point) so every branch stays testable on
+/// every host platform.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ShellLaunchTarget {
+    Windows,
+    Macos,
+    OtherUnix,
+}
+
+impl ShellLaunchTarget {
+    fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::Macos
+        } else {
+            Self::OtherUnix
+        }
+    }
+}
+
+fn shell_mode_uses_login_shell(
+    mode: crate::config::ShellModeConfig,
+    target: ShellLaunchTarget,
+) -> bool {
+    match mode {
+        crate::config::ShellModeConfig::Auto => target == ShellLaunchTarget::Macos,
+        crate::config::ShellModeConfig::Login => true,
+        crate::config::ShellModeConfig::NonLogin => false,
+    }
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn resolve_shell_for_login_mode(shell: &str) -> io::Result<String> {
+    if shell.contains(std::path::MAIN_SEPARATOR) {
+        let path = Path::new(shell);
+        return is_executable_file(path)
+            .then(|| shell.to_string())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("login shell {shell:?} is not executable"),
+                )
+            });
+    }
+
+    std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(shell))
+                .find(|candidate| is_executable_file(candidate))
+        })
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("login shell {shell:?} was not found on PATH"),
+            )
+        })
+}
+
+/// Sourced via `-NoExit -Command` when launching PowerShell on Windows. It
+/// wraps whatever `prompt` function the user's profile left behind so each
+/// prompt render appends the cwd as OSC 9;9 — the sequence Windows Terminal
+/// and ConEmu standardized for shell integration. PowerShell never updates
+/// its Win32 process cwd on `Set-Location`, so the prompt hook updates it when
+/// possible before reporting the cwd.
+///
+/// The snippet must not contain double quotes: powershell.exe parses its
+/// command line with its own rules that disagree with the ArgvQuote escaping
+/// portable-pty applies, and embedded `\"` sequences get corrupted in
+/// transit. Single-quoted strings and `[char]` codes keep the round-trip
+/// byte-exact, and the OSC 9;9 payload is emitted unquoted (the original
+/// ConEmu form, which the cwd tracker accepts).
+///
+/// The original prompt must be invoked before any other statement in the
+/// wrapper: anything that runs first resets `$?`, so a status-aware user
+/// prompt would show success after a failed command (verified on 5.1).
+pub(crate) const WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND: &str = r"if ($null -eq $global:__HerdrOriginalPrompt) { $global:__HerdrOriginalPrompt = $function:prompt; function global:prompt { $out = @(& $global:__HerdrOriginalPrompt) -join ' '; $loc = $ExecutionContext.SessionState.Path.CurrentLocation; if ($loc.Provider.Name -eq 'FileSystem') { try { [Environment]::CurrentDirectory = $loc.ProviderPath } catch {}; $esc = [string][char]27; $out += $esc + ']9;9;' + $loc.ProviderPath + $esc + '\' }; $out } }";
+
+/// Login flags appended when launching POSIX-style shells on Windows.
+///
+/// `portable-pty`'s default-program path resolves to `%ComSpec%` (cmd.exe) on
+/// Windows and ignores the `SHELL` env override, and the Unix argv0-prefix
+/// login convention does not exist there. A login shell therefore has to be
+/// launched directly with the shell's own login flag. Only POSIX-style shells
+/// that define one (the sh family, fish, and csh/tcsh) get it; Windows-native
+/// shells such as cmd.exe and PowerShell have no login concept and launch
+/// plain.
+fn windows_login_shell_args(shell: &str) -> &'static [&'static str] {
+    let name = shell
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(shell)
+        .to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    match name {
+        "sh" | "bash" | "zsh" | "ksh" | "dash" | "ash" | "mksh" | "fish" | "csh" | "tcsh" => {
+            &["-l"]
+        }
+        _ => &[],
+    }
+}
+
+fn pane_shell_command_builder_for_target(
+    shell_config: PaneShellConfig<'_>,
+    target: ShellLaunchTarget,
+) -> io::Result<CommandBuilder> {
+    let shell = pane_shell(shell_config.default_shell);
+    // Unix login shells go through portable-pty's default-program builder so
+    // they receive the login argv0 convention. Windows has no such convention
+    // and the default-program builder would launch cmd.exe, so Windows login
+    // shells are built directly below like every other direct-shell target.
+    if shell_mode_uses_login_shell(shell_config.mode, target)
+        && target != ShellLaunchTarget::Windows
+    {
+        let mut cmd = CommandBuilder::new_default_prog();
+        cmd.env("SHELL", resolve_shell_for_login_mode(&shell)?);
+        return Ok(cmd);
+    }
+
+    let mut cmd = CommandBuilder::new(&shell);
+    if shell_mode_uses_login_shell(shell_config.mode, target) {
+        cmd.args(windows_login_shell_args(&shell));
+    }
+    if uses_windows_powershell_pane_shell_for_target(shell_config, target) {
+        cmd.args([
+            "-NoExit",
+            "-Command",
+            WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND,
+        ]);
+    }
+    Ok(cmd)
+}
+
+fn pane_shell_command_builder(shell_config: PaneShellConfig<'_>) -> io::Result<CommandBuilder> {
+    pane_shell_command_builder_for_target(shell_config, ShellLaunchTarget::current())
+}
+
+/// True when panes launch an interactive PowerShell directly on Windows.
+/// Gates the prompt-based cwd reporting pipeline and the agent-exit shell
+/// respawn recovery.
+pub(crate) fn uses_windows_powershell_pane_shell(shell_config: PaneShellConfig<'_>) -> bool {
+    uses_windows_powershell_pane_shell_for_target(shell_config, ShellLaunchTarget::current())
+}
+
+fn uses_windows_powershell_pane_shell_for_target(
+    shell_config: PaneShellConfig<'_>,
+    target: ShellLaunchTarget,
+) -> bool {
+    // Login mode no longer routes Windows through the default-program builder,
+    // so login PowerShell panes are launched directly and can carry the same
+    // prompt-based cwd reporting as non-login panes.
+    target == ShellLaunchTarget::Windows
+        && is_powershell_shell(&pane_shell(shell_config.default_shell))
+}
+
+fn is_powershell_shell(shell: &str) -> bool {
+    // Split on both separators by hand: `Path::file_name` only treats `\` as
+    // a separator on Windows hosts, and this predicate must evaluate Windows
+    // shell paths correctly from tests on any host.
+    let name = shell
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(shell)
+        .to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
+    )
+}
+
+fn usable_reported_cwd(cwd: std::path::PathBuf) -> Option<std::path::PathBuf> {
+    (cwd.is_absolute() && cwd.is_dir()).then_some(cwd)
+}
+
+fn publish_terminal_bells(pane_id: PaneId, count: u16, events: &mpsc::Sender<AppEvent>) {
+    if count == 0 {
+        return;
+    }
+    if let Err(err) = events.try_send(AppEvent::TerminalBell { pane_id, count }) {
+        warn!(
+            pane = pane_id.raw(),
+            count,
+            err = %err,
+            "failed to queue terminal bell"
+        );
+    }
+}
+
+fn publish_reported_cwd(
+    pane_id: PaneId,
+    cwd: std::path::PathBuf,
+    reported_cwd: &Arc<Mutex<Option<std::path::PathBuf>>>,
+    events: &mpsc::Sender<AppEvent>,
+) {
+    let Some(cwd) = usable_reported_cwd(cwd) else {
+        return;
+    };
+    if let Ok(mut current) = reported_cwd.lock() {
+        if current.as_ref() == Some(&cwd) {
+            return;
+        }
+        *current = Some(cwd.clone());
+    }
+    if let Err(err) = events.try_send(AppEvent::TerminalCwdReported { pane_id, cwd }) {
+        warn!(
+            pane = pane_id.raw(),
+            err = %err,
+            "failed to send terminal cwd report"
+        );
+    }
+}
+
+impl PaneRuntime {
+    pub fn shutdown(mut self) {
+        if let Some(handle) = self.detect_handle.take() {
+            handle.abort();
+        }
+        self.compression.abort();
+        self.io.shutdown();
+        shutdown_pane_processes(
+            self.pane_id,
+            self.child_pid.load(Ordering::Acquire),
+            self.child_wait_completed.as_deref(),
+        );
+        self.preserve_processes_on_drop = true;
+    }
+
+    #[cfg(unix)]
+    pub fn duplicate_handoff_fd(&self) -> std::io::Result<std::os::fd::RawFd> {
+        self.io.duplicate_handoff_fd()
+    }
+
+    #[cfg(unix)]
+    pub fn preserve_for_handoff(mut self) {
+        if let Err(err) = self.io.release_after_commit() {
+            warn!(
+                pane = self.pane_id.raw(),
+                err = %err,
+                "failed to release PTY actor after handoff commit; dropping runtime will still close the actor handle"
+            );
+        }
+        if let Some(handle) = self.detect_handle.take() {
+            handle.abort();
+        }
+        self.compression.abort();
+        self.preserve_processes_on_drop = true;
+    }
+
+    #[cfg(unix)]
+    pub fn assume_handoff_ownership(&mut self) {
+        self.preserve_processes_on_drop = false;
+    }
+
+    #[cfg(unix)]
+    pub fn set_handoff_reader_paused(&self, paused: bool) {
+        if let Err(err) = self.io.set_handoff_paused(paused) {
+            warn!(
+                pane = self.pane_id.raw(),
+                err = %err,
+                paused,
+                "failed to update PTY actor handoff pause state"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn pause_handoff_reader(&self, timeout: std::time::Duration) -> std::io::Result<()> {
+        self.io.begin_handoff(timeout)
+    }
+
+    #[cfg(unix)]
+    pub fn handoff_runtime_state(
+        &self,
+        pane_id: u32,
+    ) -> crate::handoff_runtime::HandoffRuntimeState {
+        let child_pid = self.child_pid.load(Ordering::Acquire);
+        let (rows, cols, cell_width_px, cell_height_px) = self.current_size.get();
+        crate::handoff_runtime::HandoffRuntimeState {
+            pane_id,
+            child_pid,
+            rows,
+            cols,
+            cell_width_px,
+            cell_height_px,
+            keyboard_protocol_flags: match self.keyboard_protocol() {
+                crate::input::KeyboardProtocol::Legacy => 0,
+                crate::input::KeyboardProtocol::Kitty { flags } => flags,
+            },
+            keyboard_protocol_ansi: self.terminal.kitty_keyboard_state_ansi(),
+            input_state: self.input_state(),
+            terminal_title: self.terminal_title(),
+            initial_history_ansi: None,
+            agent_state: None,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn handoff_history_ansi(&self) -> Option<String> {
+        if self.terminal.alternate_screen_active() {
+            return None;
+        }
+        self.snapshot_history().map(|history| {
+            truncate_handoff_history(history, crate::server::handoff::MAX_REPLAY_BYTES_PER_PANE)
+        })
+    }
+
+    pub fn apply_host_terminal_theme(&self, theme: crate::terminal_theme::TerminalTheme) {
+        self.terminal.apply_host_terminal_theme(theme);
+    }
+
+    pub fn apply_host_terminal_appearance(
+        &self,
+        appearance: Option<crate::terminal_theme::HostAppearance>,
+    ) {
+        self.io
+            .write_terminal_response(|| self.terminal.apply_host_terminal_appearance(appearance));
+    }
+
+    // Runtime construction threads PTY geometry, host context, launch policy, and render hooks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn(
+        pane_id: PaneId,
+        rows: u16,
+        cols: u16,
+        cwd: std::path::PathBuf,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        shell_config: PaneShellConfig<'_>,
+        launch_env: &PaneLaunchEnv,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> std::io::Result<Self> {
+        Self::spawn_with_initial_history(
+            pane_id,
+            rows,
+            cols,
+            cwd,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            shell_config,
+            launch_env,
+            None,
+            events,
+            render_notify,
+            render_dirty,
+        )
+    }
+
+    // Runtime construction needs to thread PTY size, environment, theme, and render hooks together.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn spawn_with_initial_history(
+        pane_id: PaneId,
+        rows: u16,
+        cols: u16,
+        cwd: std::path::PathBuf,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        shell_config: PaneShellConfig<'_>,
+        launch_env: &PaneLaunchEnv,
+        initial_history_ansi: Option<&str>,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> std::io::Result<Self> {
+        let windows_powershell_prompt_cwd_reporting =
+            uses_windows_powershell_pane_shell(shell_config);
+        let mut cmd = pane_shell_command_builder(shell_config)?;
+        cmd.cwd(crate::platform::normalize_cwd_for_launch(&cwd));
+        apply_pane_terminal_env(&mut cmd);
+        apply_pane_launch_env(&mut cmd, launch_env);
+        Self::spawn_command_builder(
+            pane_id,
+            rows,
+            cols,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            events,
+            render_notify,
+            render_dirty,
+            cmd,
+            "failed to spawn shell",
+            SpawnInitialState {
+                detected_agent: None,
+                history_ansi: initial_history_ansi,
+                windows_powershell_prompt_cwd_reporting,
+            },
+            AgentDetection::Enabled,
+        )
+    }
+
+    // Runtime construction needs to thread PTY size, environment, theme, and render hooks together.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_shell_command(
+        pane_id: PaneId,
+        rows: u16,
+        cols: u16,
+        cwd: std::path::PathBuf,
+        command: &str,
+        launch_env: &PaneLaunchEnv,
+        agent_detection: AgentDetection,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> std::io::Result<Self> {
+        let mut cmd = crate::platform::pane_custom_command_pty_builder(command);
+        cmd.cwd(crate::platform::normalize_cwd_for_launch(&cwd));
+        apply_pane_terminal_env(&mut cmd);
+        apply_pane_launch_env(&mut cmd, launch_env);
+        Self::spawn_command_builder(
+            pane_id,
+            rows,
+            cols,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            events,
+            render_notify,
+            render_dirty,
+            cmd,
+            "failed to spawn command pane",
+            SpawnInitialState::default(),
+            agent_detection,
+        )
+    }
+
+    // Runtime construction needs to thread PTY size, environment, theme, render hooks, and detection policy together.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_argv_command(
+        pane_id: PaneId,
+        rows: u16,
+        cols: u16,
+        cwd: std::path::PathBuf,
+        argv: &[String],
+        launch_env: &PaneLaunchEnv,
+        agent_detection: AgentDetection,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> std::io::Result<Self> {
+        let Some((program, args)) = argv.split_first() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "argv must not be empty",
+            ));
+        };
+        let mut cmd = CommandBuilder::new(program);
+        for arg in args {
+            cmd.arg(arg);
+        }
+        cmd.cwd(crate::platform::normalize_cwd_for_launch(&cwd));
+        apply_pane_terminal_env(&mut cmd);
+        apply_pane_launch_env(&mut cmd, launch_env);
+        Self::spawn_command_builder(
+            pane_id,
+            rows,
+            cols,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            events,
+            render_notify,
+            render_dirty,
+            cmd,
+            "failed to spawn argv command pane",
+            SpawnInitialState::default(),
+            agent_detection,
+        )
+    }
+
+    #[cfg(unix)]
+    pub fn from_handoff_fd(
+        import: crate::handoff_runtime::ImportedHandoffRuntime,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> std::io::Result<Self> {
+        let crate::handoff_runtime::ImportedHandoffRuntime { master_fd, state } = import;
+        let crate::handoff_runtime::HandoffRuntimeState {
+            pane_id,
+            child_pid,
+            rows,
+            cols,
+            cell_width_px,
+            cell_height_px,
+            keyboard_protocol_flags,
+            keyboard_protocol_ansi,
+            input_state,
+            terminal_title,
+            initial_history_ansi,
+            agent_state: _,
+        } = state;
+        let pane_id = PaneId::from_raw(pane_id);
+        use std::os::fd::FromRawFd;
+
+        let master_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(master_fd) };
+
+        let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
+        let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        terminal
+            .resize(cols, rows, cell_width_px, cell_height_px)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        if crate::kitty_graphics::is_enabled() {
+            terminal
+                .enable_kitty_graphics()
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
+        let pane_terminal = GhosttyPaneTerminal::new(terminal, response_tx.clone())?;
+        pane_terminal.apply_host_terminal_theme(host_terminal_theme);
+        let _ = pane_terminal.apply_host_terminal_appearance(host_terminal_appearance);
+        pane_terminal.seed_terminal_title(terminal_title);
+        if let Some(input_state) = input_state {
+            pane_terminal.seed_handoff_input_state(input_state);
+        }
+        if let Some(ansi) = keyboard_protocol_ansi.as_deref() {
+            pane_terminal.seed_keyboard_protocol_ansi(ansi);
+        } else {
+            pane_terminal.seed_keyboard_protocol_flags(keyboard_protocol_flags);
+        }
+        if let Some(ansi) = initial_history_ansi.as_deref() {
+            pane_terminal.seed_history_ansi(ansi);
+        }
+        let terminal = Arc::new(PaneTerminal::new(pane_terminal));
+        let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+        let child_pid = Arc::new(AtomicU32::new(child_pid));
+        let reported_cwd = Arc::new(Mutex::new(None));
+        let cwd_process_exited = Arc::new(AtomicBool::new(false));
+        let kitty_keyboard_flags = Arc::new(AtomicU16::new(keyboard_protocol_flags));
+        let content_seq = Arc::new(AtomicU64::new(0));
+        let content_write_lock = Arc::new(Mutex::new(()));
+        let detection_content_seq = Arc::new(AtomicU64::new(0));
+
+        let io = {
+            let terminal = terminal.clone();
+            let response_writer = response_tx.clone();
+            let render_notify = render_notify.clone();
+            let render_dirty = render_dirty.clone();
+            let content_seq = content_seq.clone();
+            let content_write_lock = content_write_lock.clone();
+            let detection_content_seq = detection_content_seq.clone();
+            let child_pid = child_pid.clone();
+            let read_events = events.clone();
+            let reported_cwd = reported_cwd.clone();
+            let compression_wake = compression.notifier();
+            let rt = tokio::runtime::Handle::current();
+            let delay_rt = rt.clone();
+            let on_read = Box::new(move |bytes: &[u8]| {
+                let _content_write_guard = match content_write_lock.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                content_seq.fetch_add(1, Ordering::AcqRel);
+                let shell_pid = child_pid.load(Ordering::Acquire);
+                let result =
+                    terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
+                content_seq.fetch_add(1, Ordering::Release);
+                drop(_content_write_guard);
+                compression_wake.wake();
+                publish_terminal_bells(pane_id, result.terminal_bells, &read_events);
+                observe_detection_content_change(bytes, &detection_content_seq);
+                let title_requested =
+                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
+                let render_requested = result.request_render && render_dirty.request_pty(pane_id);
+                if title_requested || render_requested {
+                    render_notify.notify_one();
+                }
+                if let Some(delay) = result.render_delay {
+                    let render_notify = render_notify.clone();
+                    let render_dirty = render_dirty.clone();
+                    delay_rt.spawn(async move {
+                        tokio::time::sleep(delay).await;
+                        if render_dirty.request_pty(pane_id) {
+                            render_notify.notify_one();
+                        }
+                    });
+                }
+                if let Some(cwd) = result.reported_cwd.clone() {
+                    publish_reported_cwd(pane_id, cwd, &reported_cwd, &read_events);
+                }
+                for content in result.clipboard_writes {
+                    if let Err(err) = read_events.try_send(AppEvent::ClipboardWrite { content }) {
+                        warn!(
+                            pane = pane_id.raw(),
+                            err = %err,
+                            "failed to queue OSC 52 clipboard write"
+                        );
+                    }
+                }
+                PtyReadResult {
+                    terminal_responses: result.terminal_responses,
+                }
+            });
+            let exit_events = events.clone();
+            let cwd_process_exited = cwd_process_exited.clone();
+            let on_reader_exit = Box::new(move || {
+                cwd_process_exited.store(true, Ordering::Release);
+                // Imported handoff panes have no child wait handle, so their exit cause is
+                // unknowable. Checkpoint conservatively; normal autosave settles clean exits.
+                let _ = rt.block_on(exit_events.send(AppEvent::PaneDied {
+                    pane_id,
+                    exit_reason: crate::platform::ChildExitReason::Handoff,
+                }));
+                debug!(pane = pane_id.raw(), "handoff PTY actor exiting");
+            });
+            PaneRuntimeIo::Actor(PtyIoActor::spawn(PtyIoActorConfig {
+                pane_id: pane_id.raw(),
+                master_fd,
+                initially_quiesced: true,
+                on_read,
+                on_reader_exit: Some(on_reader_exit),
+            })?)
+        };
+
+        let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
+        let self_reported_agent_active = Arc::new(AtomicBool::new(false));
+        let (detect_handle, detect_reset_notify, pending_release) = spawn_basic_detection_task(
+            pane_id,
+            child_pid.clone(),
+            terminal.clone(),
+            detection_pty_actor(&io),
+            content_seq.clone(),
+            detection_content_seq.clone(),
+            full_lifecycle_authority_active.clone(),
+            self_reported_agent_active.clone(),
+            events,
+        );
+
+        Ok(Self {
+            pane_id,
+            terminal,
+            io,
+            current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
+            child_pid,
+            reported_cwd,
+            persistence_cwd: Mutex::new(None),
+            cwd_process_exited,
+            child_wait_completed: None,
+            kitty_keyboard_flags,
+            content_seq,
+            content_write_lock,
+            detection_content_seq,
+            full_lifecycle_authority_active,
+            self_reported_agent_active,
+            detect_reset_notify,
+            pending_release,
+            preserve_processes_on_drop: true,
+            compression,
+            detect_handle: Some(detect_handle),
+        })
+    }
+
+    // Runtime construction needs to thread PTY size, environment, theme, render hooks, and detection policy together.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_command_builder(
+        pane_id: PaneId,
+        rows: u16,
+        cols: u16,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+        cmd: CommandBuilder,
+        spawn_error_message: &'static str,
+        initial_state: SpawnInitialState<'_>,
+        agent_detection: AgentDetection,
+    ) -> std::io::Result<Self> {
+        crate::logging::pane_spawn_started(pane_id.raw(), rows, cols, scrollback_limit_bytes);
+
+        let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
+        let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        if crate::kitty_graphics::is_enabled() {
+            terminal
+                .enable_kitty_graphics()
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
+        let pane_terminal = GhosttyPaneTerminal::new(terminal, response_tx.clone())?;
+        pane_terminal.apply_host_terminal_theme(host_terminal_theme);
+        let _ = pane_terminal.apply_host_terminal_appearance(host_terminal_appearance);
+        pane_terminal.set_windows_powershell_prompt_cwd_reporting(
+            initial_state.windows_powershell_prompt_cwd_reporting,
+        );
+        if let Some(ansi) = initial_state.history_ansi {
+            pane_terminal.seed_history_ansi(ansi);
+        }
+        let terminal = Arc::new(PaneTerminal::new(pane_terminal));
+        let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+        let kitty_keyboard_flags = Arc::new(AtomicU16::new(0));
+        let content_write_lock = Arc::new(Mutex::new(()));
+
+        let spawned = crate::pty::backend::spawn_with_portable_pty(rows, cols, cmd)
+            .inspect_err(|err| error!(pane = pane_id.raw(), err = %err, "{spawn_error_message}"))?;
+
+        // --- Child watcher task ---
+        let child_pid = Arc::new(AtomicU32::new(0));
+        let reported_cwd = Arc::new(Mutex::new(None));
+        let child_wait_completed = Arc::new(AtomicBool::new(false));
+        let content_seq = Arc::new(AtomicU64::new(0));
+        let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
+        let self_reported_agent_active = Arc::new(AtomicBool::new(false));
+        {
+            let child_pid = child_pid.clone();
+            let child_wait_completed = child_wait_completed.clone();
+            let events = events.clone();
+            let rt = tokio::runtime::Handle::current();
+            let mut child = spawned.child;
+            if let Some(pid) = child.process_id() {
+                child_pid.store(pid, Ordering::Release);
+                crate::logging::pane_spawned(pane_id.raw(), pid);
+            }
+            tokio::task::spawn_blocking(move || {
+                let exit_reason = match child.wait() {
+                    Ok(status) => {
+                        let exit_reason = crate::platform::classify_child_exit(&status);
+                        let status_text = format!("{status:?}");
+                        crate::logging::pane_exited(pane_id.raw(), &status_text);
+                        exit_reason
+                    }
+                    Err(e) => {
+                        crate::logging::pane_exit_failed(pane_id.raw(), &e.to_string());
+                        crate::platform::ChildExitReason::WaitFailed
+                    }
+                };
+                child_wait_completed.store(true, Ordering::Release);
+                // Use blocking send — PaneDied is critical, must not be dropped
+                if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
+                    pane_id,
+                    exit_reason,
+                })) {
+                    error!(pane = pane_id.raw(), err = %e, "failed to send PaneDied event");
+                }
+            });
+        }
+
+        let io = {
+            let terminal = terminal.clone();
+            let response_writer = response_tx.clone();
+            let render_notify = render_notify.clone();
+            let render_dirty = render_dirty.clone();
+            let content_seq = content_seq.clone();
+            let content_write_lock = content_write_lock.clone();
+            let detection_content_seq = detection_content_seq.clone();
+            let child_pid = child_pid.clone();
+            let events = events.clone();
+            let reported_cwd = reported_cwd.clone();
+            let compression_wake = compression.notifier();
+            let rt = tokio::runtime::Handle::current();
+            let on_read = Box::new(move |bytes: &[u8]| {
+                let _content_write_guard = match content_write_lock.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                content_seq.fetch_add(1, Ordering::AcqRel);
+                let shell_pid = child_pid.load(Ordering::Acquire);
+                let result =
+                    terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
+                content_seq.fetch_add(1, Ordering::Release);
+                drop(_content_write_guard);
+                compression_wake.wake();
+                publish_terminal_bells(pane_id, result.terminal_bells, &events);
+                if agent_detection == AgentDetection::Enabled {
+                    observe_detection_content_change(bytes, &detection_content_seq);
+                }
+                let title_requested =
+                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
+                let render_requested = result.request_render && render_dirty.request_pty(pane_id);
+                if title_requested || render_requested {
+                    render_notify.notify_one();
+                }
+                if let Some(delay) = result.render_delay {
+                    let render_notify = render_notify.clone();
+                    let render_dirty = render_dirty.clone();
+                    rt.spawn(async move {
+                        tokio::time::sleep(delay).await;
+                        if render_dirty.request_pty(pane_id) {
+                            render_notify.notify_one();
+                        }
+                    });
+                }
+                if let Some(cwd) = result.reported_cwd.clone() {
+                    publish_reported_cwd(pane_id, cwd, &reported_cwd, &events);
+                }
+                for content in result.clipboard_writes {
+                    if let Err(err) = events.try_send(AppEvent::ClipboardWrite { content }) {
+                        warn!(
+                            pane = pane_id.raw(),
+                            err = %err,
+                            "failed to send OSC 52 clipboard write"
+                        );
+                    }
+                }
+                PtyReadResult {
+                    terminal_responses: result.terminal_responses,
+                }
+            });
+            PaneRuntimeIo::Actor(PtyIoActor::spawn(PtyIoActorConfig {
+                pane_id: pane_id.raw(),
+                #[cfg(unix)]
+                master_fd: spawned.master_fd,
+                #[cfg(windows)]
+                master: spawned.master,
+                initially_quiesced: false,
+                on_read,
+                on_reader_exit: None,
+            })?)
+        };
+
+        let pty_actor = detection_pty_actor(&io);
+
+        // --- Detection task ---
+        let (detect_handle, detect_reset_notify, pending_release) = if agent_detection
+            == AgentDetection::Enabled
+        {
+            use crate::detect;
+            use std::time::{Duration, Instant};
+
+            const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
+            const TICK_IDENTIFIED: Duration = Duration::from_millis(300);
+            const TICK_PENDING_RELEASE: Duration = Duration::from_millis(50);
+
+            let child_pid = child_pid.clone();
+            let terminal = terminal.clone();
+            let state_events = events.clone();
+            let text_content_seq = content_seq.clone();
+            let detection_content_seq = detection_content_seq.clone();
+            let full_lifecycle_authority_active_for_task = full_lifecycle_authority_active.clone();
+            let self_reported_agent_active_for_task = self_reported_agent_active.clone();
+            let render_notify = render_notify.clone();
+            let render_dirty = render_dirty.clone();
+            let detect_reset_notify = Arc::new(Notify::new());
+            let detect_reset = detect_reset_notify.clone();
+            let pending_release = Arc::new(Mutex::new(None));
+            let pending_release_for_task = pending_release.clone();
+
+            let handle = tokio::spawn(async move {
+                let mut agent_presence =
+                    AgentDetectionPresence::from_agent(initial_state.detected_agent);
+                let mut state = AgentState::Idle;
+                let mut last_visible_idle = initial_state.detected_agent.is_some();
+                let mut last_process_check = Instant::now();
+                #[cfg(windows)]
+                let mut last_observation = (Instant::now(), Some(0));
+                let mut last_foreground_pgid = None;
+                let mut has_process_probe = false;
+                let mut acquisition_started_at = None;
+                let mut last_content_change_at = None;
+                let mut pending_foreground_shell_clear = false;
+                let mut foreground_shell_exit_reported = false;
+                let mut release_was_active = false;
+                let mut pending_restore_probe = initial_state.detected_agent.is_some();
+                let mut last_visible_blocker = false;
+                let mut last_visible_working = false;
+                let mut last_visible_signal_refresh = None;
+                let mut last_detection_text = DetectionTextCache::default();
+                let mut last_screen_scan_detection_content_seq = None;
+                let mut agent_startup_grace_until = None;
+                let mut pending_idle = PendingIdleConfirmation::default();
+                let mut last_codex_prompt_ready = false;
+                let mut last_self_reported_shell_check = None;
+                let mut agent_job = AgentJobTracker::default();
+
+                tokio::time::sleep(Duration::from_millis(50)).await;
+
+                loop {
+                    let now_for_tick = Instant::now();
+                    let tick = if active_pending_release(&pending_release_for_task, now_for_tick)
+                        .is_some()
+                        || terminal.has_transient_default_color_override()
+                    {
+                        TICK_PENDING_RELEASE
+                    } else if pending_idle.active() {
+                        AGENT_PENDING_IDLE_RECHECK
+                    } else if agent_presence.current_agent().is_none() {
+                        TICK_UNIDENTIFIED
+                    } else {
+                        TICK_IDENTIFIED
+                    };
+                    tokio::select! {
+                        _ = tokio::time::sleep(tick) => {}
+                        _ = detect_reset.notified() => {
+                            publish_codex_prompt_observation(
+                                &state_events, pane_id, Some(Agent::Codex), "", None, false,
+                                &mut last_codex_prompt_ready,
+                            ).await;
+                            agent_presence = AgentDetectionPresence::from_agent(None);
+                            state = AgentState::Unknown;
+                            last_visible_idle = false;
+                            last_foreground_pgid = None;
+                            has_process_probe = false;
+                            acquisition_started_at = None;
+                            last_content_change_at = None;
+                            pending_foreground_shell_clear = false;
+                            foreground_shell_exit_reported = false;
+                            release_was_active = false;
+                            pending_restore_probe = false;
+                            last_visible_blocker = false;
+                            last_visible_working = false;
+                            last_visible_signal_refresh = None;
+                            last_detection_text.clear();
+                            last_screen_scan_detection_content_seq = None;
+                            agent_startup_grace_until = None;
+                            pending_idle.clear();
+                            agent_job = AgentJobTracker::default();
+                        }
+                    }
+
+                    let now = Instant::now();
+                    let suppressed_agent = active_pending_release(&pending_release_for_task, now);
+                    if suppressed_agent.is_none() && release_was_active {
+                        has_process_probe = false;
+                        acquisition_started_at = None;
+                        last_content_change_at = None;
+                    }
+                    release_was_active = suppressed_agent.is_some();
+                    let pid = child_pid.load(Ordering::Acquire);
+                    let mut agent = agent_presence.current_agent();
+                    let lifecycle_authority_active =
+                        full_lifecycle_authority_active_for_task.load(Ordering::Acquire);
+                    report_self_reported_agent_shell_return(
+                        &self_reported_agent_active_for_task,
+                        pid,
+                        now,
+                        &mut last_self_reported_shell_check,
+                        &state_events,
+                        pane_id,
+                    )
+                    .await;
+                    let process_probe_input = ProcessProbeInput {
+                        current_agent: agent,
+                        suppressed_agent,
+                        foreground_pgid: last_foreground_pgid,
+                        last_foreground_pgid,
+                        has_process_probe,
+                        acquisition_age: acquisition_started_at
+                            .map(|started| now.duration_since(started)),
+                        pending_foreground_shell_clear,
+                        pending_restore_probe,
+                        elapsed_since_process_check: now.duration_since(last_process_check),
+                    };
+                    #[cfg(windows)]
+                    let content_seq = detection_content_seq.load(Ordering::Relaxed);
+                    #[cfg(windows)]
+                    let last_content_seq = last_observation.1;
+                    #[cfg(windows)]
+                    let foreground_observation_due = should_observe_foreground_process_group(
+                        lifecycle_authority_active,
+                        last_content_seq != Some(content_seq)
+                            && (last_content_seq.is_some()
+                                || now.duration_since(last_observation.0) >= TICK_IDENTIFIED),
+                        now.duration_since(last_observation.0),
+                        process_probe_input,
+                    );
+                    #[cfg(not(windows))]
+                    let foreground_observation_due = true;
+                    let foreground_pgid = match (pid, foreground_observation_due) {
+                        (0, _) => None,
+                        (_, true) => detect::foreground_process_group_id(pid)
+                            .or_else(|| pty_actor_foreground_process_group(&pty_actor)),
+                        _ => last_foreground_pgid,
+                    };
+                    #[cfg(windows)]
+                    if pid > 0 && foreground_observation_due {
+                        let retry =
+                            last_content_seq.is_some() && last_content_seq != Some(content_seq);
+                        last_observation = (now, (!retry).then_some(content_seq));
+                    }
+                    let process_group_changed =
+                        foreground_group_changed(foreground_pgid, last_foreground_pgid);
+                    let should_check_process = pid > 0 && {
+                        let process_probe_input = ProcessProbeInput {
+                            foreground_pgid,
+                            ..process_probe_input
+                        };
+                        should_check_foreground_process(
+                            lifecycle_authority_active,
+                            agent_job.in_background(),
+                            process_probe_input,
+                        )
+                    };
+
+                    let mut agent_changed = false;
+                    if should_check_process {
+                        last_process_check = now;
+                        let had_process_probe = has_process_probe;
+                        has_process_probe = true;
+                        if pid > 0 {
+                            let probe = probe_foreground_process(pid, foreground_pgid);
+                            let process_name = probe.process_name;
+                            let process_group_id = probe.process_group_id;
+                            let tracked_process_group_id = process_group_for_change_tracking(
+                                foreground_pgid,
+                                process_group_id,
+                            );
+                            let foreground_is_pane_shell = probe.foreground_is_pane_shell;
+                            let mut new_agent = probe.agent;
+
+                            if let Some(suppressed_agent) = suppressed_agent {
+                                if new_agent == Some(suppressed_agent) {
+                                    new_agent = None;
+                                } else if let Ok(mut pending_release) =
+                                    pending_release_for_task.lock()
+                                {
+                                    *pending_release = None;
+                                }
+                            }
+
+                            let previous_agent = agent_presence.current_agent();
+                            let (foreground_action, changed) = observe_foreground_agent(
+                                &mut agent_presence,
+                                &mut agent_job,
+                                &mut pending_foreground_shell_clear,
+                                &mut foreground_shell_exit_reported,
+                                ForegroundAgentObservation {
+                                    shell_pid: pid,
+                                    agent: new_agent,
+                                    agent_pid: new_agent.and(probe.agent_pid),
+                                    process_group_id,
+                                    foreground_is_pane_shell,
+                                },
+                                &PlatformAgentProcesses,
+                                pane_id,
+                            );
+                            last_foreground_pgid = tracked_process_group_id;
+                            if new_agent.is_some() {
+                                acquisition_started_at = None;
+                                last_content_change_at = None;
+                            } else if agent_presence.current_agent().is_none()
+                                && had_process_probe
+                                && process_group_changed
+                            {
+                                acquisition_started_at = Some(now);
+                            }
+                            pending_restore_probe = false;
+                            if changed {
+                                agent = agent_presence.current_agent();
+                                if agent != previous_agent
+                                    || foreground_action
+                                        == ForegroundShellAgentAction::ReportReplacementProcess
+                                {
+                                    pending_idle.clear();
+                                    last_codex_prompt_ready = false;
+                                    last_screen_scan_detection_content_seq = None;
+                                    // A replacement agent must not inherit OSC
+                                    // evidence from the previous process; a first
+                                    // acquisition keeps the evidence its own
+                                    // process already emitted.
+                                    clear_osc_evidence_for_agent_transition(
+                                        &terminal,
+                                        previous_agent,
+                                    );
+                                    if let Some(agent) = agent {
+                                        agent_startup_grace_until =
+                                            Some(now + AGENT_STARTUP_GRACE_WINDOW);
+                                        state = AgentState::Unknown;
+                                        last_visible_idle = false;
+                                        last_visible_blocker = false;
+                                        last_visible_working = false;
+                                        last_visible_signal_refresh = None;
+                                        publish_agent_process_detected_event(
+                                            state_events.clone(),
+                                            pane_id,
+                                            agent,
+                                            now,
+                                        )
+                                        .await;
+                                    } else {
+                                        agent_startup_grace_until = None;
+                                    }
+                                }
+                                if let Some(process_name) = process_name {
+                                    info!(
+                                        pane = pane_id.raw(),
+                                        previous_agent = ?previous_agent,
+                                        ?agent,
+                                        process = %process_name,
+                                        pgid = ?process_group_id,
+                                        "agent changed"
+                                    );
+                                } else {
+                                    info!(
+                                        pane = pane_id.raw(),
+                                        previous_agent = ?previous_agent,
+                                        ?agent,
+                                        pgid = ?process_group_id,
+                                        "agent changed"
+                                    );
+                                }
+                                agent_changed = true;
+                            }
+                        }
+                    }
+
+                    let pid = child_pid.load(Ordering::Acquire);
+                    // Keep the terminal restore side effect separate from render notification state.
+                    #[allow(clippy::collapsible_if)]
+                    if pid > 0 && terminal.maybe_restore_host_terminal_theme(pane_id, pid) {
+                        if render_dirty.request_pty(pane_id) {
+                            render_notify.notify_one();
+                        }
+                    }
+
+                    let process_exited = pending_foreground_shell_clear
+                        && agent.is_some()
+                        && !foreground_shell_exit_reported;
+
+                    // The visible screen belongs to another job while the agent
+                    // waits in the background, so it says nothing about its state.
+                    if (lifecycle_authority_active || agent_job.in_background()) && !process_exited
+                    {
+                        pending_idle.clear();
+                        continue;
+                    }
+
+                    if let Some(until) = agent_startup_grace_until {
+                        if process_exited {
+                            agent_startup_grace_until = None;
+                            last_screen_scan_detection_content_seq = None;
+                            pending_idle.clear();
+                        } else {
+                            if now < until {
+                                pending_idle.clear();
+                                continue;
+                            }
+                            agent_startup_grace_until = None;
+                            pending_idle.clear();
+                            continue;
+                        }
+                    }
+
+                    let current_detection_content_seq = if agent.is_some() {
+                        Some(detection_content_seq.load(Ordering::Relaxed))
+                    } else {
+                        None
+                    };
+                    match decide_detection_screen_read(DetectionScreenReadInput {
+                        state,
+                        agent,
+                        pending_idle_active: pending_idle.active(),
+                        agent_changed,
+                        process_exited,
+                        current_detection_content_seq,
+                        last_screen_scan_detection_content_seq,
+                    }) {
+                        DetectionScreenReadDecision::Read => {}
+                        DetectionScreenReadDecision::Skip => continue,
+                    }
+
+                    let content_changed =
+                        last_detection_text.refresh(agent, &text_content_seq, || {
+                            terminal.detection_text_for_cache()
+                        });
+                    let content = &last_detection_text.text;
+                    last_screen_scan_detection_content_seq = current_detection_content_seq;
+                    let osc_title = terminal.agent_osc_title();
+                    let osc_progress = terminal.agent_osc_progress();
+                    let screen_detection = detection_update_for_publish_with_osc(
+                        agent,
+                        content,
+                        &osc_title,
+                        &osc_progress,
+                        process_exited,
+                    );
+                    publish_codex_prompt_observation(
+                        &state_events,
+                        pane_id,
+                        agent,
+                        content,
+                        screen_detection.as_ref(),
+                        process_exited,
+                        &mut last_codex_prompt_ready,
+                    )
+                    .await;
+                    let Some(screen_detection) = screen_detection else {
+                        pending_idle.clear();
+                        continue;
+                    };
+                    sync_content_change_acquisition(
+                        agent_presence.current_agent(),
+                        suppressed_agent,
+                        process_group_changed,
+                        content_changed,
+                        now,
+                        &mut acquisition_started_at,
+                        &mut last_content_change_at,
+                    );
+                    match decide_screen_detection_publish(
+                        ScreenDetectionPublishInput {
+                            screen_detection,
+                            current_state: state,
+                            last_visible_idle,
+                            last_visible_blocker,
+                            last_visible_working,
+                            last_visible_signal_refresh,
+                            process_exited,
+                            agent_changed,
+                            now,
+                        },
+                        &mut pending_idle,
+                    ) {
+                        DetectionPublishDecision::NoPublish => {}
+                        DetectionPublishDecision::Publish {
+                            state: new_state,
+                            visible_idle,
+                            visible_blocker,
+                            visible_working,
+                            process_exited: publish_process_exited,
+                        } => {
+                            apply_agent_detection_publish_update(
+                                state_events.clone(),
+                                pane_id,
+                                agent,
+                                AgentDetectionPublishUpdate {
+                                    state: new_state,
+                                    visible_idle,
+                                    visible_blocker,
+                                    visible_working,
+                                    process_exited: publish_process_exited,
+                                },
+                                now,
+                                &mut state,
+                                &mut last_visible_idle,
+                                &mut last_visible_blocker,
+                                &mut last_visible_working,
+                                &mut last_visible_signal_refresh,
+                                &mut foreground_shell_exit_reported,
+                            )
+                            .await;
+                        }
+                    }
+                }
+            });
+            (
+                Some(handle.abort_handle()),
+                detect_reset_notify,
+                pending_release,
+            )
+        } else {
+            (None, Arc::new(Notify::new()), Arc::new(Mutex::new(None)))
+        };
+
+        Ok(Self {
+            pane_id,
+            terminal,
+            io,
+            current_size: Cell::new((rows, cols, 0, 0)),
+            child_pid,
+            reported_cwd,
+            persistence_cwd: Mutex::new(None),
+            cwd_process_exited: child_wait_completed.clone(),
+            child_wait_completed: Some(child_wait_completed),
+            kitty_keyboard_flags,
+            content_seq,
+            content_write_lock,
+            detection_content_seq,
+            full_lifecycle_authority_active,
+            self_reported_agent_active,
+            detect_reset_notify,
+            pending_release,
+            preserve_processes_on_drop: false,
+            compression,
+            detect_handle,
+        })
+    }
+
+    pub fn begin_graceful_release(&self, agent: Agent) {
+        if let Ok(mut pending_release) = self.pending_release.lock() {
+            *pending_release = Some(PendingAgentRelease {
+                agent,
+                until: std::time::Instant::now() + RELEASE_REACQUIRE_SUPPRESSION,
+            });
+        }
+        self.detect_reset_notify.notify_one();
+    }
+
+    pub fn reset_agent_detection(&self) {
+        self.detect_reset_notify.notify_one();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn agent_detection_reset_notify_for_test(&self) -> Arc<Notify> {
+        self.detect_reset_notify.clone()
+    }
+
+    pub fn set_self_reported_agent_active(&self, active: bool) {
+        self.self_reported_agent_active
+            .store(active, Ordering::Release);
+    }
+
+    pub fn set_full_lifecycle_authority_active(&self, active: bool) {
+        let previous = self
+            .full_lifecycle_authority_active
+            .swap(active, Ordering::AcqRel);
+        if active && !previous {
+            self.detect_reset_notify.notify_one();
+        }
+    }
+
+    pub(crate) fn current_size(&self) -> (u16, u16) {
+        let (rows, cols, _, _) = self.current_size.get();
+        (rows, cols)
+    }
+
+    pub(crate) fn content_seq(&self) -> u64 {
+        self.content_seq.load(Ordering::Acquire)
+    }
+
+    /// Resize if the dimensions actually changed.
+    pub fn resize(&self, rows: u16, cols: u16, cell_width_px: u32, cell_height_px: u32) {
+        let rows = rows.max(MIN_PANE_ROWS);
+        let cols = cols.max(MIN_PANE_COLS);
+        let size = (rows, cols, cell_width_px, cell_height_px);
+        if self.current_size.get() == size {
+            return;
+        }
+        self.current_size.set(size);
+        let _content_write_guard = match self.content_write_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        self.content_seq.fetch_add(1, Ordering::AcqRel);
+        let terminal_responses = self
+            .terminal
+            .resize(rows, cols, cell_width_px, cell_height_px);
+        self.content_seq.fetch_add(1, Ordering::Release);
+        drop(_content_write_guard);
+        self.compression.wake();
+        mark_detection_content_changed(&self.detection_content_seq);
+        self.io.resize(
+            rows,
+            cols,
+            cell_width_px,
+            cell_height_px,
+            terminal_responses,
+        );
+    }
+
+    #[cfg(unix)]
+    pub fn nudge_child_redraw_after_handoff(&self) {
+        let (rows, cols, cell_width_px, cell_height_px) = self.current_size.get();
+        self.io
+            .nudge_child_redraw_after_handoff(rows, cols, cell_width_px, cell_height_px);
+    }
+
+    /// Scroll up by N lines (into scrollback history).
+    pub fn scroll_up(&self, lines: usize) {
+        self.terminal.scroll_up(lines);
+        self.compression.wake();
+    }
+
+    /// Scroll down by N lines (toward live output).
+    pub fn scroll_down(&self, lines: usize) {
+        self.terminal.scroll_down(lines);
+        self.compression.wake();
+    }
+
+    pub fn clear_screen(&self) -> Result<(), String> {
+        let guard = match self.content_write_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        self.content_seq.fetch_add(1, Ordering::AcqRel);
+        let result = self.terminal.clear_screen();
+        self.content_seq.fetch_add(1, Ordering::Release);
+        drop(guard);
+        self.compression.wake();
+        mark_detection_content_changed(&self.detection_content_seq);
+        result
+    }
+
+    /// Reset scroll to live view (offset = 0).
+    pub fn scroll_reset(&self) {
+        self.terminal.scroll_reset();
+        self.compression.wake();
+    }
+
+    /// Set scrollback offset measured from the live bottom of the terminal.
+    pub fn set_scroll_offset_from_bottom(&self, lines: usize) {
+        self.terminal.set_scroll_offset_from_bottom(lines);
+        self.compression.wake();
+    }
+
+    pub fn scroll_metrics(&self) -> Option<ScrollMetrics> {
+        self.terminal.scroll_metrics()
+    }
+
+    pub(crate) fn search_text_window(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+        direction: crate::pane::TerminalSearchDirection,
+        cursor: crate::pane::TerminalTextPoint,
+        previous: Option<(
+            crate::pane::TerminalTextPoint,
+            crate::pane::TerminalTextPoint,
+        )>,
+        limit: usize,
+    ) -> crate::pane::TerminalSearchWindow {
+        let result = self.terminal.search_text_window(
+            query,
+            case_sensitive,
+            direction,
+            cursor,
+            previous,
+            limit,
+        );
+        self.compression.wake();
+        result
+    }
+
+    pub(crate) fn word_motion_target(
+        &self,
+        row: u32,
+        col: u16,
+        motion: crate::pane::TerminalWordMotion,
+    ) -> Option<crate::pane::TerminalTextPoint> {
+        let result = self.terminal.word_motion_target(row, col, motion);
+        self.compression.wake();
+        result
+    }
+
+    pub(crate) fn terminal_dimensions(&self) -> Option<(u16, u16)> {
+        self.terminal.dimensions()
+    }
+
+    pub(crate) fn paragraph_motion_target(
+        &self,
+        row: u32,
+        direction: i8,
+    ) -> Option<crate::pane::TerminalTextPoint> {
+        let result = self.terminal.paragraph_motion_target(row, direction);
+        self.compression.wake();
+        result
+    }
+
+    #[cfg(unix)]
+    pub fn input_state(&self) -> Option<InputState> {
+        self.terminal.input_state()
+    }
+
+    pub fn bracketed_paste_enabled(&self) -> bool {
+        self.terminal.bracketed_paste_enabled()
+    }
+
+    pub fn focus_reporting_enabled(&self) -> bool {
+        self.terminal.focus_reporting_enabled()
+    }
+
+    pub fn mouse_reporting_enabled(&self) -> bool {
+        self.terminal.mouse_reporting_enabled()
+    }
+
+    pub fn sgr_pixel_mouse_enabled(&self) -> bool {
+        self.terminal.sgr_pixel_mouse_enabled()
+    }
+
+    pub fn plain_page_keys_use_host_scrollback(&self) -> Option<bool> {
+        self.terminal.plain_page_keys_use_host_scrollback()
+    }
+
+    pub fn alternate_screen_active(&self) -> bool {
+        self.terminal.alternate_screen_active()
+    }
+
+    pub fn cursor_state(&self, area: Rect, show_cursor: bool) -> Option<TerminalCursorState> {
+        if !show_cursor {
+            return None;
+        }
+        let cursor = self.terminal.cursor_state()?;
+        if cursor.x >= area.width || cursor.y >= area.height {
+            return None;
+        }
+        Some(TerminalCursorState {
+            x: area.x + cursor.x,
+            y: area.y + cursor.y,
+            visible: cursor.visible,
+            shape: cursor.shape,
+        })
+    }
+
+    pub fn synchronized_output_active(&self) -> bool {
+        self.terminal.synchronized_output_active()
+    }
+
+    pub(crate) fn synchronized_output_state(&self) -> (bool, u64) {
+        self.terminal.synchronized_output_state()
+    }
+
+    pub fn visible_text(&self) -> String {
+        self.terminal.visible_text()
+    }
+
+    pub fn visible_ansi(&self) -> String {
+        self.terminal.visible_ansi()
+    }
+
+    pub fn detection_text(&self) -> String {
+        self.terminal.detection_text()
+    }
+
+    pub fn terminal_title(&self) -> Option<String> {
+        self.terminal.terminal_title()
+    }
+
+    pub fn agent_osc_title(&self) -> String {
+        self.terminal.agent_osc_title()
+    }
+
+    pub fn agent_osc_progress(&self) -> String {
+        self.terminal.agent_osc_progress()
+    }
+
+    pub(crate) fn recent_text_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
+        let result = self.terminal.recent_text_snapshot(lines);
+        self.compression.wake();
+        result
+    }
+
+    pub(crate) fn recent_ansi_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
+        let result = self.terminal.recent_ansi_snapshot(lines);
+        self.compression.wake();
+        result
+    }
+
+    pub(crate) fn recent_unwrapped_text_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
+        let result = self.terminal.recent_unwrapped_text_snapshot(lines);
+        self.compression.wake();
+        result
+    }
+
+    pub fn recent_unwrapped_ansi(&self, lines: usize) -> String {
+        let result = self.terminal.recent_unwrapped_ansi(lines);
+        self.compression.wake();
+        result
+    }
+
+    pub(crate) fn recent_unwrapped_ansi_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
+        let result = self.terminal.recent_unwrapped_ansi_snapshot(lines);
+        self.compression.wake();
+        result
+    }
+
+    pub fn snapshot_history(&self) -> Option<String> {
+        let ansi = self.recent_unwrapped_ansi(usize::MAX);
+        (!ansi.trim().is_empty()).then_some(ansi)
+    }
+
+    pub fn extract_selection(&self, selection: &crate::selection::Selection) -> Option<String> {
+        let result = self.terminal.extract_selection(selection);
+        self.compression.wake();
+        result
+    }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect, show_cursor: bool) {
+        self.terminal.render(frame, area, show_cursor);
+    }
+
+    pub(crate) fn collect_dirty_patch_snapshot(
+        &self,
+        area_width: u16,
+        area_height: u16,
+    ) -> Option<TerminalDirtyPatchSnapshot> {
+        // PTY/resize writers announce changes before locking the terminal core.
+        // Exclude them until rows and metadata have been paired with their revision.
+        let _content_guard = self
+            .content_write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let revision = self.content_seq();
+        if !revision.is_multiple_of(2) {
+            return None;
+        }
+        let patch = self.terminal.collect_dirty_patch(area_width, area_height);
+        if matches!(patch, TerminalDirtyPatchOutcome::Fallback) {
+            return None;
+        }
+        let snapshot = TerminalDirtyPatchSnapshot {
+            patch,
+            content_revision: revision,
+            scroll_metrics: self.scroll_metrics(),
+            mouse_reporting: self.mouse_reporting_enabled(),
+            sgr_pixel_mouse: self.sgr_pixel_mouse_enabled(),
+            alternate_screen_active: self.alternate_screen_active(),
+            graphics_may_have_placements: crate::kitty_graphics::is_enabled()
+                && self.kitty_graphics_may_have_placements(),
+        };
+        (self.content_seq() == revision).then_some(snapshot)
+    }
+
+    pub fn visible_hyperlinks(&self, area: Rect) -> Vec<((u16, u16), String, String)> {
+        self.terminal.visible_hyperlinks(area)
+    }
+
+    pub(crate) fn link_regions_at(
+        &self,
+        col: u16,
+        row: u16,
+        resolve: fn(&str, usize) -> Option<std::ops::Range<usize>>,
+    ) -> Vec<crate::api::schema::PaneLinkRegion> {
+        self.terminal.link_regions_at(col, row, resolve)
+    }
+
+    pub(crate) fn link_target_at(&self, col: u16, row: u16) -> Option<crate::ghostty::LinkTarget> {
+        self.terminal.link_target_at(col, row)
+    }
+
+    pub(crate) fn kitty_graphics_may_have_placements(&self) -> bool {
+        self.terminal.kitty_graphics_may_have_placements()
+    }
+
+    pub fn kitty_image_placements_with_data_filter<F>(
+        &self,
+        needs_data: F,
+    ) -> Vec<crate::ghostty::KittyImagePlacement>
+    where
+        F: FnMut(crate::ghostty::KittyImageDescriptor) -> bool,
+    {
+        self.terminal
+            .kitty_image_placements_with_data_filter(needs_data)
+    }
+
+    pub(crate) fn kitty_image_fingerprints(&self, image_ids: &[u32]) -> Vec<Option<u64>> {
+        self.terminal.kitty_image_fingerprints(image_ids)
+    }
+
+    pub fn keyboard_protocol(&self) -> crate::input::KeyboardProtocol {
+        let fallback = crate::input::KeyboardProtocol::from_kitty_flags(
+            self.kitty_keyboard_flags.load(Ordering::Relaxed),
+        );
+        self.terminal.keyboard_protocol(fallback)
+    }
+
+    pub fn modify_other_keys_level(&self) -> u8 {
+        self.terminal.modify_other_keys_level()
+    }
+
+    pub fn encode_terminal_key(&self, key: crate::input::TerminalKey) -> Vec<u8> {
+        self.terminal.encode_terminal_key(key)
+    }
+
+    pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        self.io.try_send_bytes(bytes)
+    }
+
+    /// Preflight a complete API command without changing input queue semantics.
+    pub(crate) fn validate_input_submission(&self, bytes: &[u8]) -> std::io::Result<()> {
+        match &self.io {
+            #[cfg(unix)]
+            PaneRuntimeIo::Actor(actor) => actor.validate_input_submission(bytes),
+            #[cfg(windows)]
+            PaneRuntimeIo::Actor(_) => {
+                let _ = bytes;
+                Ok(())
+            }
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => Ok(()),
+        }
+    }
+
+    pub fn queue_user_input_submission(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+        deadline: Option<std::time::Instant>,
+    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+        self.io
+            .queue_user_input_submission(text, enter, delay, deadline)
+    }
+
+    pub fn try_send_paste(&self, text: String) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        self.try_send_bytes(self.paste_payload(text))
+    }
+
+    fn paste_payload(&self, text: String) -> Bytes {
+        let text = crate::platform::prepare_paste_text_for_pty(text);
+        let bracketed = self.bracketed_paste_enabled();
+        let payload = if bracketed {
+            format!("\x1b[200~{text}\x1b[201~")
+        } else {
+            text
+        };
+        Bytes::from(payload)
+    }
+
+    pub fn try_send_focus_event(&self, event: crate::ghostty::FocusEvent) -> bool {
+        if !self.focus_reporting_enabled() {
+            return false;
+        }
+
+        let Ok(bytes) = crate::ghostty::encode_focus(event) else {
+            return false;
+        };
+        if let Err(err) = self.try_send_bytes(Bytes::from(bytes)) {
+            warn!(err = %err, ?event, "failed to forward pane focus event");
+        }
+        true
+    }
+
+    pub fn wheel_routing(&self) -> Option<WheelRouting> {
+        self.terminal.wheel_routing()
+    }
+
+    pub(crate) fn screen_text_snapshot(
+        &self,
+    ) -> Option<(
+        crate::ghostty::ActiveScreen,
+        u16,
+        Vec<crate::ghostty::ScreenTextRow>,
+    )> {
+        let result = self.terminal.screen_text_snapshot();
+        self.compression.wake();
+        result
+    }
+
+    pub fn encode_mouse_button(
+        &self,
+        kind: crossterm::event::MouseEventKind,
+        position: crate::input::mouse::Position,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> Option<Vec<u8>> {
+        if !self.mouse_reporting_enabled() {
+            return None;
+        }
+        self.terminal.encode_mouse_button(kind, position, modifiers)
+    }
+
+    pub(crate) fn encode_mouse_motion(
+        &self,
+        kind: crossterm::event::MouseEventKind,
+        position: crate::input::mouse::Position,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> Option<Vec<u8>> {
+        self.terminal.encode_mouse_motion(kind, position, modifiers)
+    }
+
+    pub(crate) fn encode_mouse_wheel(
+        &self,
+        kind: crossterm::event::MouseEventKind,
+        position: crate::input::mouse::Position,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> Option<Vec<u8>> {
+        if self.wheel_routing()? != WheelRouting::MouseReport {
+            return None;
+        }
+        self.terminal.encode_mouse_wheel(kind, position, modifiers)
+    }
+
+    pub(crate) fn pixel_size(&self) -> Option<(u32, u32)> {
+        let (rows, cols, cell_width_px, cell_height_px) = self.current_size.get();
+        let width = u32::from(cols).checked_mul(cell_width_px)?;
+        let height = u32::from(rows).checked_mul(cell_height_px)?;
+        (width > 0 && height > 0).then_some((width, height))
+    }
+
+    pub fn encode_alternate_scroll(
+        &self,
+        kind: crossterm::event::MouseEventKind,
+    ) -> Option<Vec<u8>> {
+        if self.wheel_routing()? != WheelRouting::AlternateScroll {
+            return None;
+        }
+        let key = match kind {
+            crossterm::event::MouseEventKind::ScrollUp => crossterm::event::KeyCode::Up,
+            crossterm::event::MouseEventKind::ScrollDown => crossterm::event::KeyCode::Down,
+            _ => return None,
+        };
+        Some(self.encode_terminal_key(crate::input::TerminalKey::new(
+            key,
+            crossterm::event::KeyModifiers::empty(),
+        )))
+    }
+
+    /// Get the current working directory of the child shell process.
+    pub fn cwd(&self) -> Option<std::path::PathBuf> {
+        if let Some(cwd) = self
+            .reported_cwd
+            .lock()
+            .ok()
+            .and_then(|reported_cwd| reported_cwd.clone())
+        {
+            return Some(cwd);
+        }
+
+        let pid = self.child_pid.load(Ordering::Relaxed);
+        crate::platform::pane_process_cwd(pid)
+    }
+
+    pub fn cwd_for_persistence(&self) -> Option<std::path::PathBuf> {
+        let pid = self.child_pid.load(Ordering::Acquire);
+        let exited = self.cwd_process_exited.load(Ordering::Acquire);
+        if let Some(cwd) = (!exited)
+            .then(|| crate::platform::pane_process_cwd(pid))
+            .flatten()
+            .filter(|cwd| cwd.is_absolute())
+        {
+            // Persistence observations must not change OSC authority or follow-cwd behavior.
+            if let Ok(mut known) = self.persistence_cwd.lock() {
+                *known = Some(cwd.clone());
+            }
+            return Some(cwd);
+        }
+        self.persistence_cwd
+            .lock()
+            .ok()
+            .and_then(|cwd| cwd.clone())
+            .or_else(|| self.reported_cwd.lock().ok().and_then(|cwd| cwd.clone()))
+    }
+
+    pub fn child_pid(&self) -> Option<u32> {
+        let pid = self.child_pid.load(Ordering::Acquire);
+        (pid > 0).then_some(pid)
+    }
+
+    pub(crate) fn pty_foreground_process_group_id(&self) -> Option<u32> {
+        #[cfg(unix)]
+        {
+            self.io.foreground_process_group_id()
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
+    pub fn follow_cwd(&self) -> Option<std::path::PathBuf> {
+        #[cfg(unix)]
+        {
+            let leader_cwd = self
+                .io
+                .foreground_process_group_id()
+                .and_then(usable_process_cwd);
+            leader_cwd.or_else(|| self.cwd())
+        }
+
+        #[cfg(not(unix))]
+        {
+            self.cwd()
+        }
+    }
+
+    /// Get the current working directory of the process group controlling the pane PTY.
+    pub fn foreground_cwd(&self) -> Option<std::path::PathBuf> {
+        #[cfg(unix)]
+        {
+            let pid = self.child_pid.load(Ordering::Acquire);
+            let shell_cwd = absolute_process_cwd(pid);
+            let foreground_pgid = self
+                .io
+                .foreground_process_group_id()
+                .or_else(|| crate::platform::foreground_process_group_id(pid));
+            let leader_cwd = foreground_pgid.and_then(absolute_process_cwd);
+
+            // The group leader's cwd is authoritative (issue #3270): a helper
+            // process that chdirs elsewhere inside the same foreground group
+            // must not override it. Scan other members only when the leader's
+            // cwd cannot be read at all.
+            leader_cwd
+                .or_else(|| foreground_member_cwd_different_from_shell(pid, shell_cwd.as_ref()))
+        }
+
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+impl PaneRuntime {
+    #[cfg(unix)]
+    pub(crate) fn test_enable_kitty_source_forwarding(&self) {
+        let mut core = self.terminal.ghostty.core.lock().unwrap();
+        core.terminal.enable_kitty_graphics().unwrap();
+        core.terminal.set_kitty_source_forwarding(true).unwrap();
+    }
+
+    pub(crate) fn test_with_channel(cols: u16, rows: u16) -> (Self, mpsc::Receiver<Bytes>) {
+        Self::test_with_channel_and_scrollback_bytes(cols, rows, 0, &[], 4)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn test_with_actor(actor: PtyIoActorHandle) -> Self {
+        let (mut runtime, _) = Self::test_with_channel(80, 24);
+        runtime.io = PaneRuntimeIo::Actor(actor);
+        runtime
+    }
+
+    pub(crate) fn test_with_channel_capacity(
+        cols: u16,
+        rows: u16,
+        capacity: usize,
+    ) -> (Self, mpsc::Receiver<Bytes>) {
+        Self::test_with_channel_and_scrollback_bytes(cols, rows, 0, &[], capacity)
+    }
+
+    pub(crate) fn test_with_screen_bytes(cols: u16, rows: u16, bytes: &[u8]) -> Self {
+        Self::test_with_scrollback_bytes(cols, rows, 0, bytes)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn test_start_basic_detection(&mut self) -> mpsc::Receiver<AppEvent> {
+        if let Some(handle) = self.detect_handle.take() {
+            handle.abort();
+        }
+        let (events, receiver) = mpsc::channel(8);
+        let (handle, reset, release) = spawn_basic_detection_task(
+            self.pane_id,
+            self.child_pid.clone(),
+            self.terminal.clone(),
+            detection_pty_actor(&self.io),
+            self.content_seq.clone(),
+            self.detection_content_seq.clone(),
+            self.full_lifecycle_authority_active.clone(),
+            self.self_reported_agent_active.clone(),
+            events,
+        );
+        self.detect_handle = Some(handle);
+        self.detect_reset_notify = reset;
+        self.pending_release = release;
+        receiver
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn test_wait_for_detection_reads(&self, expected: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while self
+                .terminal
+                .ghostty
+                .detection_text_reads
+                .load(Ordering::Relaxed)
+                < expected
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("detection task should extract fresh text");
+    }
+
+    pub(crate) fn test_scroll_metrics_reads(&self) -> usize {
+        self.terminal
+            .ghostty
+            .scroll_metrics_reads
+            .load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn test_contend_during_dirty_collection(
+        &self,
+        bytes: Vec<u8>,
+    ) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<bool>) {
+        let terminal = self.terminal.clone();
+        let sequence = self.content_seq.clone();
+        let write_lock = self.content_write_lock.clone();
+        let pane_id = self.pane_id;
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        self.terminal
+            .ghostty
+            .core
+            .lock()
+            .unwrap()
+            .dirty_collection_hook = Some(Box::new(move || {
+            start_tx.send(()).unwrap();
+            ready_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }));
+        let writer = std::thread::spawn(move || {
+            start_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            let guard = match write_lock.try_lock() {
+                Ok(guard) => Some(guard),
+                Err(std::sync::TryLockError::WouldBlock) => None,
+                Err(error) => panic!("poisoned content lock: {error}"),
+            };
+            let announced = guard.is_some();
+            if announced {
+                sequence.fetch_add(1, Ordering::AcqRel);
+                assert!(matches!(
+                    terminal.ghostty.core.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+            }
+            ready_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+            let _guard = guard.unwrap_or_else(|| {
+                let guard = write_lock.lock().unwrap();
+                sequence.fetch_add(1, Ordering::AcqRel);
+                guard
+            });
+            let (tx, _rx) = mpsc::channel(1);
+            let _ = terminal.process_pty_bytes(pane_id, 0, &bytes, &tx);
+            sequence.fetch_add(1, Ordering::Release);
+            announced
+        });
+        (release_tx, writer)
+    }
+
+    pub(crate) fn test_process_pty_bytes(&self, bytes: &[u8]) {
+        let _content_write_guard = match self.content_write_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        self.content_seq.fetch_add(1, Ordering::AcqRel);
+        let (tx, _rx) = mpsc::channel(1);
+        let _ = self.terminal.process_pty_bytes(self.pane_id, 0, bytes, &tx);
+        self.content_seq.fetch_add(1, Ordering::Release);
+        self.compression.wake();
+    }
+
+    pub(crate) fn test_with_scrollback_bytes(
+        cols: u16,
+        rows: u16,
+        scrollback_limit_bytes: usize,
+        bytes: &[u8],
+    ) -> Self {
+        Self::test_with_channel_and_scrollback_bytes(cols, rows, scrollback_limit_bytes, bytes, 4).0
+    }
+
+    pub(crate) fn test_with_channel_and_scrollback_bytes(
+        cols: u16,
+        rows: u16,
+        scrollback_limit_bytes: usize,
+        bytes: &[u8],
+        channel_capacity: usize,
+    ) -> (Self, mpsc::Receiver<Bytes>) {
+        let (tx, rx) = mpsc::channel(channel_capacity);
+        let (resize_tx, _resize_rx) = watch::channel((rows, cols, 0, 0));
+        let mut terminal =
+            crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes).unwrap();
+        // Runtime fixtures model the default config, which enables graphics.
+        terminal.enable_kitty_graphics().unwrap();
+        terminal.write(bytes);
+        let pane_id = PaneId::from_raw(0);
+        let terminal = Arc::new(PaneTerminal::new(
+            GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
+        ));
+        let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+
+        (
+            Self {
+                pane_id,
+                terminal,
+                io: PaneRuntimeIo::TestChannel {
+                    sender: tx,
+                    resize_tx,
+                },
+                current_size: Cell::new((rows, cols, 0, 0)),
+                child_pid: Arc::new(AtomicU32::new(0)),
+                reported_cwd: Arc::new(Mutex::new(None)),
+                persistence_cwd: Mutex::new(None),
+                cwd_process_exited: Arc::new(AtomicBool::new(false)),
+                child_wait_completed: None,
+                kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
+                content_seq: Arc::new(AtomicU64::new(0)),
+                content_write_lock: Arc::new(Mutex::new(())),
+                detection_content_seq: Arc::new(AtomicU64::new(0)),
+                full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
+                self_reported_agent_active: Arc::new(AtomicBool::new(false)),
+                detect_reset_notify: Arc::new(Notify::new()),
+                pending_release: Arc::new(Mutex::new(None)),
+                preserve_processes_on_drop: true,
+                compression,
+                detect_handle: Some(tokio::spawn(async {}).abort_handle()),
+            },
+            rx,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[tokio::test]
+    async fn unidentified_text_cache_tracks_runtime_mutations_not_viewport_scroll() {
+        let runtime = PaneRuntime::test_with_scrollback_bytes(
+            12,
+            3,
+            100_000,
+            b"old\r\nold\r\nabcdefghijklmnop\r\nprompt",
+        );
+        let mut cache = DetectionTextCache::default();
+        let reads = Cell::new(0);
+        let refresh = |cache: &mut DetectionTextCache| {
+            cache.refresh(None, &runtime.content_seq, || {
+                reads.set(reads.get() + 1);
+                runtime.terminal.detection_text_for_cache()
+            })
+        };
+        assert!(
+            refresh(&mut cache),
+            "seeded history must be read at revision zero"
+        );
+        assert_eq!(reads.get(), 1);
+        runtime.scroll_up(2);
+        assert!(!refresh(&mut cache));
+        assert_eq!(
+            reads.get(),
+            1,
+            "viewport scrolling must not rebuild bottom text"
+        );
+        assert_eq!(cache.text, runtime.detection_text());
+
+        // Control-only and fragmented output still invalidate the physical read,
+        // but do not manufacture a text change for acquisition scheduling.
+        runtime.test_process_pty_bytes(b"\x1b]0;title\x07\x1b[");
+        assert!(!refresh(&mut cache));
+        assert_eq!(reads.get(), 2);
+        runtime.test_process_pty_bytes(b"2J\x1b[Hupdated");
+        assert!(refresh(&mut cache));
+        assert_eq!(reads.get(), 3);
+        assert_eq!(cache.text, runtime.detection_text());
+
+        runtime.resize(4, 8, 0, 0);
+        refresh(&mut cache);
+        assert_eq!(reads.get(), 4);
+        assert_eq!(cache.text, runtime.detection_text());
+        runtime.clear_screen().unwrap();
+        refresh(&mut cache);
+        assert_eq!(reads.get(), 5);
+        assert_eq!(cache.text, runtime.detection_text());
+        runtime.test_process_pty_bytes(b"\x1b[?1049halt");
+        assert!(refresh(&mut cache));
+        assert_eq!(reads.get(), 6);
+        assert_eq!(cache.text, runtime.detection_text());
+        assert!(!refresh(&mut cache));
+        assert_eq!(reads.get(), 6);
+        runtime.test_process_pty_bytes(b"\x1b[?1049l");
+        assert!(refresh(&mut cache));
+        assert_eq!(reads.get(), 7);
+        assert_eq!(cache.text, runtime.detection_text());
+        assert!(!cache.text.contains("alt"));
+        assert!(!refresh(&mut cache));
+        assert_eq!(reads.get(), 7);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unidentified_text_cache_resets_with_adopted_runtime_and_recreation() {
+        let mut runtime = PaneRuntime::test_with_screen_bytes(20, 4, b"first runtime");
+        let _events = runtime.test_start_basic_detection();
+        runtime.test_wait_for_detection_reads(1).await;
+        let revision = runtime.content_seq();
+        runtime.reset_agent_detection();
+        runtime.test_wait_for_detection_reads(2).await;
+        assert_eq!(
+            runtime.content_seq(),
+            revision,
+            "reset does not require output"
+        );
+        drop(runtime);
+
+        // A new runtime can reuse both the pane identity and revision zero. Its
+        // detector must not inherit the previous runtime's text or revision.
+        let mut recreated = PaneRuntime::test_with_screen_bytes(20, 4, b"second runtime");
+        assert_eq!(recreated.content_seq(), revision);
+        let _events = recreated.test_start_basic_detection();
+        recreated.test_wait_for_detection_reads(1).await;
+        assert!(recreated.visible_text().contains("second runtime"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unidentified_text_cache_resets_in_spawned_runtime_without_output() {
+        let (events, _event_rx) = mpsc::channel(8);
+        let runtime = PaneRuntime::spawn_shell_command(
+            PaneId::from_raw(42),
+            4,
+            20,
+            std::env::temp_dir(),
+            "printf 'cache-ready'; exec sleep 30",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Enabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !runtime.visible_text().contains("cache-ready") {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("shell should populate the terminal");
+        // The first reset guarantees a populated read even if the initial tick
+        // preceded shell output. The second proves that a warm cache is cleared.
+        let revision = {
+            let _write = runtime.content_write_lock.lock().unwrap();
+            runtime.content_seq()
+        };
+        for _ in 0..2 {
+            let reads = runtime
+                .terminal
+                .ghostty
+                .detection_text_reads
+                .load(Ordering::Relaxed);
+            runtime.reset_agent_detection();
+            runtime.test_wait_for_detection_reads(reads + 1).await;
+        }
+        assert_eq!(runtime.content_seq(), revision);
+        runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn clear_pane_preserves_wrapped_input_and_unfinished_vt_sequence() {
+        let (runtime, mut rx) = PaneRuntime::test_with_channel_and_scrollback_bytes(
+            10,
+            5,
+            100_000,
+            b"old\r\nold\r\nold\r\nold\r\nold\r\n\x1b[32m$ abcdefghijklmnop\x1b[1A\x1b[4G\x1b[",
+            4,
+        );
+        let before = runtime.content_seq();
+        runtime.scroll_up(1);
+        runtime.clear_screen().unwrap();
+        let snapshot = runtime.collect_dirty_patch_snapshot(10, 5).unwrap();
+        assert!(snapshot.content_revision > before);
+        assert!(!matches!(snapshot.patch, TerminalDirtyPatchOutcome::Clean));
+        let metrics = runtime.scroll_metrics().unwrap();
+        assert_eq!(metrics.max_offset_from_bottom, 0);
+        assert_eq!(metrics.offset_from_bottom, 0);
+        let text = runtime.recent_unwrapped_text_snapshot(100).text;
+        assert!(text.contains("$ abcdefghijklmnop"), "{text:?}");
+        assert!(!text.contains("old"), "{text:?}");
+        runtime.test_process_pty_bytes(b"5 q");
+        assert!(!runtime.visible_text().contains("5 q"));
+        assert!(rx.try_recv().is_err(), "clear must not send child input");
+    }
+
+    #[tokio::test]
+    async fn clear_pane_preserves_alternate_screen_and_primary_history() {
+        let runtime = PaneRuntime::test_with_scrollback_bytes(
+            20,
+            4,
+            100_000,
+            b"one\r\ntwo\r\nthree\r\nfour\r\nfive\x1b[?1049halt app",
+        );
+        let before = runtime.visible_text();
+        runtime.clear_screen().unwrap();
+        assert_eq!(runtime.visible_text(), before);
+        runtime.test_process_pty_bytes(b"\x1b[?1049l");
+        assert!(runtime
+            .recent_unwrapped_text_snapshot(100)
+            .text
+            .contains("one"));
+        runtime.clear_screen().unwrap();
+        assert!(!runtime
+            .recent_unwrapped_text_snapshot(100)
+            .text
+            .contains("one"));
+        assert!(runtime.visible_text().contains("five"));
+    }
+
+    #[tokio::test]
+    async fn dirty_patch_snapshot_keeps_clean_metadata_and_terminal_fallback() {
+        let (runtime, _rx) = PaneRuntime::test_with_channel(20, 4);
+        runtime
+            .collect_dirty_patch_snapshot(20, 4)
+            .expect("initial snapshot");
+        runtime.test_process_pty_bytes(b"\x1b[?1003h\x1b[?1016h");
+        let snapshot = runtime
+            .collect_dirty_patch_snapshot(20, 4)
+            .expect("mode snapshot");
+        assert!(matches!(snapshot.patch, TerminalDirtyPatchOutcome::Clean));
+        assert_eq!(snapshot.content_revision, runtime.content_seq());
+        assert!(snapshot.content_revision.is_multiple_of(2));
+        assert!(snapshot.mouse_reporting);
+        assert!(snapshot.sgr_pixel_mouse);
+        assert!(!snapshot.alternate_screen_active);
+
+        runtime.test_process_pty_bytes(b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\");
+        assert!(runtime.collect_dirty_patch_snapshot(20, 4).is_none());
+        assert!(runtime.content_write_lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn dirty_patch_snapshot_tracks_serialized_scroll_and_resize() {
+        let runtime = PaneRuntime::test_with_scrollback_bytes(
+            20,
+            4,
+            100_000,
+            b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix",
+        );
+        runtime
+            .collect_dirty_patch_snapshot(20, 4)
+            .expect("live snapshot");
+        runtime.scroll_up(1);
+        let scrolled = runtime
+            .collect_dirty_patch_snapshot(20, 4)
+            .expect("scrolled snapshot");
+        assert_eq!(
+            scrolled.scroll_metrics.expect("metrics").offset_from_bottom,
+            1
+        );
+        runtime.scroll_reset();
+        runtime.resize(5, 24, 0, 0);
+        let resized = runtime
+            .collect_dirty_patch_snapshot(24, 5)
+            .expect("resized snapshot");
+        let metrics = resized.scroll_metrics.expect("resized metrics");
+        assert_eq!(metrics.offset_from_bottom, 0);
+        assert_eq!(metrics.viewport_rows, 5);
+        assert!(resized.content_revision.is_multiple_of(2));
+        let TerminalDirtyPatchOutcome::Patch(patch) = resized.patch else {
+            panic!("resize must dirty the viewport");
+        };
+        assert_eq!(patch.rows.len(), 5);
+        assert!(patch.rows.iter().all(|(_, cells)| cells.len() == 24));
+    }
+
+    #[test]
+    fn pane_launch_env_removes_outer_agent_identity() {
+        let keys = [
+            "CODEX_THREAD_ID",
+            "OMPCODE",
+            "CLAUDECODE",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+        ];
+        let mut cmd = CommandBuilder::new("shell");
+        for key in keys {
+            cmd.env(key, "outer-session");
+        }
+        cmd.env("ANTHROPIC_API_KEY", "fake-api-key");
+        cmd.env("DISPLAY", ":42");
+
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+
+        for key in keys {
+            assert!(cmd.get_env(key).is_none(), "{key} must not leak into panes");
+        }
+        assert_eq!(
+            cmd.get_env("ANTHROPIC_API_KEY"),
+            Some(OsStr::new("fake-api-key"))
+        );
+        assert_eq!(cmd.get_env("DISPLAY"), Some(OsStr::new(":42")));
+    }
+
+    #[test]
+    fn pane_terminal_identity_removes_outer_terminal_identity() {
+        let keys = [
+            "ITERM_SESSION_ID",
+            "LC_TERMINAL",
+            "LC_TERMINAL_VERSION",
+            "WEZTERM_PANE",
+            "KITTY_WINDOW_ID",
+            "WT_SESSION",
+            "TMUX",
+            "TMUX_PANE",
+            "STY",
+            "ZELLIJ",
+            "ZELLIJ_SESSION_NAME",
+            "ZELLIJ_PANE_ID",
+        ];
+        let mut cmd = CommandBuilder::new("shell");
+        for key in keys {
+            cmd.env(key, "outer-session");
+        }
+        cmd.env("TERM_PROGRAM", "iTerm.app");
+        cmd.env("TERM_PROGRAM_VERSION", "outer-version");
+
+        apply_pane_terminal_env(&mut cmd);
+
+        for key in keys {
+            assert!(cmd.get_env(key).is_none(), "{key} must not leak into panes");
+        }
+        assert_eq!(cmd.get_env("TERM_PROGRAM"), Some(OsStr::new("herdr")));
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM_VERSION"),
+            Some(OsStr::new(&crate::build_info::version()))
+        );
+    }
+
+    #[test]
+    fn pane_terminal_env_tells_fish_that_herdr_reflows() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
+        apply_pane_terminal_env(&mut cmd);
+        assert_eq!(
+            cmd.get_env(FISH_HANDLE_REFLOW_ENV_VAR),
+            Some(OsStr::new("0"))
+        );
+    }
+
+    #[test]
+    fn pane_terminal_env_keeps_existing_fish_handle_reflow_entry() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env(FISH_HANDLE_REFLOW_ENV_VAR, "1");
+        apply_pane_terminal_env(&mut cmd);
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+        assert_eq!(
+            cmd.get_env(FISH_HANDLE_REFLOW_ENV_VAR),
+            Some(OsStr::new("1"))
+        );
+    }
+
+    #[test]
+    fn pane_terminal_env_sets_lowercase_fish_handle_reflow_beside_other_casing() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
+        cmd.env("FISH_HANDLE_REFLOW", "1");
+        apply_pane_terminal_env(&mut cmd);
+        assert!(cmd
+            .iter_full_env_as_str()
+            .any(|entry| entry == (FISH_HANDLE_REFLOW_ENV_VAR, "0")));
+    }
+
+    #[test]
+    fn pane_launch_env_explicit_fish_handle_reflow_wins() {
+        let mut explicit = CommandBuilder::new("shell");
+        explicit.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
+        apply_pane_terminal_env(&mut explicit);
+        apply_pane_launch_env(
+            &mut explicit,
+            &PaneLaunchEnv::from_extra(vec![(FISH_HANDLE_REFLOW_ENV_VAR.into(), "1".into())]),
+        );
+        assert_eq!(
+            explicit.get_env(FISH_HANDLE_REFLOW_ENV_VAR),
+            Some(OsStr::new("1"))
+        );
+    }
+
+    #[test]
+    fn pane_launch_env_allows_explicit_session_identity() {
+        let extra = vec![
+            ("CLAUDE_CODE_CHILD_SESSION".into(), "1".into()),
+            ("CLAUDE_CODE_SESSION_ID".into(), "intentional-child".into()),
+            ("CLAUDE_CODE_MESSAGING_TOKEN".into(), "fake-token".into()),
+            ("ITERM_SESSION_ID".into(), "intentional-host".into()),
+        ];
+        let mut cmd = CommandBuilder::new("shell");
+        apply_pane_terminal_env(&mut cmd);
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::from_extra(extra.clone()));
+
+        for (key, value) in extra {
+            assert_eq!(cmd.get_env(key), Some(OsStr::new(&value)));
+        }
+    }
+
+    #[tokio::test]
+    async fn cwd_returns_accepted_report_without_rechecking_filesystem() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let cwd = std::env::temp_dir().join(format!(
+            "herdr-reported-cwd-cache-{}-{stamp}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&cwd).expect("create reported cwd");
+
+        let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
+        let (events, _event_rx) = mpsc::channel(1);
+        publish_reported_cwd(runtime.pane_id, cwd.clone(), &runtime.reported_cwd, &events);
+        assert_eq!(
+            runtime.reported_cwd.lock().unwrap().as_ref(),
+            Some(&cwd),
+            "test setup must pass cache admission"
+        );
+
+        std::fs::remove_dir(&cwd).expect("remove reported cwd after admission");
+
+        assert_eq!(runtime.cwd(), Some(cwd));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_cwd_does_not_require_traversing_the_directory_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "herdr-process-cwd-no-stat-{}-{stamp}",
+            std::process::id()
+        ));
+        let private = base.join("private");
+        let cwd = private.join("cwd");
+        std::fs::create_dir_all(&cwd).expect("create process cwd");
+
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .current_dir(&cwd)
+            .spawn()
+            .expect("spawn process in cwd");
+        let expected_cwd = crate::platform::process_cwd(child.id())
+            .expect("resolve process cwd before restricting traversal");
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o000))
+            .expect("make cwd path untraversable");
+
+        let path_is_traversable = cwd.is_dir();
+        let observed = (!path_is_traversable)
+            .then(|| absolute_process_cwd(child.id()))
+            .flatten();
+
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o755))
+            .expect("restore cwd path permissions");
+        let _ = child.kill();
+        let _ = child.wait();
+        std::fs::remove_dir_all(&base).expect("remove process cwd");
+
+        if path_is_traversable {
+            eprintln!("skipping untraversable cwd assertion for privileged test process");
+            return;
+        }
+        assert_eq!(observed, Some(expected_cwd));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn follow_cwd_falls_back_to_reported_pane_cwd_without_foreground_group() {
+        let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
+        let cwd = std::env::temp_dir();
+        *runtime.reported_cwd.lock().unwrap() = Some(cwd.clone());
+
+        assert_eq!(runtime.follow_cwd(), Some(cwd));
+    }
+
+    #[test]
+    fn shutdown_liveness_treats_reaped_direct_child_as_gone() {
+        assert!(!process_alive_for_shutdown(42, 42, true, |_| true));
+    }
+
+    #[test]
+    fn shutdown_liveness_keeps_unreaped_direct_child_alive() {
+        assert!(process_alive_for_shutdown(42, 42, false, |_| true));
+    }
+
+    #[test]
+    fn shutdown_liveness_keeps_other_session_processes_alive() {
+        assert!(process_alive_for_shutdown(43, 42, true, |_| true));
+    }
+
+    #[test]
+    fn shutdown_liveness_treats_missing_process_as_gone() {
+        assert!(!process_alive_for_shutdown(43, 42, false, |_| false));
+    }
+
+    #[cfg(unix)]
+    fn capture_shell_output(command: &str, extra_env: &[(&str, &str)]) -> String {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let output_path = std::env::temp_dir().join(format!(
+            "herdr-pane-term-test-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.arg("-c");
+        cmd.arg(format!("{command} > '{}'", output_path.display()));
+        cmd.cwd(std::env::current_dir().unwrap());
+        cmd.env("TERM", "xterm-ghostty");
+        cmd.env("COLORTERM", "falsecolor");
+        apply_pane_terminal_env(&mut cmd);
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
+
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        let status = child.wait().unwrap();
+        assert!(status.success(), "shell command failed: {status:?}");
+
+        let output = std::fs::read_to_string(&output_path).unwrap();
+        let _ = std::fs::remove_file(output_path);
+        output
+    }
+
+    #[test]
+    fn pane_shell_prefers_configured_shell() {
+        assert_eq!(
+            pane_shell_from("/usr/bin/nu", Some("/bin/bash".to_string())),
+            "/usr/bin/nu"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn pane_shell_falls_back_to_shell_env() {
+        assert_eq!(
+            pane_shell_from("", Some("/bin/bash".to_string())),
+            "/bin/bash"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pane_shell_ignores_shell_env_on_windows() {
+        assert_eq!(
+            pane_shell_from("", Some("c:\\windows\\system32\\cmd.exe".to_string())),
+            default_pane_shell()
+        );
+    }
+
+    #[test]
+    fn pane_shell_ignores_empty_values() {
+        assert_eq!(
+            pane_shell_from("   ", Some("  ".to_string())),
+            default_pane_shell()
+        );
+        assert_eq!(pane_shell_from("", None), default_pane_shell());
+    }
+
+    const TEST_EXECUTABLE_IMAGE: u16 = 0x0002;
+    const TEST_DLL: u16 = 0x2000;
+    const TEST_MACHINE_AMD64: u16 = 0x8664;
+
+    /// Structurally valid PE32+ image, with fields chosen so tests can make it
+    /// malformed one way at a time.
+    fn windows_test_pe(machine: u16, characteristics: u16, number_of_sections: u16) -> Vec<u8> {
+        const PE_OFFSET: u32 = 0x80;
+        const COFF_HEADER_LEN: usize = 20;
+        const OPTIONAL_HEADER_LEN: u16 = 0x70;
+        const SECTION_HEADER_LEN: usize = 40;
+
+        let pe = PE_OFFSET as usize;
+        let mut bytes = vec![
+            0u8;
+            pe + 4
+                + COFF_HEADER_LEN
+                + OPTIONAL_HEADER_LEN as usize
+                + number_of_sections as usize * SECTION_HEADER_LEN
+        ];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&PE_OFFSET.to_le_bytes());
+        bytes[pe..pe + 4].copy_from_slice(b"PE\0\0");
+        bytes[pe + 4..pe + 6].copy_from_slice(&machine.to_le_bytes());
+        bytes[pe + 4 + 2..pe + 4 + 4].copy_from_slice(&number_of_sections.to_le_bytes());
+        bytes[pe + 4 + 16..pe + 4 + 18].copy_from_slice(&OPTIONAL_HEADER_LEN.to_le_bytes());
+        bytes[pe + 4 + 18..pe + 4 + 20].copy_from_slice(&characteristics.to_le_bytes());
+        bytes[pe + 24..pe + 26].copy_from_slice(&0x020bu16.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn windows_default_pane_shell_prefers_pwsh_on_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-pwsh-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pwsh = dir.join("pwsh.exe");
+        let image = windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE, 1);
+        std::fs::write(&pwsh, image).unwrap();
+        let path = std::env::join_paths([&dir]).unwrap();
+
+        let resolved = default_windows_pane_shell(Some(path));
+        let expected = pwsh.into_os_string().into_string().unwrap();
+
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn windows_default_pane_shell_falls_back_to_inbox_powershell() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-fallback-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file that is not a launchable executable must not be selected.
+        std::fs::write(dir.join("pwsh.exe"), b"not a PE image").unwrap();
+        let path = std::env::join_paths([&dir]).unwrap();
+
+        let invalid = default_windows_pane_shell(Some(path));
+
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(invalid, "powershell.exe");
+        assert_eq!(default_windows_pane_shell(None), "powershell.exe");
+    }
+
+    #[test]
+    fn windows_default_pane_shell_rejects_non_executable_pe_images() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-invalid-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pwsh = dir.join("pwsh.exe");
+        let path = || std::env::join_paths([&dir]).unwrap();
+
+        let truncated_header = {
+            let mut bytes = b"MZ".to_vec();
+            bytes.resize(0x40, 0);
+            bytes[0x3c..0x40].copy_from_slice(&0x50u32.to_le_bytes());
+            bytes
+        };
+        // One declared section, but the file ends before its 40-byte header.
+        let truncated_section_table = {
+            let mut bytes = windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE, 1);
+            bytes.truncate(bytes.len() - 1);
+            bytes
+        };
+        let cases: [(&str, Vec<u8>); 7] = [
+            ("empty", Vec::new()),
+            ("dos signature only", b"MZ".to_vec()),
+            ("truncated pe header", truncated_header),
+            ("truncated section table", truncated_section_table),
+            (
+                "dll",
+                windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE | TEST_DLL, 1),
+            ),
+            (
+                "no executable bit",
+                windows_test_pe(TEST_MACHINE_AMD64, 0, 1),
+            ),
+            (
+                "foreign machine",
+                windows_test_pe(0x0200, TEST_EXECUTABLE_IMAGE, 1),
+            ),
+        ];
+
+        for (label, bytes) in cases {
+            std::fs::write(&pwsh, &bytes).unwrap();
+            assert_eq!(
+                default_windows_pane_shell(Some(path())),
+                "powershell.exe",
+                "case {label:?}"
+            );
+        }
+
+        std::fs::write(
+            &pwsh,
+            windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE, 0),
+        )
+        .unwrap();
+        assert_eq!(
+            default_windows_pane_shell(Some(path())),
+            "powershell.exe",
+            "case zero sections"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn windows_executable_machine_compatibility_tracks_native_host() {
+        const I386: u16 = 0x014c;
+        const AMD64: u16 = 0x8664;
+        const ARM64: u16 = 0xaa64;
+
+        assert!(windows_executable_machine_is_compatible(I386, AMD64));
+        assert!(windows_executable_machine_is_compatible(AMD64, AMD64));
+        assert!(!windows_executable_machine_is_compatible(ARM64, AMD64));
+        assert!(windows_executable_machine_is_compatible(I386, ARM64));
+        assert!(windows_executable_machine_is_compatible(AMD64, ARM64));
+        assert!(windows_executable_machine_is_compatible(ARM64, ARM64));
+        assert!(windows_executable_machine_is_compatible(I386, I386));
+        assert!(!windows_executable_machine_is_compatible(AMD64, I386));
+        assert!(!windows_executable_machine_is_compatible(0x0200, AMD64));
+    }
+
+    #[test]
+    fn windows_executable_file_rejects_arm64_image_on_amd64_host() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-arm64-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pwsh = dir.join("pwsh.exe");
+        std::fs::write(&pwsh, windows_test_pe(0xaa64, TEST_EXECUTABLE_IMAGE, 1)).unwrap();
+
+        let on_amd64 = is_windows_executable_file_for_host(&pwsh, 0x8664);
+        let on_arm64 = is_windows_executable_file_for_host(&pwsh, 0xaa64);
+        let on_x86 = is_windows_executable_file_for_host(&pwsh, 0x014c);
+
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(!on_amd64, "x64 Windows cannot launch a pure ARM64 image");
+        assert!(on_arm64);
+        assert!(!on_x86);
+    }
+
+    #[test]
+    fn windows_default_pane_shell_skips_invalid_pwsh_candidates() {
+        let base = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-skip-{}",
+            std::process::id()
+        ));
+        let invalid_dir = base.join("invalid");
+        let valid_dir = base.join("valid");
+        std::fs::create_dir_all(&invalid_dir).unwrap();
+        std::fs::create_dir_all(&valid_dir).unwrap();
+        std::fs::write(invalid_dir.join("pwsh.exe"), b"MZ").unwrap();
+        let pwsh = valid_dir.join("pwsh.exe");
+        std::fs::write(
+            &pwsh,
+            windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE, 1),
+        )
+        .unwrap();
+        let path = std::env::join_paths([&invalid_dir, &valid_dir]).unwrap();
+
+        let resolved = default_windows_pane_shell(Some(path));
+        let expected = pwsh.into_os_string().into_string().unwrap();
+
+        let _ = std::fs::remove_dir_all(base);
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn shell_mode_auto_uses_login_shell_only_on_macos() {
+        assert!(shell_mode_uses_login_shell(
+            crate::config::ShellModeConfig::Auto,
+            ShellLaunchTarget::Macos
+        ));
+        assert!(!shell_mode_uses_login_shell(
+            crate::config::ShellModeConfig::Auto,
+            ShellLaunchTarget::OtherUnix
+        ));
+        assert!(!shell_mode_uses_login_shell(
+            crate::config::ShellModeConfig::Auto,
+            ShellLaunchTarget::Windows
+        ));
+        assert!(shell_mode_uses_login_shell(
+            crate::config::ShellModeConfig::Login,
+            ShellLaunchTarget::OtherUnix
+        ));
+        assert!(!shell_mode_uses_login_shell(
+            crate::config::ShellModeConfig::NonLogin,
+            ShellLaunchTarget::Macos
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_builder_uses_default_prog_with_resolved_shell_env() {
+        let cmd = pane_shell_command_builder_for_target(
+            PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::Login),
+            ShellLaunchTarget::OtherUnix,
+        )
+        .unwrap();
+        assert!(cmd.is_default_prog());
+        assert_eq!(
+            cmd.get_env("SHELL").and_then(std::ffi::OsStr::to_str),
+            Some("/bin/sh")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn auto_shell_builder_uses_login_shell_on_macos_target() {
+        let cmd = pane_shell_command_builder_for_target(
+            PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::Auto),
+            ShellLaunchTarget::Macos,
+        )
+        .unwrap();
+        assert!(cmd.is_default_prog());
+        assert_eq!(
+            cmd.get_env("SHELL").and_then(std::ffi::OsStr::to_str),
+            Some("/bin/sh")
+        );
+    }
+
+    #[test]
+    fn windows_login_shell_builder_launches_configured_shell_with_login_flag() {
+        let cmd = pane_shell_command_builder_for_target(
+            PaneShellConfig::new("bash.exe", crate::config::ShellModeConfig::Login),
+            ShellLaunchTarget::Windows,
+        )
+        .unwrap();
+
+        assert!(
+            !cmd.is_default_prog(),
+            "Windows login mode must not fall back to the default program (cmd.exe)"
+        );
+        assert_eq!(
+            cmd.get_argv(),
+            &[
+                std::ffi::OsString::from("bash.exe"),
+                std::ffi::OsString::from("-l"),
+            ]
+        );
+    }
+
+    #[test]
+    fn windows_login_shell_builder_launches_native_shells_without_flag() {
+        for shell in ["cmd.exe", "C:\\Windows\\System32\\cmd.exe"] {
+            let cmd = pane_shell_command_builder_for_target(
+                PaneShellConfig::new(shell, crate::config::ShellModeConfig::Login),
+                ShellLaunchTarget::Windows,
+            )
+            .unwrap();
+
+            assert!(!cmd.is_default_prog(), "shell {shell:?}");
+            assert_eq!(
+                cmd.get_argv(),
+                &[std::ffi::OsString::from(shell)],
+                "shell {shell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_login_powershell_builder_injects_prompt_cwd_shell_integration() {
+        for shell in [
+            "powershell.exe",
+            "pwsh.exe",
+            "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+        ] {
+            let cmd = pane_shell_command_builder_for_target(
+                PaneShellConfig::new(shell, crate::config::ShellModeConfig::Login),
+                ShellLaunchTarget::Windows,
+            )
+            .unwrap();
+
+            assert_eq!(
+                cmd.get_argv(),
+                &[
+                    std::ffi::OsString::from(shell),
+                    std::ffi::OsString::from("-NoExit"),
+                    std::ffi::OsString::from("-Command"),
+                    std::ffi::OsString::from(WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND),
+                ],
+                "shell {shell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_login_shell_args_maps_posix_shells_to_login_flag() {
+        for shell in [
+            "sh",
+            "sh.exe",
+            "bash",
+            "bash.exe",
+            "BASH.EXE",
+            "zsh",
+            "zsh.exe",
+            "ksh",
+            "dash",
+            "ash",
+            "mksh",
+            "fish",
+            "fish.exe",
+            "csh",
+            "csh.exe",
+            "tcsh",
+            "tcsh.exe",
+            "C:\\Program Files\\Git\\bin\\bash.exe",
+        ] {
+            assert_eq!(
+                windows_login_shell_args(shell),
+                &["-l"],
+                "shell {shell:?} should get the login flag"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_login_shell_args_omits_flag_for_shells_without_login_concept() {
+        for shell in [
+            "cmd",
+            "cmd.exe",
+            "powershell",
+            "powershell.exe",
+            "pwsh",
+            "pwsh.exe",
+            "nu",
+            "nu.exe",
+            "C:\\Windows\\System32\\cmd.exe",
+        ] {
+            assert_eq!(
+                windows_login_shell_args(shell),
+                &[] as &[&str],
+                "shell {shell:?} must not get a login flag"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_shell_builder_keeps_direct_shell_on_non_macos_target() {
+        let cmd = pane_shell_command_builder_for_target(
+            PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::Auto),
+            ShellLaunchTarget::OtherUnix,
+        )
+        .unwrap();
+        assert!(!cmd.is_default_prog());
+        assert_eq!(cmd.get_argv(), &[std::ffi::OsString::from("/bin/sh")]);
+    }
+
+    #[test]
+    fn windows_powershell_builder_injects_prompt_cwd_shell_integration() {
+        for shell in [
+            "powershell.exe",
+            "pwsh.exe",
+            "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+        ] {
+            let cmd = pane_shell_command_builder_for_target(
+                PaneShellConfig::new(shell, crate::config::ShellModeConfig::NonLogin),
+                ShellLaunchTarget::Windows,
+            )
+            .unwrap();
+
+            assert_eq!(
+                cmd.get_argv(),
+                &[
+                    std::ffi::OsString::from(shell),
+                    std::ffi::OsString::from("-NoExit"),
+                    std::ffi::OsString::from("-Command"),
+                    std::ffi::OsString::from(WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND),
+                ]
+            );
+        }
+
+        let script = WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND;
+        let cwd_sync = script
+            .find("[Environment]::CurrentDirectory = $loc.ProviderPath")
+            .expect("wrapper must synchronize the Win32 process cwd");
+        let osc_report = script.find("]9;9;").expect("wrapper must emit OSC 9;9");
+        assert!(cwd_sync < osc_report, "cwd sync must precede OSC report");
+        assert!(
+            script.contains("$global:__HerdrOriginalPrompt = $function:prompt"),
+            "must wrap the profile-defined prompt: {script}"
+        );
+        assert!(
+            script.contains("$null -eq $global:__HerdrOriginalPrompt"),
+            "wrap must be idempotent for nested sessions: {script}"
+        );
+        assert!(
+            script.contains("'FileSystem'"),
+            "must not report non-filesystem provider paths: {script}"
+        );
+        assert!(
+            !script.contains('"'),
+            "double quotes corrupt the powershell.exe command-line round-trip: {script}"
+        );
+        let invoke_original = script
+            .find("@(& $global:__HerdrOriginalPrompt)")
+            .expect("wrapper must invoke the original prompt");
+        let cwd_lookup = script
+            .find("$loc =")
+            .expect("wrapper must look up the current location");
+        assert!(
+            invoke_original < cwd_lookup,
+            "original prompt must run first or $? is reset before a status-aware prompt reads it: {script}"
+        );
+    }
+
+    #[test]
+    fn windows_non_powershell_builder_launches_plain_shell() {
+        let cmd = pane_shell_command_builder_for_target(
+            PaneShellConfig::new("cmd.exe", crate::config::ShellModeConfig::NonLogin),
+            ShellLaunchTarget::Windows,
+        )
+        .unwrap();
+
+        assert_eq!(cmd.get_argv(), &[std::ffi::OsString::from("cmd.exe")]);
+    }
+
+    #[test]
+    fn unix_powershell_builder_launches_plain_shell() {
+        let cmd = pane_shell_command_builder_for_target(
+            PaneShellConfig::new("pwsh", crate::config::ShellModeConfig::NonLogin),
+            ShellLaunchTarget::OtherUnix,
+        )
+        .unwrap();
+
+        assert_eq!(cmd.get_argv(), &[std::ffi::OsString::from("pwsh")]);
+    }
+
+    #[test]
+    fn windows_powershell_pane_shell_predicate_requires_windows_and_powershell() {
+        for mode in [
+            crate::config::ShellModeConfig::NonLogin,
+            crate::config::ShellModeConfig::Login,
+        ] {
+            let pwsh = PaneShellConfig::new("pwsh.exe", mode);
+            assert!(
+                uses_windows_powershell_pane_shell_for_target(pwsh, ShellLaunchTarget::Windows),
+                "mode {mode:?}"
+            );
+            assert!(!uses_windows_powershell_pane_shell_for_target(
+                pwsh,
+                ShellLaunchTarget::OtherUnix
+            ));
+            assert!(!uses_windows_powershell_pane_shell_for_target(
+                pwsh,
+                ShellLaunchTarget::Macos
+            ));
+        }
+        assert!(!uses_windows_powershell_pane_shell_for_target(
+            PaneShellConfig::new("cmd.exe", crate::config::ShellModeConfig::NonLogin),
+            ShellLaunchTarget::Windows
+        ));
+        assert!(!uses_windows_powershell_pane_shell_for_target(
+            PaneShellConfig::new("cmd.exe", crate::config::ShellModeConfig::Login),
+            ShellLaunchTarget::Windows
+        ));
+    }
+
+    #[test]
+    fn login_shell_builder_rejects_missing_shell_instead_of_falling_back() {
+        let err = pane_shell_command_builder_for_target(
+            PaneShellConfig::new(
+                "/__herdr_missing_shell__",
+                crate::config::ShellModeConfig::Login,
+            ),
+            ShellLaunchTarget::OtherUnix,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_builder_resolves_bare_shell_names_from_path() {
+        let _lock = crate::integration::integration_env_lock();
+        let base = std::env::temp_dir().join(format!(
+            "herdr-login-shell-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bin = base.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let shell = bin.join("fake-shell");
+        std::fs::write(&shell, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin);
+
+        let cmd = pane_shell_command_builder_for_target(
+            PaneShellConfig::new("fake-shell", crate::config::ShellModeConfig::Login),
+            ShellLaunchTarget::OtherUnix,
+        )
+        .unwrap();
+
+        assert!(cmd.is_default_prog());
+        assert_eq!(
+            cmd.get_env("SHELL").and_then(std::ffi::OsStr::to_str),
+            shell.to_str()
+        );
+        match original_path {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_resolution_preserves_shell_paths() {
+        assert_eq!(resolve_shell_for_login_mode("/bin/sh").unwrap(), "/bin/sh");
+    }
+
+    #[test]
+    fn non_login_shell_builder_execs_resolved_shell_directly() {
+        let cmd = pane_shell_command_builder(PaneShellConfig::new(
+            "/bin/sh",
+            crate::config::ShellModeConfig::NonLogin,
+        ))
+        .unwrap();
+        assert!(!cmd.is_default_prog());
+        assert_eq!(cmd.get_argv(), &[std::ffi::OsString::from("/bin/sh")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_terminal_identity_overrides_outer_terminal_env() {
+        let output = capture_shell_output("printf '%s\\n%s\\n' \"$TERM\" \"$COLORTERM\"", &[]);
+        assert_eq!(output, "xterm-256color\ntruecolor\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_terminal_identity_allows_explicit_override() {
+        let output = capture_shell_output(
+            "printf '%s\\n%s\\n' \"$TERM\" \"$COLORTERM\"",
+            &[("TERM", "vt100"), ("COLORTERM", "24bit")],
+        );
+        assert_eq!(output, "vt100\n24bit\n");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handoff_history_ansi_captures_primary_screen() {
+        let runtime =
+            PaneRuntime::test_with_scrollback_bytes(40, 5, 4096, b"handoff-primary-history\r\n");
+
+        let history = runtime.handoff_history_ansi().unwrap();
+
+        assert!(history.contains("handoff-primary-history"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handoff_history_ansi_skips_alternate_screen() {
+        let runtime = PaneRuntime::test_with_scrollback_bytes(
+            40,
+            5,
+            4096,
+            b"primary\r\n\x1b[?1049halt-screen",
+        );
+
+        assert!(runtime.handoff_history_ansi().is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ended_handoff_keeps_persistence_cwd_when_pid_is_reused() {
+        let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
+        assert!(runtime.child_wait_completed.is_none());
+        let saved = std::env::temp_dir().join("saved-handoff-cwd");
+        *runtime.persistence_cwd.lock().unwrap() = Some(saved.clone());
+        // A different live process now owns the imported shell's numeric PID.
+        runtime
+            .child_pid
+            .store(std::process::id(), Ordering::Release);
+        runtime.cwd_process_exited.store(true, Ordering::Release);
+        assert_eq!(runtime.cwd_for_persistence(), Some(saved));
+        *runtime.persistence_cwd.lock().unwrap() = None;
+        assert_eq!(runtime.cwd_for_persistence(), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handoff_runtime_state_captures_terminal_input_and_title_state() {
+        let runtime = PaneRuntime::test_with_screen_bytes(
+            80,
+            24,
+            b"\x1b[>5u\x1b[>4;2m\x1b[?1h\x1b[?2004h\x1b[?1004h\x1b[?1002h\x1b[?1006h\x1b[?2031h",
+        );
+
+        runtime.test_process_pty_bytes("\x1b]2;✳ 修复🙂标题\x1b\\".as_bytes());
+        runtime.terminal.clear_agent_osc_state();
+        assert_eq!(runtime.agent_osc_title(), "");
+        let pane = runtime.handoff_runtime_state(12);
+
+        assert_eq!(pane.keyboard_protocol_flags, 5);
+        assert_eq!(pane.terminal_title.as_deref(), Some("✳ 修复🙂标题"));
+        assert_eq!(
+            pane.input_state,
+            Some(InputState {
+                alternate_screen: false,
+                application_cursor: true,
+                bracketed_paste: true,
+                focus_reporting: true,
+                mouse_protocol_mode: crate::input::MouseProtocolMode::ButtonMotion,
+                mouse_protocol_encoding: crate::input::MouseProtocolEncoding::Sgr,
+                mouse_alternate_scroll: true,
+                modify_other_keys: true,
+                color_scheme_reporting: true,
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn truncate_handoff_history_keeps_recent_utf8_boundary() {
+        let history = format!("old\n{}\nrecent\n", "é".repeat(8));
+
+        let truncated = truncate_handoff_history(history, 20);
+
+        assert_eq!(truncated, "recent\n");
+        assert!(truncated.is_char_boundary(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn truncate_handoff_history_drops_partial_long_line() {
+        let history = format!("old\n{}", "x".repeat(64));
+
+        let truncated = truncate_handoff_history(history, 12);
+
+        assert!(truncated.is_empty());
+    }
+
+    #[tokio::test]
+    async fn compression_permit_survives_an_aborted_async_waiter() {
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let handle = spawn_blocking_with_compression_permit(permit, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.await.unwrap();
+
+        handle.abort();
+        assert!(semaphore.clone().try_acquire_owned().is_err());
+
+        release_tx.send(()).unwrap();
+        handle.await.unwrap();
+        assert!(semaphore.try_acquire_owned().is_ok());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn compression_task_rechecks_history_after_a_read() {
+        let suffix = "x".repeat(66);
+        let history = (1..=2_000)
+            .map(|line| format!("{line:05} {suffix}\r\n"))
+            .collect::<String>();
+        let runtime =
+            PaneRuntime::test_with_scrollback_bytes(80, 24, 20_000_000, history.as_bytes());
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while runtime.compression.completed_passes() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let completed_before_read = runtime.compression.completed_passes();
+
+        let snapshot = runtime.recent_unwrapped_text_snapshot(usize::MAX);
+        assert!(snapshot.text.contains("00001 "));
+        assert!(snapshot.text.contains("02000 "));
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while runtime.compression.completed_passes() == completed_before_read {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn compressed_scrollback_survives_shrink_and_grow_resize() {
+        let suffix = "x".repeat(66);
+        let history = (1..=2_000)
+            .map(|line| format!("{line:05} {suffix}\r\n"))
+            .collect::<String>();
+        let runtime =
+            PaneRuntime::test_with_scrollback_bytes(80, 45, 20_000_000, history.as_bytes());
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while runtime.compression.completed_passes() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        runtime.resize(21, 80, 0, 0);
+        let completed_after_shrink = runtime.compression.completed_passes();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while runtime.compression.completed_passes() == completed_after_shrink {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        runtime.resize(45, 80, 0, 0);
+
+        assert_eq!(runtime.current_size(), (45, 80));
+        assert_eq!(runtime.terminal_dimensions(), Some((80, 45)));
+        assert_eq!(runtime.scroll_metrics().unwrap().viewport_rows, 45);
+        let snapshot = runtime.recent_unwrapped_text_snapshot(usize::MAX);
+        assert!(snapshot.text.contains("00001 "));
+        assert!(snapshot.text.contains("02000 "));
+    }
+
+    #[tokio::test]
+    async fn focus_events_are_forwarded_when_enabled() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let (resize_tx, _resize_rx) = watch::channel((80, 24, 0, 0));
+        let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        terminal
+            .mode_set(crate::ghostty::MODE_FOCUS_EVENT, true)
+            .unwrap();
+        let pane_id = PaneId::from_raw(0);
+        let terminal = Arc::new(PaneTerminal::new(
+            GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
+        ));
+        let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+        let runtime = PaneRuntime {
+            self_reported_agent_active: Arc::new(AtomicBool::new(false)),
+            cwd_process_exited: Arc::new(AtomicBool::new(false)),
+            persistence_cwd: Mutex::new(None),
+            pane_id,
+            terminal,
+            io: PaneRuntimeIo::TestChannel {
+                sender: tx,
+                resize_tx,
+            },
+            current_size: Cell::new((80, 24, 0, 0)),
+            child_pid: Arc::new(AtomicU32::new(0)),
+            reported_cwd: Arc::new(Mutex::new(None)),
+            child_wait_completed: None,
+            kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
+            content_seq: Arc::new(AtomicU64::new(0)),
+            content_write_lock: Arc::new(Mutex::new(())),
+            detection_content_seq: Arc::new(AtomicU64::new(0)),
+            full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
+            detect_reset_notify: Arc::new(Notify::new()),
+            pending_release: Arc::new(Mutex::new(None)),
+            preserve_processes_on_drop: true,
+            compression,
+            detect_handle: Some(tokio::spawn(async {}).abort_handle()),
+        };
+
+        assert!(runtime.try_send_focus_event(crate::ghostty::FocusEvent::Gained));
+        assert_eq!(rx.recv().await.unwrap(), Bytes::from_static(b"\x1b[I"));
+    }
+
+    #[tokio::test]
+    async fn focus_events_are_suppressed_when_disabled() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let (resize_tx, _resize_rx) = watch::channel((80, 24, 0, 0));
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane_id = PaneId::from_raw(0);
+        let terminal = Arc::new(PaneTerminal::new(
+            GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
+        ));
+        let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
+        let runtime = PaneRuntime {
+            self_reported_agent_active: Arc::new(AtomicBool::new(false)),
+            cwd_process_exited: Arc::new(AtomicBool::new(false)),
+            persistence_cwd: Mutex::new(None),
+            pane_id,
+            terminal,
+            io: PaneRuntimeIo::TestChannel {
+                sender: tx,
+                resize_tx,
+            },
+            current_size: Cell::new((80, 24, 0, 0)),
+            child_pid: Arc::new(AtomicU32::new(0)),
+            reported_cwd: Arc::new(Mutex::new(None)),
+            child_wait_completed: None,
+            kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
+            content_seq: Arc::new(AtomicU64::new(0)),
+            content_write_lock: Arc::new(Mutex::new(())),
+            detection_content_seq: Arc::new(AtomicU64::new(0)),
+            full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
+            detect_reset_notify: Arc::new(Notify::new()),
+            pending_release: Arc::new(Mutex::new(None)),
+            preserve_processes_on_drop: true,
+            compression,
+            detect_handle: Some(tokio::spawn(async {}).abort_handle()),
+        };
+
+        assert!(!runtime.try_send_focus_event(crate::ghostty::FocusEvent::Gained));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), rx.recv())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribed_idle_child_receives_color_scheme_transition() {
+        let (runtime, mut rx) = PaneRuntime::test_with_channel(80, 24);
+        runtime.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark));
+        runtime.test_process_pty_bytes(b"\x1b[?2031h");
+
+        runtime.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Light));
+
+        assert_eq!(rx.recv().await, Some(Bytes::from_static(b"\x1b[?997;2n")));
+    }
+
+    #[test]
+    fn foreground_shell_reports_process_exit_before_clearing_agent() {
+        assert_eq!(
+            foreground_shell_agent_action(
+                Some(Agent::Codex),
+                None,
+                true,
+                false,
+                AgentJobStatus::Unknown
+            ),
+            ForegroundShellAgentAction::ReportProcessExit
+        );
+        assert_eq!(
+            foreground_shell_agent_action(
+                Some(Agent::Codex),
+                None,
+                true,
+                true,
+                AgentJobStatus::Unknown
+            ),
+            ForegroundShellAgentAction::ClearAgent
+        );
+    }
+
+    #[test]
+    fn same_agent_after_reported_exit_is_a_replacement_process() {
+        assert_eq!(
+            foreground_shell_agent_action(
+                Some(Agent::Pi),
+                Some(Agent::Pi),
+                false,
+                true,
+                AgentJobStatus::Unknown
+            ),
+            ForegroundShellAgentAction::ReportReplacementProcess
+        );
+    }
+
+    #[test]
+    fn unknown_non_shell_foreground_job_is_not_immediate_clear_signal() {
+        assert_eq!(
+            foreground_shell_agent_action(
+                Some(Agent::Claude),
+                None,
+                false,
+                false,
+                AgentJobStatus::Unknown
+            ),
+            ForegroundShellAgentAction::ObserveProbe
+        );
+    }
+
+    #[test]
+    fn shell_in_front_of_a_live_agent_job_holds_the_agent() {
+        for foreground_is_pane_shell in [true, false] {
+            assert_eq!(
+                foreground_shell_agent_action(
+                    Some(Agent::Claude),
+                    None,
+                    foreground_is_pane_shell,
+                    false,
+                    AgentJobStatus::Background
+                ),
+                ForegroundShellAgentAction::HoldBackgroundAgent
+            );
+        }
+    }
+
+    #[test]
+    fn held_agent_job_exit_is_reported_behind_any_foreground_job() {
+        for foreground_is_pane_shell in [true, false] {
+            assert_eq!(
+                foreground_shell_agent_action(
+                    Some(Agent::Pi),
+                    None,
+                    foreground_is_pane_shell,
+                    false,
+                    AgentJobStatus::ExitedInBackground
+                ),
+                ForegroundShellAgentAction::ReportProcessExit
+            );
+        }
+    }
+
+    /// Drives `observe_foreground_agent` the way the detection loops do, against
+    /// a fake process table of `pid -> (start token, process group)`.
+    mod held_agent {
+        use super::*;
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        pub(super) const SHELL: u32 = 10;
+        pub(super) const WRAPPER_JOB: u32 = 20;
+        pub(super) const AGENT_PID: u32 = 21;
+        const AGENT_START: u64 = 7_000;
+
+        #[derive(Default)]
+        pub(super) struct FakeProcesses(RefCell<HashMap<u32, (u64, u32)>>);
+
+        impl FakeProcesses {
+            pub(super) fn spawn(&self, pid: u32, start_token: u64, group: u32) {
+                self.0.borrow_mut().insert(pid, (start_token, group));
+            }
+
+            pub(super) fn exit(&self, pid: u32) {
+                self.0.borrow_mut().remove(&pid);
+            }
+        }
+
+        impl AgentProcessLiveness for FakeProcesses {
+            fn start_token(&self, pid: u32) -> Option<u64> {
+                self.0
+                    .borrow()
+                    .get(&pid)
+                    .map(|(start_token, _)| *start_token)
+            }
+
+            fn live_process_group(
+                &self,
+                shell_pid: u32,
+                pid: u32,
+                start_token: u64,
+            ) -> Option<u32> {
+                assert_eq!(shell_pid, SHELL);
+                self.0
+                    .borrow()
+                    .get(&pid)
+                    .filter(|(token, _)| *token == start_token)
+                    .map(|(_, group)| *group)
+            }
+        }
+
+        pub(super) struct Pane {
+            pub(super) presence: AgentDetectionPresence,
+            pub(super) job: AgentJobTracker,
+            pub(super) processes: FakeProcesses,
+            pending_clear: bool,
+            exit_reported: bool,
+        }
+
+        impl Pane {
+            /// An agent process `AGENT_PID` under a wrapper that leads its job.
+            pub(super) fn with_agent(agent: Agent) -> Self {
+                let processes = FakeProcesses::default();
+                processes.spawn(WRAPPER_JOB, 6_000, WRAPPER_JOB);
+                processes.spawn(AGENT_PID, AGENT_START, WRAPPER_JOB);
+                let mut pane = Self {
+                    presence: AgentDetectionPresence::from_agent(None),
+                    job: AgentJobTracker::default(),
+                    processes,
+                    pending_clear: false,
+                    exit_reported: false,
+                };
+                let (_, acquired) = pane.probe(Some(agent), WRAPPER_JOB);
+                assert!(acquired);
+                pane
+            }
+
+            pub(super) fn probe(
+                &mut self,
+                agent: Option<Agent>,
+                foreground_group: u32,
+            ) -> (ForegroundShellAgentAction, bool) {
+                self.probe_process(agent, AGENT_PID, foreground_group)
+            }
+
+            pub(super) fn probe_process(
+                &mut self,
+                agent: Option<Agent>,
+                agent_pid: u32,
+                foreground_group: u32,
+            ) -> (ForegroundShellAgentAction, bool) {
+                let result = observe_foreground_agent(
+                    &mut self.presence,
+                    &mut self.job,
+                    &mut self.pending_clear,
+                    &mut self.exit_reported,
+                    ForegroundAgentObservation {
+                        shell_pid: SHELL,
+                        agent,
+                        agent_pid: agent.map(|_| agent_pid),
+                        process_group_id: Some(foreground_group),
+                        foreground_is_pane_shell: foreground_group == SHELL,
+                    },
+                    &self.processes,
+                    PaneId::from_raw(1),
+                );
+                // The loop publishes the pending exit before the next probe.
+                if self.pending_clear {
+                    self.exit_reported = true;
+                }
+                result
+            }
+
+            pub(super) fn assert_held_while_shell_in_front(&mut self) {
+                for _ in 0..(AGENT_MISS_CONFIRMATION_ATTEMPTS + 2) {
+                    assert_eq!(
+                        self.probe(None, SHELL),
+                        (ForegroundShellAgentAction::HoldBackgroundAgent, false)
+                    );
+                }
+                assert!(self.job.in_background());
+            }
+
+            pub(super) fn assert_exit_reported_then_cleared(&mut self) {
+                assert_eq!(
+                    self.probe(None, SHELL),
+                    (ForegroundShellAgentAction::ReportProcessExit, false)
+                );
+                assert_eq!(
+                    self.probe(None, SHELL),
+                    (ForegroundShellAgentAction::ClearAgent, true)
+                );
+                assert_eq!(self.presence.current_agent(), None);
+                assert!(!self.job.in_background());
+            }
+        }
+    }
+
+    #[test]
+    fn suspend_command_and_resume_publish_no_agent_transition() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+
+        // ctrl-z: the shell is in front, the stopped agent is alive.
+        pane.assert_held_while_shell_in_front();
+        // A plain command runs in front of the stopped agent.
+        for _ in 0..(AGENT_MISS_CONFIRMATION_ATTEMPTS + 2) {
+            assert_eq!(
+                pane.probe(None, 30),
+                (ForegroundShellAgentAction::HoldBackgroundAgent, false)
+            );
+        }
+        // fg: the same agent is back in front.
+        assert_eq!(
+            pane.probe(Some(Agent::Claude), held_agent::WRAPPER_JOB),
+            (ForegroundShellAgentAction::ObserveProbe, false)
+        );
+        assert_eq!(pane.presence.current_agent(), Some(Agent::Claude));
+        assert!(!pane.job.in_background());
+
+        // A real exit afterwards still reports and clears.
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.exit(held_agent::WRAPPER_JOB);
+        pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn agent_killed_while_suspended_reports_its_exit() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Pi);
+        pane.assert_held_while_shell_in_front();
+
+        // `kill -9 %1`: the whole stopped job is gone.
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.exit(held_agent::WRAPPER_JOB);
+
+        pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn held_agent_exit_is_reported_while_its_wrapper_survives() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Pi);
+        pane.assert_held_while_shell_in_front();
+
+        // The agent dies; the wrapper that leads its job lives on.
+        pane.processes.exit(held_agent::AGENT_PID);
+
+        pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn held_agent_pid_reused_by_another_process_reports_exit() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+        pane.assert_held_while_shell_in_front();
+
+        // The agent exits and an unrelated process in the same job gets its pid.
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes
+            .spawn(held_agent::AGENT_PID, 9_000, held_agent::WRAPPER_JOB);
+
+        pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn same_kind_agent_started_in_front_of_a_held_one_replaces_it() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+        pane.assert_held_while_shell_in_front();
+
+        // A second Claude starts in front of the suspended one.
+        pane.processes.spawn(31, 9_000, 30);
+        assert_eq!(
+            pane.probe_process(Some(Agent::Claude), 31, 30),
+            (ForegroundShellAgentAction::ReportProcessExit, false)
+        );
+        assert_eq!(
+            pane.probe_process(Some(Agent::Claude), 31, 30),
+            (ForegroundShellAgentAction::ReportReplacementProcess, true)
+        );
+        assert!(!pane.job.in_background());
+    }
+
+    #[test]
+    fn same_kind_agent_reusing_the_held_pid_replaces_it() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+        pane.assert_held_while_shell_in_front();
+
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.spawn(held_agent::AGENT_PID, 9_000, 30);
+
+        assert_eq!(
+            pane.probe(Some(Agent::Claude), 30),
+            (ForegroundShellAgentAction::ReportProcessExit, false)
+        );
+        assert_eq!(
+            pane.probe(Some(Agent::Claude), 30),
+            (ForegroundShellAgentAction::ReportReplacementProcess, true)
+        );
+    }
+
+    #[test]
+    fn held_agent_under_hook_authority_is_reprobed_on_the_identified_cadence() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Pi);
+        pane.assert_held_while_shell_in_front();
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.exit(held_agent::WRAPPER_JOB);
+
+        // Detection ticks every 300 ms; lifecycle hooks own the pane, and the
+        // foreground group stays the shell's, so only the cadence can probe.
+        let tick = std::time::Duration::from_millis(300);
+        let mut since_check = std::time::Duration::ZERO;
+        loop {
+            since_check += tick;
+            assert!(
+                since_check <= PROCESS_RECHECK_IDENTIFIED + tick,
+                "never reprobed"
+            );
+            let input = ProcessProbeInput {
+                current_agent: pane.presence.current_agent(),
+                foreground_pgid: Some(held_agent::SHELL),
+                last_foreground_pgid: Some(held_agent::SHELL),
+                elapsed_since_process_check: since_check,
+                ..process_probe_input()
+            };
+            if should_check_foreground_process(true, pane.job.in_background(), input) {
+                break;
+            }
+        }
+
+        assert!(since_check >= PROCESS_RECHECK_IDENTIFIED);
+        pane.assert_exit_reported_then_cleared();
+    }
+
+    #[tokio::test]
+    async fn first_agent_acquisition_keeps_osc_evidence_replacement_clears_it() {
+        let runtime = PaneRuntime::test_with_screen_bytes(80, 24, b"");
+        runtime.test_process_pty_bytes(b"\x1b]2;startup title\x1b\\\x1b]9;4;1;\x1b\\");
+
+        clear_osc_evidence_for_agent_transition(&runtime.terminal, None);
+        assert_eq!(runtime.agent_osc_title(), "startup title");
+        assert_eq!(runtime.agent_osc_progress(), "4;1;");
+
+        clear_osc_evidence_for_agent_transition(&runtime.terminal, Some(Agent::Claude));
+        assert_eq!(runtime.agent_osc_title(), "");
+        assert_eq!(runtime.agent_osc_progress(), "");
+    }
+
+    #[test]
+    fn reported_process_exit_clears_before_unknown_foreground_probe() {
+        assert_eq!(
+            foreground_shell_agent_action(
+                Some(Agent::Claude),
+                None,
+                false,
+                true,
+                AgentJobStatus::Unknown
+            ),
+            ForegroundShellAgentAction::ClearAgent
+        );
+    }
+
+    #[test]
+    fn foreground_agent_job_is_not_clear_signal() {
+        assert_eq!(
+            foreground_shell_agent_action(
+                Some(Agent::Claude),
+                Some(Agent::OpenCode),
+                true,
+                false,
+                AgentJobStatus::Unknown
+            ),
+            ForegroundShellAgentAction::ObserveProbe
+        );
+    }
+
+    fn foreground_process(pid: u32, name: &str) -> crate::platform::ForegroundProcess {
+        crate::platform::ForegroundProcess {
+            pid,
+            name: name.to_string(),
+            argv0: None,
+            argv: None,
+            cmdline: None,
+        }
+    }
+
+    #[test]
+    fn foreground_agent_hint_accepts_pane_shell_environment() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![foreground_process(42, "bash")],
+        };
+
+        assert_eq!(
+            agent_hint_for_foreground_job_members(&job, |pid| {
+                (pid == 42).then_some(Agent::Claude)
+            }),
+            Some((Agent::Claude, 42))
+        );
+    }
+
+    #[test]
+    fn foreground_agent_hint_accepts_non_leader_foreground_process_environment() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![
+                foreground_process(99, "fence"),
+                foreground_process(100, "pi"),
+            ],
+        };
+
+        assert_eq!(
+            agent_hint_for_foreground_job_members(&job, |pid| {
+                (pid == 100).then_some(Agent::Codex)
+            }),
+            Some((Agent::Codex, 100))
+        );
+    }
+
+    #[test]
+    fn foreground_agent_hint_wins_over_process_name_detection() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![foreground_process(99, "codex")],
+        };
+
+        let result = probe_foreground_process_from_jobs(
+            42,
+            Some(99),
+            Some(job),
+            || None,
+            |pid| (pid == 99).then_some(Agent::Claude),
+        );
+
+        assert_eq!(result.agent, Some(Agent::Claude));
+        assert_eq!(result.process_name.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn foreground_agent_hint_on_inherited_child_environment_is_authoritative() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![foreground_process(99, "vim")],
+        };
+
+        let result = probe_foreground_process_from_jobs(
+            42,
+            Some(99),
+            None,
+            || Some(job),
+            |pid| (pid == 99).then_some(Agent::Claude),
+        );
+
+        assert_eq!(result.agent, Some(Agent::Claude));
+        assert_eq!(result.process_name.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn non_leader_agent_hint_does_not_override_identifiable_leader() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![
+                foreground_process(99, "codex"),
+                foreground_process(100, "vim"),
+            ],
+        };
+
+        let result = probe_foreground_process_from_jobs(
+            42,
+            Some(99),
+            None,
+            || Some(job),
+            |pid| (pid == 100).then_some(Agent::Claude),
+        );
+
+        assert_eq!(result.agent, Some(Agent::Codex));
+        assert_eq!(result.agent_pid, Some(99));
+        assert_eq!(result.process_name.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn probe_reports_the_agent_process_behind_an_unrecognized_job_leader() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![
+                foreground_process(99, "some_wrapper"),
+                foreground_process(100, "claude"),
+            ],
+        };
+
+        let result = probe_foreground_process_from_jobs(42, Some(99), None, || Some(job), |_| None);
+
+        assert_eq!(result.agent, Some(Agent::Claude));
+        assert_eq!(result.agent_pid, Some(100));
+        assert_eq!(result.process_group_id, Some(99));
+    }
+
+    #[test]
+    fn non_leader_agent_hint_wins_when_leader_is_unidentified() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![
+                foreground_process(99, "some_vm"),
+                foreground_process(100, "vim"),
+            ],
+        };
+
+        let result = probe_foreground_process_from_jobs(
+            42,
+            Some(99),
+            None,
+            || Some(job),
+            |pid| (pid == 100).then_some(Agent::Claude),
+        );
+
+        assert_eq!(result.agent, Some(Agent::Claude));
+        assert_eq!(result.process_name.as_deref(), Some("claude"));
+    }
+
+    fn process_probe_input() -> ProcessProbeInput {
+        ProcessProbeInput {
+            current_agent: None,
+            suppressed_agent: None,
+            foreground_pgid: Some(42),
+            last_foreground_pgid: Some(42),
+            has_process_probe: true,
+            acquisition_age: None,
+            pending_foreground_shell_clear: false,
+            pending_restore_probe: false,
+            elapsed_since_process_check: std::time::Duration::from_secs(1),
+        }
+    }
+
+    #[test]
+    fn windows_foreground_observation_schedule_preserves_lifecycle_checks() {
+        let quiet = ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            ..process_probe_input()
+        };
+        let before_safety_bound = PROCESS_RECHECK_IDENTIFIED - std::time::Duration::from_millis(1);
+        let content_retry = std::time::Duration::from_millis(300);
+        let observe = |lifecycle, content_changed, elapsed, input| {
+            should_observe_foreground_process_group(lifecycle, content_changed, elapsed, input)
+        };
+        let content_due = |last: Option<u64>, current, elapsed| {
+            last != Some(current) && (last.is_some() || elapsed >= content_retry)
+        };
+
+        assert!(!observe(false, false, before_safety_bound, quiet));
+        assert!(observe(false, true, before_safety_bound, quiet));
+        assert!(observe(true, true, before_safety_bound, quiet));
+        assert!(content_due(Some(0), 1, std::time::Duration::ZERO));
+        assert!(!content_due(
+            None,
+            1,
+            content_retry - std::time::Duration::from_millis(1)
+        ));
+        assert!(content_due(None, 1, content_retry));
+        assert!(observe(
+            false,
+            false,
+            before_safety_bound,
+            ProcessProbeInput {
+                elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
+                ..quiet
+            }
+        ));
+        assert!(observe(true, false, PROCESS_RECHECK_IDENTIFIED, quiet));
+
+        for immediate in [
+            ProcessProbeInput {
+                has_process_probe: false,
+                ..quiet
+            },
+            ProcessProbeInput {
+                current_agent: None,
+                acquisition_age: Some(std::time::Duration::ZERO),
+                ..quiet
+            },
+            ProcessProbeInput {
+                pending_restore_probe: true,
+                ..quiet
+            },
+            ProcessProbeInput {
+                suppressed_agent: Some(Agent::Codex),
+                ..quiet
+            },
+            ProcessProbeInput {
+                pending_foreground_shell_clear: true,
+                ..quiet
+            },
+        ] {
+            assert!(observe(false, false, std::time::Duration::ZERO, immediate));
+        }
+    }
+
+    #[test]
+    fn unchanged_unidentified_foreground_group_skips_full_process_probe() {
+        assert!(!should_probe_foreground_job(process_probe_input()));
+    }
+
+    #[test]
+    fn unidentified_foreground_group_change_runs_full_process_probe() {
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            foreground_pgid: Some(43),
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn unidentified_pane_gets_initial_process_probe() {
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            has_process_probe: false,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn stable_unidentified_foreground_group_has_no_safety_process_probe() {
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            elapsed_since_process_check: PROCESS_RECHECK_MISSING_FOREGROUND_GROUP,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn unidentified_pane_without_foreground_group_uses_safety_process_probe() {
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            foreground_pgid: None,
+            last_foreground_pgid: None,
+            ..process_probe_input()
+        }));
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            foreground_pgid: None,
+            last_foreground_pgid: None,
+            elapsed_since_process_check: PROCESS_RECHECK_MISSING_FOREGROUND_GROUP,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn unidentified_pane_probes_when_foreground_group_disappears() {
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            foreground_pgid: None,
+            last_foreground_pgid: Some(42),
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn inferred_group_does_not_trigger_a_probe_on_every_tick() {
+        let tracked = process_group_for_change_tracking(None, Some(300));
+        assert_eq!(tracked, None);
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Claude),
+            foreground_pgid: None,
+            last_foreground_pgid: tracked,
+            elapsed_since_process_check: std::time::Duration::from_millis(300),
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn pending_shell_clear_and_restore_force_process_probes() {
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            pending_foreground_shell_clear: true,
+            ..process_probe_input()
+        }));
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            pending_restore_probe: true,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn lifecycle_authority_skips_stable_routine_process_probe() {
+        assert!(should_skip_process_probe_for_lifecycle_authority(
+            true,
+            ProcessProbeInput {
+                current_agent: Some(Agent::Pi),
+                elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
+                ..process_probe_input()
+            }
+        ));
+        assert!(!should_skip_process_probe_for_lifecycle_authority(
+            false,
+            ProcessProbeInput {
+                current_agent: Some(Agent::Pi),
+                elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
+                ..process_probe_input()
+            }
+        ));
+    }
+
+    #[test]
+    fn lifecycle_authority_keeps_periodic_probes_without_an_observed_group() {
+        let input = ProcessProbeInput {
+            current_agent: Some(Agent::Pi),
+            foreground_pgid: None,
+            last_foreground_pgid: None,
+            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
+            ..process_probe_input()
+        };
+        assert!(!should_skip_process_probe_for_lifecycle_authority(
+            true, input
+        ));
+        assert!(should_probe_foreground_job(input));
+    }
+
+    #[test]
+    fn lifecycle_authority_preserves_process_exit_and_release_probes() {
+        assert!(!should_skip_process_probe_for_lifecycle_authority(
+            true,
+            ProcessProbeInput {
+                current_agent: Some(Agent::Pi),
+                pending_foreground_shell_clear: true,
+                ..process_probe_input()
+            }
+        ));
+        assert!(!should_skip_process_probe_for_lifecycle_authority(
+            true,
+            ProcessProbeInput {
+                current_agent: Some(Agent::Pi),
+                suppressed_agent: Some(Agent::Pi),
+                ..process_probe_input()
+            }
+        ));
+    }
+
+    #[test]
+    fn lifecycle_authority_preserves_initial_and_foreground_group_change_probes() {
+        assert!(!should_skip_process_probe_for_lifecycle_authority(
+            true,
+            ProcessProbeInput {
+                current_agent: None,
+                has_process_probe: false,
+                ..process_probe_input()
+            }
+        ));
+        assert!(!should_skip_process_probe_for_lifecycle_authority(
+            true,
+            ProcessProbeInput {
+                current_agent: Some(Agent::Pi),
+                foreground_pgid: Some(43),
+                ..process_probe_input()
+            }
+        ));
+    }
+
+    #[test]
+    fn pending_release_forces_initial_process_probe() {
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            suppressed_agent: Some(Agent::Codex),
+            has_process_probe: false,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn pending_release_forces_process_probe_after_runtime_identity_clears() {
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: None,
+            suppressed_agent: Some(Agent::Codex),
+            has_process_probe: false,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn pending_release_skips_repeated_probe_when_foreground_group_is_stable() {
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            current_agent: None,
+            suppressed_agent: Some(Agent::Codex),
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn pending_release_probes_when_foreground_group_changes() {
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: None,
+            suppressed_agent: Some(Agent::Codex),
+            foreground_pgid: Some(43),
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn acquisition_window_catches_delayed_same_group_wrapper_startup() {
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            current_agent: None,
+            acquisition_age: Some(std::time::Duration::from_millis(1250)),
+            elapsed_since_process_check: PROCESS_ACQUISITION_FAST_RECHECK
+                - std::time::Duration::from_millis(1),
+            ..process_probe_input()
+        }));
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: None,
+            acquisition_age: Some(std::time::Duration::from_millis(1250)),
+            elapsed_since_process_check: PROCESS_ACQUISITION_FAST_RECHECK,
+            ..process_probe_input()
+        }));
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: None,
+            acquisition_age: Some(std::time::Duration::from_secs(5)),
+            elapsed_since_process_check: PROCESS_ACQUISITION_SLOW_RECHECK,
+            ..process_probe_input()
+        }));
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            current_agent: None,
+            acquisition_age: Some(PROCESS_ACQUISITION_WINDOW + std::time::Duration::from_millis(1),),
+            elapsed_since_process_check: PROCESS_ACQUISITION_SLOW_RECHECK,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn content_change_starts_bounded_unidentified_acquisition_window() {
+        let now = std::time::Instant::now();
+        let mut acquisition_started_at = None;
+        let mut last_content_change_at = None;
+
+        sync_content_change_acquisition(
+            None,
+            None,
+            false,
+            true,
+            now,
+            &mut acquisition_started_at,
+            &mut last_content_change_at,
+        );
+        assert_eq!(acquisition_started_at, Some(now));
+        assert_eq!(last_content_change_at, Some(now));
+
+        let later = now + std::time::Duration::from_secs(1);
+        sync_content_change_acquisition(
+            None,
+            None,
+            false,
+            true,
+            later,
+            &mut acquisition_started_at,
+            &mut last_content_change_at,
+        );
+        assert_eq!(
+            acquisition_started_at,
+            Some(now),
+            "changed frames should not refresh the acquisition window"
+        );
+        assert_eq!(last_content_change_at, Some(later));
+
+        let quiet_after_window =
+            later + PROCESS_ACQUISITION_WINDOW + PROCESS_ACQUISITION_IDLE_RESET;
+        sync_content_change_acquisition(
+            None,
+            None,
+            false,
+            false,
+            quiet_after_window,
+            &mut acquisition_started_at,
+            &mut last_content_change_at,
+        );
+        assert_eq!(acquisition_started_at, None);
+        assert_eq!(last_content_change_at, None);
+
+        let next_burst = quiet_after_window + std::time::Duration::from_secs(1);
+        sync_content_change_acquisition(
+            None,
+            None,
+            false,
+            true,
+            next_burst,
+            &mut acquisition_started_at,
+            &mut last_content_change_at,
+        );
+        assert_eq!(acquisition_started_at, Some(next_burst));
+        assert_eq!(last_content_change_at, Some(next_burst));
+    }
+
+    #[test]
+    fn content_change_does_not_start_acquisition_when_process_probe_has_other_signal() {
+        let now = std::time::Instant::now();
+        let mut acquisition_started_at = None;
+        let mut last_content_change_at = None;
+
+        sync_content_change_acquisition(
+            Some(Agent::Codex),
+            None,
+            false,
+            true,
+            now,
+            &mut acquisition_started_at,
+            &mut last_content_change_at,
+        );
+        assert_eq!(acquisition_started_at, None);
+        assert_eq!(last_content_change_at, None);
+
+        sync_content_change_acquisition(
+            None,
+            Some(Agent::Codex),
+            false,
+            true,
+            now,
+            &mut acquisition_started_at,
+            &mut last_content_change_at,
+        );
+        assert_eq!(acquisition_started_at, None);
+        assert_eq!(last_content_change_at, None);
+
+        sync_content_change_acquisition(
+            None,
+            None,
+            true,
+            true,
+            now,
+            &mut acquisition_started_at,
+            &mut last_content_change_at,
+        );
+        assert_eq!(acquisition_started_at, None);
+        assert_eq!(last_content_change_at, None);
+    }
+
+    #[test]
+    fn content_change_restarts_stale_process_group_acquisition_window() {
+        let now = std::time::Instant::now();
+        let stale_start = now - PROCESS_ACQUISITION_WINDOW - std::time::Duration::from_millis(1);
+        let mut acquisition_started_at = Some(stale_start);
+        let mut last_content_change_at = None;
+
+        sync_content_change_acquisition(
+            None,
+            None,
+            false,
+            true,
+            now,
+            &mut acquisition_started_at,
+            &mut last_content_change_at,
+        );
+
+        assert_eq!(acquisition_started_at, Some(now));
+        assert_eq!(last_content_change_at, Some(now));
+    }
+
+    #[test]
+    fn release_expiry_can_force_reacquire_probe_by_resetting_probe_state() {
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: None,
+            has_process_probe: false,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn identified_agent_uses_shorter_safety_process_probe() {
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED
+                - std::time::Duration::from_millis(1),
+            ..process_probe_input()
+        }));
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn identified_agent_probes_when_foreground_group_disappears() {
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            foreground_pgid: None,
+            last_foreground_pgid: Some(42),
+            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED
+                - std::time::Duration::from_millis(1),
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn stable_missing_foreground_group_uses_safety_process_probe() {
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            foreground_pgid: None,
+            last_foreground_pgid: None,
+            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED
+                - std::time::Duration::from_millis(1),
+            ..process_probe_input()
+        }));
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            foreground_pgid: None,
+            last_foreground_pgid: None,
+            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
+    fn transient_process_miss_keeps_current_agent_detected() {
+        let mut presence = AgentDetectionPresence::from_agent(Some(Agent::Pi));
+
+        let changed = presence.observe_process_probe(None);
+
+        assert!(!changed, "one miss should not clear the detected agent");
+        assert_eq!(presence.current_agent(), Some(Agent::Pi));
+    }
+
+    #[test]
+    fn agent_only_clears_after_confirmation_misses() {
+        let mut presence = AgentDetectionPresence::from_agent(Some(Agent::Pi));
+
+        for attempt in 1..AGENT_MISS_CONFIRMATION_ATTEMPTS {
+            let changed = presence.observe_process_probe(None);
+            assert!(
+                !changed,
+                "miss {attempt} should stay in the confirmation window"
+            );
+            assert_eq!(presence.current_agent(), Some(Agent::Pi));
+        }
+
+        let changed = presence.observe_process_probe(None);
+        assert!(changed, "last confirmation miss should clear the agent");
+        assert_eq!(presence.current_agent(), None);
+    }
+
+    #[tokio::test]
+    async fn set_full_lifecycle_authority_active_notifies_only_on_activation_transitions() {
+        let runtime = PaneRuntime::test_with_screen_bytes(80, 24, b"");
+        let reset_notify = runtime.agent_detection_reset_notify_for_test();
+
+        runtime.set_full_lifecycle_authority_active(true);
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            reset_notify.notified(),
+        )
+        .await
+        .expect("false-to-true transition should notify detection reset");
+
+        runtime.set_full_lifecycle_authority_active(true);
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(20),
+                reset_notify.notified()
+            )
+            .await
+            .is_err(),
+            "repeated true-to-true sync should not notify detection reset"
+        );
+
+        runtime.set_full_lifecycle_authority_active(false);
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(20),
+                reset_notify.notified()
+            )
+            .await
+            .is_err(),
+            "true-to-false transition should not notify detection reset"
+        );
+
+        runtime.set_full_lifecycle_authority_active(true);
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            reset_notify.notified(),
+        )
+        .await
+        .expect("re-entering active authority should notify detection reset");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawned_pane_process_sees_fish_handle_reflow() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "herdr-fish-handle-reflow-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&output_dir).unwrap();
+        let output_path = output_dir.join("out.txt");
+        let (events, _event_rx) = mpsc::channel(8);
+        // The cwd keeps the temp path out of the shell command line.
+        let runtime = PaneRuntime::spawn_shell_command(
+            PaneId::from_raw(42),
+            24,
+            80,
+            output_dir.clone(),
+            "printf '%s\\n' \"$fish_handle_reflow\" > out.txt",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Disabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+
+        let output = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Ok(output) = std::fs::read_to_string(&output_path) {
+                    if output.ends_with('\n') {
+                        break output;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("pane process should write its env");
+        runtime.shutdown();
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let expected = std::env::var(FISH_HANDLE_REFLOW_ENV_VAR).unwrap_or_else(|_| "0".into());
+        assert_eq!(output, format!("{expected}\n"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawned_pty_reader_aggregates_terminal_bells() {
+        let (events, mut event_rx) = mpsc::channel(8);
+        let pane_id = PaneId::from_raw(42);
+        let runtime = PaneRuntime::spawn_shell_command(
+            pane_id,
+            24,
+            80,
+            std::env::temp_dir(),
+            "printf '\\a\\a'; sleep 0.05",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Disabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+
+        let bell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(AppEvent::TerminalBell {
+                    pane_id: delivered_pane,
+                    count,
+                }) = event_rx.recv().await
+                {
+                    break (delivered_pane, count);
+                }
+            }
+        })
+        .await
+        .expect("PTY reader should publish terminal bells");
+
+        assert_eq!(bell, (pane_id, 2));
+        runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn state_changed_event_waits_for_queue_space_instead_of_dropping() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let pane_id = PaneId::from_raw(42);
+
+        tx.try_send(AppEvent::UpdateReady {
+            version: "9.9.9".into(),
+            install_command: "herdr update".into(),
+        })
+        .unwrap();
+
+        let publish = publish_state_changed_event(
+            tx.clone(),
+            pane_id,
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            std::time::Instant::now(),
+        );
+        tokio::pin!(publish);
+
+        let blocked = tokio::time::timeout(std::time::Duration::from_millis(20), async {
+            (&mut publish).await;
+        })
+        .await;
+        assert!(
+            blocked.is_err(),
+            "publisher should wait for queue space instead of dropping StateChanged"
+        );
+
+        let first = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
+            .await
+            .expect("queue should yield first event")
+            .expect("sender still alive");
+        assert!(matches!(first, AppEvent::UpdateReady { .. }));
+
+        tokio::time::timeout(std::time::Duration::from_millis(50), async {
+            (&mut publish).await;
+        })
+        .await
+        .expect("publisher should complete once queue space is available");
+
+        let second = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
+            .await
+            .expect("queue should yield second event")
+            .expect("sender still alive");
+        assert!(matches!(
+            second,
+            AppEvent::StateChanged {
+                pane_id: delivered_pane,
+                agent: Some(Agent::Pi),
+                state: AgentState::Idle,
+                visible_blocker: false,
+                visible_working: false,
+                process_exited: false,
+                observed_at: _,
+            } if delivered_pane == pane_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn codex_prompt_observation_revokes_on_working_or_skipped_screen() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let pane_id = PaneId::from_raw(42);
+        let detection = crate::detect::AgentDetection {
+            state: AgentState::Unknown,
+            skip_state_update: false,
+            visible_idle: false,
+            visible_blocker: false,
+            visible_working: false,
+        };
+        let mut last_ready = false;
+        let prompt = "› Ask Codex to do anything";
+        publish_codex_prompt_observation(
+            &tx,
+            pane_id,
+            Some(Agent::Codex),
+            prompt,
+            Some(&detection),
+            false,
+            &mut last_ready,
+        )
+        .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(AppEvent::CodexPromptObserved { ready: true, .. })
+        ));
+        publish_codex_prompt_observation(
+            &tx,
+            pane_id,
+            Some(Agent::Codex),
+            prompt,
+            Some(&detection),
+            false,
+            &mut last_ready,
+        )
+        .await;
+        assert!(rx.try_recv().is_err());
+        let working = crate::detect::AgentDetection {
+            state: AgentState::Working,
+            ..detection
+        };
+        publish_codex_prompt_observation(
+            &tx,
+            pane_id,
+            Some(Agent::Codex),
+            prompt,
+            Some(&working),
+            false,
+            &mut last_ready,
+        )
+        .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(AppEvent::CodexPromptObserved { ready: false, .. })
+        ));
+        publish_codex_prompt_observation(
+            &tx,
+            pane_id,
+            Some(Agent::Codex),
+            prompt,
+            Some(&detection),
+            false,
+            &mut last_ready,
+        )
+        .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(AppEvent::CodexPromptObserved { ready: true, .. })
+        ));
+        publish_codex_prompt_observation(
+            &tx,
+            pane_id,
+            Some(Agent::Codex),
+            prompt,
+            None,
+            false,
+            &mut last_ready,
+        )
+        .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(AppEvent::CodexPromptObserved { ready: false, .. })
+        ));
+        publish_codex_prompt_observation(
+            &tx,
+            pane_id,
+            Some(Agent::Codex),
+            prompt,
+            Some(&detection),
+            false,
+            &mut last_ready,
+        )
+        .await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(AppEvent::CodexPromptObserved { ready: true, .. })
+        ));
+    }
+}

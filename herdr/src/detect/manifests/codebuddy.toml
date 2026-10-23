@@ -1,0 +1,48 @@
+id = "codebuddy"
+version = "2026.10.18.1"
+min_engine_version = 2
+updated_at = "2026-10-18T00:00:00Z"
+aliases = ["codebuddy-code", "codebuddy-cli"]
+
+# Permission prompts: CodeBuddy renders "Do you want to proceed?" with
+# numbered options and an "Esc to cancel" footer, like Claude Code.
+[[rules]]
+id = "permission_prompt_blocked"
+state = "blocked"
+priority = 980
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+regex = ['(?i)do\s+you\s+want\s+to\s+proceed\?']
+any = [
+  { contains = ["1. yes"] },
+  { contains = ["2. yes"] },
+]
+
+[[rules]]
+id = "connection_approval_blocked"
+state = "blocked"
+priority = 975
+region = "whole_recent"
+visible_blocker = true
+contains = ["do you want to allow this connection?"]
+
+[[rules]]
+id = "waiting_permission_blocked"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+contains = ["waiting for permission"]
+
+# Live turn: the footer renders "(12s • esc to interrupt)" while the agent runs.
+[[rules]]
+id = "interrupt_hint_working"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(20)"
+visible_working = true
+regex = ['(?i)esc\s+to\s+interrupt']
+not = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["waiting for permission"] },
+]

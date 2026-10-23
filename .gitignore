@@ -3,6 +3,16 @@
 **/cargo-target
 **/target
 **/build
+# Zig build cache of the vendored libghostty-vt tree (hundreds of MB, rebuilt on demand).
+**/.zig-cache
+# Zig package cache of the vendored libghostty-vt tree. These are third-party
+# sources that `build.zig.zon` fetches by URL (translate_c, arocc, uucode,
+# libxev, vaxis); Zig re-creates the directory on the first build, which then
+# needs network access. Kept out of the repository on purpose.
+**/zig-pkg
+# The vendored agent server is its own cargo workspace; running `cargo about` or
+# a standalone build inside `herdr/` resolves its own lock file there.
+herdr/Cargo.lock
 .webrtc-sys/
 **/venv
 **/.direnv
@@ -83,3 +93,12 @@ hap/cerfile/
 hap/entry/hnp/arm64-v8a/hicodeerd.hnp
 hap/entry/hnp/arm64-v8a/hishell.hnp
 crates/gpui_ohos/depend/cmd-agent/hicodeerd/shim/musllib-shim.so
+
+# The vendored herdr tree ships Zig build scripts in directories named `build`.
+# The build/ patterns above only mean Cargo output, so the Zig sources must be
+# kept: libghostty-vt's build.zig imports `src/build/main.zig`, and every Zig
+# package in zig-pkg carries its own `build/` module.
+!herdr/vendor/libghostty-vt/src/build/
+!herdr/vendor/libghostty-vt/src/build/**
+!herdr/vendor/libghostty-vt/src/apprt/gtk/build/
+!herdr/vendor/libghostty-vt/src/apprt/gtk/build/**

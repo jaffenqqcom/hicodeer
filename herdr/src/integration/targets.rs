@@ -1,0 +1,1881 @@
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde_json::{json, Map, Value};
+
+use super::claude_settings::{
+    install as install_claude_settings, uninstall as uninstall_claude_settings,
+};
+use super::command::hook_command;
+#[cfg(windows)]
+use super::command::powershell_encoded_hook_command;
+#[cfg(not(windows))]
+use super::command::shell_single_quote;
+use super::config_edit::{
+    build_codex_config_with_hooks, build_kimi_config_with_hooks, ensure_command_hook,
+    ensure_direct_command_hook, ensure_flat_command_hook, ensure_hermes_plugin_enabled,
+    ensure_hooks_object, ensure_simple_command_hook, hooks_object_if_present,
+    remove_direct_hook_commands, remove_flat_command_hook, remove_hermes_plugin_enabled,
+    remove_hook_commands, remove_kimi_config_block, remove_simple_command_hook,
+};
+use super::config_file::{check_config_targets, write_config};
+use super::env::{
+    antigravity_cli_dir, claude_dir, codebuddy_dir, codex_dir, copilot_dir, cursor_dir, devin_dir,
+    droid_dir, grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, letta_dir,
+    mastracode_dir, omp_extension_dir, opencode_dir, opencode_state_dir, pi_extension_dir,
+    qodercli_dir, qwen_dir,
+};
+use super::file_ops::{
+    make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
+};
+use super::opencode_config::{
+    add_cli_plugin, add_tui_plugin, remove_cli_plugin, remove_tui_plugin,
+    validate_tui_plugin_config,
+};
+use super::types::{
+    AntigravityCliInstallPaths, AntigravityCliUninstallResult, ClaudeInstallPaths,
+    ClaudeUninstallResult, CodexInstallPaths, CodexUninstallResult, CopilotInstallPaths,
+    CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult, DevinInstallPaths,
+    DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, GrokInstallPaths,
+    GrokUninstallResult, HermesInstallPaths, HermesUninstallResult, KiloInstallPaths,
+    KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, LettaInstallPaths,
+    LettaUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
+    OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
+    QodercliInstallPaths, QodercliUninstallResult, QwenInstallPaths, QwenUninstallResult,
+};
+use super::{
+    ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
+    ANTIGRAVITY_CLI_HOOK_INSTALL_NAME, ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC, CLAUDE_HOOK_ASSET,
+    CLAUDE_HOOK_INSTALL_NAME, CODEBUDDY_HOOK_ASSET, CODEBUDDY_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET,
+    CODEX_HOOK_INSTALL_NAME, COPILOT_HOOK_ASSET, COPILOT_HOOK_EVENTS, COPILOT_HOOK_INSTALL_NAME,
+    COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS, CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME,
+    DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS, DEVIN_HOOK_INSTALL_NAME,
+    DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET, DROID_HOOK_EVENTS,
+    DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS, GROK_HOOK_ASSET,
+    GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME, HERMES_PLUGIN_INIT_ASSET,
+    HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
+    HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
+    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, LETTA_HOOK_ASSET, LETTA_HOOK_INSTALL_NAME,
+    LETTA_HOOK_TIMEOUT_MS, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
+    MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
+    OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET,
+    OPENCODE_PLUGIN_INSTALL_NAME, OPENCODE_TUI_PLUGIN_ASSET, OPENCODE_TUI_PLUGIN_INSTALL_NAME,
+    OPENCODE_TUI_PLUGIN_SPEC, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET,
+    QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
+    QWEN_HOOK_ASSET, QWEN_HOOK_EVENTS, QWEN_HOOK_INSTALL_NAME,
+};
+
+fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if dir.parent().is_some_and(|parent| parent.is_dir()) {
+        return fs::create_dir_all(dir);
+    }
+    Err(io::Error::other(format!(
+        "{agent} extension directory not found at {}. install {agent} first",
+        dir.display()
+    )))
+}
+
+pub(crate) fn install_pi() -> io::Result<PathBuf> {
+    let dir = pi_extension_dir()?;
+    ensure_extension_dir(&dir, "pi")?;
+
+    let path = dir.join(PI_EXTENSION_INSTALL_NAME);
+    fs::write(&path, PI_EXTENSION_ASSET)?;
+    Ok(path)
+}
+
+pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
+    let dir = omp_extension_dir()?;
+    let pi_dir = pi_extension_dir()?;
+    if dir == pi_dir {
+        return Err(io::Error::other(format!(
+            "Pi and OMP resolve to the same extension directory at {}; configure separate agent directories before installing OMP",
+            dir.display()
+        )));
+    }
+    ensure_extension_dir(&dir, "omp")?;
+
+    let removed_legacy_pi_extension = remove_legacy_pi_extension_from_omp_dir(&dir)?;
+    let extension_path = dir.join(OMP_EXTENSION_INSTALL_NAME);
+    fs::write(&extension_path, OMP_EXTENSION_ASSET)?;
+    Ok(OmpInstallPaths {
+        extension_path,
+        removed_legacy_pi_extension,
+    })
+}
+
+pub(crate) fn remove_legacy_pi_extension_from_omp_dir(dir: &Path) -> io::Result<bool> {
+    let legacy_path = dir.join(PI_EXTENSION_INSTALL_NAME);
+    if !legacy_path.is_file() {
+        return Ok(false);
+    }
+
+    let content = fs::read_to_string(&legacy_path)?;
+    if content.contains("HERDR_INTEGRATION_ID=pi") {
+        fs::remove_file(legacy_path)?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
+    let dir = claude_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "claude directory not found at {}. install claude code first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(CLAUDE_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, CLAUDE_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let settings_path = dir.join("settings.json");
+    let existing_settings = if settings_path.is_file() {
+        fs::read_to_string(&settings_path)?
+    } else {
+        "{}".to_string()
+    };
+    let updated_settings = install_claude_settings(&existing_settings, &settings_path, &hook_path)?;
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    if updated_settings != existing_settings {
+        write_config(&settings_path, updated_settings)?;
+    }
+
+    Ok(ClaudeInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
+pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
+    let dir = codex_dir()?;
+    check_config_targets(&dir, &["hooks.json", "config.toml"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "codex config directory not found at {}. install codex first",
+            dir.display()
+        )));
+    }
+
+    let hook_path = dir.join(CODEX_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, CODEX_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let hooks_path = dir.join("hooks.json");
+    let mut hooks_file = if hooks_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?).map_err(|err| {
+            io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut hooks_file,
+        &hooks_path,
+        "codex hooks file",
+        "codex hooks file hooks",
+    )?;
+    remove_hook_commands(hooks, "PermissionRequest", &hook_path, Some("blocked"))?;
+    remove_hook_commands(hooks, "SessionStart", &hook_path, Some("idle"))?;
+    remove_hook_commands(hooks, "UserPromptSubmit", &hook_path, Some("working"))?;
+    remove_hook_commands(hooks, "PreToolUse", &hook_path, Some("working"))?;
+    remove_hook_commands(hooks, "Stop", &hook_path, Some("idle"))?;
+    remove_hook_commands(hooks, "Interrupt", &hook_path, Some("idle"))?;
+    remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
+    ensure_command_hook(
+        hooks,
+        "SessionStart",
+        hook_command(&hook_path, Some("session")),
+        10,
+        None,
+    )?;
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+
+    let config_path = dir.join("config.toml");
+    let existing_config = if config_path.is_file() {
+        fs::read_to_string(&config_path)?
+    } else {
+        String::new()
+    };
+    let new_config = build_codex_config_with_hooks(&existing_config);
+    if new_config != existing_config {
+        write_config(&config_path, new_config)?;
+    }
+
+    Ok(CodexInstallPaths {
+        hook_path,
+        hooks_path,
+        config_path,
+    })
+}
+
+pub(crate) fn install_kimi() -> io::Result<KimiInstallPaths> {
+    let dir = kimi_dir()?;
+    check_config_targets(&dir, &["config.toml"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "kimi code config directory not found at {}. install kimi code first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(KIMI_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, KIMI_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let config_path = dir.join("config.toml");
+    let existing_config = if config_path.is_file() {
+        fs::read_to_string(&config_path)?
+    } else {
+        String::new()
+    };
+    let new_config = build_kimi_config_with_hooks(&existing_config, &hook_path);
+    if new_config != existing_config {
+        write_config(&config_path, new_config)?;
+    }
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    Ok(KimiInstallPaths {
+        hook_path,
+        config_path,
+    })
+}
+
+pub(crate) fn install_copilot() -> io::Result<CopilotInstallPaths> {
+    let dir = copilot_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "copilot config directory not found at {}. install github copilot cli first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(COPILOT_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, COPILOT_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let settings_path = dir.join("settings.json");
+    let mut settings = if settings_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?).map_err(|err| {
+            io::Error::other(format!(
+                "failed to parse {}: {err}",
+                settings_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut settings,
+        &settings_path,
+        "copilot settings",
+        "copilot settings hooks",
+    )?;
+    let command = hook_command(&hook_path, None);
+    for event in COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS {
+        remove_direct_hook_commands(hooks, event, &hook_path, None)?;
+    }
+    for event in COPILOT_HOOK_EVENTS {
+        remove_direct_hook_commands(hooks, event, &hook_path, None)?;
+    }
+    for event in COPILOT_HOOK_EVENTS {
+        ensure_direct_command_hook(hooks, event, command.clone(), 10, None)?;
+    }
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    Ok(CopilotInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
+pub(crate) fn install_devin() -> io::Result<DevinInstallPaths> {
+    let dir = devin_dir()?;
+    check_config_targets(&dir, &["config.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "devin config directory not found at {}. install devin cli first",
+            dir.display()
+        )));
+    }
+
+    let hook_path = dir.join(DEVIN_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, DEVIN_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let settings_path = dir.join("config.json");
+    let mut settings = if settings_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?).map_err(|err| {
+            io::Error::other(format!(
+                "failed to parse {}: {err}",
+                settings_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut settings,
+        &settings_path,
+        "devin settings",
+        "devin settings hooks",
+    )?;
+    for (event, action) in DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS {
+        remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+    }
+    for (event, action) in DEVIN_HOOK_EVENTS {
+        remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+    }
+    for (event, action) in DEVIN_HOOK_EVENTS {
+        ensure_command_hook(
+            hooks,
+            event,
+            hook_command(&hook_path, Some(action)),
+            10,
+            None,
+        )?;
+    }
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    Ok(DevinInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
+pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
+    let dir = droid_dir()?;
+    check_config_targets(&dir, &["settings.json", "hooks.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "droid config directory not found at {}. install droid first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(DROID_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, DROID_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let settings_path = dir.join("settings.json");
+    let mut settings = if settings_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?).map_err(|err| {
+            io::Error::other(format!(
+                "failed to parse {}: {err}",
+                settings_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut settings,
+        &settings_path,
+        "droid settings",
+        "droid settings hooks",
+    )?;
+    remove_hook_commands(hooks, "SessionStart", &hook_path, None)?;
+    for (event, action) in DROID_REMOVED_LIFECYCLE_HOOK_EVENTS {
+        remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+    }
+    for (event, action) in DROID_HOOK_EVENTS {
+        remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+    }
+    for (event, action) in DROID_HOOK_EVENTS {
+        ensure_command_hook(
+            hooks,
+            event,
+            hook_command(&hook_path, Some(action)),
+            10,
+            None,
+        )?;
+    }
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    let hooks_path = dir.join("hooks.json");
+    let mut updated_legacy_hooks = false;
+    if hooks_path.is_file() {
+        let mut hooks_file = serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?)
+            .map_err(|err| {
+                io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+            })?;
+        if let Some(hooks) = hooks_object_if_present(
+            &mut hooks_file,
+            &hooks_path,
+            "droid hooks file",
+            "droid hooks file hooks",
+        )? {
+            updated_legacy_hooks = remove_hook_commands(hooks, "SessionStart", &hook_path, None)?;
+            for (event, action) in DROID_REMOVED_LIFECYCLE_HOOK_EVENTS {
+                updated_legacy_hooks |=
+                    remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+            for (event, action) in DROID_HOOK_EVENTS {
+                updated_legacy_hooks |=
+                    remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+        }
+        if updated_legacy_hooks {
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+        }
+    }
+
+    Ok(DroidInstallPaths {
+        hook_path,
+        hooks_path,
+        settings_path,
+        updated_legacy_hooks,
+    })
+}
+
+pub(crate) fn install_opencode() -> io::Result<OpenCodeInstallPaths> {
+    let dir = opencode_dir()?;
+    check_config_targets(&dir, &["tui.jsonc", "tui.json", "cli.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "opencode config directory not found at {}. install opencode first",
+            dir.display()
+        )));
+    }
+
+    validate_tui_plugin_config(&dir)?;
+    let plugins_dir = dir.join("plugins");
+    fs::create_dir_all(&plugins_dir)?;
+
+    let plugin_path = plugins_dir.join(OPENCODE_PLUGIN_INSTALL_NAME);
+    fs::write(&plugin_path, OPENCODE_PLUGIN_ASSET)?;
+    let tui_plugin_path = dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME);
+    fs::write(&tui_plugin_path, OPENCODE_TUI_PLUGIN_ASSET)?;
+    let tui_config_path = add_tui_plugin(&dir, OPENCODE_TUI_PLUGIN_SPEC)?;
+    let v2_dir = dir.join(super::OPENCODE_V2_TUI_PLUGIN_DIR);
+    fs::create_dir_all(&v2_dir)?;
+    fs::write(v2_dir.join("tui.js"), super::OPENCODE_V2_TUI_PLUGIN_ASSET)?;
+    let cli_config_path = add_cli_plugin(
+        &dir,
+        &opencode_state_dir()?,
+        super::OPENCODE_V2_TUI_PLUGIN_SPEC,
+    )?;
+
+    Ok(OpenCodeInstallPaths {
+        plugin_path,
+        tui_plugin_path,
+        tui_config_path,
+        cli_config_path,
+    })
+}
+
+pub(crate) fn install_kilo() -> io::Result<KiloInstallPaths> {
+    let dir = kilo_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "kilo config directory not found at {}. install kilo first",
+            dir.display()
+        )));
+    }
+
+    let plugins_dir = dir.join("plugin");
+    fs::create_dir_all(&plugins_dir)?;
+
+    let plugin_path = plugins_dir.join(KILO_PLUGIN_INSTALL_NAME);
+    fs::write(&plugin_path, KILO_PLUGIN_ASSET)?;
+
+    Ok(KiloInstallPaths { plugin_path })
+}
+
+pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
+    let dir = hermes_dir()?;
+    check_config_targets(&dir, &["config.yaml"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "hermes config directory not found at {}. install hermes agent first",
+            dir.display()
+        )));
+    }
+
+    let plugin_dir = hermes_plugin_dir()?;
+    fs::create_dir_all(&plugin_dir)?;
+    fs::write(
+        plugin_dir.join(HERMES_PLUGIN_MANIFEST_INSTALL_NAME),
+        HERMES_PLUGIN_MANIFEST_ASSET,
+    )?;
+    fs::write(
+        plugin_dir.join(HERMES_PLUGIN_INIT_INSTALL_NAME),
+        HERMES_PLUGIN_INIT_ASSET,
+    )?;
+
+    let config_path = dir.join("config.yaml");
+    let existing_config = if config_path.is_file() {
+        fs::read_to_string(&config_path)?
+    } else {
+        String::new()
+    };
+    let new_config = ensure_hermes_plugin_enabled(&existing_config);
+    if new_config != existing_config {
+        write_config(&config_path, new_config)?;
+    }
+
+    Ok(HermesInstallPaths {
+        plugin_dir,
+        config_path,
+    })
+}
+
+pub(crate) fn uninstall_pi() -> io::Result<PiUninstallResult> {
+    let extension_path = pi_extension_dir()?.join(PI_EXTENSION_INSTALL_NAME);
+    let removed_extension = remove_file_if_exists(&extension_path)?;
+
+    Ok(PiUninstallResult {
+        extension_path,
+        removed_extension,
+    })
+}
+
+pub(crate) fn uninstall_omp() -> io::Result<OmpUninstallResult> {
+    let extension_path = omp_extension_dir()?.join(OMP_EXTENSION_INSTALL_NAME);
+    let removed_extension = remove_file_if_exists(&extension_path)?;
+
+    Ok(OmpUninstallResult {
+        extension_path,
+        removed_extension,
+    })
+}
+
+pub(crate) fn uninstall_claude() -> io::Result<ClaudeUninstallResult> {
+    let dir = claude_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    let hook_path = dir.join("hooks").join(CLAUDE_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
+    let mut updated_settings = false;
+
+    if settings_path.is_file() {
+        let existing_settings = fs::read_to_string(&settings_path)?;
+        let new_settings =
+            uninstall_claude_settings(&existing_settings, &settings_path, &hook_path)?;
+        updated_settings = new_settings != existing_settings;
+        if updated_settings {
+            write_config(&settings_path, new_settings)?;
+        }
+    }
+
+    let removed_hook_file =
+        remove_file_if_exists(&hook_path)? | remove_legacy_bash_hook_file(&hook_path)?;
+
+    Ok(ClaudeUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
+    })
+}
+
+/// CodeBuddy hook events mapped to the state the hook reports.
+const CODEBUDDY_HOOK_EVENTS: &[(&str, &str)] = &[
+    ("SessionStart", "session"),
+    ("UserPromptSubmit", "working"),
+    ("PreToolUse", "working"),
+    ("PostToolUse", "working"),
+    ("PermissionRequest", "blocked"),
+    ("Stop", "idle"),
+    ("SessionEnd", "idle"),
+];
+const CODEBUDDY_SESSION_START_MATCHER: &str = "^(startup|resume|clear|compact|fork)$";
+
+pub(crate) fn install_codebuddy() -> io::Result<ClaudeInstallPaths> {
+    let dir = codebuddy_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "codebuddy directory not found at {}. install codebuddy first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(CODEBUDDY_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, CODEBUDDY_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let settings_path = dir.join("settings.json");
+    let existing_settings = if settings_path.is_file() {
+        fs::read_to_string(&settings_path)?
+    } else {
+        "{}".to_string()
+    };
+    let mut settings = serde_json::from_str::<Value>(&existing_settings).map_err(|err| {
+        io::Error::other(format!("failed to parse {}: {err}", settings_path.display()))
+    })?;
+    let hooks = ensure_hooks_object(
+        &mut settings,
+        &settings_path,
+        "codebuddy settings",
+        "codebuddy settings hooks",
+    )?;
+    for (event, action) in CODEBUDDY_HOOK_EVENTS {
+        remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+        let matcher = (*event == "SessionStart").then_some(CODEBUDDY_SESSION_START_MATCHER);
+        ensure_command_hook(
+            hooks,
+            event,
+            hook_command(&hook_path, Some(action)),
+            10,
+            matcher,
+        )?;
+    }
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    Ok(ClaudeInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
+pub(crate) fn uninstall_codebuddy() -> io::Result<ClaudeUninstallResult> {
+    let dir = codebuddy_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    let hook_path = dir.join("hooks").join(CODEBUDDY_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
+    let mut updated_settings = false;
+
+    if settings_path.is_file() {
+        let existing_settings = fs::read_to_string(&settings_path)?;
+        let mut settings = serde_json::from_str::<Value>(&existing_settings).map_err(|err| {
+            io::Error::other(format!("failed to parse {}: {err}", settings_path.display()))
+        })?;
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "codebuddy settings",
+            "codebuddy settings hooks",
+        )? {
+            for (event, action) in CODEBUDDY_HOOK_EVENTS {
+                updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+        }
+        if updated_settings {
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(ClaudeUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
+    })
+}
+
+pub(crate) fn uninstall_codex() -> io::Result<CodexUninstallResult> {
+    let codex_dir = codex_dir()?;
+    check_config_targets(&codex_dir, &["hooks.json"])?;
+    let hook_path = codex_dir.join(CODEX_HOOK_INSTALL_NAME);
+    let hooks_path = codex_dir.join("hooks.json");
+    let config_path = codex_dir.join("config.toml");
+    let mut updated_hooks = false;
+
+    if hooks_path.is_file() {
+        let mut hooks_file = serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?)
+            .map_err(|err| {
+                io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+            })?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut hooks_file,
+            &hooks_path,
+            "codex hooks file",
+            "codex hooks file hooks",
+        )? {
+            updated_hooks |= remove_hook_commands(hooks, "SessionStart", &hook_path, Some("idle"))?;
+            updated_hooks |=
+                remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
+            updated_hooks |=
+                remove_hook_commands(hooks, "UserPromptSubmit", &hook_path, Some("working"))?;
+            updated_hooks |=
+                remove_hook_commands(hooks, "PreToolUse", &hook_path, Some("working"))?;
+            updated_hooks |=
+                remove_hook_commands(hooks, "PermissionRequest", &hook_path, Some("blocked"))?;
+            updated_hooks |= remove_hook_commands(hooks, "Stop", &hook_path, Some("idle"))?;
+            updated_hooks |= remove_hook_commands(hooks, "Interrupt", &hook_path, Some("idle"))?;
+        }
+
+        if updated_hooks {
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+        }
+    }
+
+    let removed_hook_file =
+        remove_file_if_exists(&hook_path)? | remove_legacy_bash_hook_file(&hook_path)?;
+
+    Ok(CodexUninstallResult {
+        hook_path,
+        hooks_path,
+        config_path,
+        removed_hook_file,
+        updated_hooks,
+    })
+}
+
+pub(crate) fn uninstall_kimi() -> io::Result<KimiUninstallResult> {
+    let kimi_dir = kimi_dir()?;
+    check_config_targets(&kimi_dir, &["config.toml"])?;
+    let hook_path = kimi_dir.join("hooks").join(KIMI_HOOK_INSTALL_NAME);
+    let config_path = kimi_dir.join("config.toml");
+    let mut updated_config = false;
+
+    if config_path.is_file() {
+        let existing_config = fs::read_to_string(&config_path)?;
+        let new_config = remove_kimi_config_block(&existing_config);
+        if new_config != existing_config {
+            write_config(&config_path, new_config)?;
+            updated_config = true;
+        }
+    }
+
+    let removed_hook_file =
+        remove_file_if_exists(&hook_path)? | remove_legacy_bash_hook_file(&hook_path)?;
+
+    Ok(KimiUninstallResult {
+        hook_path,
+        config_path,
+        removed_hook_file,
+        updated_config,
+    })
+}
+
+pub(crate) fn uninstall_copilot() -> io::Result<CopilotUninstallResult> {
+    let copilot_dir = copilot_dir()?;
+    check_config_targets(&copilot_dir, &["settings.json"])?;
+    let hook_path = copilot_dir.join("hooks").join(COPILOT_HOOK_INSTALL_NAME);
+    let settings_path = copilot_dir.join("settings.json");
+    let mut updated_settings = false;
+
+    if settings_path.is_file() {
+        let mut settings = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse {}: {err}",
+                    settings_path.display()
+                ))
+            })?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "copilot settings",
+            "copilot settings hooks",
+        )? {
+            for event in COPILOT_HOOK_EVENTS {
+                updated_settings |= remove_direct_hook_commands(hooks, event, &hook_path, None)?;
+            }
+            for event in COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS {
+                updated_settings |= remove_direct_hook_commands(hooks, event, &hook_path, None)?;
+            }
+        }
+
+        if updated_settings {
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    let removed_hook_file =
+        remove_file_if_exists(&hook_path)? | remove_legacy_bash_hook_file(&hook_path)?;
+
+    Ok(CopilotUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
+    })
+}
+
+pub(crate) fn uninstall_devin() -> io::Result<DevinUninstallResult> {
+    let devin_dir = devin_dir()?;
+    check_config_targets(&devin_dir, &["config.json"])?;
+    let hook_path = devin_dir.join(DEVIN_HOOK_INSTALL_NAME);
+    let settings_path = devin_dir.join("config.json");
+    let mut updated_settings = false;
+
+    if settings_path.is_file() {
+        let mut settings = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse {}: {err}",
+                    settings_path.display()
+                ))
+            })?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "devin settings",
+            "devin settings hooks",
+        )? {
+            for (event, action) in DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS {
+                updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+            for (event, action) in DEVIN_HOOK_EVENTS {
+                updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+        }
+
+        if updated_settings {
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    let removed_hook_file =
+        remove_file_if_exists(&hook_path)? | remove_legacy_bash_hook_file(&hook_path)?;
+
+    Ok(DevinUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
+    })
+}
+
+pub(crate) fn uninstall_droid() -> io::Result<DroidUninstallResult> {
+    let droid_dir = droid_dir()?;
+    check_config_targets(&droid_dir, &["settings.json", "hooks.json"])?;
+    let hook_path = droid_dir.join("hooks").join(DROID_HOOK_INSTALL_NAME);
+    let hooks_path = droid_dir.join("hooks.json");
+    let settings_path = droid_dir.join("settings.json");
+    let mut updated_hooks = false;
+    let mut updated_settings = false;
+    if hooks_path.is_file() {
+        let mut hooks_file = serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?)
+            .map_err(|err| {
+                io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+            })?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut hooks_file,
+            &hooks_path,
+            "droid hooks file",
+            "droid hooks file hooks",
+        )? {
+            updated_hooks |= remove_hook_commands(hooks, "SessionStart", &hook_path, None)?;
+            for (event, action) in DROID_REMOVED_LIFECYCLE_HOOK_EVENTS {
+                updated_hooks |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+            for (event, action) in DROID_HOOK_EVENTS {
+                updated_hooks |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+        }
+
+        if updated_hooks {
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+        }
+    }
+
+    if settings_path.is_file() {
+        let mut settings = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse {}: {err}",
+                    settings_path.display()
+                ))
+            })?;
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "droid settings",
+            "droid settings hooks",
+        )? {
+            updated_settings = remove_hook_commands(hooks, "SessionStart", &hook_path, None)?;
+            for (event, action) in DROID_REMOVED_LIFECYCLE_HOOK_EVENTS {
+                updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+            for (event, action) in DROID_HOOK_EVENTS {
+                updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+        }
+
+        if updated_settings {
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    let removed_hook_file =
+        remove_file_if_exists(&hook_path)? | remove_legacy_bash_hook_file(&hook_path)?;
+
+    Ok(DroidUninstallResult {
+        hook_path,
+        hooks_path,
+        settings_path,
+        removed_hook_file,
+        updated_hooks,
+        updated_settings,
+    })
+}
+
+pub(crate) fn uninstall_opencode() -> io::Result<OpenCodeUninstallResult> {
+    let dir = opencode_dir()?;
+    check_config_targets(&dir, &["tui.jsonc", "tui.json", "cli.json"])?;
+    let plugin_path = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
+    let tui_plugin_path = dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME);
+    let mut errors = Vec::new();
+    remove_cli_plugin(&dir, super::OPENCODE_V2_TUI_PLUGIN_SPEC).unwrap_or_else(|err| {
+        errors.push(err.to_string());
+        false
+    });
+    let v2_dir = dir.join(super::OPENCODE_V2_TUI_PLUGIN_DIR);
+    remove_dir_all_if_exists(&v2_dir).unwrap_or_else(|err| {
+        errors.push(format!("failed to remove {}: {err}", v2_dir.display()));
+        false
+    });
+    let updated_tui_configs =
+        remove_tui_plugin(&dir, OPENCODE_TUI_PLUGIN_SPEC).unwrap_or_else(|err| {
+            errors.push(err.to_string());
+            Vec::new()
+        });
+    let removed_plugin = remove_file_if_exists(&plugin_path).unwrap_or_else(|err| {
+        errors.push(format!("failed to remove {}: {err}", plugin_path.display()));
+        false
+    });
+    let removed_tui_plugin = remove_file_if_exists(&tui_plugin_path).unwrap_or_else(|err| {
+        errors.push(format!(
+            "failed to remove {}: {err}",
+            tui_plugin_path.display()
+        ));
+        false
+    });
+    if !errors.is_empty() {
+        return Err(io::Error::other(errors.join("; ")));
+    }
+
+    Ok(OpenCodeUninstallResult {
+        plugin_path,
+        tui_plugin_path,
+        removed_plugin,
+        removed_tui_plugin,
+        updated_tui_configs,
+    })
+}
+
+pub(crate) fn uninstall_kilo() -> io::Result<KiloUninstallResult> {
+    let plugin_path = kilo_dir()?.join("plugin").join(KILO_PLUGIN_INSTALL_NAME);
+    let removed_plugin = remove_file_if_exists(&plugin_path)?;
+
+    Ok(KiloUninstallResult {
+        plugin_path,
+        removed_plugin,
+    })
+}
+
+pub(crate) fn uninstall_hermes() -> io::Result<HermesUninstallResult> {
+    let dir = hermes_dir()?;
+    check_config_targets(&dir, &["config.yaml"])?;
+    let plugin_dir = hermes_plugin_dir()?;
+    let config_path = dir.join("config.yaml");
+
+    let removed_plugin_dir = remove_dir_all_if_exists(&plugin_dir)?;
+    let mut updated_config = false;
+    if config_path.is_file() {
+        let existing_config = fs::read_to_string(&config_path)?;
+        let new_config = remove_hermes_plugin_enabled(&existing_config);
+        if new_config != existing_config {
+            write_config(&config_path, new_config)?;
+            updated_config = true;
+        }
+    }
+
+    Ok(HermesUninstallResult {
+        plugin_dir,
+        config_path,
+        removed_plugin_dir,
+        updated_config,
+    })
+}
+
+pub(crate) fn install_qodercli() -> io::Result<QodercliInstallPaths> {
+    let dir = qodercli_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "qodercli config directory not found at {}. install qodercli first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(QODERCLI_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, QODERCLI_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    // Register the hook in ~/.qoder/settings.json. The schema mirrors claude
+    // settings.json (per https://docs.qoder.com/zh/cli/hooks): a top-level
+    // `hooks` object keyed by event name, each entry holding a matcher + a
+    // list of `{type: "command", command, timeout?}` invocations. The hook
+    // script reads the event payload from stdin via `hook_event_name`.
+    let settings_path = dir.join("settings.json");
+    let mut settings = if settings_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?).map_err(|err| {
+            io::Error::other(format!(
+                "failed to parse {}: {err}",
+                settings_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut settings,
+        &settings_path,
+        "qodercli settings",
+        "qodercli settings hooks",
+    )?;
+    for (event, action) in QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS {
+        remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+    }
+    for (event, action) in QODERCLI_HOOK_EVENTS {
+        remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+    }
+    for (event, action) in QODERCLI_HOOK_EVENTS {
+        ensure_command_hook(
+            hooks,
+            event,
+            hook_command(&hook_path, Some(action)),
+            10,
+            Some("*"),
+        )?;
+    }
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    Ok(QodercliInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
+pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
+    let dir = qwen_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "qwen code config directory not found at {}. install qwen code first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(QWEN_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, QWEN_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let settings_path = dir.join("settings.json");
+    let mut settings = if settings_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?).map_err(|err| {
+            io::Error::other(format!(
+                "failed to parse {}: {err}",
+                settings_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut settings,
+        &settings_path,
+        "qwen settings",
+        "qwen settings hooks",
+    )?;
+    for (event, action) in QWEN_HOOK_EVENTS {
+        remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+        ensure_command_hook(
+            hooks,
+            event,
+            hook_command(&hook_path, Some(action)),
+            10_000,
+            Some("*"),
+        )?;
+    }
+
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    Ok(QwenInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
+fn letta_install_artifact_path(path: &Path, role: &str) -> io::Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other(format!("invalid install path: {}", path.display())))?;
+    let mut artifact_name = file_name.to_os_string();
+    artifact_name.push(format!(".herdr-install-{}-{role}", std::process::id()));
+    Ok(path.with_file_name(artifact_name))
+}
+
+pub(super) fn prepare_letta_install_file(
+    target: &Path,
+    contents: &[u8],
+    executable: bool,
+    preserve_permissions: bool,
+) -> io::Result<(PathBuf, PathBuf)> {
+    if target.try_exists()? && !target.is_file() {
+        return Err(io::Error::other(format!(
+            "install target is not a file: {}",
+            target.display()
+        )));
+    }
+
+    let staged = letta_install_artifact_path(target, "staged")?;
+    let backup = letta_install_artifact_path(target, "backup")?;
+    if staged.try_exists()? || backup.try_exists()? {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("stale install artifact exists for {}", target.display()),
+        ));
+    }
+
+    let prepare_result = (|| {
+        fs::write(&staged, contents)?;
+        if preserve_permissions && target.is_file() {
+            fs::set_permissions(&staged, fs::metadata(target)?.permissions())?;
+        }
+        if executable {
+            make_executable(&staged)?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = prepare_result {
+        let _ = remove_file_if_exists(&staged);
+        return Err(err);
+    }
+
+    Ok((staged, backup))
+}
+
+fn combine_letta_install_errors(primary: io::Error, rollback: io::Result<()>) -> io::Error {
+    match rollback {
+        Ok(()) => primary,
+        Err(rollback_err) => io::Error::new(
+            primary.kind(),
+            format!("{primary}; rollback failed: {rollback_err}"),
+        ),
+    }
+}
+
+pub(super) fn publish_letta_install_file(
+    target: &Path,
+    staged: &Path,
+    backup: &Path,
+) -> io::Result<bool> {
+    let had_original = target.try_exists()?;
+    if had_original {
+        fs::rename(target, backup)?;
+    }
+
+    if let Err(err) = fs::rename(staged, target) {
+        let rollback = if had_original {
+            fs::rename(backup, target)
+        } else {
+            Ok(())
+        };
+        return Err(combine_letta_install_errors(err, rollback));
+    }
+
+    Ok(had_original)
+}
+
+pub(super) fn rollback_letta_install_file(
+    target: &Path,
+    backup: &Path,
+    had_original: bool,
+) -> io::Result<()> {
+    remove_file_if_exists(target)?;
+    if had_original {
+        fs::rename(backup, target)?;
+    }
+    Ok(())
+}
+
+fn cleanup_letta_install_artifact(path: &Path) {
+    if let Err(err) = remove_file_if_exists(path) {
+        tracing::warn!(path = %path.display(), %err, "failed to remove Letta install artifact");
+    }
+}
+
+fn ensure_letta_session_hook(hooks: &mut Map<String, Value>, command: String) -> io::Result<()> {
+    let entries = hooks
+        .entry("SessionStart".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| io::Error::other("hook entries for SessionStart must be an array"))?;
+
+    entries.push(json!({
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "timeout": LETTA_HOOK_TIMEOUT_MS,
+            "quiet": true,
+        }],
+    }));
+    Ok(())
+}
+
+pub(crate) fn install_letta() -> io::Result<LettaInstallPaths> {
+    let dir = letta_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "letta code config directory not found at {}. install letta code first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(LETTA_HOOK_INSTALL_NAME);
+
+    let settings_path = dir.join("settings.json");
+    let mut settings = if settings_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?).map_err(|err| {
+            io::Error::other(format!(
+                "failed to parse {}: {err}",
+                settings_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut settings,
+        &settings_path,
+        "letta settings",
+        "letta settings hooks",
+    )?;
+    remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
+    ensure_letta_session_hook(hooks, hook_command(&hook_path, Some("session")))?;
+
+    let settings_contents = serde_json::to_string_pretty(&settings)?;
+    let (hook_staged, hook_backup) =
+        prepare_letta_install_file(&hook_path, LETTA_HOOK_ASSET.as_bytes(), true, false)?;
+    let (settings_staged, settings_backup) =
+        match prepare_letta_install_file(&settings_path, settings_contents.as_bytes(), false, true)
+        {
+            Ok(paths) => paths,
+            Err(err) => {
+                cleanup_letta_install_artifact(&hook_staged);
+                return Err(err);
+            }
+        };
+
+    let hook_had_original = match publish_letta_install_file(&hook_path, &hook_staged, &hook_backup)
+    {
+        Ok(had_original) => had_original,
+        Err(err) => {
+            cleanup_letta_install_artifact(&hook_staged);
+            cleanup_letta_install_artifact(&settings_staged);
+            return Err(err);
+        }
+    };
+
+    let settings_had_original =
+        match publish_letta_install_file(&settings_path, &settings_staged, &settings_backup) {
+            Ok(had_original) => had_original,
+            Err(err) => {
+                let err = combine_letta_install_errors(
+                    err,
+                    rollback_letta_install_file(&hook_path, &hook_backup, hook_had_original),
+                );
+                cleanup_letta_install_artifact(&settings_staged);
+                return Err(err);
+            }
+        };
+
+    if hook_had_original {
+        cleanup_letta_install_artifact(&hook_backup);
+    }
+    if settings_had_original {
+        cleanup_letta_install_artifact(&settings_backup);
+    }
+
+    Ok(LettaInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
+pub(crate) fn install_cursor() -> io::Result<CursorInstallPaths> {
+    let dir = cursor_dir()?;
+    check_config_targets(&dir, &["hooks.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "cursor config directory not found at {}. install cursor agent cli first",
+            dir.display()
+        )));
+    }
+
+    let hook_path = dir.join(CURSOR_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, CURSOR_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let hooks_path = dir.join("hooks.json");
+    let mut hooks_file = if hooks_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?).map_err(|err| {
+            io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+        })?
+    } else {
+        json!({ "version": 1 })
+    };
+
+    if hooks_file.get("version").is_none() {
+        hooks_file
+            .as_object_mut()
+            .ok_or_else(|| {
+                io::Error::other(format!(
+                    "cursor hooks file at {} must be a JSON object",
+                    hooks_path.display()
+                ))
+            })?
+            .insert("version".to_string(), json!(1));
+    }
+
+    let hooks = ensure_hooks_object(
+        &mut hooks_file,
+        &hooks_path,
+        "cursor hooks file",
+        "cursor hooks file hooks",
+    )?;
+    let session_command = hook_command(&hook_path, Some("session"));
+    remove_simple_command_hook(hooks, "beforeSubmitPrompt", &session_command)?;
+    remove_simple_command_hook(hooks, "beforeShellExecution", &session_command)?;
+    remove_simple_command_hook(hooks, "beforeMCPExecution", &session_command)?;
+    remove_simple_command_hook(hooks, "stop", &session_command)?;
+    remove_simple_command_hook(hooks, "sessionEnd", &session_command)?;
+    ensure_simple_command_hook(hooks, "sessionStart", session_command)?;
+
+    write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+
+    Ok(CursorInstallPaths {
+        hook_path,
+        hooks_path,
+    })
+}
+
+pub(crate) fn uninstall_qodercli() -> io::Result<QodercliUninstallResult> {
+    let dir = qodercli_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    let hook_path = dir.join("hooks").join(QODERCLI_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
+    let mut updated_settings = false;
+
+    if settings_path.is_file() {
+        let mut settings = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse {}: {err}",
+                    settings_path.display()
+                ))
+            })?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "qodercli settings",
+            "qodercli settings hooks",
+        )? {
+            for (event, action) in QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS {
+                updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+            for (event, action) in QODERCLI_HOOK_EVENTS {
+                updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+        }
+
+        if updated_settings {
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    let removed_hook_file =
+        remove_file_if_exists(&hook_path)? | remove_legacy_bash_hook_file(&hook_path)?;
+
+    Ok(QodercliUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
+    })
+}
+
+pub(crate) fn uninstall_qwen() -> io::Result<QwenUninstallResult> {
+    let dir = qwen_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    let hook_path = dir.join("hooks").join(QWEN_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
+    let mut updated_settings = false;
+
+    if settings_path.is_file() {
+        let mut settings = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse {}: {err}",
+                    settings_path.display()
+                ))
+            })?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "qwen settings",
+            "qwen settings hooks",
+        )? {
+            for (event, action) in QWEN_HOOK_EVENTS {
+                updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+        }
+
+        if updated_settings {
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(QwenUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
+    })
+}
+
+pub(crate) fn uninstall_letta() -> io::Result<LettaUninstallResult> {
+    let dir = letta_dir()?;
+    let hook_path = dir.join("hooks").join(LETTA_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
+    let mut updated_settings = false;
+
+    if settings_path.is_file() {
+        let mut settings = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse {}: {err}",
+                    settings_path.display()
+                ))
+            })?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "letta settings",
+            "letta settings hooks",
+        )? {
+            updated_settings |=
+                remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
+        }
+
+        if updated_settings {
+            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(LettaUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
+    })
+}
+
+pub(crate) fn uninstall_cursor() -> io::Result<CursorUninstallResult> {
+    let cursor_home = cursor_dir()?;
+    check_config_targets(&cursor_home, &["hooks.json"])?;
+    let hook_path = cursor_home.join(CURSOR_HOOK_INSTALL_NAME);
+    let hooks_path = cursor_home.join("hooks.json");
+    let mut updated_hooks = false;
+
+    if hooks_path.is_file() {
+        let mut hooks_file = serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?)
+            .map_err(|err| {
+                io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+            })?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut hooks_file,
+            &hooks_path,
+            "cursor hooks file",
+            "cursor hooks file hooks",
+        )? {
+            let session_command = hook_command(&hook_path, Some("session"));
+            updated_hooks |= remove_simple_command_hook(hooks, "sessionStart", &session_command)?;
+            updated_hooks |=
+                remove_simple_command_hook(hooks, "beforeSubmitPrompt", &session_command)?;
+            updated_hooks |=
+                remove_simple_command_hook(hooks, "beforeShellExecution", &session_command)?;
+            updated_hooks |=
+                remove_simple_command_hook(hooks, "beforeMCPExecution", &session_command)?;
+            updated_hooks |= remove_simple_command_hook(hooks, "stop", &session_command)?;
+            updated_hooks |= remove_simple_command_hook(hooks, "sessionEnd", &session_command)?;
+        }
+
+        if updated_hooks {
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(CursorUninstallResult {
+        hook_path,
+        hooks_path,
+        removed_hook_file,
+        updated_hooks,
+    })
+}
+
+pub(crate) fn mastracode_hook_command(hook_path: &Path, action: &str) -> String {
+    #[cfg(windows)]
+    {
+        powershell_encoded_hook_command(hook_path, action)
+    }
+    #[cfg(not(windows))]
+    {
+        hook_command(hook_path, Some(action))
+    }
+}
+
+pub(crate) fn install_mastracode() -> io::Result<MastracodeInstallPaths> {
+    let mastracode_home = mastracode_dir()?;
+    check_config_targets(&mastracode_home, &["hooks.json"])?;
+    let hook_dir = mastracode_home.join("hooks");
+    fs::create_dir_all(&hook_dir)?;
+
+    let hook_path = hook_dir.join(MASTRACODE_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, MASTRACODE_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let hooks_path = mastracode_home.join("hooks.json");
+    let mut hooks_file = if hooks_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?).map_err(|err| {
+            io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = hooks_file.as_object_mut().ok_or_else(|| {
+        io::Error::other(format!(
+            "mastracode hooks file at {} must be a JSON object",
+            hooks_path.display()
+        ))
+    })?;
+
+    for (event, action) in MASTRACODE_REMOVED_HOOK_EVENTS {
+        remove_flat_command_hook(hooks, event, &hook_command(&hook_path, Some(action)))?;
+        remove_flat_command_hook(hooks, event, &mastracode_hook_command(&hook_path, action))?;
+    }
+    for (event, action) in MASTRACODE_HOOK_EVENTS {
+        remove_flat_command_hook(hooks, event, &hook_command(&hook_path, Some(action)))?;
+        ensure_flat_command_hook(
+            hooks,
+            event,
+            mastracode_hook_command(&hook_path, action),
+            MASTRACODE_HOOK_TIMEOUT_MS,
+        )?;
+    }
+
+    write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+
+    Ok(MastracodeInstallPaths {
+        hook_path,
+        hooks_path,
+    })
+}
+
+pub(crate) fn uninstall_mastracode() -> io::Result<MastracodeUninstallResult> {
+    let mastracode_home = mastracode_dir()?;
+    check_config_targets(&mastracode_home, &["hooks.json"])?;
+    let hook_path = mastracode_home
+        .join("hooks")
+        .join(MASTRACODE_HOOK_INSTALL_NAME);
+    let hooks_path = mastracode_home.join("hooks.json");
+    let mut updated_hooks = false;
+
+    if hooks_path.is_file() {
+        let mut hooks_file = serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?)
+            .map_err(|err| {
+                io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+            })?;
+        let hooks = hooks_file.as_object_mut().ok_or_else(|| {
+            io::Error::other(format!(
+                "mastracode hooks file at {} must be a JSON object",
+                hooks_path.display()
+            ))
+        })?;
+
+        for (event, action) in MASTRACODE_HOOK_EVENTS
+            .into_iter()
+            .chain(MASTRACODE_REMOVED_HOOK_EVENTS)
+        {
+            updated_hooks |=
+                remove_flat_command_hook(hooks, event, &hook_command(&hook_path, Some(action)))?;
+            updated_hooks |= remove_flat_command_hook(
+                hooks,
+                event,
+                &mastracode_hook_command(&hook_path, action),
+            )?;
+        }
+
+        if updated_hooks {
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(MastracodeUninstallResult {
+        hook_path,
+        hooks_path,
+        removed_hook_file,
+        updated_hooks,
+    })
+}
+
+pub(crate) fn install_antigravity_cli() -> io::Result<AntigravityCliInstallPaths> {
+    let dir = antigravity_cli_dir()?;
+    check_config_targets(&dir, &["hooks.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "antigravity cli config directory not found at {}. install antigravity cli first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, ANTIGRAVITY_CLI_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let hooks_path = dir.join("hooks.json");
+    let mut hooks_file = if hooks_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?).map_err(|err| {
+            io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = hooks_file.as_object_mut().ok_or_else(|| {
+        io::Error::other(format!(
+            "antigravity cli hooks file at {} must be a JSON object",
+            hooks_path.display()
+        ))
+    })?;
+
+    // The Herdr block is Herdr-owned, so rewrite it wholesale and leave every
+    // other named hook untouched.
+    hooks.insert(
+        ANTIGRAVITY_CLI_HOOK_BLOCK_NAME.to_string(),
+        antigravity_cli_hook_block(&hook_path),
+    );
+
+    write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+
+    Ok(AntigravityCliInstallPaths {
+        hook_path,
+        hooks_path,
+    })
+}
+
+pub(crate) fn antigravity_cli_hook_command(hook_path: &Path, action: &str) -> String {
+    #[cfg(windows)]
+    {
+        powershell_encoded_hook_command(hook_path, action)
+    }
+    #[cfg(not(windows))]
+    {
+        hook_command(hook_path, Some(action))
+    }
+}
+
+/// Builds the Herdr-owned `hooks.json` block for Antigravity CLI.
+///
+/// Every event Herdr registers takes a flat handler list; the `matcher`/`hooks`
+/// group is only valid for the tool events, which Herdr does not use.
+fn antigravity_cli_hook_block(hook_path: &Path) -> Value {
+    let mut block = Map::new();
+    for (event, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
+        let handler = json!({
+            "type": "command",
+            "command": antigravity_cli_hook_command(hook_path, action),
+            "timeout": ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC,
+        });
+        block.insert(event.to_string(), json!([handler]));
+    }
+    Value::Object(block)
+}
+
+pub(crate) fn uninstall_antigravity_cli() -> io::Result<AntigravityCliUninstallResult> {
+    let dir = antigravity_cli_dir()?;
+    check_config_targets(&dir, &["hooks.json"])?;
+    let hook_path = dir.join("hooks").join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME);
+    let hooks_path = dir.join("hooks.json");
+    let mut updated_hooks = false;
+
+    if hooks_path.is_file() {
+        let mut hooks_file = serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?)
+            .map_err(|err| {
+                io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+            })?;
+
+        let hooks = hooks_file.as_object_mut().ok_or_else(|| {
+            io::Error::other(format!(
+                "antigravity cli hooks file at {} must be a JSON object",
+                hooks_path.display()
+            ))
+        })?;
+
+        updated_hooks = hooks.remove(ANTIGRAVITY_CLI_HOOK_BLOCK_NAME).is_some();
+
+        if updated_hooks {
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(AntigravityCliUninstallResult {
+        hook_path,
+        hooks_path,
+        removed_hook_file,
+        updated_hooks,
+    })
+}
+
+/// The complete Herdr-owned Grok hook config. Installation and status share
+/// this value so any config drift is reported as outdated.
+fn grok_hook_command(hook_path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        hook_command(hook_path, Some("session"))
+    }
+    #[cfg(not(windows))]
+    {
+        format!(
+            "sh {} session",
+            shell_single_quote(&hook_path.display().to_string())
+        )
+    }
+}
+
+pub(crate) fn grok_hook_config(hook_path: &Path) -> Value {
+    let session_command = grok_hook_command(hook_path);
+    json!({
+        "hooks": {
+            "SessionStart": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": session_command,
+                            "timeout": 10,
+                        }
+                    ]
+                }
+            ]
+        }
+    })
+}
+
+pub(crate) fn install_grok() -> io::Result<GrokInstallPaths> {
+    let dir = grok_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "grok config directory not found at {}. install grok cli first",
+            dir.display()
+        )));
+    }
+
+    // Grok merges every `~/.grok/hooks/*.json`, so herdr owns a dedicated
+    // config file and never edits the user's other hooks. The hook script and
+    // its config live side by side under `hooks/`.
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, GROK_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let config_path = hooks_dir.join(GROK_HOOK_CONFIG_INSTALL_NAME);
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&grok_hook_config(&hook_path))?,
+    )?;
+
+    Ok(GrokInstallPaths {
+        hook_path,
+        config_path,
+    })
+}
+
+pub(crate) fn uninstall_grok() -> io::Result<GrokUninstallResult> {
+    let hooks_dir = grok_dir()?.join("hooks");
+    let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
+    let config_path = hooks_dir.join(GROK_HOOK_CONFIG_INSTALL_NAME);
+
+    // herdr owns both files outright, so removal is a straight delete.
+    let removed_config_file = remove_file_if_exists(&config_path)?;
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(GrokUninstallResult {
+        hook_path,
+        config_path,
+        removed_hook_file,
+        removed_config_file,
+    })
+}

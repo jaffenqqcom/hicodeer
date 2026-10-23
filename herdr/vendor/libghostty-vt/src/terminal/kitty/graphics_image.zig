@@ -1,0 +1,2686 @@
+const std = @import("std");
+const builtin = @import("builtin");
+const assert = @import("../../quirks.zig").inlineAssert;
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const posix = std.posix;
+
+const fastmem = @import("../../fastmem.zig");
+const animation = @import("graphics_animation.zig");
+const command = @import("graphics_command.zig");
+const kitty_windows = @import("windows.zig");
+const PageList = @import("../PageList.zig");
+const sys = @import("../sys.zig");
+const LimitedAllocator = @import("../../datastruct/main.zig").LimitedAllocator;
+
+const log = std.log.scoped(.kitty_gfx);
+
+/// Maximum width or height of an image. Taken directly from Kitty.
+const max_dimension = 10000;
+
+/// Maximum size in bytes, taken from Kitty.
+const max_size = 400 * 1024 * 1024; // 400MB
+
+/// Host-owned immutable raw RGBA snapshot. A successful callback transfers one reference.
+pub const FileBacking = extern struct {
+    context: ?*anyopaque,
+    identity: u64,
+    len: usize,
+    read: ?*const fn (?*anyopaque, [*]u8, usize) callconv(.c) bool,
+    release: ?*const fn (?*anyopaque) callconv(.c) void,
+};
+pub const SnapshotFileRequest = extern struct {
+    size: usize = @sizeOf(SnapshotFileRequest),
+    fd: i64,
+    expected_len: u64,
+};
+pub const SnapshotFileHook = struct {
+    context: ?*anyopaque,
+    callback: *const fn (?*anyopaque, *const SnapshotFileRequest, *FileBacking) bool,
+};
+
+/// An image that is still being loaded. The image should be initialized
+/// using init on the first chunk and then addData for each subsequent
+/// chunk. Once all chunks have been added, complete should be called
+/// to finalize the image.
+pub const LoadingImage = struct {
+    /// The in-progress image. The first chunk must have all the metadata
+    /// so this comes from that initially.
+    image: Image,
+    snapshot_file: ?SnapshotFileHook = null,
+
+    /// The data that is being built up.
+    data: std.ArrayListUnmanaged(u8) = .empty,
+
+    /// This is non-null when a transmit and display command is given
+    /// so that we display the image after it is fully loaded.
+    display: ?command.Display = null,
+
+    /// This is non-null when this load is an animation frame
+    /// transmission (a=f) rather than a new image. On completion the
+    /// data is composed into the target image's animation instead of
+    /// being stored as an image.
+    frame: ?FrameContext = null,
+
+    /// Quiet is the quiet settings for the initial load command. This is
+    /// used if q isn't set on subsequent chunks.
+    quiet: command.Command.Quiet,
+
+    /// Response identifiers from the initial load command. Subsequent chunks
+    /// omit these, so completion responses must use the saved values.
+    response: command.Response = .{},
+
+    /// The temporary directory for file transmission (null means that
+    /// temporary directory transmission is disabled).
+    temporary_directory: ?[]const u8,
+
+    pub const FrameContext = struct {
+        /// The frame parameters from the initial a=f command. Chunked
+        /// continuations only contribute payload bytes; all parameters
+        /// come from the command that started the load, matching the
+        /// protocol's requirement that chunks repeat a=f.
+        cmd: command.AnimationFrameLoading,
+
+        /// The generation of the target image when the load began.
+        /// A different generation at completion means the image was
+        /// replaced or evicted mid-transmission and the frame must be
+        /// discarded rather than composed onto the wrong image.
+        image_generation: u64,
+    };
+
+    /// The limits of the Kitty Graphics protocol we should allow.
+    ///
+    /// This can be used to restrict the type of images and other
+    /// parameters for resource or security reasons. Note that depending
+    /// on how libghostty is compiled, some of these may be fully unsupported
+    /// and ignored (e.g. "file" on wasm32-freestanding).
+    pub const Limits = struct {
+        file: bool,
+        temporary_file: union(enum) {
+            enabled: struct {
+                /// The directory to expect temporary files in.
+                directory: []const u8,
+            },
+            disabled: void,
+        },
+        shared_memory: bool,
+        preserve_png: bool = false,
+        snapshot_file: ?SnapshotFileHook = null,
+
+        /// Enables all filesystem-related image transmission mediums. `path`
+        /// is the temporary directory to expect files in when files are
+        /// transmitted using said medium.
+        pub fn allWithTempDir(path: []const u8) Limits {
+            return .{
+                .file = true,
+                .temporary_file = .{ .enabled = .{ .directory = path } },
+                .shared_memory = true,
+            };
+        }
+
+        pub const direct: Limits = .{
+            .file = false,
+            .temporary_file = .disabled,
+            .shared_memory = false,
+        };
+    };
+
+    /// Initialize a chunked immage from the first image transmission.
+    /// If this is a multi-chunk image, this should only be the FIRST
+    /// chunk.
+    pub fn init(
+        io: std.Io,
+        alloc: Allocator,
+        cmd: *const command.Command,
+        limits: Limits,
+    ) !LoadingImage {
+        // Build our initial image from the properties sent via the control.
+        // These can be overwritten by the data loading process. For example,
+        // PNG loading sets the width/height from the data.
+        const t = cmd.transmission().?;
+
+        // Validated here rather than while parsing so the response can
+        // carry the image id, matching Kitty's initialize_load_data.
+        if (t.format_unknown) return error.UnsupportedFormat;
+        var result: LoadingImage = .{
+            .image = .{
+                .id = t.image_id,
+                .number = t.image_number,
+                .width = t.width,
+                .height = t.height,
+                .compression = t.compression,
+                .format = t.format,
+                .metadata = .{ .transient = t.usage.transient },
+            },
+
+            .snapshot_file = if (cmd.control == .transmit or cmd.control == .transmit_and_display)
+                limits.snapshot_file
+            else
+                null,
+            .display = cmd.display(),
+            .quiet = cmd.quiet,
+            .response = .{
+                .id = t.image_id,
+                .image_number = t.image_number,
+                .placement_id = t.placement_id,
+            },
+            .temporary_directory = switch (limits.temporary_file) {
+                .enabled => |d| d.directory,
+                .disabled => null,
+            },
+        };
+
+        // Special case for the direct medium, we just add the chunk directly.
+        if (t.medium == .direct) {
+            try result.addData(alloc, cmd.data);
+            return result;
+        }
+
+        // Verify our capabilities and limits allow this.
+        {
+            // Special case if we don't support decoding PNGs and the format
+            // is a PNG we can save a lot of memory/effort buffering the
+            // data but failing up front.
+            if (t.format == .png and
+                sys.decode_png == null)
+            {
+                return error.UnsupportedMedium;
+            }
+
+            // Verify the medium is allowed
+            switch (t.medium) {
+                .direct => unreachable,
+                .file => if (!limits.file) return error.UnsupportedMedium,
+                .temporary_file => if (limits.temporary_file == .disabled) return error.UnsupportedMedium,
+                .shared_memory => if (!limits.shared_memory) return error.UnsupportedMedium,
+            }
+        }
+
+        // Otherwise, the payload data is guaranteed to be a path.
+
+        if (comptime builtin.os.tag != .windows) {
+            if (std.mem.indexOfScalar(u8, cmd.data, 0) != null) {
+                // POSIX paths cannot contain internal nulls.
+                log.warn("invalid image path: BadPathName", .{});
+                return error.InvalidData;
+            }
+        }
+
+        // Depending on the medium, load the data from the path.
+        switch (t.medium) {
+            .direct => unreachable, // handled above
+            .file => try result.readFile(.file, io, alloc, t, cmd.data),
+            .temporary_file => try result.readFile(.temporary_file, io, alloc, t, cmd.data),
+            .shared_memory => try result.readSharedMemory(io, alloc, t, cmd.data),
+        }
+
+        return result;
+    }
+
+    /// Reads the data from a shared memory segment.
+    fn readSharedMemory(
+        self: *LoadingImage,
+        io: std.Io,
+        alloc: Allocator,
+        t: command.Transmission,
+        path: []const u8,
+    ) !void {
+        // android does not support POSIX shared memory.
+        // windows is currently unsupported, does it support shm?
+        if (comptime builtin.abi.isAndroid() or builtin.target.os.tag == .windows) {
+            return error.UnsupportedMedium;
+        }
+
+        // libc is required for shm_open
+        if (comptime !builtin.link_libc) {
+            return error.UnsupportedMedium;
+        }
+
+        // POSIX shared memory names must begin with a slash, contain at
+        // least one character after it, contain no other slashes, and fit
+        // within NAME_MAX. Some shm_open implementations accept names
+        // without the leading slash, but the Kitty protocol does not.
+        if (!validSharedMemoryName(path, posix.NAME_MAX)) {
+            log.warn("invalid shared memory name", .{});
+            return error.InvalidData;
+        }
+
+        // Since we're only supporting posix then max_path_bytes should
+        // be enough to stack allocate the path.
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const pathz = std.fmt.bufPrintZ(&buf, "{s}", .{path}) catch return error.InvalidData;
+
+        const fd = std.c.shm_open(pathz, @as(c_int, @bitCast(std.c.O{ .ACCMODE = .RDONLY })), @as(u16, 0));
+        switch (std.posix.errno(fd)) {
+            .SUCCESS => {},
+            else => |err| {
+                log.warn("unable to open shared memory {s}: {}", .{ path, err });
+                return error.InvalidData;
+            },
+        }
+        const file: std.Io.File = .{
+            .handle = fd,
+            .flags = .{ .nonblocking = false },
+        };
+
+        defer file.close(io);
+        defer _ = std.c.shm_unlink(pathz);
+
+        // The size from stat on may be larger than our expected size because
+        // shared memory has to be a multiple of the page size.
+        const stat_size: usize = stat: {
+            const stat = file.stat(io) catch |err| {
+                log.warn("unable to fstat shared memory {s}: {}", .{ path, err });
+                return error.InvalidData;
+            };
+            if (stat.size <= 0) return error.InvalidData;
+            break :stat std.math.cast(usize, stat.size) orelse
+                return error.InvalidData;
+        };
+
+        // Get the memory range we'll read. Validate it to make sure
+        // it doesn't overflow.
+        const range = try self.sharedMemoryRange(t, stat_size);
+
+        const map = std.posix.mmap(
+            null,
+            stat_size, // mmap always uses the stat size
+            .{ .READ = true },
+            std.c.MAP{ .TYPE = .SHARED },
+            fd,
+            0,
+        ) catch |err| {
+            log.warn("unable to mmap shared memory {s}: {}", .{ path, err });
+            return error.InvalidData;
+        };
+        defer std.posix.munmap(map);
+
+        assert(self.data.items.len == 0);
+        try self.data.appendSlice(alloc, map[range.start..range.end]);
+    }
+
+    const SharedMemoryRange = struct {
+        start: usize,
+        end: usize,
+    };
+
+    /// Returns the byte range to copy from a shared memory object.
+    fn sharedMemoryRange(
+        self: *const LoadingImage,
+        t: command.Transmission,
+        stat_size: usize,
+    ) error{
+        InvalidData,
+        DimensionsTooLarge,
+    }!SharedMemoryRange {
+        const expected_size: ?usize = switch (self.image.format) {
+            // PNG dimensions come from the decoded data.
+            .png => null,
+
+            // Validate before multiplying because protocol dimensions are
+            // u32 values and may otherwise overflow in safe builds.
+            .gray, .gray_alpha, .rgb, .rgba => size: {
+                if (self.image.width > max_dimension or
+                    self.image.height > max_dimension)
+                {
+                    return error.DimensionsTooLarge;
+                }
+
+                const bpp: usize = command.Transmission.formatBpp(self.image.format);
+                break :size @as(usize, self.image.width) *
+                    @as(usize, self.image.height) * bpp;
+            },
+        };
+
+        // Get our start offset and validate its within the range of
+        // the statted data.
+        const start = std.math.cast(usize, t.offset) orelse
+            return error.InvalidData;
+        if (start > stat_size) return error.InvalidData;
+
+        // Validate that our length is within the stat range too.
+        const available = stat_size - start;
+        const data_size: usize = if (t.size > 0)
+            std.math.cast(usize, t.size) orelse return error.InvalidData
+        else if (self.image.compression == .none and expected_size != null)
+            expected_size.?
+        else
+            available;
+        if (data_size > max_size or data_size > available) {
+            return error.InvalidData;
+        }
+
+        // data_size <= available guarantees this addition cannot overflow.
+        return .{ .start = start, .end = start + data_size };
+    }
+
+    /// Reads the data from a temporary file and returns it. This allocates
+    /// and does not free any of the data, so the caller must free it.
+    ///
+    /// This will also delete the temporary file if it is in a safe location.
+    fn readFile(
+        self: *LoadingImage,
+        comptime medium: command.Transmission.Medium,
+        io: std.Io,
+        alloc: Allocator,
+        t: command.Transmission,
+        path: []const u8,
+    ) !void {
+        switch (medium) {
+            .file, .temporary_file => {},
+            else => @compileError("readFile only supports file and temporary_file"),
+        }
+
+        // Some Windows paths are dangerous to even open, so the raw path
+        // is checked before the open. The canonical path of the opened
+        // file is checked again in validatedFilePath. See kitty_windows
+        // for what is refused and why.
+        if (comptime builtin.os.tag == .windows) {
+            kitty_windows.checkPath(path) catch |err| {
+                log.warn("invalid image path: {}", .{err});
+                return error.InvalidData;
+            };
+        }
+
+        // The canonical path buffer is sized for the longest path the
+        // platform allows, which is about 96 KiB on Windows, so it is
+        // heap allocated rather than placed on the stack of whichever
+        // host thread feeds the stream. It is allocated before the open
+        // so the deferred temporary file deletion below can still use it.
+        const abs_buf = try alloc.alloc(u8, std.fs.max_path_bytes);
+        defer alloc.free(abs_buf);
+
+        // Open our file right away before we do validation. This avoids
+        // TOCTOU issues.
+        var file = std.Io.Dir.cwd().openFile(
+            io,
+            path,
+            .{},
+        ) catch |err| {
+            log.warn("failed to open image file: {}", .{err});
+            return error.InvalidData;
+        };
+
+        // We'll populate a delete path if this is a temporary file.
+        var delete_path: ?[]const u8 = null;
+        defer {
+            file.close(io);
+            if (delete_path) |p| {
+                std.Io.Dir.cwd().deleteFile(io, p) catch |err| {
+                    log.warn("failed to delete temporary file: {}", .{err});
+                };
+            }
+        }
+
+        // Derive the path from the open handle so the file we validate is the
+        // exact file we read. Resolving a path before opening it would allow a
+        // cooperating process to swap a symlink or directory entry in between.
+        const abs_path = validatedFilePath(
+            io,
+            file,
+            abs_buf,
+        ) catch |err| {
+            log.warn("failed to validate image file path: {}", .{err});
+            return error.InvalidData;
+        };
+
+        // Temporary file logic
+        if (medium == .temporary_file) {
+            assert(self.temporary_directory != null);
+            if (!try isPathInTempDir(
+                io,
+                alloc,
+                self.temporary_directory.?,
+                abs_path,
+            )) return error.TemporaryFileNotInTempDir;
+            if (std.mem.indexOf(
+                u8,
+                abs_path,
+                "tty-graphics-protocol",
+            ) == null) return error.TemporaryFileNotNamedCorrectly;
+            delete_path = abs_path;
+        }
+
+        // File must be a regular file
+        if (file.stat(io)) |stat| {
+            if (stat.kind != .file) {
+                log.warn("file is not a regular file kind={}", .{stat.kind});
+                return error.InvalidData;
+            }
+        } else |err| {
+            log.warn("failed to stat file: {}", .{err});
+            return error.InvalidData;
+        }
+
+        // Only whole, uncompressed base RGBA files qualify. The host must
+        // verify the descriptor size and create an immutable private snapshot.
+        if (comptime builtin.os.tag != .windows and builtin.os.tag != .wasi and builtin.os.tag != .freestanding) {
+            if (self.snapshot_file) |hook| {
+                if (nativeFileExpectedLen(t)) |expected| {
+                    if (try self.trySnapshotFile(hook, .{ .fd = @intCast(file.handle), .expected_len = expected })) return;
+                }
+            }
+        }
+
+        var buf: [4096]u8 = undefined;
+        var buf_reader = file.reader(io, &buf);
+        if (t.offset > 0) {
+            buf_reader.seekTo(@intCast(t.offset)) catch |err| {
+                log.warn("failed to seek to offset {}: {}", .{ t.offset, err });
+                return error.InvalidData;
+            };
+        }
+        const reader = &buf_reader.interface;
+
+        // Read the file
+        var managed: std.ArrayList(u8) = .empty;
+        errdefer managed.deinit(alloc);
+        if (t.size > 0) {
+            // S is the exact number of bytes to read, not a maximum:
+            // https://sw.kovidgoyal.net/kitty/graphics-protocol/#local-client
+            const size = std.math.cast(usize, t.size) orelse
+                return error.InvalidData;
+            if (size > max_size) return error.InvalidData;
+
+            // Read exact size
+            const data = reader.readAlloc(alloc, size) catch |err| {
+                log.warn("failed to read image file: {}", .{err});
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => error.InvalidData,
+                };
+            };
+            managed = .{ .items = data, .capacity = data.len };
+        } else {
+            reader.appendRemaining(alloc, &managed, .limited(max_size)) catch {
+                log.warn("failed to read image file: {?}", .{buf_reader.err});
+                return error.InvalidData;
+            };
+        }
+
+        // Set our data
+        assert(self.data.items.len == 0);
+        self.data = .{ .items = managed.items, .capacity = managed.capacity };
+    }
+
+    /// Accept only complete callback records. A malformed success falls back
+    /// to the ordinary reader, releasing the transferred reference if possible.
+    fn trySnapshotFile(self: *LoadingImage, hook: SnapshotFileHook, request: SnapshotFileRequest) !bool {
+        var backing: FileBacking = .{ .context = null, .identity = 0, .len = 0, .read = null, .release = null };
+        if (!hook.callback(hook.context, &request, &backing)) return false;
+        if (backing.read == null or backing.release == null) {
+            if (backing.release) |release| release(backing.context);
+            return false;
+        }
+        if (backing.len != request.expected_len) {
+            backing.release.?(backing.context);
+            return error.InvalidData;
+        }
+        self.image.data = .{ .native_file = backing };
+        return true;
+    }
+
+    fn nativeFileExpectedLen(t: command.Transmission) ?usize {
+        if (t.medium != .file or t.format != .rgba or t.compression != .none or
+            t.more_chunks or t.offset != 0 or t.width == 0 or t.height == 0 or
+            t.width > max_dimension or t.height > max_dimension) return null;
+        const len = @as(usize, t.width) * @as(usize, t.height) * 4;
+        if (len > 16 * 1024 * 1024 or (t.size != 0 and t.size != len)) return null;
+        return len;
+    }
+
+    /// Returns the canonical path of an open file after applying the file
+    /// transmission blocklist.
+    fn validatedFilePath(io: std.Io, file: std.Io.File, buf: []u8) ![]const u8 {
+        const path = buf[0..try file.realPath(io, buf)];
+
+        if (comptime builtin.os.tag == .windows) {
+            try kitty_windows.checkCanonicalPath(path);
+            return path;
+        }
+
+        // This is logic copied directly from Kitty, mostly. This is really
+        // rough but it will catch obvious bad actors.
+        if (std.mem.startsWith(u8, path, "/proc/") or
+            std.mem.startsWith(u8, path, "/sys/") or
+            (std.mem.startsWith(u8, path, "/dev/") and
+                !std.mem.startsWith(u8, path, "/dev/shm/")))
+        {
+            return error.InvalidData;
+        }
+
+        return path;
+    }
+
+    /// Returns true if path appears to be in a temporary directory.
+    /// Copies logic from Kitty.
+    fn isPathInTempDir(
+        io: std.Io,
+        alloc: Allocator,
+        dir: []const u8,
+        path: []const u8,
+    ) Allocator.Error!bool {
+        if (isPathInDir("/tmp", path)) return true;
+        if (isPathInDir("/dev/shm", path)) return true;
+        if (isPathInDir(dir, path)) return true;
+
+        // The temporary dir is sometimes a symlink. On macOS for
+        // example /tmp is /private/var/... On Windows the directory a
+        // host passes (typically GetTempPath output) regularly differs
+        // from the canonical path in case or uses 8.3 short names, and
+        // resolving it covers both. The buffer is heap allocated for
+        // the reason given in readFile.
+        const buf = try alloc.alloc(u8, std.fs.max_path_bytes);
+        defer alloc.free(buf);
+        const real_dir = buf[0 .. std.Io.Dir.cwd().realPathFile(
+            io,
+            dir,
+            buf,
+        ) catch return false];
+        if (isPathInDir(real_dir, path)) return true;
+
+        return false;
+    }
+
+    pub fn deinit(self: *LoadingImage, alloc: Allocator) void {
+        self.image.deinit(alloc);
+        self.data.deinit(alloc);
+    }
+
+    pub fn destroy(self: *LoadingImage, alloc: Allocator) void {
+        self.deinit(alloc);
+        alloc.destroy(self);
+    }
+
+    /// Adds a chunk of data to the image. Use this if the image
+    /// is coming in chunks (the "m" parameter in the protocol).
+    pub fn addData(self: *LoadingImage, alloc: Allocator, data: []const u8) !void {
+        // If no data, skip
+        if (data.len == 0) return;
+
+        // If our data would get too big, return an error
+        if (self.data.items.len + data.len > max_size) {
+            log.warn("image data too large max_size={}", .{max_size});
+            return error.InvalidData;
+        }
+
+        // Ensure we have enough room to add the data
+        // to the end of the ArrayList before doing so.
+        try self.data.ensureUnusedCapacity(alloc, data.len);
+
+        const start_i = self.data.items.len;
+        self.data.items.len = start_i + data.len;
+        fastmem.copy(u8, self.data.items[start_i..], data);
+    }
+
+    /// Complete the chunked image, returning a completed image.
+    pub fn complete(self: *LoadingImage, alloc: Allocator) !Image {
+        const img = &self.image;
+
+        // Decompress the data if it is compressed.
+        try self.decompress(alloc);
+
+        // Decode the png if we have to
+        if (img.format == .png) try self.decodePng(alloc);
+
+        // Validate our dimensions.
+        if (img.width == 0 or img.height == 0) return error.DimensionsRequired;
+        if (img.width > max_dimension or img.height > max_dimension) return error.DimensionsTooLarge;
+
+        // Data length must be what we expect.
+        const bpp = command.Transmission.formatBpp(img.format);
+        const expected_len = img.width * img.height * bpp;
+        const actual_len = if (img.data == .native_file) img.data.native_file.len else self.data.items.len;
+        if (self.frame != null) {
+            // Kitty allows animation frames to exceed their expected length
+            // and just truncates it. Not sure if thats expected but lets
+            // allow it too.
+            if (actual_len < expected_len) {
+                std.log.warn(
+                    "insufficient frame data image id={} expected_len={} actual_len={}",
+                    .{ img.id, expected_len, actual_len },
+                );
+                return error.InsufficientData;
+            }
+            self.data.items.len = expected_len;
+        } else if (actual_len != expected_len) {
+            std.log.warn(
+                "unexpected length image id={} width={} height={} bpp={} expected_len={} actual_len={}",
+                .{ img.id, img.width, img.height, bpp, expected_len, actual_len },
+            );
+            return error.InvalidData;
+        }
+
+        // Everything looks good, copy the image data over.
+        var result = self.image;
+        if (result.data != .native_file) result.data = .{ .complete = try self.data.toOwnedSlice(alloc) };
+        errdefer result.deinit(alloc);
+        self.image = .{};
+        return result;
+    }
+
+    /// Experimental forwarding path: only invoked for assembled quiet base
+    /// transmissions. Never used by queries or animation frame loading.
+    pub fn completePreservingPng(self: *LoadingImage, alloc: Allocator) !Image {
+        if (self.image.format != .png or self.image.compression != .none or
+            self.quiet != .failures or self.frame != null) return self.complete(alloc);
+        const header = inspectPng(self.data.items) catch |err| switch (err) {
+            // Do not expand the deferred-corruption contract to metadata we
+            // have not validated. Such PNGs keep the normal decoder semantics.
+            error.UnsupportedPngRetention => return self.complete(alloc),
+            error.InvalidData => return error.InvalidData,
+            error.DimensionsRequired => return error.DimensionsRequired,
+            error.DimensionsTooLarge => return error.DimensionsTooLarge,
+        };
+        var result = self.image;
+        result.width = header.width;
+        result.height = header.height;
+        result.format = .rgba;
+        result.data = .{ .encoded_png = .{
+            .bytes = try self.data.toOwnedSlice(alloc),
+            .decoded_len = header.decoded_len,
+        } };
+        self.image = .{};
+        return result;
+    }
+
+    /// Debug function to write the data to a file. This is useful for
+    /// capturing some test data for unit tests.
+    pub fn debugDump(io: std.Io, self: LoadingImage) !void {
+        if (comptime builtin.mode != .Debug) @compileError("debugDump in non-debug");
+
+        var buf: [1024]u8 = undefined;
+        const filename = try std.fmt.bufPrint(
+            &buf,
+            "image-{s}-{s}-{d}x{d}-{}.data",
+            .{
+                @tagName(self.image.format),
+                @tagName(self.image.compression),
+                self.image.width,
+                self.image.height,
+                self.image.id,
+            },
+        );
+        const cwd = std.Io.Dir.cwd();
+        const f = try cwd.createFile(io, filename, .{});
+        defer f.close(io);
+
+        const writer = f.writer();
+        try writer.writeAll(self.data.items);
+    }
+
+    /// Decompress the data in-place.
+    fn decompress(self: *LoadingImage, alloc: Allocator) !void {
+        return switch (self.image.compression) {
+            .none => {},
+            .zlib_deflate => self.decompressZlib(alloc),
+        };
+    }
+
+    fn decompressZlib(self: *LoadingImage, alloc: Allocator) !void {
+        // Open our zlib stream
+        var buf: [std.compress.flate.max_window_len]u8 = undefined;
+        var reader: std.Io.Reader = .fixed(self.data.items);
+        var stream: std.compress.flate.Decompress = .init(&reader, .zlib, &buf);
+
+        // Write it to an array list
+        var list: std.ArrayList(u8) = .empty;
+        errdefer list.deinit(alloc);
+        stream.reader.appendRemaining(alloc, &list, .limited(max_size)) catch {
+            log.warn("failed to read decompressed data: {?}", .{stream.err});
+            return error.DecompressionFailed;
+        };
+
+        // Empty our current data list, take ownership over managed array list
+        self.data.deinit(alloc);
+        self.data = .{ .items = list.items, .capacity = list.capacity };
+
+        // Make sure we note that our image is no longer compressed
+        self.image.compression = .none;
+    }
+
+    /// Decode the data as PNG. This will also updated the image dimensions.
+    fn decodePng(self: *LoadingImage, alloc: Allocator) !void {
+        assert(self.image.format == .png);
+
+        const decode_png_fn = sys.decode_png orelse
+            return error.UnsupportedFormat;
+
+        var limited: LimitedAllocator = .init(alloc, max_size);
+        const decode_alloc = limited.allocator();
+        const result = decode_png_fn(
+            decode_alloc,
+            self.data.items,
+        ) catch |err| switch (err) {
+            error.InvalidData => return error.InvalidData,
+            error.OutOfMemory => if (limited.limit_exceeded)
+                return error.InvalidData
+            else
+                return error.OutOfMemory,
+        };
+        defer decode_alloc.free(result.data);
+
+        if (result.data.len > max_size) {
+            log.warn("png image too large size={} max_size={}", .{ result.data.len, max_size });
+            return error.InvalidData;
+        }
+
+        // Replace our data
+        self.data.deinit(alloc);
+        self.data = .empty;
+        try self.data.ensureUnusedCapacity(alloc, result.data.len);
+        try self.data.appendSlice(alloc, result.data[0..result.data.len]);
+
+        // Store updated image dimensions
+        self.image.width = result.width;
+        self.image.height = result.height;
+        self.image.format = .rgba;
+    }
+};
+
+/// Image represents a single image whose metadata is fully known.
+///
+/// Complete image data is always fully decoded raw pixels: loading inflates
+/// any zlib-compressed payload and decodes PNG into RGBA before an image is
+/// completed, so `compression` is always `.none` and `format` is never `.png`
+/// for a stored image. Pending image data reserves the exact decoded byte
+/// length that will be attached later.
+pub const Image = struct {
+    id: u32 = 0,
+    number: u32 = 0,
+    width: u32 = 0,
+    height: u32 = 0,
+    format: command.Transmission.Format = .rgb,
+    compression: command.Transmission.Compression = .none,
+    data: Data = .{ .complete = "" },
+    metadata: packed struct(u32) {
+        /// The image's transient usage hint, used to prioritize eviction.
+        transient: bool = false,
+
+        /// Set this if the image was loaded without an ID or number. Such
+        /// images must not receive responses. Kitty gives these client ID
+        /// 0 (unaddressable); our storage keys everything by one public
+        /// u32 ID, so they get an ID from the upper half of the range
+        /// that is guaranteed unused at assignment time, but a client
+        /// that explicitly transmits that ID later can still replace
+        /// them.
+        implicit_id: bool = false,
+
+        /// Number of placements referencing this image.
+        placement_count: u30 = 0,
+    } = .{},
+
+    /// Unique, monotonically increasing stamp assigned each time an
+    /// image is added to (or replaced in) an ImageStorage. A changed
+    /// generation for a given image ID means the image contents may
+    /// have changed, even if the dimensions and byte length are the
+    /// same (e.g. a retransmission of the same ID). Stamps order by
+    /// transmission time. Zero means "never stored".
+    ///
+    /// For animated images this also changes whenever the frame that
+    /// should be displayed changes (advance, edit, or delete of the
+    /// current frame), since consumers key texture caches off it.
+    generation: u64 = 0,
+
+    /// Animation state, non-null once any animation command (a=f,
+    /// a=a) has attached animation state to this image. Owned by the
+    /// image; replaced/retransmitted images drop it, which implements
+    /// the protocol's "retransmission resets the animation" rule.
+    ///
+    /// This is only ever attached to images stored in an ImageStorage
+    /// and must only be mutated through the storage's own pointer
+    /// (Image values are copied around freely; copies share this
+    /// pointer and never own it).
+    animation: ?*animation.Animation = null,
+
+    pub const Error = error{
+        InsufficientData,
+        InvalidData,
+        DecompressionFailed,
+        DimensionsRequired,
+        DimensionsTooLarge,
+        FilePathTooLong,
+        TemporaryFileNotInTempDir,
+        TemporaryFileNotNamedCorrectly,
+        UnsupportedFormat,
+        UnsupportedMedium,
+        UnsupportedDepth,
+    };
+
+    pub const Data = union(enum) {
+        /// Owned, decoded image bytes. The empty default is not allocated.
+        complete: []const u8,
+
+        /// Expected decoded byte length for a payload that has not arrived.
+        pending: usize,
+
+        encoded_png: struct { bytes: []const u8, decoded_len: usize },
+        native_file: FileBacking,
+
+        /// Bytes reserved against the storage limit.
+        pub fn len(self: Data) usize {
+            return switch (self) {
+                .complete => |data| data.len,
+                .pending => |expected_len| expected_len,
+                .native_file => |file| file.len,
+                .encoded_png => |png| png.bytes.len + png.decoded_len,
+            };
+        }
+
+        /// Returns decoded bytes when the payload is complete.
+        pub fn bytes(self: Data) ?[]const u8 {
+            return switch (self) {
+                .complete => |data| data,
+                .pending, .encoded_png, .native_file => null,
+            };
+        }
+
+        pub fn isPending(self: Data) bool {
+            return self == .pending;
+        }
+
+        pub fn deinit(self: *Data, alloc: Allocator) void {
+            switch (self.*) {
+                .complete => |data| if (data.len > 0) alloc.free(data),
+                .pending => {},
+                .encoded_png => |png| alloc.free(png.bytes),
+                .native_file => |file| if (file.release) |release| release(file.context),
+            }
+        }
+    };
+
+    /// Transactional: a failed host read leaves the authoritative backing owned.
+    pub fn materializeFile(self: *Image, alloc: Allocator) !void {
+        const file = switch (self.data) {
+            .native_file => |file| file,
+            else => return,
+        };
+        const read = file.read orelse return error.InvalidData;
+        const release = file.release orelse return error.InvalidData;
+        const bytes = try alloc.alloc(u8, file.len);
+        errdefer alloc.free(bytes);
+        if (!read(file.context, bytes.ptr, bytes.len)) return error.InvalidData;
+        self.data = .{ .complete = bytes };
+        release(file.context);
+    }
+
+    /// Transactional: neither ownership nor metadata changes on failure.
+    pub fn materializePng(self: *Image, alloc: Allocator) !void {
+        const png = switch (self.data) {
+            .encoded_png => |png| png,
+            else => return,
+        };
+        const decode = sys.decode_png orelse return error.UnsupportedFormat;
+        var limited: LimitedAllocator = .init(alloc, max_size);
+        const result = try decode(limited.allocator(), png.bytes);
+        errdefer alloc.free(result.data);
+        if (result.width != self.width or result.height != self.height or
+            result.data.len != png.decoded_len) return error.InvalidData;
+        alloc.free(png.bytes);
+        self.data = .{ .complete = result.data };
+    }
+
+    pub fn deinit(self: *Image, alloc: Allocator) void {
+        self.data.deinit(alloc);
+        if (self.animation) |anim| {
+            anim.deinit(alloc);
+            alloc.destroy(anim);
+            self.animation = null;
+        }
+    }
+
+    /// The pixel data that should be displayed for this image. For an
+    /// animated image this is the current animation frame; otherwise
+    /// (and for the root frame) it is the image's own data.
+    pub fn renderData(self: *const Image) Data {
+        if (self.animation) |anim| {
+            if (anim.current_index > 0) {
+                return .{ .complete = anim.frames.items[anim.current_index - 1].data };
+            }
+        }
+
+        return self.data;
+    }
+
+    /// The pixel data of the given 1-based animation frame number, or
+    /// null if the frame doesn't exist. Frame 1 (the root frame)
+    /// always exists as long as the image data is complete, even for
+    /// images without animation state.
+    ///
+    /// The returned slice is owned by the image (or its animation)
+    /// and remains valid until the image or frame is mutated.
+    pub fn frameData(self: *const Image, number: u32) ?[]const u8 {
+        switch (number) {
+            0 => return null,
+            1 => return self.data.bytes(),
+            else => {
+                const anim = self.animation orelse return null;
+                // Minus 2 because frame is 1-based and frame 1 is the
+                // image base data, so the animation frames start at frame 2.
+                const idx = number - 2;
+                if (idx >= anim.frames.items.len) return null;
+                return anim.frames.items[idx].data;
+            },
+        }
+    }
+
+    /// Total bytes of pixel data reserved against the storage limit
+    /// for this image: the base data plus any animation frames.
+    pub fn storageSize(self: *const Image) usize {
+        var total: usize = self.data.len();
+        if (self.animation) |anim| total += anim.frameBytes();
+        return total;
+    }
+
+    /// Mostly for logging
+    pub fn withoutData(self: *const Image) Image {
+        var copy = self.*;
+        if (copy.data == .complete) copy.data = .{ .complete = "" };
+        return copy;
+    }
+};
+
+/// The rect taken up by some image placement, in grid cells. This will
+/// be rounded up to the nearest grid cell since we can't place images
+/// in partial grid cells.
+pub const Rect = struct {
+    top_left: PageList.Pin,
+    bottom_right: PageList.Pin,
+
+    /// Returns true if the grid cell is inside this rectangle. Pin.isBetween
+    /// compares page order, so its interior rows intentionally do not constrain
+    /// x. Check the column independently and use isBetween only for the row.
+    pub fn contains(self: Rect, cell: PageList.Pin) bool {
+        if (cell.x < self.top_left.x or cell.x > self.bottom_right.x) return false;
+
+        var row = cell;
+        row.x = self.top_left.x;
+        return row.isBetween(self.top_left, self.bottom_right);
+    }
+};
+
+/// Returns whether a name follows the POSIX shared memory name format.
+fn validSharedMemoryName(name: []const u8, name_max: usize) bool {
+    if (name.len < 2 or name.len > name_max or name[0] != '/') return false;
+    for (name[1..]) |c| {
+        if (c == '/' or c == 0) return false;
+    }
+
+    return true;
+}
+
+/// Returns true if `path` is `dir` or is contained within it, requiring a
+/// path-separator boundary so similarly prefixed directories do not match.
+fn isPathInDir(dir: []const u8, path: []const u8) bool {
+    if (dir.len == 0 or !std.mem.startsWith(u8, path, dir)) return false;
+    if (path.len == dir.len or std.fs.path.isSep(dir[dir.len - 1])) return true;
+    return std.fs.path.isSep(path[dir.len]);
+}
+
+test {
+    _ = kitty_windows;
+}
+
+test "temporary file path must be inside directory" {
+    const testing = std.testing;
+
+    try testing.expect(isPathInDir("/tmp", "/tmp/tty-graphics-protocol-image.data"));
+    try testing.expect(isPathInDir("/tmp/", "/tmp/tty-graphics-protocol-image.data"));
+    try testing.expect(isPathInDir("/tmp", "/tmp"));
+
+    try testing.expect(!isPathInDir("", "/tmp/tty-graphics-protocol-image.data"));
+    try testing.expect(!isPathInDir("/tmp", "/tmpX/tty-graphics-protocol-image.data"));
+    try testing.expect(!isPathInDir("/dev/shm", "/dev/shm-evil/tty-graphics-protocol-image.data"));
+    try testing.expect(!isPathInDir("/custom/tmp", "/custom/tmp-suffix/tty-graphics-protocol-image.data"));
+}
+
+test "shared memory names follow POSIX rules" {
+    const testing = std.testing;
+
+    try testing.expect(validSharedMemoryName("/kitty", 8));
+    try testing.expect(validSharedMemoryName("/1234567", 8));
+
+    try testing.expect(!validSharedMemoryName("", 8));
+    try testing.expect(!validSharedMemoryName("/", 8));
+    try testing.expect(!validSharedMemoryName("kitty", 8));
+    try testing.expect(!validSharedMemoryName("/kitty/image", 16));
+    try testing.expect(!validSharedMemoryName("/kitty\x00image", 16));
+    try testing.expect(!validSharedMemoryName("/12345678", 8));
+}
+
+test "image load rejects invalid POSIX shared memory names" {
+    if (comptime builtin.abi.isAndroid() or
+        builtin.target.os.tag == .windows or
+        !builtin.link_libc)
+    {
+        return error.SkipZigTest;
+    }
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .shared_memory,
+            .width = 1,
+            .height = 1,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, "kitty-without-leading-slash"),
+    };
+    defer cmd.deinit(alloc);
+
+    try testing.expectError(
+        error.InvalidData,
+        LoadingImage.init(testing.io, alloc, &cmd, .{
+            .file = false,
+            .temporary_file = .disabled,
+            .shared_memory = true,
+        }),
+    );
+}
+
+test "shared memory range with offset and size" {
+    const testing = std.testing;
+
+    const loading: LoadingImage = .{
+        .image = .{
+            .width = 1,
+            .height = 1,
+            .format = .rgb,
+        },
+        .quiet = .no,
+        .temporary_directory = null,
+    };
+
+    const explicit = try loading.sharedMemoryRange(.{
+        .offset = 2,
+        .size = 3,
+    }, 5);
+    try testing.expectEqual(@as(usize, 2), explicit.start);
+    try testing.expectEqual(@as(usize, 5), explicit.end);
+
+    const implicit = try loading.sharedMemoryRange(.{
+        .offset = 2,
+    }, 5);
+    try testing.expectEqual(@as(usize, 2), implicit.start);
+    try testing.expectEqual(@as(usize, 5), implicit.end);
+}
+
+test "shared memory range rejects out of bounds offset" {
+    const loading: LoadingImage = .{
+        .image = .{
+            .width = 1,
+            .height = 1,
+            .format = .rgb,
+        },
+        .quiet = .no,
+        .temporary_directory = null,
+    };
+
+    try std.testing.expectError(
+        error.InvalidData,
+        loading.sharedMemoryRange(.{ .offset = 4 }, 3),
+    );
+}
+
+test "shared memory range validates dimensions before multiplication" {
+    const loading: LoadingImage = .{
+        .image = .{
+            .width = std.math.maxInt(u32),
+            .height = std.math.maxInt(u32),
+            .format = .rgba,
+        },
+        .quiet = .no,
+        .temporary_directory = null,
+    };
+
+    try std.testing.expectError(
+        error.DimensionsTooLarge,
+        loading.sharedMemoryRange(.{}, 1),
+    );
+}
+
+// This specifically tests we ALLOW invalid RGB data because Kitty
+// documents that this should work.
+test "image load with invalid RGB data" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    // <ESC>_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA<ESC>\
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .width = 1,
+            .height = 1,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, "AAAA"),
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .direct);
+    defer loading.deinit(alloc);
+}
+
+test "image load with image too wide" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .width = max_dimension + 1,
+            .height = 1,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, "AAAA"),
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .direct);
+    defer loading.deinit(alloc);
+    try testing.expectError(error.DimensionsTooLarge, loading.complete(alloc));
+}
+
+test "image load with image too tall" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .height = max_dimension + 1,
+            .width = 1,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, "AAAA"),
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .direct);
+    defer loading.deinit(alloc);
+    try testing.expectError(error.DimensionsTooLarge, loading.complete(alloc));
+}
+
+test "image load: rgb, zlib compressed, direct" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .direct,
+            .compression = .zlib_deflate,
+            .height = 96,
+            .width = 128,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(
+            u8,
+            @embedFile("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data"),
+        ),
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .direct);
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+
+    // should be decompressed
+    try testing.expect(img.compression == .none);
+}
+
+test "image load: rgb, not compressed, direct" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .direct,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(
+            u8,
+            @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data"),
+        ),
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .direct);
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+
+    // should be decompressed
+    try testing.expect(img.compression == .none);
+}
+
+test "image load: rgb, zlib compressed, direct, chunked" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    const data = @embedFile("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
+
+    // Setup our initial chunk
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .direct,
+            .compression = .zlib_deflate,
+            .height = 96,
+            .width = 128,
+            .image_id = 31,
+            .more_chunks = true,
+        } },
+        .data = try alloc.dupe(u8, data[0..1024]),
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .direct);
+    defer loading.deinit(alloc);
+
+    // Read our remaining chunks
+    var fbs: std.Io.Reader = .fixed(data[1024..]);
+    var buf: [1024]u8 = undefined;
+    while (fbs.readSliceShort(&buf)) |size| {
+        try loading.addData(alloc, buf[0..size]);
+        if (size < buf.len) break;
+    } else |err| return err;
+
+    // Complete
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.compression == .none);
+}
+
+test "image load: rgb, zlib compressed, direct, chunked with zero initial chunk" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    const data = @embedFile("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
+
+    // Setup our initial chunk
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .direct,
+            .compression = .zlib_deflate,
+            .height = 96,
+            .width = 128,
+            .image_id = 31,
+            .more_chunks = true,
+        } },
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .direct);
+    defer loading.deinit(alloc);
+
+    // Read our remaining chunks
+    var fbs: std.Io.Reader = .fixed(data);
+    var buf: [1024]u8 = undefined;
+    while (fbs.readSliceShort(&buf)) |size| {
+        try loading.addData(alloc, buf[0..size]);
+        if (size < buf.len) break;
+    } else |err| return err;
+
+    // Complete
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.compression == .none);
+}
+
+test "image load: temporary file without correct path" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(testing.io, .{
+        .sub_path = "image.data",
+        .data = data,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = buf[0..try tmp_dir.dir.realPathFile(testing.io, "image.data", &buf)];
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .temporary_file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+    var dir_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try testing.expectError(error.TemporaryFileNotNamedCorrectly, LoadingImage.init(
+        io,
+        alloc,
+        &cmd,
+        .allWithTempDir(dir_path_buf[0..try tmp_dir.dir.realPath(testing.io, &dir_path_buf)]),
+    ));
+
+    // Temporary file should still be there
+    try tmp_dir.dir.access(testing.io, path, .{});
+}
+
+test "image load: temporary file outside directory prefix is rejected" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDir(io, "temp", .default_dir);
+    try tmp_dir.dir.createDir(io, "temp-suffix", .default_dir);
+
+    var trusted_dir = try tmp_dir.dir.openDir(io, "temp", .{});
+    defer trusted_dir.close(io);
+    var outside_dir = try tmp_dir.dir.openDir(io, "temp-suffix", .{});
+    defer outside_dir.close(io);
+
+    const filename = "tty-graphics-protocol-image.data";
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try outside_dir.writeFile(io, .{
+        .sub_path = filename,
+        .data = data,
+    });
+
+    var trusted_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const trusted_path = trusted_path_buf[0..try trusted_dir.realPath(io, &trusted_path_buf)];
+    var outside_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const outside_path = outside_path_buf[0..try outside_dir.realPathFile(io, filename, &outside_path_buf)];
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .temporary_file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, outside_path),
+    };
+    defer cmd.deinit(alloc);
+    try testing.expectError(
+        error.TemporaryFileNotInTempDir,
+        LoadingImage.init(io, alloc, &cmd, .allWithTempDir(trusted_path)),
+    );
+
+    // Rejection must happen before temporary-file cleanup is armed.
+    try outside_dir.access(io, filename, .{});
+}
+
+test "image load: rgb, not compressed, temporary file" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(testing.io, .{
+        .sub_path = "tty-graphics-protocol-image.data",
+        .data = data,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = buf[0..try tmp_dir.dir.realPathFile(testing.io, "tty-graphics-protocol-image.data", &buf)];
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .temporary_file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+    var dir_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var loading = try LoadingImage.init(
+        io,
+        alloc,
+        &cmd,
+        .allWithTempDir(dir_path_buf[0..try tmp_dir.dir.realPath(testing.io, &dir_path_buf)]),
+    );
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.compression == .none);
+
+    // Temporary file should be gone
+    try testing.expectError(error.FileNotFound, tmp_dir.dir.access(testing.io, path, .{}));
+}
+
+test "image load: rgb, not compressed, regular file" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(testing.io, .{
+        .sub_path = "image.data",
+        .data = data,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = buf[0..try tmp_dir.dir.realPathFile(testing.io, "image.data", &buf)];
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+    var dir_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var loading = try LoadingImage.init(
+        io,
+        alloc,
+        &cmd,
+        .allWithTempDir(dir_path_buf[0..try tmp_dir.dir.realPath(testing.io, &dir_path_buf)]),
+    );
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.compression == .none);
+    try tmp_dir.dir.access(testing.io, path, .{});
+}
+
+test "image load: regular file size reads exactly requested bytes" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(io, .{
+        .sub_path = "image.data",
+        .data = &.{ 1, 2, 3, 4, 5, 6 },
+    });
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = path_buf[0..try tmp_dir.dir.realPathFile(
+        io,
+        "image.data",
+        &path_buf,
+    )];
+
+    const cases = [_]struct {
+        offset: u32,
+        expected: [3]u8,
+    }{
+        .{ .offset = 0, .expected = .{ 1, 2, 3 } },
+        .{ .offset = 3, .expected = .{ 4, 5, 6 } },
+    };
+    for (cases) |case| {
+        var cmd: command.Command = .{
+            .control = .{ .transmit = .{
+                .format = .rgb,
+                .medium = .file,
+                .width = 1,
+                .height = 1,
+                .size = 3,
+                .offset = case.offset,
+                .image_id = 31,
+            } },
+            .data = try alloc.dupe(u8, path),
+        };
+        defer cmd.deinit(alloc);
+
+        var loading = try LoadingImage.init(io, alloc, &cmd, .{
+            .file = true,
+            .temporary_file = .disabled,
+            .shared_memory = false,
+        });
+        defer loading.deinit(alloc);
+        var img = try loading.complete(alloc);
+        defer img.deinit(alloc);
+
+        try testing.expectEqualSlices(u8, &case.expected, img.data.complete);
+    }
+}
+
+test "image load: regular file size rejects short data" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(io, .{
+        .sub_path = "image.data",
+        .data = &.{ 1, 2 },
+    });
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = path_buf[0..try tmp_dir.dir.realPathFile(
+        io,
+        "image.data",
+        &path_buf,
+    )];
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .file,
+            .width = 1,
+            .height = 1,
+            .size = 3,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+
+    try testing.expectError(
+        error.InvalidData,
+        LoadingImage.init(io, alloc, &cmd, .{
+            .file = true,
+            .temporary_file = .disabled,
+            .shared_memory = false,
+        }),
+    );
+}
+
+test "image load: rgb, not compressed, relative regular file" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(testing.io, .{
+        .sub_path = "image.data",
+        .data = data,
+    });
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try std.fmt.allocPrint(
+            alloc,
+            ".zig-cache/tmp/{s}/image.data",
+            .{tmp_dir.sub_path},
+        ),
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .{
+        .file = true,
+        .temporary_file = .disabled,
+        .shared_memory = false,
+    });
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.compression == .none);
+}
+
+test "image load: blocklist applies to opened file after symlink swap" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(io, .{
+        .sub_path = "safe.data",
+        .data = "safe",
+    });
+    try tmp_dir.dir.symLink(io, "/dev/null", "image.data", .{});
+
+    // Pin the blocked file, then simulate the cooperating process replacing
+    // the path with a safe target before validation.
+    const blocked_file = try tmp_dir.dir.openFile(io, "image.data", .{});
+    defer blocked_file.close(io);
+    try tmp_dir.dir.symLinkAtomic(io, "safe.data", "image.data", .{});
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try testing.expectError(
+        error.InvalidData,
+        LoadingImage.validatedFilePath(io, blocked_file, &path_buf),
+    );
+
+    // The pathname now resolves to the safe replacement, demonstrating that
+    // the rejection above came from the already-open file handle.
+    const safe_file = try tmp_dir.dir.openFile(io, "image.data", .{});
+    defer safe_file.close(io);
+    _ = try LoadingImage.validatedFilePath(io, safe_file, &path_buf);
+}
+
+test "image load: windows UNC path is rejected before open" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    // Opening a UNC path would resolve the host name and authenticate to
+    // it over SMB, so the rejection has to happen on the raw path. The
+    // host name is in the reserved .invalid TLD so it can never resolve.
+    const paths = [_][]const u8{
+        "\\\\nonexistent-host.invalid\\share\\tty-graphics-protocol-image.data",
+        "//nonexistent-host.invalid/share/tty-graphics-protocol-image.data",
+        "\\\\?\\UNC\\nonexistent-host.invalid\\share\\image.data",
+    };
+    for (paths) |path| {
+        var cmd: command.Command = .{
+            .control = .{ .transmit = .{
+                .format = .rgb,
+                .medium = .file,
+                .compression = .none,
+                .width = 20,
+                .height = 15,
+                .image_id = 31,
+            } },
+            .data = try alloc.dupe(u8, path),
+        };
+        defer cmd.deinit(alloc);
+        try testing.expectError(
+            error.InvalidData,
+            LoadingImage.init(io, alloc, &cmd, .{
+                .file = true,
+                .temporary_file = .disabled,
+                .shared_memory = false,
+            }),
+        );
+    }
+}
+
+test "image load: windows device namespace paths are rejected before open" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const filename = "tty-graphics-protocol-image.data";
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = filename, .data = data });
+
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_path = dir_buf[0..try tmp_dir.dir.realPath(io, &dir_buf)];
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const real_path = path_buf[0..try tmp_dir.dir.realPathFile(io, filename, &path_buf)];
+
+    // The verbatim, local device and NT namespace spellings all resolve
+    // to the same real file, so rejecting them proves the check runs on
+    // the raw path rather than on the canonical one.
+    const prefixes = [_][]const u8{ "\\\\?\\", "\\\\.\\", "\\??\\" };
+    for (prefixes) |prefix| {
+        const path = try std.mem.concat(alloc, u8, &.{ prefix, real_path });
+        defer alloc.free(path);
+
+        const mediums = [_]command.Transmission.Medium{ .file, .temporary_file };
+        for (mediums) |medium| {
+            var cmd: command.Command = .{
+                .control = .{ .transmit = .{
+                    .format = .rgb,
+                    .medium = medium,
+                    .compression = .none,
+                    .width = 20,
+                    .height = 15,
+                    .image_id = 31,
+                } },
+                .data = try alloc.dupe(u8, path),
+            };
+            defer cmd.deinit(alloc);
+            try testing.expectError(
+                error.InvalidData,
+                LoadingImage.init(io, alloc, &cmd, .allWithTempDir(dir_path)),
+            );
+        }
+    }
+
+    // A named pipe reached through the local device namespace.
+    {
+        var cmd: command.Command = .{
+            .control = .{ .transmit = .{
+                .format = .rgb,
+                .medium = .file,
+                .compression = .none,
+                .width = 20,
+                .height = 15,
+                .image_id = 31,
+            } },
+            .data = try alloc.dupe(u8, "\\\\.\\pipe\\ghostty-kitty-graphics-test"),
+        };
+        defer cmd.deinit(alloc);
+        try testing.expectError(
+            error.InvalidData,
+            LoadingImage.init(io, alloc, &cmd, .allWithTempDir(dir_path)),
+        );
+    }
+
+    // Nothing above reached the temporary file deletion.
+    try tmp_dir.dir.access(io, filename, .{});
+}
+
+test "image load: windows reserved device names are rejected before open" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_path = dir_buf[0..try tmp_dir.dir.realPath(io, &dir_buf)];
+
+    const names = [_][]const u8{ "CON", "NUL.data", "com1", "LPT9.png", "AUX", "PRN." };
+    for (names) |name| {
+        const path = try std.fs.path.join(alloc, &.{ dir_path, name });
+        defer alloc.free(path);
+
+        var cmd: command.Command = .{
+            .control = .{ .transmit = .{
+                .format = .rgb,
+                .medium = .file,
+                .compression = .none,
+                .width = 20,
+                .height = 15,
+                .image_id = 31,
+            } },
+            .data = try alloc.dupe(u8, path),
+        };
+        defer cmd.deinit(alloc);
+        try testing.expectError(
+            error.InvalidData,
+            LoadingImage.init(io, alloc, &cmd, .{
+                .file = true,
+                .temporary_file = .disabled,
+                .shared_memory = false,
+            }),
+        );
+    }
+}
+
+test "image load: windows local file accepted in forward slash and upper case spellings" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const filename = "image.data";
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = filename, .data = data });
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const real_path = path_buf[0..try tmp_dir.dir.realPathFile(io, filename, &path_buf)];
+
+    // Both spellings open the same file; the canonical path the checks
+    // see is the backslash, on-disk case form either way.
+    const forward = try alloc.dupe(u8, real_path);
+    defer alloc.free(forward);
+    std.mem.replaceScalar(u8, forward, '\\', '/');
+    const upper = try alloc.dupe(u8, real_path);
+    defer alloc.free(upper);
+    _ = std.ascii.upperString(upper, real_path);
+
+    const spellings = [_][]const u8{ forward, upper };
+    for (spellings) |path| {
+        var cmd: command.Command = .{
+            .control = .{ .transmit = .{
+                .format = .rgb,
+                .medium = .file,
+                .compression = .none,
+                .width = 20,
+                .height = 15,
+                .image_id = 31,
+            } },
+            .data = try alloc.dupe(u8, path),
+        };
+        defer cmd.deinit(alloc);
+        var loading = try LoadingImage.init(io, alloc, &cmd, .{
+            .file = true,
+            .temporary_file = .disabled,
+            .shared_memory = false,
+        });
+        defer loading.deinit(alloc);
+        var img = try loading.complete(alloc);
+        defer img.deinit(alloc);
+        try testing.expect(img.compression == .none);
+    }
+
+    try tmp_dir.dir.access(io, filename, .{});
+}
+
+test "image load: windows temporary file with differently spelled directory" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const filename = "tty-graphics-protocol-image.data";
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = filename, .data = data });
+
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_path = dir_buf[0..try tmp_dir.dir.realPath(io, &dir_buf)];
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const real_path = path_buf[0..try tmp_dir.dir.realPathFile(io, filename, &path_buf)];
+
+    // Hosts hand over GetTempPath output, which regularly differs from
+    // the canonical path in case (`C:\WINDOWS\TEMP\`), so the directory
+    // prefix check only passes through the real-path fallback.
+    const dir_upper = try alloc.dupe(u8, dir_path);
+    defer alloc.free(dir_upper);
+    _ = std.ascii.upperString(dir_upper, dir_path);
+    const path_upper = try alloc.dupe(u8, real_path);
+    defer alloc.free(path_upper);
+    _ = std.ascii.upperString(path_upper, real_path);
+    try testing.expect(!isPathInDir(dir_upper, real_path) or
+        std.mem.eql(u8, dir_upper, dir_path));
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .temporary_file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path_upper),
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .allWithTempDir(dir_upper));
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.compression == .none);
+
+    // Temporary file should be gone
+    try testing.expectError(error.FileNotFound, tmp_dir.dir.access(io, filename, .{}));
+}
+
+test "image load: windows canonical path check accepts a local file opened through a device spelling" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const filename = "image.data";
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = filename, .data = "safe" });
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const real_path = path_buf[0..try tmp_dir.dir.realPathFile(io, filename, &path_buf)];
+
+    // readFile refuses this spelling before the open, but the post-open
+    // check works from the canonical path and so does not care how the
+    // file was reached: `\\.\C:\...` canonicalizes back to `C:\...`.
+    const device_path = try std.mem.concat(alloc, u8, &.{ "\\\\.\\", real_path });
+    defer alloc.free(device_path);
+    const file = try std.Io.Dir.cwd().openFile(io, device_path, .{});
+    defer file.close(io);
+
+    const canon_buf = try alloc.alloc(u8, std.fs.max_path_bytes);
+    defer alloc.free(canon_buf);
+    const canon = try LoadingImage.validatedFilePath(io, file, canon_buf);
+    try testing.expectEqualStrings(real_path, canon);
+}
+
+test "image load: windows canonical path check rejects a file reached through a UNC share" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const filename = "image.data";
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = filename, .data = "safe" });
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const real_path = path_buf[0..try tmp_dir.dir.realPathFile(io, filename, &path_buf)];
+    try testing.expect(kitty_windows.isDriveAbsolute(real_path));
+
+    // Reach the same local file through the loopback administrative
+    // share, which is how a junction or symlink into a share would look
+    // to the post-open check. The share needs the server service and an
+    // administrative token, so the test is skipped when the open fails.
+    const unc_path = try std.fmt.allocPrint(
+        alloc,
+        "\\\\localhost\\{c}$\\{s}",
+        .{ real_path[0], real_path[3..] },
+    );
+    defer alloc.free(unc_path);
+    const file = std.Io.Dir.cwd().openFile(io, unc_path, .{}) catch
+        return error.SkipZigTest;
+    defer file.close(io);
+
+    const canon_buf = try alloc.alloc(u8, std.fs.max_path_bytes);
+    defer alloc.free(canon_buf);
+    try testing.expectError(
+        error.NotDriveAbsolute,
+        LoadingImage.validatedFilePath(io, file, canon_buf),
+    );
+}
+
+test "image load: png, not compressed, regular file" {
+    if (sys.decode_png == null) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const data = @embedFile("testdata/image-png-none-50x76-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(testing.io, .{
+        .sub_path = "tty-graphics-protocol-image.data",
+        .data = data,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = buf[0..try tmp_dir.dir.realPathFile(testing.io, "tty-graphics-protocol-image.data", &buf)];
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .png,
+            .medium = .file,
+            .compression = .none,
+            .width = 0,
+            .height = 0,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+    var dir_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var loading = try LoadingImage.init(
+        io,
+        alloc,
+        &cmd,
+        .allWithTempDir(dir_path_buf[0..try tmp_dir.dir.realPath(testing.io, &dir_path_buf)]),
+    );
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.compression == .none);
+    try testing.expect(img.format == .rgba);
+    try tmp_dir.dir.access(testing.io, path, .{});
+}
+
+test "image load: png rejects oversized decoder allocation" {
+    const testing = std.testing;
+
+    const oversized_decoder = struct {
+        fn decode(
+            alloc: Allocator,
+            _: []const u8,
+        ) sys.DecodeError!sys.Image {
+            const data = try alloc.alloc(u8, max_size + 1);
+            return .{
+                .width = 1,
+                .height = 1,
+                .data = data,
+            };
+        }
+    }.decode;
+
+    const original_decode_png = sys.decode_png;
+    defer sys.decode_png = original_decode_png;
+    sys.decode_png = &oversized_decoder;
+
+    // Fail any allocation which reaches the underlying allocator. The size
+    // limiter should reject the decoder's request before it gets that far.
+    var failing = testing.FailingAllocator.init(testing.allocator, .{
+        .fail_index = 0,
+    });
+    const alloc = failing.allocator();
+
+    var loading: LoadingImage = .{
+        .image = .{ .format = .png },
+        .quiet = .no,
+        .temporary_directory = null,
+    };
+    defer loading.deinit(alloc);
+
+    try testing.expectError(error.InvalidData, loading.complete(alloc));
+    try testing.expect(!failing.has_induced_failure);
+}
+
+test "image load: png rejects oversized Wuffs image before allocation" {
+    if (sys.decode_png == null) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    // Turn the small test PNG into a 32768x32767 image. Its decoded RGBA
+    // size is just under Wuffs' 4 GiB package limit but over Kitty's 400 MiB
+    // limit, which previously allowed the large allocation to happen first.
+    var data = @embedFile("testdata/image-png-none-50x76-2147483647-raw.data").*;
+    std.mem.writeInt(u32, data[16..20], 32768, .big);
+    std.mem.writeInt(u32, data[20..24], 32767, .big);
+    std.mem.writeInt(u32, data[29..33], std.hash.Crc32.hash(data[12..29]), .big);
+
+    const cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .png,
+            .medium = .direct,
+        } },
+        .data = &data,
+    };
+    var loading = try LoadingImage.init(testing.io, alloc, &cmd, .direct);
+    defer loading.deinit(alloc);
+
+    try testing.expectError(error.InvalidData, loading.complete(alloc));
+}
+
+test "limits: direct medium always allowed" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .direct,
+            .width = 1,
+            .height = 1,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, "AAAA"),
+    };
+    defer cmd.deinit(alloc);
+
+    // Direct medium should work even with the most restrictive limits
+    var loading = try LoadingImage.init(io, alloc, &cmd, .direct);
+    defer loading.deinit(alloc);
+}
+
+test "limits: file medium blocked by limits" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(testing.io, .{
+        .sub_path = "image.data",
+        .data = data,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = buf[0..try tmp_dir.dir.realPathFile(testing.io, "image.data", &buf)];
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+    try testing.expectError(error.UnsupportedMedium, LoadingImage.init(io, alloc, &cmd, .direct));
+}
+
+test "limits: file medium allowed by limits" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(testing.io, .{
+        .sub_path = "image.data",
+        .data = data,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = buf[0..try tmp_dir.dir.realPathFile(testing.io, "image.data", &buf)];
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+    var loading = try LoadingImage.init(io, alloc, &cmd, .{
+        .file = true,
+        .temporary_file = .disabled,
+        .shared_memory = false,
+    });
+    defer loading.deinit(alloc);
+}
+
+test "limits: temporary file medium blocked by limits" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(testing.io, .{
+        .sub_path = "tty-graphics-protocol-image.data",
+        .data = data,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = buf[0..try tmp_dir.dir.realPathFile(testing.io, "tty-graphics-protocol-image.data", &buf)];
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .temporary_file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+    try testing.expectError(error.UnsupportedMedium, LoadingImage.init(io, alloc, &cmd, .{
+        .file = true,
+        .temporary_file = .disabled,
+        .shared_memory = true,
+    }));
+
+    // File should still exist since we blocked before reading
+    try tmp_dir.dir.access(testing.io, "tty-graphics-protocol-image.data", .{});
+}
+
+test "limits: temporary file medium allowed by limits" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const data = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(testing.io, .{
+        .sub_path = "tty-graphics-protocol-image.data",
+        .data = data,
+    });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = buf[0..try tmp_dir.dir.realPathFile(testing.io, "tty-graphics-protocol-image.data", &buf)];
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .temporary_file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+    var dir_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var loading = try LoadingImage.init(
+        io,
+        alloc,
+        &cmd,
+
+        .{
+            .file = false,
+            .temporary_file = .{
+                .enabled = .{ .directory = dir_path_buf[0..try tmp_dir.dir.realPath(testing.io, &dir_path_buf)] },
+            },
+            .shared_memory = false,
+        },
+    );
+    defer loading.deinit(alloc);
+}
+
+const PngHeader = struct { width: u32, height: u32, decoded_len: usize };
+
+/// Bounded structural validation, deliberately without inflating IDAT.
+/// CRC-valid but corrupt compressed pixels can fail later in this experiment.
+fn inspectPng(bytes: []const u8) !PngHeader {
+    if (bytes.len > max_size or bytes.len < 33 or
+        !std.mem.eql(u8, bytes[0..8], "\x89PNG\r\n\x1a\n")) return error.InvalidData;
+    var offset: usize = 8;
+    var header: ?PngHeader = null;
+    var idat = false;
+    var ended_idat = false;
+    var palette = false;
+    var indexed = false;
+    var color_type: u8 = 0;
+    var bit_depth: u8 = 0;
+    var palette_entries: usize = 0;
+    var transparency = false;
+    while (offset < bytes.len) {
+        if (bytes.len - offset < 12) return error.InvalidData;
+        const len: usize = std.mem.readInt(u32, bytes[offset..][0..4], .big);
+        if (len > bytes.len - offset - 12) return error.InvalidData;
+        const kind = bytes[offset + 4 ..][0..4];
+        for (kind) |ch| if (!std.ascii.isAlphabetic(ch)) return error.InvalidData;
+        if (kind[2] & 0x20 != 0) return error.InvalidData;
+        const body = bytes[offset + 8 ..][0..len];
+        const crc = std.mem.readInt(u32, bytes[offset + 8 + len ..][0..4], .big);
+        if (std.hash.crc.Crc32IsoHdlc.hash(bytes[offset + 4 ..][0 .. len + 4]) != crc)
+            return error.InvalidData;
+        offset += len + 12;
+        if (std.mem.eql(u8, kind, "IHDR")) {
+            if (header != null or len != 13) return error.InvalidData;
+            const width = std.mem.readInt(u32, body[0..4], .big);
+            const height = std.mem.readInt(u32, body[4..8], .big);
+            if (width == 0 or height == 0) return error.DimensionsRequired;
+            if (width > max_dimension or height > max_dimension) return error.DimensionsTooLarge;
+            const depth = body[8];
+            const supported = switch (body[9]) {
+                0 => depth == 1 or depth == 2 or depth == 4 or depth == 8 or depth == 16,
+                2, 4, 6 => depth == 8 or depth == 16,
+                3 => depth == 1 or depth == 2 or depth == 4 or depth == 8,
+                else => false,
+            };
+            if (!supported or body[10] != 0 or body[11] != 0 or body[12] > 1)
+                return error.InvalidData;
+            color_type = body[9];
+            bit_depth = depth;
+            indexed = color_type == 3;
+            const pixels = std.math.mul(usize, width, height) catch return error.InvalidData;
+            const decoded_len = std.math.mul(usize, pixels, 4) catch return error.InvalidData;
+            if (decoded_len > max_size) return error.InvalidData;
+            header = .{ .width = width, .height = height, .decoded_len = decoded_len };
+        } else {
+            if (header == null) return error.InvalidData;
+            if (std.mem.eql(u8, kind, "IDAT")) {
+                if (ended_idat or (indexed and !palette)) return error.InvalidData;
+                idat = true;
+            } else {
+                if (idat) ended_idat = true;
+                if (std.mem.eql(u8, kind, "IEND")) {
+                    if (!idat or len != 0 or offset != bytes.len) return error.InvalidData;
+                    return header.?;
+                } else if (std.mem.eql(u8, kind, "PLTE")) {
+                    if (palette or idat or transparency or len == 0 or len > 768 or len % 3 != 0 or
+                        color_type == 0 or color_type == 4) return error.InvalidData;
+                    palette_entries = len / 3;
+                    if (indexed and palette_entries > (@as(usize, 1) << @intCast(bit_depth)))
+                        return error.InvalidData;
+                    palette = true;
+                } else if (std.mem.eql(u8, kind, "tRNS")) {
+                    if (transparency or idat) return error.InvalidData;
+                    switch (color_type) {
+                        0, 2 => {
+                            const expected: usize = if (color_type == 0) 2 else 6;
+                            if (len != expected) return error.InvalidData;
+                            const max_sample: u32 = (@as(u32, 1) << @intCast(bit_depth)) - 1;
+                            var i: usize = 0;
+                            while (i < len) : (i += 2) {
+                                if (std.mem.readInt(u16, body[i..][0..2], .big) > max_sample)
+                                    return error.InvalidData;
+                            }
+                        },
+                        3 => if (!palette or len == 0 or len > palette_entries)
+                            return error.InvalidData,
+                        // Alpha-bearing color types must not carry tRNS.
+                        else => return error.InvalidData,
+                    }
+                    transparency = true;
+                } else if (kind[0] & 0x20 == 0) {
+                    return error.InvalidData;
+                } else {
+                    // sBIT, bKGD, color profiles, APNG, text, and any other
+                    // ancillary extensions are deliberately not eligible.
+                    // The strict decoder handles their validity/semantics.
+                    return error.UnsupportedPngRetention;
+                }
+            }
+        }
+    }
+    return error.InvalidData;
+}
+
+test "experimental PNG inspection validates CRC and complete structure" {
+    const testing = std.testing;
+    const original = @embedFile("testdata/image-png-none-50x76-2147483647-raw.data");
+    const header = try inspectPng(original);
+    try testing.expectEqual(@as(u32, 50), header.width);
+    try testing.expectEqual(@as(u32, 76), header.height);
+    try testing.expectEqual(@as(usize, 50 * 76 * 4), header.decoded_len);
+    try testing.expectError(error.InvalidData, inspectPng(original[0 .. original.len - 1]));
+    var corrupt = original.*;
+    corrupt[29] ^= 1; // IHDR CRC
+    try testing.expectError(error.InvalidData, inspectPng(&corrupt));
+    corrupt = original.*;
+    corrupt[0] = 0;
+    try testing.expectError(error.InvalidData, inspectPng(&corrupt));
+}
+
+test "experimental PNG inspection transparency and palette metadata" {
+    const testing = std.testing;
+    const Chunk = struct { kind: *const [4]u8, body: []const u8 };
+    const Helper = struct {
+        fn append(out: *std.ArrayList(u8), kind: *const [4]u8, body: []const u8) !void {
+            var word: [4]u8 = undefined;
+            std.mem.writeInt(u32, &word, @intCast(body.len), .big);
+            try out.appendSlice(testing.allocator, &word);
+            const crc_start = out.items.len;
+            try out.appendSlice(testing.allocator, kind);
+            try out.appendSlice(testing.allocator, body);
+            std.mem.writeInt(u32, &word, std.hash.crc.Crc32IsoHdlc.hash(out.items[crc_start..]), .big);
+            try out.appendSlice(testing.allocator, &word);
+        }
+        fn make(color: u8, depth: u8, chunks: []const Chunk) ![]u8 {
+            var out: std.ArrayList(u8) = .empty;
+            errdefer out.deinit(testing.allocator);
+            try out.appendSlice(testing.allocator, "\x89PNG\r\n\x1a\n");
+            const ihdr = [_]u8{ 0, 0, 0, 1, 0, 0, 0, 1, depth, color, 0, 0, 0 };
+            try append(&out, "IHDR", &ihdr);
+            for (chunks) |chunk| try append(&out, chunk.kind, chunk.body);
+            try append(&out, "IEND", "");
+            return out.toOwnedSlice(testing.allocator);
+        }
+        fn check(color: u8, depth: u8, chunks: []const Chunk, expected: ?anyerror) !void {
+            const png = try make(color, depth, chunks);
+            defer testing.allocator.free(png);
+            if (expected) |err| {
+                try testing.expectError(err, inspectPng(png));
+            } else {
+                _ = try inspectPng(png);
+            }
+        }
+    };
+    // IDAT is intentionally opaque; this test only exercises structure.
+    const idat: Chunk = .{ .kind = "IDAT", .body = "" };
+    const palette: Chunk = .{ .kind = "PLTE", .body = &.{ 0, 0, 0, 255, 255, 255 } };
+    const alpha: Chunk = .{ .kind = "tRNS", .body = &.{128} };
+    const gray: Chunk = .{ .kind = "tRNS", .body = &.{ 0, 1 } };
+    const rgb: Chunk = .{ .kind = "tRNS", .body = &.{ 0, 1, 0, 2, 0, 3 } };
+    try Helper.check(3, 1, &.{ palette, alpha, idat }, null);
+    try Helper.check(0, 1, &.{ gray, idat }, null);
+    try Helper.check(2, 8, &.{ rgb, idat }, null);
+    try Helper.check(2, 8, &.{ palette, rgb, idat }, null);
+    try Helper.check(3, 1, &.{ alpha, palette, idat }, error.InvalidData);
+    try Helper.check(3, 1, &.{ palette, idat, alpha }, error.InvalidData);
+    try Helper.check(3, 1, &.{ palette, alpha, alpha, idat }, error.InvalidData);
+    try Helper.check(0, 8, &.{ alpha, idat }, error.InvalidData);
+    try Helper.check(2, 8, &.{ gray, idat }, error.InvalidData);
+    try Helper.check(4, 8, &.{ gray, idat }, error.InvalidData);
+    try Helper.check(6, 8, &.{ rgb, idat }, error.InvalidData);
+    try Helper.check(0, 8, &.{ palette, idat }, error.InvalidData);
+    try Helper.check(4, 8, &.{ palette, idat }, error.InvalidData);
+    try Helper.check(2, 8, &.{ rgb, palette, idat }, error.InvalidData);
+    try Helper.check(3, 1, &.{ palette, .{ .kind = "tRNS", .body = "" }, idat }, error.InvalidData);
+    try Helper.check(3, 1, &.{ palette, .{ .kind = "tRNS", .body = &.{ 1, 2, 3 } }, idat }, error.InvalidData);
+    try Helper.check(3, 1, &.{ .{ .kind = "PLTE", .body = &.{ 0, 0, 0, 1, 1, 1, 2, 2, 2 } }, idat }, error.InvalidData);
+    try Helper.check(0, 1, &.{ .{ .kind = "tRNS", .body = &.{ 0, 2 } }, idat }, error.InvalidData);
+    try Helper.check(2, 8, &.{ .{ .kind = "tRNS", .body = &.{ 1, 0, 0, 0, 0, 0 } }, idat }, error.InvalidData);
+    try Helper.check(0, 16, &.{ .{ .kind = "tRNS", .body = &.{ 255, 255 } }, idat }, null);
+    for ([_]*const [4]u8{ "sBIT", "bKGD", "iCCP", "gAMA" }) |kind| {
+        try Helper.check(2, 8, &.{ .{ .kind = kind, .body = "" }, idat }, error.UnsupportedPngRetention);
+    }
+}
+
+test "experimental PNG unsupported metadata falls back to strict decoding" {
+    const testing = std.testing;
+    const Decoder = struct {
+        var calls: usize = 0;
+        fn decode(_: Allocator, _: []const u8) sys.DecodeError!sys.Image {
+            calls += 1;
+            return error.InvalidData;
+        }
+    };
+    const original_decoder = sys.decode_png;
+    defer sys.decode_png = original_decoder;
+    sys.decode_png = &Decoder.decode;
+    Decoder.calls = 0;
+    const png = @embedFile("testdata/image-png-none-50x76-2147483647-raw.data");
+    var loading: LoadingImage = .{
+        .image = .{ .format = .png },
+        .quiet = .failures,
+        .temporary_directory = null,
+    };
+    defer loading.deinit(testing.allocator);
+    try loading.addData(testing.allocator, png[0..33]);
+    // CRC-valid ancillary chunk: inspection must delegate, not retain or
+    // return UnsupportedPngRetention to the caller.
+    var chunk = [_]u8{ 0, 0, 0, 1, 's', 'B', 'I', 'T', 8, 0, 0, 0, 0 };
+    std.mem.writeInt(u32, chunk[9..13], std.hash.crc.Crc32IsoHdlc.hash(chunk[4..9]), .big);
+    try loading.addData(testing.allocator, &chunk);
+    try loading.addData(testing.allocator, png[33..]);
+    try testing.expectError(error.InvalidData, loading.completePreservingPng(testing.allocator));
+    try testing.expectEqual(@as(usize, 1), Decoder.calls);
+}
+
+test "native file completion and transactional lazy materialization" {
+    const testing = std.testing;
+    const Fake = struct {
+        reads: usize = 0,
+        releases: usize = 0,
+        fail: bool = false,
+        fn read(ctx: ?*anyopaque, dest: [*]u8, len: usize) callconv(.c) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.reads += 1;
+            if (self.fail) return false;
+            @memset(dest[0..len], 123);
+            return true;
+        }
+        fn release(ctx: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.releases += 1;
+        }
+        fn backing(self: *@This(), len: usize) FileBacking {
+            return .{ .context = self, .identity = 7, .len = len, .read = read, .release = release };
+        }
+    };
+    var fake: Fake = .{};
+    var loading: LoadingImage = .{
+        .image = .{ .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = fake.backing(4) } },
+        .quiet = .no,
+        .temporary_directory = null,
+    };
+    defer loading.deinit(testing.allocator);
+    var img = try loading.complete(testing.allocator);
+    defer img.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), fake.reads);
+    try testing.expectEqual(@as(usize, 4), img.data.len());
+    try testing.expect(!img.data.isPending());
+    try testing.expect(img.data.bytes() == null);
+    fake.fail = true;
+    try testing.expectError(error.InvalidData, img.materializeFile(testing.allocator));
+    try testing.expect(img.data == .native_file);
+    try testing.expectEqual(@as(usize, 0), fake.releases);
+    fake.fail = false;
+    try img.materializeFile(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), fake.releases);
+    try testing.expectEqualSlices(u8, &.{ 123, 123, 123, 123 }, img.data.bytes().?);
+
+    var invalid: LoadingImage = .{
+        .image = .{ .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = fake.backing(3) } },
+        .quiet = .no,
+        .temporary_directory = null,
+    };
+    try testing.expectError(error.InvalidData, invalid.complete(testing.allocator));
+    invalid.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), fake.releases);
+    // q=1 also validates length without reading pixels.
+    var quiet_one: LoadingImage = .{
+        .image = .{ .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = fake.backing(4) } },
+        .quiet = .ok,
+        .temporary_directory = null,
+    };
+    const reads_before = fake.reads;
+    var quiet_img = try quiet_one.complete(testing.allocator);
+    quiet_one.deinit(testing.allocator);
+    try testing.expectEqual(reads_before, fake.reads);
+    quiet_img.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 3), fake.releases);
+    var canceled: LoadingImage = .{
+        .image = .{ .data = .{ .native_file = fake.backing(4) } },
+        .quiet = .failures,
+        .temporary_directory = null,
+    };
+    canceled.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 4), fake.releases);
+}
+
+test "native file eligibility is whole raw RGBA only" {
+    const testing = std.testing;
+    var t: command.Transmission = .{ .medium = .file, .format = .rgba, .width = 1, .height = 2 };
+    try testing.expectEqual(@as(?usize, 8), LoadingImage.nativeFileExpectedLen(t));
+    t.size = 8;
+    try testing.expectEqual(@as(?usize, 8), LoadingImage.nativeFileExpectedLen(t));
+    t.size = 7;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.size = 0;
+    t.more_chunks = true;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.more_chunks = false;
+    t.offset = 1;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.offset = 0;
+    t.format = .rgb;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.format = .png;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.format = .rgba;
+    t.medium = .temporary_file;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.medium = .shared_memory;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.medium = .file;
+    t.compression = .zlib_deflate;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.compression = .none;
+    t.width = 0;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.width = 10001;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+    t.width = 10000;
+    t.height = 10000;
+    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
+}
+
+test "native file snapshot rejects missing callbacks before retaining" {
+    const testing = std.testing;
+    const Fake = struct {
+        reads: usize = 0,
+        releases: usize = 0,
+        missing_read: bool = true,
+        missing_release: bool = false,
+
+        fn read(ctx: ?*anyopaque, dest: [*]u8, len: usize) callconv(.c) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.reads += 1;
+            @memset(dest[0..len], 42);
+            return true;
+        }
+
+        fn release(ctx: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.releases += 1;
+        }
+
+        fn snapshot(ctx: ?*anyopaque, request: *const SnapshotFileRequest, out: *FileBacking) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            out.* = .{
+                .context = ctx,
+                .identity = 1,
+                .len = @intCast(request.expected_len),
+                .read = if (self.missing_read) null else &read,
+                .release = if (self.missing_release) null else &release,
+            };
+            return true;
+        }
+    };
+    var fake: Fake = .{};
+    const hook: SnapshotFileHook = .{ .context = &fake, .callback = &Fake.snapshot };
+    const request: SnapshotFileRequest = .{ .fd = -1, .expected_len = 4 };
+    var loading: LoadingImage = .{
+        .image = .{ .width = 1, .height = 1, .format = .rgba },
+        .quiet = .no,
+        .temporary_directory = null,
+    };
+    // Missing read: transferred context is immediately released, not stored.
+    try testing.expect(!try loading.trySnapshotFile(hook, request));
+    try testing.expect(loading.image.data != .native_file);
+    try testing.expectEqual(@as(usize, 1), fake.releases);
+
+    // Missing release (or both): reject without calling a null pointer.
+    fake.missing_read = false;
+    fake.missing_release = true;
+    try testing.expect(!try loading.trySnapshotFile(hook, request));
+    try testing.expect(loading.image.data != .native_file);
+    fake.missing_read = true;
+    try testing.expect(!try loading.trySnapshotFile(hook, request));
+    try testing.expect(loading.image.data != .native_file);
+    try testing.expectEqual(@as(usize, 0), fake.reads);
+    try testing.expectEqual(@as(usize, 1), fake.releases);
+
+    // The ordinary reader can still supply bytes after rejection.
+    try loading.addData(testing.allocator, &.{ 1, 2, 3, 4 });
+    var img = try loading.complete(testing.allocator);
+    loading.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, img.data.bytes().?);
+    img.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), fake.releases);
+
+    // Valid callback ownership is unchanged: zero-read acceptance, one release.
+    fake.missing_read = false;
+    fake.missing_release = false;
+    var accepted: LoadingImage = .{
+        .image = .{ .width = 1, .height = 1, .format = .rgba },
+        .quiet = .no,
+        .temporary_directory = null,
+    };
+    try testing.expect(try accepted.trySnapshotFile(hook, request));
+    try testing.expect(accepted.image.data == .native_file);
+    try testing.expectEqual(@as(usize, 0), fake.reads);
+    accepted.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), fake.releases);
+}

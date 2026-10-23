@@ -1,0 +1,68 @@
+--- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+@@ -1951,6 +1951,14 @@
+    * Output type: size_t *
+    */
+   GHOSTTY_TERMINAL_DATA_CLIPBOARD_WRITE_MAX_BYTES = 40,
++
++  /**
++   * Whether xterm modifyOtherKeys mode 2 is enabled.
++   *
++   * Output type: bool *
++   */
++  GHOSTTY_TERMINAL_DATA_MODIFY_OTHER_KEYS = 41,
++
+   GHOSTTY_TERMINAL_DATA_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyTerminalData;
+ 
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -1556,6 +1556,7 @@
+     vt_ground = 38,
+     cursor_at_prompt = 39,
+     clipboard_write_max_bytes = 40,
++    modify_other_keys = 41,
+ 
+     /// Output type expected for querying the data of the given kind.
+     pub fn OutType(comptime self: TerminalData) type {
+@@ -1569,6 +1570,7 @@
+             .vt_processing_error,
+             .vt_ground,
+             .cursor_at_prompt,
++            .modify_other_keys,
+             => bool,
+             .active_screen => TerminalScreen,
+             .kitty_keyboard_flags => u8,
+@@ -1719,6 +1721,7 @@
+             t.screens.active.selection orelse return .no_value,
+         ),
+         .viewport_active => out.* = t.screens.active.pages.viewport == .active,
++        .modify_other_keys => out.* = t.flags.modify_other_keys_2,
+         .vt_processing_error => out.* = wrapper.stream.handler.semantic_failure,
+         .vt_ground => out.* = wrapper.stream.ground(),
+         .scrollback_max_bytes => {
+@@ -3139,6 +3142,24 @@
+     try testing.expectEqual(3, flags);
+ }
+ 
++test "get modify_other_keys" {
++    var t: Terminal = null;
++    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 80, 24));
++    defer free(t);
++
++    var enabled: bool = undefined;
++    try testing.expectEqual(Result.success, get(t, .modify_other_keys, @ptrCast(&enabled)));
++    try testing.expect(!enabled);
++
++    vt_write(t, "\x1b[>4;2m", 7);
++    try testing.expectEqual(Result.success, get(t, .modify_other_keys, @ptrCast(&enabled)));
++    try testing.expect(enabled);
++
++    vt_write(t, "\x1b[>4;0m", 7);
++    try testing.expectEqual(Result.success, get(t, .modify_other_keys, @ptrCast(&enabled)));
++    try testing.expect(!enabled);
++}
++
+ test "get mouse_tracking" {
+     var t: Terminal = null;
+     try testing.expectEqual(Result.success, new(

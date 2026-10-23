@@ -211,6 +211,9 @@ impl Telemetry {
             subscribers: Vec::new(),
         }));
 
+        // [OHOS PORT BEGIN] HiCodeer sends no telemetry, so it also keeps no
+        // local event log on disk.
+        #[cfg(not(target_env = "ohos"))]
         cx.background_spawn({
             let state = state.clone();
             let os_version = os_version();
@@ -222,6 +225,7 @@ impl Telemetry {
             }
         })
         .detach();
+        // [OHOS PORT END]
 
         cx.observe_global::<SettingsStore>({
             let state = state.clone();

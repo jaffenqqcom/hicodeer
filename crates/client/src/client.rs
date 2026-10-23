@@ -545,12 +545,34 @@ pub struct TelemetrySettings {
 
 impl settings::Settings for TelemetrySettings {
     fn from_settings(content: &SettingsContent) -> Self {
-        let telemetry = content.telemetry.as_ref().unwrap();
-        Self {
-            diagnostics: telemetry.diagnostics.unwrap(),
-            metrics: telemetry.metrics.unwrap(),
-            anthropic_retention: telemetry.anthropic_retention.unwrap(),
-        }
+        telemetry_settings(content)
+    }
+}
+
+// [OHOS PORT BEGIN] HiCodeer collects no telemetry on this platform. Both
+// switches are forced off and the values in the settings file are ignored, so
+// every reporting path (usage events and crash diagnostics) sees them disabled.
+#[cfg(target_env = "ohos")]
+fn telemetry_settings(_content: &SettingsContent) -> TelemetrySettings {
+    TelemetrySettings {
+        diagnostics: false,
+        metrics: false,
+        anthropic_retention: false,
+    }
+}
+// [OHOS PORT END]
+
+#[cfg(not(target_env = "ohos"))]
+fn telemetry_settings(content: &SettingsContent) -> TelemetrySettings {
+    // A missing key means "use the built-in default" rather than a panic during
+    // startup.
+    let telemetry = content.telemetry.as_ref();
+    TelemetrySettings {
+        diagnostics: telemetry.and_then(|telemetry| telemetry.diagnostics).unwrap_or(true),
+        metrics: telemetry.and_then(|telemetry| telemetry.metrics).unwrap_or(true),
+        anthropic_retention: telemetry
+            .and_then(|telemetry| telemetry.anthropic_retention)
+            .unwrap_or(false),
     }
 }
 

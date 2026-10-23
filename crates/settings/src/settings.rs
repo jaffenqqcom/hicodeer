@@ -174,6 +174,26 @@ fn merge_default_overlay(base: &str, overlay: &str) -> anyhow::Result<String> {
     let mut merged: serde_json::Value = parse_json_with_comments(base)?;
     let delta: serde_json::Value = parse_json_with_comments(overlay)?;
     merged.merge_from(&delta);
+    // HiCodeer collects no telemetry, so the switches that control it are
+    // dropped from the defaults this build publishes. The shared `default.json`
+    // keeps them for the other platforms.
+    let telemetry_is_empty = match merged
+        .get_mut("telemetry")
+        .and_then(|value| value.as_object_mut())
+    {
+        Some(telemetry) => {
+            telemetry.remove("diagnostics");
+            telemetry.remove("metrics");
+            telemetry.remove("anthropic_retention");
+            telemetry.is_empty()
+        }
+        None => false,
+    };
+    if telemetry_is_empty {
+        if let Some(root) = merged.as_object_mut() {
+            root.remove("telemetry");
+        }
+    }
     Ok(serde_json::to_string(&merged)?)
 }
 

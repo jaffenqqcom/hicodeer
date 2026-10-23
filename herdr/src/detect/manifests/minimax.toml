@@ -26,5 +26,5 @@ region = "bottom_non_empty_lines(20)"
 visible_working = true
 regex = ['(?i)esc\s+to\s+interrupt']
 not = [
-  { regex = '(?i)waiting\s+for\s+(?:permission|approval|your\s+answer)' },
+  { regex = ['(?i)waiting\s+for\s+(?:permission|approval|your\s+answer)'] },
 ]

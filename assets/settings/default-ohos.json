@@ -1,4 +1,6 @@
 {
+  "buffer_font_family": "Default Mono",
+  "ui_font_family": "Default Sans",
   "terminal": {
     "copy_on_select": true,
     "shell": {
@@ -8,7 +10,7 @@
   "agent_panel": {
     "button": true,
     "dock": "left",
-    "default_width": 224,
+    "default_width": 238,
     "starts_open": true
   }
 }

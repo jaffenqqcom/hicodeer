@@ -16,6 +16,19 @@ use parking_lot::RwLock;
 use smallvec::SmallVec;
 use std::{borrow::Cow, path::Path, sync::Arc};
 
+/// Name under which a bundled font family is exposed to the settings UI.
+///
+/// The fonts themselves keep their original family names on disk; only the label
+/// the user sees changes. Loading a font by one of these names is handled by
+/// `font_name_with_fallbacks`.
+fn settings_font_name(family: &str) -> String {
+    match family {
+        "Lilex" => "Default Mono".to_owned(),
+        "IBM Plex Sans" => "Default Sans".to_owned(),
+        _ => family.to_owned(),
+    }
+}
+
 pub(crate) struct OhosTextSystem(RwLock<OhosTextSystemState>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -92,6 +105,10 @@ impl PlatformTextSystem for OhosTextSystem {
             .db()
             .faces()
             .filter_map(|face| face.families.first().map(|family| family.0.clone()))
+            // The bundled families are listed under the names the settings page
+            // shows. `font_name_with_fallbacks` maps them back to the real
+            // families when a font is loaded.
+            .map(|family| settings_font_name(&family))
             .collect_vec();
         result.sort();
         result.dedup();

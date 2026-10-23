@@ -1425,6 +1425,13 @@ pub fn font_name_with_fallbacks<'a>(name: &'a str, system: &'a str) -> &'a str {
         ".SystemUIFont" => system,
         ".ZedSans" | "Zed Plex Sans" => "IBM Plex Sans",
         ".ZedMono" | "Zed Plex Mono" => "Lilex",
+        // [OHOS PORT BEGIN] HiCodeer exposes the bundled fonts under neutral
+        // names in its settings, so accept those names too.
+        #[cfg(target_env = "ohos")]
+        "Default Sans" => "IBM Plex Sans",
+        #[cfg(target_env = "ohos")]
+        "Default Mono" => "Lilex",
+        // [OHOS PORT END]
         _ => name,
     }
 }
@@ -1442,6 +1449,13 @@ pub fn font_name_with_fallbacks_shared<'a>(
         ".SystemUIFont" => system,
         ".ZedSans" | "Zed Plex Sans" => const { &SharedString::new_static("IBM Plex Sans") },
         ".ZedMono" | "Zed Plex Mono" => const { &SharedString::new_static("Lilex") },
+        // [OHOS PORT BEGIN] HiCodeer exposes the bundled fonts under neutral
+        // names in its settings, so accept those names too.
+        #[cfg(target_env = "ohos")]
+        "Default Sans" => const { &SharedString::new_static("IBM Plex Sans") },
+        #[cfg(target_env = "ohos")]
+        "Default Mono" => const { &SharedString::new_static("Lilex") },
+        // [OHOS PORT END]
         _ => name,
     }
 }

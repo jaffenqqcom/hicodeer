@@ -129,6 +129,24 @@ fn local_exec_matches(program: &OsStr) -> bool {
         .unwrap_or(false)
 }
 
+/// On-device tools that prefer the daemon when it is reachable.
+///
+/// The private HNP copies run under the application's uid, which has no access
+/// to the user's home directory, so a tool whose identity and configuration
+/// live there (git's `user.name` / `user.email` in `~/.gitconfig`) fails with
+/// "Author identity unknown". The daemon runs with the user's environment, so
+/// it is the better choice; the on-device copy stays the fallback so the tool
+/// keeps working when the daemon is not running.
+const DAEMON_PREFERRED_TOOLS: &[&str] = &["git"];
+
+fn prefers_daemon(program: &OsStr) -> bool {
+    Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| DAEMON_PREFERRED_TOOLS.contains(&name))
+        .unwrap_or(false)
+}
+
 /// Resolve `program` (bare name or explicit path) to an executable absolute
 /// path on this device. Errors carry a user-readable hint that the matching
 /// HNP must be shipped in the HAP.
@@ -417,28 +435,34 @@ impl Command {
         command
     }
 
-    /// Spawns the command. Tools snapshotted as on-device (git/ssh/curl)
-    /// fork on the device itself; everything else is spawned through the VM
-    /// executor. Blocking: the remote handshake (plus the SpawnOk wait)
-    /// completes here, so the returned `Child` is immediately usable.
+    /// Spawns the command. Tools snapshotted as on-device (ssh/curl) fork on
+    /// the device itself; tools in `DAEMON_PREFERRED_TOOLS` try the daemon
+    /// first and fall back to the on-device copy; everything else is spawned
+    /// through the VM executor. Blocking: the remote handshake (plus the
+    /// SpawnOk wait) completes here, so the returned `Child` is immediately
+    /// usable.
     pub fn spawn(&mut self) -> io::Result<Child> {
         if local_exec_matches(&self.program) {
-            // A tool that exists on-device is forced local; a missing binary is
-            // an error, never a silent fallback to the VM.
+            // A tool in `DAEMON_PREFERRED_TOOLS` normally runs in the daemon's
+            // environment, which is where its configuration lives; the
+            // on-device copy is only the fallback for a daemon that cannot be
+            // reached.
+            if prefers_daemon(&self.program) {
+                match spawn_remote(self) {
+                    Ok(child) => return Ok(child),
+                    Err(error) => log::warn!(
+                        "util::command::spawn: {} unavailable through the daemon ({error}); \
+                         falling back to the on-device copy",
+                        self.program.to_string_lossy()
+                    ),
+                }
+            }
+            // A tool that exists on-device runs locally unless it prefers the
+            // daemon; a missing binary is an error, never a silent fallback to
+            // the VM.
             return spawn_local(self);
         }
-        let executor = executor()?;
-        let child = executor.spawn(self.build_spec())?;
-        Ok(Child {
-            stdin: child.stdin,
-            stdout: child.stdout,
-            stderr: child.stderr,
-            kind: ChildKind::Remote {
-                session_id: child.session_id,
-                executor,
-            },
-            kill_on_drop: self.kill_on_drop,
-        })
+        spawn_remote(self)
     }
 
     pub async fn output(&mut self) -> io::Result<Output> {
@@ -451,9 +475,10 @@ impl Command {
     }
 
     fn build_spec(&self) -> ExecSpec {
-        let program = self.program.to_string_lossy().into_owned();
-        let mut spec = ExecSpec::new(program.clone());
-        spec.source_program = program;
+        let source_program = self.program.to_string_lossy().into_owned();
+        let program = daemon_program_name(&self.program);
+        let mut spec = ExecSpec::new(program);
+        spec.source_program = source_program;
         spec.args = self
             .args
             .iter()
@@ -492,6 +517,46 @@ impl Command {
         spec.stderr_mode = fd_mode(self.stderr_cfg);
         spec
     }
+}
+
+/// Program name to hand the daemon for `program`.
+///
+/// A path under the private HNP mount (`/data/app/bin`) exists only in the
+/// application's own mount view: the daemon runs under a different uid and
+/// cannot open that directory, so passing the absolute path remotely makes
+/// every exec fail with ENOENT. Such a path is reduced to its basename so the
+/// daemon resolves the same tool from its own PATH; everything else (a bare
+/// name, or a path both sides can reach) is forwarded unchanged.
+fn daemon_program_name(program: &OsStr) -> String {
+    let path = Path::new(program);
+    let in_private_mount = path
+        .parent()
+        .is_some_and(|parent| LOCAL_TOOL_BIN_DIRS.iter().any(|dir| Path::new(dir) == parent));
+    if in_private_mount
+        && let Some(name) = path.file_name()
+    {
+        return name.to_string_lossy().into_owned();
+    }
+    program.to_string_lossy().into_owned()
+}
+
+/// Spawns `command` through the daemon executor.
+///
+/// Shared by the default dispatch and the daemon-preferred fallback so both
+/// build the same `Child`.
+fn spawn_remote(command: &Command) -> io::Result<Child> {
+    let executor = executor()?;
+    let child = executor.spawn(command.build_spec())?;
+    Ok(Child {
+        stdin: child.stdin,
+        stdout: child.stdout,
+        stderr: child.stderr,
+        kind: ChildKind::Remote {
+            session_id: child.session_id,
+            executor,
+        },
+        kill_on_drop: command.kill_on_drop,
+    })
 }
 
 fn fd_mode(stdio: Stdio) -> FdMode {

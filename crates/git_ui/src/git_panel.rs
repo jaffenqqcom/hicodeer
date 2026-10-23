@@ -4369,7 +4369,7 @@ impl GitPanel {
     /// worktree to the `safe.directory` config, ensuring that, even if the user
     /// that's running the application is not the owner of `.git/`, it can still
     /// read the repository's contents.
-    fn add_safe_directory(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn add_safe_directory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(active_repository) = &self.active_repository else {
             return;
         };
@@ -4387,10 +4387,46 @@ impl GitPanel {
                 path_arg,
             ];
 
-            self.project
-                .read(cx)
-                .git_config(path, args, cx)
-                .detach_and_log_err(cx);
+            let config_task = self.project.read(cx).git_config(path, args, cx);
+            // [OHOS PORT BEGIN] Re-check access right after a successful write.
+            // On OHOS the app's HOME is the sandbox while git runs in the daemon,
+            // whose HOME holds the global config, so the `.gitconfig` watch that
+            // normally emits `GlobalConfigurationUpdated` never fires and the
+            // panel keeps showing the stale `GitAccess::No` verdict.
+            // Remove this block to restore the upstream behaviour.
+            #[cfg(target_env = "ohos")]
+            {
+                let Some(repository) = self.active_repository.clone() else {
+                    return;
+                };
+                cx.spawn_in(window, async move |git_panel, cx| {
+                    match config_task.await {
+                        Ok(_) => {
+                            let access =
+                                repository.update(cx, |repository, cx| repository.access(cx));
+                            let access = match access.await {
+                                Ok(access) => access,
+                                Err(_) => GitAccess::No,
+                            };
+                            git_panel
+                                .update_in(cx, |git_panel, window, cx| {
+                                    git_panel.git_access = Some(access);
+                                    git_panel.schedule_update(window, cx);
+                                    cx.notify();
+                                })
+                                .ok();
+                        }
+                        Err(error) => {
+                            log::error!("add_safe_directory: git config failed: {error}");
+                        }
+                    }
+                })
+                .detach();
+                return;
+            }
+            // [OHOS PORT END]
+            #[cfg(not(target_env = "ohos"))]
+            config_task.detach_and_log_err(cx);
         }
     }
 

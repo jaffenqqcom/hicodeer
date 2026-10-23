@@ -29,6 +29,11 @@ const fileLaunch = new FileLaunchPlugin();
 const DOMAIN: number = 0x0001;
 const TAG: string = 'EntryAbility';
 
+// Feature switch for the home directory flow: when false (default), launch
+// straight into the editor and let Rust fall back to the app sandbox data root,
+// skipping the picker. Set to true to restore the picker; its code stays below.
+const SHOW_HOME_PICKER: boolean = false;
+
 export default class EntryAbility extends NativeAbility {
   public moduleName: string = 'core';
   public defaultPage: boolean = false;
@@ -90,6 +95,13 @@ export default class EntryAbility extends NativeAbility {
    */
   private async prepareHomeDirectory(windowStage: window.WindowStage): Promise<void> {
     const context = this.context as common.UIAbilityContext;
+    // Sandbox data root: skip the picker entirely, so no home directory is
+    // reported and Rust falls back to the app sandbox.
+    if (!SHOW_HOME_PICKER) {
+      await windowStage.loadContentByName(MainPageRouteName);
+      this.releaseNativeLoad();
+      return;
+    }
     const existing = await Setup.HomeDirectory.resolveExisting(context);
     if (existing !== '') {
       this.homeDirectory = existing;

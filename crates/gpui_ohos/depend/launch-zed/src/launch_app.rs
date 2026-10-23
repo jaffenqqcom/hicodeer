@@ -30,7 +30,10 @@ pub fn launch_app(app: openharmony_ability::OpenHarmonyApp) {
     // no /etc/passwd entry (every present entry resolves to /bin/false), so
     // alacritty's shell discovery would otherwise fail before spawn. See
     // ensure_shell_env.
+    // [boot] Home comes from the ets side; when the picker is skipped it
+    // reports none and the sandbox fallback below takes over.
     ensure_shell_env(app.base_path(), app.home_directory());
+    boot_trace(&format!("HOME={:?} base={:?}", std::env::var("HOME"), app.base_path()));
     // Publish the system languages the ets side read through `@ohos.i18n`; upstream resolves the
     // UI locale and the date/time formats from the POSIX `LANGUAGE` list. See export_system_locale.
     export_system_locale(app.preferred_locales());

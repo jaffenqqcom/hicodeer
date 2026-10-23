@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=antigravity_cli
-# HERDR_INTEGRATION_VERSION=4
+# HERDR_INTEGRATION_VERSION=5
 
 # Session-only: this hook reports the Antigravity conversation so Herdr can
 # resume the pane. Lifecycle state comes from Herdr's screen detection.
@@ -19,7 +19,7 @@ emit_and_exit() {
 
 [ "${1:-}" = "session" ] || emit_and_exit
 [ "${HERDR_ENV:-}" = "1" ] || emit_and_exit
-[ -n "${HERDR_SOCKET_PATH:-}" ] || emit_and_exit
+[ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || emit_and_exit
 [ -n "${HERDR_PANE_ID:-}" ] || emit_and_exit
 command -v python3 >/dev/null 2>&1 || emit_and_exit
 
@@ -67,7 +67,7 @@ request = json.dumps({
 try:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(0.5)
-        client.connect(os.environ["HERDR_SOCKET_PATH"])
+        client.connect(os.environ["HICODEER_AGENT_SOCKET_PATH"])
         client.sendall((request + "\n").encode())
         client.recv(4096)
 except Exception:

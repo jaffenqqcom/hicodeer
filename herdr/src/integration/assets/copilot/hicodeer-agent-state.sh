@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=copilot
-# HERDR_INTEGRATION_VERSION=4
+# HERDR_INTEGRATION_VERSION=5
 
 set -eu
 
@@ -12,7 +12,7 @@ trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
 [ "${HERDR_ENV:-}" = "1" ] || exit 0
-[ -n "${HERDR_SOCKET_PATH:-}" ] || exit 0
+[ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || exit 0
 [ -n "${HERDR_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
@@ -25,7 +25,7 @@ import time
 
 source = "herdr:copilot"
 pane_id = os.environ.get("HERDR_PANE_ID")
-socket_path = os.environ.get("HERDR_SOCKET_PATH")
+socket_path = os.environ.get("HICODEER_AGENT_SOCKET_PATH")
 hook_input_file = os.environ.get("HERDR_HOOK_INPUT_FILE")
 
 if not pane_id or not socket_path:

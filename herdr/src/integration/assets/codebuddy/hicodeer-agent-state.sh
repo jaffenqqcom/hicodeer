@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codebuddy
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 
 set -eu
 
@@ -18,7 +18,7 @@ case "$action" in
 esac
 
 [ "${HERDR_ENV:-}" = "1" ] || exit 0
-[ -n "${HERDR_SOCKET_PATH:-}" ] || exit 0
+[ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || exit 0
 [ -n "${HERDR_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
@@ -32,7 +32,7 @@ import time
 source = "herdr:codebuddy"
 action = os.environ.get("HERDR_ACTION", "")
 pane_id = os.environ.get("HERDR_PANE_ID")
-socket_path = os.environ.get("HERDR_SOCKET_PATH")
+socket_path = os.environ.get("HICODEER_AGENT_SOCKET_PATH")
 hook_input_file = os.environ.get("HERDR_HOOK_INPUT_FILE")
 
 if not pane_id or not socket_path:

@@ -1,13 +1,13 @@
 # managed by herdr; reinstalling the integration replaces this file.
 # HERDR_INTEGRATION_ID=letta
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 
 param([string]$Action = "")
 
 if ($Action -ne "session") { exit 0 }
 if ($env:HERDR_ENV -ne "1") { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { exit 0 }
-if ([string]::IsNullOrWhiteSpace($env:HERDR_SOCKET_PATH)) { exit 0 }
+if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_SOCKET_PATH)) { exit 0 }
 
 # Read hook input as raw bytes so UTF-8 payloads decode correctly even when the
 # console input code page is not UTF-8 (for example CP949 on Korean Windows).

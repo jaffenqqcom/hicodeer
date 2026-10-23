@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=13
+// HERDR_INTEGRATION_VERSION=14
 
 import net from "node:net";
 
@@ -60,7 +60,7 @@ function request(method, params) {
 
 function requestOnce(method, params) {
   const paneId = process.env.HERDR_PANE_ID;
-  const socketPath = process.env.HERDR_SOCKET_PATH;
+  const socketPath = process.env.HICODEER_AGENT_SOCKET_PATH;
 
   if (!paneId || !socketPath) {
     return Promise.resolve();
@@ -136,7 +136,7 @@ export const HerdrAgentStatePlugin = async () => {
   if (
     !ownsLocalLifecycle() ||
     process.env.HERDR_ENV !== "1" ||
-    !process.env.HERDR_SOCKET_PATH ||
+    !process.env.HICODEER_AGENT_SOCKET_PATH ||
     !process.env.HERDR_PANE_ID
   ) {
     return {};

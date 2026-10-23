@@ -11,7 +11,7 @@ const originalEnvironment = {
   HERDR_ENV: process.env.HERDR_ENV,
   HERDR_OMP_IDLE_DEBOUNCE_MS: process.env.HERDR_OMP_IDLE_DEBOUNCE_MS,
   HERDR_PANE_ID: process.env.HERDR_PANE_ID,
-  HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
+  HICODEER_AGENT_SOCKET_PATH: process.env.HICODEER_AGENT_SOCKET_PATH,
   OMPCODE: process.env.OMPCODE,
 };
 
@@ -91,7 +91,7 @@ function configureIntegrationEnvironment(recordingSocketPath: string) {
   // Tests may run inside an OMP shell; nested-session cases opt in explicitly.
   delete process.env.OMPCODE;
   process.env.HERDR_ENV = "1";
-  process.env.HERDR_SOCKET_PATH = recordingSocketPath;
+  process.env.HICODEER_AGENT_SOCKET_PATH = recordingSocketPath;
   process.env.HERDR_PANE_ID = "test:p1";
 }
 
@@ -156,7 +156,7 @@ for (const socketPlugin of socketPlugins) {
 test("OpenCode stays disabled without the Herdr socket environment", async () => {
   process.env.HERDR_ENV = "1";
   process.env.HERDR_PANE_ID = "test:p1";
-  delete process.env.HERDR_SOCKET_PATH;
+  delete process.env.HICODEER_AGENT_SOCKET_PATH;
 
   const { HerdrAgentStatePlugin } = await importFresh("./opencode/hicodeer-agent-state.js");
 

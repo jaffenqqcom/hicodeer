@@ -1,7 +1,7 @@
 // installed by HiCodeer
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // HERDR_INTEGRATION_ID=opencode-tui
-// HERDR_INTEGRATION_VERSION=13
+// HERDR_INTEGRATION_VERSION=14
 
 import net from "node:net";
 
@@ -12,7 +12,7 @@ const SELECTION_RETRY_DELAYS_MS = [100, 400, 1_000];
 
 function requestOnce(sessionID, state, seq, isCurrent = () => true) {
   const paneId = process.env.HERDR_PANE_ID;
-  const socketPath = process.env.HERDR_SOCKET_PATH;
+  const socketPath = process.env.HICODEER_AGENT_SOCKET_PATH;
   if (!paneId || !socketPath) {
     return Promise.resolve(true);
   }
@@ -71,7 +71,7 @@ export default {
 };
 
 async function tui(api) {
-  if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_SOCKET_PATH || !process.env.HERDR_PANE_ID) return;
+  if (process.env.HERDR_ENV !== "1" || !process.env.HICODEER_AGENT_SOCKET_PATH || !process.env.HERDR_PANE_ID) return;
 
   let disposed = false;
   let context;
@@ -404,7 +404,7 @@ async function tui(api) {
 }
 
 function setup(api) {
-  if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_SOCKET_PATH || !process.env.HERDR_PANE_ID) return;
+  if (process.env.HERDR_ENV !== "1" || !process.env.HICODEER_AGENT_SOCKET_PATH || !process.env.HERDR_PANE_ID) return;
 
   let disposed = false;
   let selected;

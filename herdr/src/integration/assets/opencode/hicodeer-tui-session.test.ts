@@ -52,7 +52,7 @@ beforeEach(() => {
   failConnections = false;
   connections.length = 0;
   process.env.HERDR_ENV = "1";
-  process.env.HERDR_SOCKET_PATH = "test.sock";
+  process.env.HICODEER_AGENT_SOCKET_PATH = "test.sock";
   process.env.HERDR_PANE_ID = "test:p1";
 });
 

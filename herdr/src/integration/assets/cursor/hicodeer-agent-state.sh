@@ -1,11 +1,11 @@
 #!/bin/sh
 # managed by herdr; reinstalling the integration replaces this file.
 # HERDR_INTEGRATION_ID=cursor
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 
 [ "${1:-}" = "session" ] || exit 0
 [ "${HERDR_ENV:-}" = "1" ] || exit 0
-[ -n "${HERDR_SOCKET_PATH:-}" ] || exit 0
+[ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || exit 0
 [ -n "${HERDR_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
@@ -51,7 +51,7 @@ request = json.dumps({
 try:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(0.5)
-        client.connect(os.environ["HERDR_SOCKET_PATH"])
+        client.connect(os.environ["HICODEER_AGENT_SOCKET_PATH"])
         client.sendall((request + "\n").encode())
         client.recv(4096)
 except Exception:

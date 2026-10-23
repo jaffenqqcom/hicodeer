@@ -1132,7 +1132,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(9));
-    assert_eq!(claude.expected_version, 11);
+    assert_eq!(claude.expected_version, 12);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     install_claude().unwrap();
@@ -1171,7 +1171,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 11);
+    assert_eq!(claude.expected_version, 12);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1430,7 +1430,7 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 10);
+    assert_eq!(codex.expected_version, 11);
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -4898,7 +4898,7 @@ fn antigravity_cli_v3_install_is_outdated_until_reinstalled() {
     fs::write(
         hook_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME),
         ANTIGRAVITY_CLI_HOOK_ASSET
-            .replace("HERDR_INTEGRATION_VERSION=4", "HERDR_INTEGRATION_VERSION=3"),
+            .replace("HERDR_INTEGRATION_VERSION=5", "HERDR_INTEGRATION_VERSION=4"),
     )
     .unwrap();
     std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
@@ -4911,8 +4911,8 @@ fn antigravity_cli_v3_install_is_outdated_until_reinstalled() {
     };
     let outdated = status();
     assert_eq!(outdated.state, IntegrationStatusKind::Outdated);
-    assert_eq!(outdated.installed_version, Some(3));
-    assert_eq!(outdated.expected_version, 4);
+    assert_eq!(outdated.installed_version, Some(4));
+    assert_eq!(outdated.expected_version, 5);
 
     install_antigravity_cli().unwrap();
     assert_eq!(status().state, IntegrationStatusKind::Current);

@@ -129,7 +129,7 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("General Settings")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Accessible Mode"),
-                description: localization::localized_str!("Optimize Zed's interface for assistive technology such as screen readers. When enabled, otherwise-collapsed controls stay expanded and keyboard-reachable."),
+                description: localization::localized_str!("Optimize HiCodeer's interface for assistive technology such as screen readers. When enabled, otherwise-collapsed controls stay expanded and keyboard-reachable."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("accessible_mode"),
@@ -253,6 +253,9 @@ fn general_page(cx: &App) -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            // [OHOS PORT BEGIN] There is no command line launcher on this
+            // platform, so there is no behavior to configure for it.
+            #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("CLI Default Open Behavior"),
                 description: localization::localized_str!("How `zed <path>` opens directories when no flag is specified."),
@@ -315,7 +318,7 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Security")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Trust All Projects By Default"),
-                description: localization::localized_str!("When opening Zed, avoid Restricted Mode by auto-trusting all projects, enabling use of all features without having to give permission to each new project."),
+                description: localization::localized_str!("When opening HiCodeer, avoid Restricted Mode by auto-trusting all projects, enabling use of all features without having to give permission to each new project."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("session.trust_all_projects"),
@@ -365,7 +368,7 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Restore On Startup"),
-                description: localization::localized_str!("What to restore from the previous session when opening Zed."),
+                description: localization::localized_str!("What to restore from the previous session when opening HiCodeer."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("restore_on_startup"),
@@ -386,7 +389,7 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Preview Channel"),
-                description: localization::localized_str!("Which settings should be activated only in Preview build of Zed."),
+                description: localization::localized_str!("Which settings should be activated only in Preview build of HiCodeer."),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -416,6 +419,9 @@ fn general_page(cx: &App) -> SettingsPage {
         ]
     }
 
+    // [OHOS PORT BEGIN] HiCodeer reports no telemetry, so the privacy switches
+    // have nothing to control.
+    #[cfg(not(target_env = "ohos"))]
     fn privacy_section() -> [SettingsPageItem; 4] {
         [
             SettingsPageItem::SectionHeader(localization::localized_str!("Privacy")),
@@ -443,7 +449,7 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Telemetry Metrics"),
-                description: localization::localized_str!("Send anonymized usage data like what languages you're using Zed with."),
+                description: localization::localized_str!("Send anonymized usage data like what languages you're using HiCodeer with."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.metrics"),
@@ -484,7 +490,11 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
         ]
     }
+    // [OHOS PORT END]
 
+    // [OHOS PORT BEGIN] HiCodeer has no update feed, so there is nothing to
+    // configure here.
+    #[cfg(not(target_env = "ohos"))]
     fn auto_update_section() -> [SettingsPageItem; 2] {
         [
             SettingsPageItem::SectionHeader(localization::localized_str!("Auto Update")),
@@ -504,6 +514,7 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
         ]
     }
+    // [OHOS PORT END]
 
     fn extensions_section() -> [SettingsPageItem; 2] {
         [
@@ -525,19 +536,26 @@ fn general_page(cx: &App) -> SettingsPage {
         ]
     }
 
+    let mut items = concat_sections!(
+        @vec,
+        general_settings_section(cx),
+        security_section(),
+        workspace_restoration_section(),
+        scoped_settings_section(),
+    );
+    // [OHOS PORT BEGIN] No telemetry and no update feed means neither section
+    // has anything to show.
+    #[cfg(not(target_env = "ohos"))]
+    {
+        items.extend(privacy_section());
+        items.extend(auto_update_section());
+    }
+    // [OHOS PORT END]
+    items.extend(extensions_section());
+
     SettingsPage {
         title: localization::localized_str!("General"),
-        items: concat_sections!(
-            @vec,
-            general_settings_section(cx),
-            security_section(),
-            workspace_restoration_section(),
-            scoped_settings_section(),
-            privacy_section(),
-            auto_update_section(),
-            extensions_section(),
-        )
-        .into(),
+        items: items.into(),
     }
 }
 
@@ -728,7 +746,7 @@ fn appearance_page() -> SettingsPage {
                 discriminant: SettingItem {
                     files: USER,
                     title: localization::localized_str!("Icon Theme"),
-                    description: localization::localized_str!("The custom set of icons Zed will associate with files and directories."),
+                    description: localization::localized_str!("The custom set of icons HiCodeer will associate with files and directories."),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("icon_theme$"),
@@ -2898,6 +2916,9 @@ fn editor_page() -> SettingsPage {
         ]
     }
 
+    // [OHOS PORT BEGIN] This build has no editor toolbar, so none of its
+    // toggles apply.
+    #[cfg(not(target_env = "ohos"))]
     fn toolbar_section() -> [SettingsPageItem; 5] {
         [
             SettingsPageItem::SectionHeader(localization::localized_str!("Toolbar")),
@@ -3268,7 +3289,7 @@ fn editor_page() -> SettingsPage {
         ]
     }
 
-    let items = concat_sections!(
+    let mut items: Vec<SettingsPageItem> = concat_sections!(
         auto_save_section(),
         which_key_section(),
         multibuffer_section(),
@@ -3279,10 +3300,18 @@ fn editor_page() -> SettingsPage {
         gutter_section(),
         scrollbar_section(),
         minimap_section(),
-        toolbar_section(),
+    )
+    .into_vec();
+    // [OHOS PORT BEGIN] This build has no editor toolbar, so its toggles are
+    // not offered.
+    #[cfg(not(target_env = "ohos"))]
+    items.extend(toolbar_section());
+    // [OHOS PORT END]
+    items.extend(concat_sections!(
         vim_settings_section(),
         language_settings_data(),
-    );
+    ));
+    let items: Box<[SettingsPageItem]> = items.into();
 
     SettingsPage {
         title: localization::localized_str!("Editor"),
@@ -3923,7 +3952,7 @@ fn search_and_files_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("File Scan")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("File Scan Exclusions"),
-                description: localization::localized_str!("Files or globs of files that will be excluded by Zed entirely. They will be skipped during file scans, file searches, and not be displayed in the project file tree. Takes precedence over \"File Scan Inclusions\""),
+                description: localization::localized_str!("Files or globs of files that will be excluded by HiCodeer entirely. They will be skipped during file scans, file searches, and not be displayed in the project file tree. Takes precedence over \"File Scan Inclusions\""),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -3946,7 +3975,7 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("File Scan Inclusions"),
-                description: localization::localized_str!("Files or globs of files that will be included by Zed, even when ignored by git. This is useful for files that are not tracked by git, but are still important to your project. Note that globs that are overly broad can slow down Zed's file scanning. \"File Scan Exclusions\" takes precedence over these inclusions"),
+                description: localization::localized_str!("Files or globs of files that will be included by HiCodeer, even when ignored by git. This is useful for files that are not tracked by git, but are still important to your project. Note that globs that are overly broad can slow down HiCodeer's file scanning. \"File Scan Exclusions\" takes precedence over these inclusions"),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -4257,8 +4286,11 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn title_bar_section() -> [SettingsPageItem; 8] {
-        [
+    // [OHOS PORT BEGIN] This build has no title bar, so none of its options
+    // apply.
+    #[cfg(not(target_env = "ohos"))]
+    fn title_bar_section() -> Vec<SettingsPageItem> {
+        vec![
             SettingsPageItem::SectionHeader(localization::localized_str!("Title Bar")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Branch Status Icon"),
@@ -5011,8 +5043,8 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn window_section() -> [SettingsPageItem; 6] {
-        [
+    fn window_section() -> Vec<SettingsPageItem> {
+        vec![
             SettingsPageItem::SectionHeader(localization::localized_str!("Window")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Title Format"),
@@ -5054,6 +5086,9 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             // todo(settings_ui): Should we filter by platform.as_ref()?
+            // [OHOS PORT BEGIN] macOS window tabbing and fullscreen modes, and
+            // compositor-drawn decorations on Linux, all have no equivalent here.
+            #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use System Window Tabs"),
                 description: localization::localized_str!("(macOS only) whether to allow Windows to tab together."),
@@ -5070,6 +5105,7 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Fullscreen Mode"),
                 description: localization::localized_str!("(macOS only) which fullscreen mode the toggle fullscreen action enters."),
@@ -5084,9 +5120,10 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Window Decorations"),
-                description: localization::localized_str!("(Linux only) whether Zed or your compositor should draw window decorations."),
+                description: localization::localized_str!("(Linux only) whether HiCodeer or your compositor should draw window decorations."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_decorations"),
@@ -5098,6 +5135,7 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            // [OHOS PORT END]
         ]
     }
 
@@ -5231,19 +5269,25 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
+    let mut items: Vec<SettingsPageItem> = concat_sections![status_bar_section()].into_vec();
+    // [OHOS PORT BEGIN] This build has no title bar, so its options are not
+    // offered.
+    #[cfg(not(target_env = "ohos"))]
+    items.extend(title_bar_section());
+    // [OHOS PORT END]
+    items.extend(concat_sections![
+        tab_bar_section(),
+        tab_settings_section(),
+        preview_tabs_section(),
+        layout_section(),
+        window_section(),
+        pane_modifiers_section(),
+        pane_split_direction_section(),
+    ]);
+
     SettingsPage {
         title: localization::localized_str!("Window & Layout"),
-        items: concat_sections![
-            status_bar_section(),
-            title_bar_section(),
-            tab_bar_section(),
-            tab_settings_section(),
-            preview_tabs_section(),
-            layout_section(),
-            window_section(),
-            pane_modifiers_section(),
-            pane_split_direction_section(),
-        ],
+        items: items.into(),
     }
 }
 
@@ -7278,9 +7322,12 @@ fn terminal_page() -> SettingsPage {
         ]
     }
 
-    fn behavior_settings_section() -> [SettingsPageItem; 6] {
-        [
+    fn behavior_settings_section() -> Vec<SettingsPageItem> {
+        vec![
             SettingsPageItem::SectionHeader(localization::localized_str!("Behavior Settings")),
+            // [OHOS PORT BEGIN] There is no Option key on this platform's
+            // keyboard, so the mapping has nothing to configure.
+            #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Option As Meta"),
                 description: localization::localized_str!("Whether the option key behaves as the meta key."),
@@ -7478,6 +7525,9 @@ fn terminal_page() -> SettingsPage {
         ]
     }
 
+    // [OHOS PORT BEGIN] This build has no terminal toolbar, so its options do
+    // not apply.
+    #[cfg(not(target_env = "ohos"))]
     fn toolbar_section() -> [SettingsPageItem; 2] {
         [
             SettingsPageItem::SectionHeader(localization::localized_str!("Toolbar")),
@@ -7546,18 +7596,25 @@ fn terminal_page() -> SettingsPage {
         ]
     }
 
+    let mut items: Vec<SettingsPageItem> = concat_sections![
+        environment_section(),
+        font_section(),
+        display_settings_section(),
+        behavior_settings_section(),
+        layout_settings_section(),
+        advanced_settings_section(),
+    ]
+    .into_vec();
+    // [OHOS PORT BEGIN] This build has no terminal toolbar, so its toggles are
+    // not offered.
+    #[cfg(not(target_env = "ohos"))]
+    items.extend(toolbar_section());
+    // [OHOS PORT END]
+    items.extend(concat_sections![scrollbar_section()]);
+
     SettingsPage {
         title: localization::localized_str!("Terminal"),
-        items: concat_sections![
-            environment_section(),
-            font_section(),
-            display_settings_section(),
-            behavior_settings_section(),
-            layout_settings_section(),
-            advanced_settings_section(),
-            toolbar_section(),
-            scrollbar_section(),
-        ],
+        items: items.into(),
     }
 }
 
@@ -7569,7 +7626,7 @@ fn version_control_page() -> SettingsPage {
                 discriminant: SettingItem {
                     files: USER,
                     title: localization::localized_str!("Disable Git Integration"),
-                    description: localization::localized_str!("Disable all Git integration features in Zed."),
+                    description: localization::localized_str!("Disable all Git integration features in HiCodeer."),
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("git.disable_git"),
@@ -8096,7 +8153,7 @@ fn network_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Server URL"),
-                description: localization::localized_str!("The URL of the Zed server to connect to."),
+                description: localization::localized_str!("The URL of the HiCodeer server to connect to."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("server_url"),
@@ -8676,7 +8733,7 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("Autoclose")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use Autoclose"),
-                description: localization::localized_str!("Whether to automatically type closing characters for you. For example, when you type '(', Zed will automatically add a closing ')' at the correct position."),
+                description: localization::localized_str!("Whether to automatically type closing characters for you. For example, when you type '(', HiCodeer will automatically add a closing ')' at the correct position."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_autoclose"),
@@ -8696,7 +8753,7 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use Auto Surround"),
-                description: localization::localized_str!("Whether to automatically surround text with characters for you. For example, when you select text and type '(', Zed will automatically surround text with ()."),
+                description: localization::localized_str!("Whether to automatically surround text with characters for you. For example, when you select text and type '(', HiCodeer will automatically surround text with ()."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_auto_surround"),
@@ -9244,7 +9301,7 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Prefer LSP"),
-                description: localization::localized_str!("Use LSP tasks over Zed language extension tasks."),
+                description: localization::localized_str!("Use LSP tasks over HiCodeer language extension tasks."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tasks.prefer_lsp"),
@@ -9265,8 +9322,8 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
         ]
     }
 
-    fn miscellaneous_section() -> [SettingsPageItem; 8] {
-        [
+    fn miscellaneous_section() -> Vec<SettingsPageItem> {
+        vec![
             SettingsPageItem::SectionHeader(localization::localized_str!("Miscellaneous")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Language Detection"),
@@ -9302,6 +9359,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 metadata: None,
                 files: USER | PROJECT,
             }),
+            // [OHOS PORT BEGIN] HiCodeer ships without the debugger stack, so a
+            // preferred-debugger list has nothing to drive.
+            #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Debuggers"),
                 description: localization::localized_str!("Preferred debuggers for this language."),
@@ -9329,6 +9389,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 metadata: None,
                 files: USER | PROJECT,
             }),
+            // [OHOS PORT BEGIN] Middle-click paste is an X11 convention; this
+            // build has no pointer-driven paste path that honors it.
+            #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Middle Click Paste"),
                 description: localization::localized_str!("Enable middle-click paste on Linux."),

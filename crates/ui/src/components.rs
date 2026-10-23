@@ -5,6 +5,7 @@ mod button;
 mod callout;
 mod chip;
 mod choice_card;
+#[cfg(not(target_env = "ohos"))]
 mod collab;
 mod context_menu;
 mod count_badge;
@@ -49,6 +50,7 @@ pub use button::*;
 pub use callout::*;
 pub use chip::*;
 pub use choice_card::*;
+#[cfg(not(target_env = "ohos"))]
 pub use collab::*;
 pub use context_menu::*;
 pub use count_badge::*;

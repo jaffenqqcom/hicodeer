@@ -103,7 +103,7 @@ impl WatcherTab {
             }
             Self::WatchRoots => localization::localized_str!("Live native and polling watch roots across the app."),
             Self::ScanExclusions => localization::localized_str!(
-                "Patterns Zed skips when scanning your open local projects. Excluded files may still produce watcher events."
+                "Patterns HiCodeer skips when scanning your open local projects. Excluded files may still produce watcher events."
             ),
         }
     }

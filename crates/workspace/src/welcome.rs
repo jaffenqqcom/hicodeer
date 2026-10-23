@@ -5,6 +5,8 @@ use crate::{
     persistence::WorkspaceDb,
 };
 use git::Clone as GitClone;
+#[cfg(target_env = "ohos")]
+use gpui::img;
 use gpui::{
     Action, App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     ParentElement, Render, Styled, Task, TaskExt, Window, actions,
@@ -15,7 +17,9 @@ use menu::{SelectNext, SelectPrevious};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{DefaultOpenBehavior, Settings};
-use ui::{ButtonLike, Divider, DividerColor, KeyBinding, Vector, VectorName, prelude::*};
+#[cfg(not(target_env = "ohos"))]
+use ui::{Vector, VectorName};
+use ui::{ButtonLike, Divider, DividerColor, KeyBinding, prelude::*};
 use util::ResultExt;
 use zed_actions::{
     Extensions, OpenKeymap, OpenOnboarding, OpenSettings, command_palette,
@@ -35,6 +39,52 @@ actions!(
         ShowWelcome
     ]
 );
+
+// [OHOS PORT BEGIN] HiCodeer replaces the upstream product name, logo and
+// tagline on the welcome page. Other platforms keep the original strings.
+#[cfg(target_env = "ohos")]
+fn welcome_headline(fallback_to_recent_projects: bool) -> &'static str {
+    if fallback_to_recent_projects {
+        localization::localized_str!("Welcome back to HiCodeer")
+    } else {
+        localization::localized_str!("Welcome to HiCodeer")
+    }
+}
+
+#[cfg(not(target_env = "ohos"))]
+fn welcome_headline(fallback_to_recent_projects: bool) -> &'static str {
+    if fallback_to_recent_projects {
+        localization::localized_str!("Welcome back to Zed")
+    } else {
+        localization::localized_str!("Welcome to Zed")
+    }
+}
+
+#[cfg(target_env = "ohos")]
+fn welcome_tagline() -> &'static str {
+    localization::localized_str!("Great to use, easy to read")
+}
+
+#[cfg(not(target_env = "ohos"))]
+fn welcome_tagline() -> &'static str {
+    localization::localized_str!("The editor for what's next")
+}
+
+#[cfg(target_env = "ohos")]
+fn welcome_logo(size: Rems) -> AnyElement {
+    img("images/hicodeer.png")
+        .flex_none()
+        .w(size)
+        .h(size)
+        .rounded(px(8.0))
+        .into_any_element()
+}
+
+#[cfg(not(target_env = "ohos"))]
+fn welcome_logo(size: Rems) -> AnyElement {
+    Vector::square(VectorName::ZedLogo, size).into_any_element()
+}
+// [OHOS PORT END]
 
 #[derive(IntoElement)]
 struct SectionHeader {
@@ -396,11 +446,7 @@ impl Render for WelcomePage {
                 .into_any_element()
         };
 
-        let welcome_label = if self.fallback_to_recent_projects {
-            localization::localized_str!("Welcome back to Zed")
-        } else {
-            localization::localized_str!("Welcome to Zed")
-        };
+        let welcome_label = welcome_headline(self.fallback_to_recent_projects);
 
         h_flex()
             .key_context("Welcome")
@@ -426,10 +472,10 @@ impl Render for WelcomePage {
                             .justify_center()
                             .mb_4()
                             .gap_4()
-                            .child(Vector::square(VectorName::ZedLogo, rems_from_px(45_f32)))
+                            .child(welcome_logo(rems_from_px(45_f32)))
                             .child(
                                 v_flex().child(Headline::new(welcome_label)).child(
-                                    Label::new(localization::localized_str!("The editor for what's next"))
+                                    Label::new(welcome_tagline())
                                         .size(LabelSize::Small)
                                         .color(Color::Muted)
                                         .italic(),

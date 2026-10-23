@@ -402,7 +402,7 @@ impl Component for Label {
                         vec![
                             single_example("Default", Label::new("Project Explorer").into_any_element()),
                             single_example("Small", Label::new("File: main.rs").size(LabelSize::Small).into_any_element()),
-                            single_example("Large", Label::new(localization::localized_str!("Welcome to Zed")).size(LabelSize::Large).into_any_element()),
+                            single_example("Large", Label::new("HiCodeer").size(LabelSize::Large).into_any_element()),
                         ],
                     ),
                     example_group_with_title(

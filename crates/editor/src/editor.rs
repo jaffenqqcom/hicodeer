@@ -2992,7 +2992,7 @@ impl Editor {
                 ErrorCode::RemoteUpgradeRequired => Some({
         let __zed_i18n_arg_0 = format!("{}", e.error_tag("required").unwrap_or("the latest version"));
         localization::format_message(
-            "The remote instance of Zed does not support this yet. It must be upgraded to {}",
+            "The remote instance of HiCodeer does not support this yet. It must be upgraded to {}",
             &[
                 ("0", __zed_i18n_arg_0)
             ],
@@ -3083,7 +3083,7 @@ impl Editor {
                 ErrorCode::RemoteUpgradeRequired => Some({
         let __zed_i18n_arg_0 = format!("{}", e.error_tag("required").unwrap_or("the latest version"));
         localization::format_message(
-            "The remote instance of Zed does not support this yet. It must be upgraded to {}",
+            "The remote instance of HiCodeer does not support this yet. It must be upgraded to {}",
             &[
                 ("0", __zed_i18n_arg_0)
             ],

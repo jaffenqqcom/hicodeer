@@ -1121,6 +1121,18 @@ impl ExtensionsPage {
             .collect::<Vec<_>>();
 
         for (feature, keywords) in keywords_by_feature() {
+            // [OHOS PORT BEGIN] HiCodeer ships without the AI agent
+            // integrations, so their upsells would promise something this build
+            // cannot deliver.
+            #[cfg(target_env = "ohos")]
+            if matches!(
+                *feature,
+                Feature::AgentClaude | Feature::AgentCodex | Feature::AgentGemini
+            ) {
+                self.upsells.remove(feature);
+                continue;
+            }
+            // [OHOS PORT END]
             if keywords
                 .iter()
                 .any(|keyword| search_terms.contains(keyword))
@@ -1209,109 +1221,109 @@ impl ExtensionsPage {
     fn render_feature_upsells(&self, cx: &Context<Self>) -> impl IntoElement {
         v_flex().children(self.upsells.iter().map(|feature| match feature {
             Feature::AgentClaude => self.render_feature_upsell_banner(
-                localization::localized_str!("Claude Agent support is built-in to Zed!"),
+                localization::localized_str!("Claude Agent support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/ai/external-agents#claude-agent",
                 false,
                 cx,
             ),
             Feature::AgentCodex => self.render_feature_upsell_banner(
-                localization::localized_str!("Codex CLI support is built-in to Zed!"),
+                localization::localized_str!("Codex CLI support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/ai/external-agents#codex-cli",
                 false,
                 cx,
             ),
             Feature::AgentGemini => self.render_feature_upsell_banner(
-                localization::localized_str!("Gemini CLI support is built-in to Zed!"),
+                localization::localized_str!("Gemini CLI support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/ai/external-agents#gemini-cli",
                 false,
                 cx,
             ),
             Feature::ExtensionBasedpyright => self.render_feature_upsell_banner(
-                localization::localized_str!("Basedpyright (Python language server) support is built-in to Zed!"),
+                localization::localized_str!("Basedpyright (Python language server) support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/python#basedpyright",
                 false,
                 cx,
             ),
             Feature::ExtensionRuff => self.render_feature_upsell_banner(
-                localization::localized_str!("Ruff (linter for Python) support is built-in to Zed!"),
+                localization::localized_str!("Ruff (linter for Python) support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/python#code-formatting--linting",
                 false,
                 cx,
             ),
             Feature::ExtensionTailwind => self.render_feature_upsell_banner(
-                localization::localized_str!("Tailwind CSS support is built-in to Zed!"),
+                localization::localized_str!("Tailwind CSS support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/tailwindcss",
                 false,
                 cx,
             ),
             Feature::ExtensionTy => self.render_feature_upsell_banner(
-                localization::localized_str!("Ty (Python language server) support is built-in to Zed!"),
+                localization::localized_str!("Ty (Python language server) support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/python",
                 false,
                 cx,
             ),
             Feature::Git => self.render_feature_upsell_banner(
-                localization::localized_str!("Zed comes with basic Git support—more features are coming in the future."),
+                localization::localized_str!("HiCodeer comes with basic Git support—more features are coming in the future."),
                 "https://zed.dev/docs/git",
                 false,
                 cx,
             ),
             Feature::LanguageBash => self.render_feature_upsell_banner(
-                localization::localized_str!("Shell support is built-in to Zed!"),
+                localization::localized_str!("Shell support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/bash",
                 false,
                 cx,
             ),
             Feature::LanguageC => self.render_feature_upsell_banner(
-                localization::localized_str!("C support is built-in to Zed!"),
+                localization::localized_str!("C support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/c",
                 false,
                 cx,
             ),
             Feature::LanguageCpp => self.render_feature_upsell_banner(
-                localization::localized_str!("C++ support is built-in to Zed!"),
+                localization::localized_str!("C++ support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/cpp",
                 false,
                 cx,
             ),
             Feature::LanguageGo => self.render_feature_upsell_banner(
-                localization::localized_str!("Go support is built-in to Zed!"),
+                localization::localized_str!("Go support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/go",
                 false,
                 cx,
             ),
             Feature::LanguagePython => self.render_feature_upsell_banner(
-                localization::localized_str!("Python support is built-in to Zed!"),
+                localization::localized_str!("Python support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/python",
                 false,
                 cx,
             ),
             Feature::LanguageReact => self.render_feature_upsell_banner(
-                localization::localized_str!("React support is built-in to Zed!"),
+                localization::localized_str!("React support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/typescript",
                 false,
                 cx,
             ),
             Feature::LanguageRust => self.render_feature_upsell_banner(
-                localization::localized_str!("Rust support is built-in to Zed!"),
+                localization::localized_str!("Rust support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/rust",
                 false,
                 cx,
             ),
             Feature::LanguageTypescript => self.render_feature_upsell_banner(
-                localization::localized_str!("Typescript support is built-in to Zed!"),
+                localization::localized_str!("Typescript support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/languages/typescript",
                 false,
                 cx,
             ),
             Feature::OpenIn => self.render_feature_upsell_banner(
-                localization::localized_str!("Zed supports linking to a source line on GitHub and others."),
+                localization::localized_str!("HiCodeer supports linking to a source line on GitHub and others."),
                 "https://zed.dev/docs/git#git-integrations",
                 false,
                 cx,
             ),
             Feature::Vim => self.render_feature_upsell_banner(
-                localization::localized_str!("Vim support is built-in to Zed!"),
+                localization::localized_str!("Vim support is built-in to HiCodeer!"),
                 "https://zed.dev/docs/vim",
                 true,
                 cx,

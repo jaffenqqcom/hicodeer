@@ -433,7 +433,7 @@ impl PaneLeaderDecorator for PaneRenderContext<'_> {
                     ParticipantLocation::UnsharedProject => Some(Label::new({
         let __zed_i18n_arg_0 = format!("{}", leader.user.username);
         localization::format_message(
-            "{} is viewing an unshared Zed project",
+            "{} is viewing an unshared HiCodeer project",
             &[
                 ("0", __zed_i18n_arg_0)
             ],
@@ -442,7 +442,7 @@ impl PaneLeaderDecorator for PaneRenderContext<'_> {
                     ParticipantLocation::External => Some(Label::new({
         let __zed_i18n_arg_0 = format!("{}", leader.user.username);
         localization::format_message(
-            "{} is viewing a window outside of Zed",
+            "{} is viewing a window outside of HiCodeer",
             &[
                 ("0", __zed_i18n_arg_0)
             ],

@@ -1,6 +1,10 @@
 mod onboarding_banner;
 mod title_bar_settings;
+// [OHOS PORT BEGIN] HiCodeer has no update feed, so the title bar shows no
+// version badge and no update affordance.
+#[cfg(not(target_env = "ohos"))]
 mod update_version;
+// [OHOS PORT END]
 
 use arrayvec::ArrayVec;
 use git_ui_core::worktree_picker::WorktreePicker;
@@ -10,6 +14,7 @@ pub use platform_title_bar::{
 };
 use project::{linked_worktree_short_name, repo_identity_path, repo_identity_path_if_local};
 
+#[cfg(not(target_env = "ohos"))]
 use auto_update::AutoUpdateStatus;
 use client::{Client, UserStore};
 
@@ -42,6 +47,7 @@ use ui::{
 };
 #[cfg(target_env = "ohos")]
 use ui::ContextMenuEntry;
+#[cfg(not(target_env = "ohos"))]
 use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{MultiWorkspace, ToggleWorktreeSecurity, Workspace};
@@ -188,6 +194,7 @@ pub fn init(cx: &mut App) {
             });
         }
 
+        #[cfg(not(target_env = "ohos"))]
         workspace.register_action(|workspace, _: &SimulateUpdateAvailable, _window, cx| {
             if let Some(titlebar) = workspace
                 .titlebar_item()
@@ -211,6 +218,7 @@ pub struct TitleBar {
     multi_workspace: Option<WeakEntity<MultiWorkspace>>,
     _subscriptions: Vec<Subscription>,
     banner: Option<Entity<OnboardingBanner>>,
+    #[cfg(not(target_env = "ohos"))]
     update_version: Entity<UpdateVersion>,
 }
 
@@ -252,7 +260,7 @@ impl Render for TitleBar {
                 .gap_1()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .children(self.render_connection_status(status, cx))
-                .child(self.update_version.clone())
+                .children(self.render_version_badge(cx))
                 .when(TitleBarSettings::get_global(cx).show_user_menu, |this| {
                     this.child(self.render_user_menu_button(cx))
                 })
@@ -429,6 +437,7 @@ impl TitleBar {
             }));
         }
 
+        #[cfg(not(target_env = "ohos"))]
         let update_version = cx.new(|cx| UpdateVersion::new(cx));
         let platform_titlebar = cx.new(|cx| {
             let mut titlebar = PlatformTitleBar::new(id, cx);
@@ -449,6 +458,7 @@ impl TitleBar {
             client,
             _subscriptions: subscriptions,
             banner,
+            #[cfg(not(target_env = "ohos"))]
             update_version,
         };
 
@@ -459,11 +469,25 @@ impl TitleBar {
         self.project.read(cx).visible_worktrees(cx).count()
     }
 
+    #[cfg(not(target_env = "ohos"))]
     fn toggle_update_simulation(&mut self, cx: &mut Context<Self>) {
         self.update_version
             .update(cx, |banner, cx| banner.update_simulation(cx));
         cx.notify();
     }
+
+    // [OHOS PORT BEGIN] HiCodeer has no update feed, so the title bar shows no
+    // version badge next to the connection status.
+    #[cfg(target_env = "ohos")]
+    fn render_version_badge(&self, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        None
+    }
+
+    #[cfg(not(target_env = "ohos"))]
+    fn render_version_badge(&self, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        Some(self.update_version.clone().into_any_element())
+    }
+    // [OHOS PORT END]
 
     /// Returns the worktree to display in the title bar.
     /// - Prefer the worktree owning the project's active repository
@@ -1107,6 +1131,10 @@ impl TitleBar {
                     .tooltip(Tooltip::text(localization::localized_str!("Disconnected")))
                     .into_any_element(),
             ),
+            // [OHOS PORT BEGIN] Collaboration is not part of HiCodeer, so the
+            // "upgrade to collaborate" prompt and its updater lookup do not
+            // exist here.
+            #[cfg(not(target_env = "ohos"))]
             client::Status::UpgradeRequired => {
                 let auto_updater = auto_update::AutoUpdater::get(cx);
                 let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
@@ -1143,7 +1171,11 @@ impl TitleBar {
     }
 
     pub fn render_user_menu_button(&mut self, cx: &mut Context<Self>) -> impl Element {
+        // [OHOS PORT BEGIN] HiCodeer has no update feed, so the menu never
+        // offers to restart into a new version.
+        #[cfg(not(target_env = "ohos"))]
         let show_update_button = self.update_version.read(cx).show_update_in_menu_bar();
+        // [OHOS PORT END]
 
         let trigger = ButtonLike::new("user-menu")
             .aria_label(localization::localized_str!("User menu"))
@@ -1154,33 +1186,38 @@ impl TitleBar {
             .trigger(trigger)
             .menu(move |window, cx| {
                 ContextMenu::build(window, cx, |menu, _, _cx| {
-                    let menu = menu.when(show_update_button, |this| {
-                        this.custom_entry(
-                            move |_window, _cx| {
-                                h_flex()
-                                    .w_full()
-                                    .gap_1()
-                                    .justify_between()
-                                    .child(
-                                        Label::new(localization::localized_str!(
-                                            "Restart to update Zed"
-                                        ))
-                                        .color(Color::Accent),
-                                    )
-                                    .child(
-                                        Icon::new(IconName::Download)
-                                            .size(IconSize::Small)
+                    // [OHOS PORT BEGIN] HiCodeer has no update feed, so the menu
+                    // carries no restart-to-update entry.
+                    #[cfg(not(target_env = "ohos"))]
+                    let menu = menu
+                        .when(show_update_button, |this| {
+                            this.custom_entry(
+                                move |_window, _cx| {
+                                    h_flex()
+                                        .w_full()
+                                        .gap_1()
+                                        .justify_between()
+                                        .child(
+                                            Label::new(localization::localized_str!(
+                                                "Restart to update Zed"
+                                            ))
                                             .color(Color::Accent),
-                                    )
-                                    .into_any_element()
-                            },
-                            move |_, cx| {
-                                workspace::reload(cx);
-                            },
-                        )
-                        .separator()
-                    })
-                    .action(
+                                        )
+                                        .child(
+                                            Icon::new(IconName::Download)
+                                                .size(IconSize::Small)
+                                                .color(Color::Accent),
+                                        )
+                                        .into_any_element()
+                                },
+                                move |_, cx| {
+                                    workspace::reload(cx);
+                                },
+                            )
+                            .separator()
+                        });
+                    // [OHOS PORT END]
+                    let menu = menu.action(
                         localization::localized_str!("Settings"),
                         zed_actions::OpenSettings.boxed_clone(),
                     )

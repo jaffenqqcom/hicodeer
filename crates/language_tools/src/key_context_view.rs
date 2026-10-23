@@ -193,7 +193,7 @@ impl Render for KeyContextView {
                 }),
             )
             .child(Label::new(localization::localized_str!("Keyboard Context")).size(LabelSize::Large))
-            .child(Label::new(localization::localized_str!("This view lets you determine the current context stack for creating custom key bindings in Zed. When a keyboard shortcut is triggered, it also shows all the possible contexts it could have triggered in, and which one matched.")))
+            .child(Label::new(localization::localized_str!("This view lets you determine the current context stack for creating custom key bindings in HiCodeer. When a keyboard shortcut is triggered, it also shows all the possible contexts it could have triggered in, and which one matched.")))
             .child(
                 h_flex()
                     .mt_4()

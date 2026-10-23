@@ -392,7 +392,7 @@ impl QuickActionBar {
         let tooltip: SharedString = SharedString::from({
         let __zed_i18n_arg_0 = format!("{}", language);
         localization::format_message(
-            "Setup Zed REPL for {}",
+            "Setup HiCodeer REPL for {}",
             &[
                 ("0", __zed_i18n_arg_0)
             ],

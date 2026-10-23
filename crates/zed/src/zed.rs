@@ -1115,37 +1115,6 @@ fn register_actions(
                 }
             }
         })
-        .register_action(|_, _: &install_cli::RegisterZedScheme, window, cx| {
-            cx.spawn_in(window, async move |workspace, cx| {
-                install_cli::register_zed_scheme(cx).await?;
-                workspace.update_in(cx, |workspace, _, cx| {
-                    struct RegisterZedScheme;
-
-                    workspace.show_toast(
-                        Toast::new(
-                            NotificationId::unique::<RegisterZedScheme>(),
-                            {
-        let __zed_i18n_arg_0 = format!("{}", ReleaseChannel::global(cx).display_name());
-        localization::format_message(
-            "zed:// links will now open in {}.",
-            &[
-                ("0", __zed_i18n_arg_0)
-            ],
-        )
-    },
-                        ),
-                        cx,
-                    )
-                })?;
-                Ok(())
-            })
-            .detach_and_prompt_err(
-                localization::localized_str!("Error registering zed:// scheme"),
-                window,
-                cx,
-                |_, _, _| None,
-            );
-        })
         .register_action(open_project_settings_file)
         .register_action(open_project_tasks_file)
         .register_action(open_worktree_setup_tasks_file)
@@ -1220,8 +1189,42 @@ fn register_actions(
             }
         });
 
-    #[cfg(not(target_os = "windows"))]
+    // [OHOS PORT BEGIN] HiCodeer ships no command line installer and does not
+    // handle the zed:// scheme, so neither handler is registered.
+    #[cfg(not(target_env = "ohos"))]
+    workspace.register_action(|_, _: &install_cli::RegisterZedScheme, window, cx| {
+        cx.spawn_in(window, async move |workspace, cx| {
+            install_cli::register_zed_scheme(cx).await?;
+            workspace.update_in(cx, |workspace, _, cx| {
+                struct RegisterZedScheme;
+
+                workspace.show_toast(
+                    Toast::new(
+                        NotificationId::unique::<RegisterZedScheme>(),
+                        {
+                            let __zed_i18n_arg_0 =
+                                format!("{}", ReleaseChannel::global(cx).display_name());
+                            localization::format_message(
+                                "zed:// links will now open in {}.",
+                                &[("0", __zed_i18n_arg_0)],
+                            )
+                        },
+                    ),
+                    cx,
+                )
+            })?;
+            Ok(())
+        })
+        .detach_and_prompt_err(
+            localization::localized_str!("Error registering zed:// scheme"),
+            window,
+            cx,
+            |_, _, _| None,
+        );
+    });
+    #[cfg(all(not(target_os = "windows"), not(target_env = "ohos")))]
     workspace.register_action(install_cli);
+    // [OHOS PORT END]
 
     if workspace.project().read(cx).is_via_remote_server() {
         workspace.register_action({
@@ -1572,7 +1575,7 @@ fn open_about_window(cx: &mut App) {
     .log_err();
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(target_env = "ohos")))]
 fn install_cli(
     _: &mut Workspace,
     _: &install_cli::InstallCliBinary,

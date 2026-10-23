@@ -13,7 +13,7 @@ pub(crate) fn locale_setting_item() -> SettingsPageItem {
     SettingsPageItem::SettingItem(SettingItem {
         title: localization::localized_str!("Display Language"),
         description: localization::localized_str!(
-            "Select the language used by the Zed interface. Changes apply after restarting Zed."
+            "Select the language used by the HiCodeer interface. Changes apply after restarting HiCodeer."
         ),
         field: Box::new(SettingField {
             organization_override: None,
@@ -123,12 +123,12 @@ pub(crate) fn render_locale_picker(
             row.child(
                 Button::new(
                     "restart-zed-for-ui-locale",
-                    localization::localized_str!("Restart Zed"),
+                    localization::localized_str!("Restart HiCodeer"),
                 )
                 .style(ButtonStyle::Outlined)
                 .size(ButtonSize::Medium)
                 .tooltip(Tooltip::text(localization::localized_str!(
-                    "Restart Zed to apply the display language."
+                    "Restart HiCodeer to apply the display language."
                 )))
                 .on_click(|_, _, cx| workspace::reload(cx)),
             )

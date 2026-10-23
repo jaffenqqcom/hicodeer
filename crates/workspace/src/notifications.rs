@@ -1364,53 +1364,10 @@ pub mod simple_message_notification {
                 }
             }
 
-            // Mirrors the shape of [`super::super::PortalError`]: a critical error with a
-            // documentation link as its primary action.
-            struct PortalSetupError;
-            impl WorkspaceError for PortalSetupError {
-                fn primary_message(&self) -> SharedString {
-                    localization::localized_str!("Linux desktop portal initialization failed.").into()
-                }
-                fn secondary_message(&self) -> Option<SharedString> {
-                    Some(localization::localized_str!("Zed needs an xdg-desktop-portal implementation to open files.").into())
-                }
-                fn severity(&self) -> ErrorSeverity {
-                    ErrorSeverity::Critical
-                }
-                fn primary_action(&self) -> ErrorAction {
-                    ErrorAction::link(
-                        localization::localized_str!("See Docs"),
-                        "https://zed.dev/docs/linux#i-cant-open-any-files",
-                    )
-                }
-            }
-
-            // Has both a primary action (link) and a secondary action (dismiss), so the
-            // preview exercises the full button row.
-            struct UpdateRequiredError;
-            impl WorkspaceError for UpdateRequiredError {
-                fn primary_message(&self) -> SharedString {
-                    localization::localized_str!("An update is required to continue using Zed AI.").into()
-                }
-                fn severity(&self) -> ErrorSeverity {
-                    ErrorSeverity::Critical
-                }
-                fn primary_action(&self) -> ErrorAction {
-                    ErrorAction::link(localization::localized_str!("Update Zed"), "https://zed.dev/releases")
-                }
-                fn secondary_action(&self) -> Option<ErrorAction> {
-                    Some(ErrorAction::dismiss())
-                }
-            }
-
             let basic_error =
                 cx.new(|cx| MessageNotification::from_workspace_error(BasicError, cx));
             let detailed_error =
                 cx.new(|cx| MessageNotification::from_workspace_error(LanguageServerError, cx));
-            let docs_error =
-                cx.new(|cx| MessageNotification::from_workspace_error(PortalSetupError, cx));
-            let update_error =
-                cx.new(|cx| MessageNotification::from_workspace_error(UpdateRequiredError, cx));
 
             let container = || div().w(px(440.));
 
@@ -1473,14 +1430,6 @@ pub mod simple_message_notification {
                             single_example(
                                 "With Secondary Message",
                                 container().child(detailed_error).into_any_element(),
-                            ),
-                            single_example(
-                                "With Documentation Link",
-                                container().child(docs_error).into_any_element(),
-                            ),
-                            single_example(
-                                "With Primary + Secondary Action",
-                                container().child(update_error).into_any_element(),
                             ),
                         ],
                     ),

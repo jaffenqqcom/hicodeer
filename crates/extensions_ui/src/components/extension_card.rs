@@ -371,7 +371,7 @@ impl ExtensionCard {
                                     {
         let __zed_i18n_arg_0 = format!("{}", version);
         localization::format_message(
-            "v{version} is not compatible with this version of Zed.",
+            "v{version} is not compatible with this version of HiCodeer.",
             &[
                 ("version", __zed_i18n_arg_0)
             ],

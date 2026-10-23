@@ -2371,7 +2371,7 @@ impl RemoteServerProjects {
                                                 .color(Color::Muted)
                                                 .size(IconSize::Small),
                                         )
-                                        .child(Label::new(localization::localized_str!("Open Zed Log")))
+                                        .child(Label::new(localization::localized_str!("Open HiCodeer Log")))
                                         .on_click(cx.listener(|_, _, window, cx| {
                                             window.dispatch_action(Box::new(OpenLog), cx);
                                             cx.emit(DismissEvent);

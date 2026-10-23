@@ -91,7 +91,7 @@ fn build_application() -> Application {
 }
 
 fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
-    let message = localization::localized_str!("Zed failed to launch");
+    let message = localization::localized_str!("HiCodeer failed to launch");
     let error_details = errors
         .into_iter()
         .flat_map(|(kind, paths)| {
@@ -152,9 +152,7 @@ fn fail_to_open_window_async(e: anyhow::Error, cx: &mut AsyncApp) {
 }
 
 fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
-    eprintln!(
-        "Zed failed to open a window: {e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
-    );
+    eprintln!("HiCodeer failed to open a window: {e:?}");
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     {
         process::exit(1);
@@ -174,7 +172,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
             proxy
                 .add_notification(
                     notification_id,
-                    Notification::new(localization::localized_str!("Zed failed to launch"))
+                    Notification::new(localization::localized_str!("HiCodeer failed to launch"))
                         .body(Some(
                             format!(
                                 "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
@@ -664,8 +662,13 @@ fn main() {
         AppState::set_global(app_state.clone(), cx);
 
         watcher_debug::init(app_state.clone(), cx);
+        // [OHOS PORT BEGIN] HiCodeer has no update feed, so the updater never
+        // starts and no update affordance is created.
+        #[cfg(not(target_env = "ohos"))]
         auto_update::init(client.clone(), cx);
+        #[cfg(not(target_env = "ohos"))]
         auto_update_ui::init(cx);
+        // [OHOS PORT END]
         reliability::init(client.clone(), app_state.workspace_store.clone(), cx);
         extension_host::init(
             extension_host_proxy.clone(),

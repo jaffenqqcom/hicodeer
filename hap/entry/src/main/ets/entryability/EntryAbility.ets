@@ -29,10 +29,10 @@ const fileLaunch = new FileLaunchPlugin();
 const DOMAIN: number = 0x0001;
 const TAG: string = 'EntryAbility';
 
-// Feature switch for the home directory flow: when false (default), launch
-// straight into the editor and let Rust fall back to the app sandbox data root,
-// skipping the picker. Set to true to restore the picker; its code stays below.
-const SHOW_HOME_PICKER: boolean = false;
+// Feature switch for the home directory flow: when true (default), the setup
+// page asks for a data folder before the native module loads. When false, launch
+// straight into the editor and let Rust fall back to the app sandbox data root.
+const SHOW_HOME_PICKER: boolean = true;
 
 export default class EntryAbility extends NativeAbility {
   public moduleName: string = 'core';

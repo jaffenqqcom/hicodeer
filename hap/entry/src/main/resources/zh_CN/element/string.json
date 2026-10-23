@@ -1,0 +1,64 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "HiCodeer 模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "HiCodeer 主界面"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "HiCodeer"
+    },
+    {
+      "name": "perm_auth_reason",
+      "value": "持续读写用户选择的文件和文件夹"
+    },
+    {
+      "name": "perm_writable_code_memory_reason",
+      "value": "为 wasmtime JIT 分配可写可执行内存，以运行编辑器插件"
+    },
+    {
+      "name": "perm_microphone_reason",
+      "value": "在音频输入测试面板中录制音频"
+    },
+    {
+      "name": "setup_title",
+      "value": "选择数据存放位置"
+    },
+    {
+      "name": "setup_lede",
+      "value": "配置、扩展插件、语言分析工具等都会保存在这个文件夹里"
+    },
+    {
+      "name": "setup_data_folder",
+      "value": "数据文件夹"
+    },
+    {
+      "name": "setup_no_folder",
+      "value": "尚未选择文件夹"
+    },
+    {
+      "name": "setup_choose",
+      "value": "选择"
+    },
+    {
+      "name": "setup_change",
+      "value": "更改"
+    },
+    {
+      "name": "setup_final_path",
+      "value": "最终路径"
+    },
+    {
+      "name": "setup_next",
+      "value": "下一步"
+    },
+    {
+      "name": "setup_preparing",
+      "value": "正在准备…"
+    }
+  ]
+}

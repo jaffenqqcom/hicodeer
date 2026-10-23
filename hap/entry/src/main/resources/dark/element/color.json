@@ -3,6 +3,46 @@
     {
       "name": "start_window_background",
       "value": "#000000"
+    },
+    {
+      "name": "setup_background",
+      "value": "#0B0C0E"
+    },
+    {
+      "name": "setup_surface",
+      "value": "#131518"
+    },
+    {
+      "name": "setup_field",
+      "value": "#191C20"
+    },
+    {
+      "name": "setup_border",
+      "value": "#14FFFFFF"
+    },
+    {
+      "name": "setup_text_primary",
+      "value": "#E9EBEE"
+    },
+    {
+      "name": "setup_text_secondary",
+      "value": "#A2A8B0"
+    },
+    {
+      "name": "setup_text_tertiary",
+      "value": "#6D737B"
+    },
+    {
+      "name": "setup_accent",
+      "value": "#5B8CFF"
+    },
+    {
+      "name": "setup_on_accent",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "setup_disabled",
+      "value": "#1F2227"
     }
   ]
 }

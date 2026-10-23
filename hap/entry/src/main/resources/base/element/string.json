@@ -13,14 +13,6 @@
       "value": "HiCodeer"
     },
     {
-      "name": "set_home_directory_button",
-      "value": "Pick up"
-    },
-    {
-      "name": "set_home_directory_hint",
-      "value": "Set Home Directory of HiCodeer"
-    },
-    {
       "name": "perm_auth_reason",
       "value": "persist read/write access to files and folders selected by the user"
     },
@@ -31,6 +23,42 @@
     {
       "name": "perm_microphone_reason",
       "value": "record audio in the audio input test panel"
+    },
+    {
+      "name": "setup_title",
+      "value": "Choose where to store data"
+    },
+    {
+      "name": "setup_lede",
+      "value": "Settings, extensions, language servers and more are stored in this folder"
+    },
+    {
+      "name": "setup_data_folder",
+      "value": "DATA FOLDER"
+    },
+    {
+      "name": "setup_no_folder",
+      "value": "No folder selected"
+    },
+    {
+      "name": "setup_choose",
+      "value": "Choose"
+    },
+    {
+      "name": "setup_change",
+      "value": "Change"
+    },
+    {
+      "name": "setup_final_path",
+      "value": "FINAL PATH"
+    },
+    {
+      "name": "setup_next",
+      "value": "Next"
+    },
+    {
+      "name": "setup_preparing",
+      "value": "Preparing…"
     }
   ]
 }

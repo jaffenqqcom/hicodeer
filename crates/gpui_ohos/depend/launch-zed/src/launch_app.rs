@@ -32,7 +32,12 @@ pub fn launch_app(app: openharmony_ability::OpenHarmonyApp) {
     // ensure_shell_env.
     // [boot] Home comes from the ets side; when the picker is skipped it
     // reports none and the sandbox fallback below takes over.
-    ensure_shell_env(app.base_path(), app.home_directory());
+    // Resolve the data directory before $HOME is published so both agree even
+    // when an older build recorded the non-hidden `<root>/HiCodeer`.
+    let home_directory = app
+        .home_directory()
+        .map(|dir| resolve_data_dir(Path::new(&dir)).to_string_lossy().into_owned());
+    ensure_shell_env(app.base_path(), home_directory.clone());
     boot_trace(&format!("HOME={:?} base={:?}", std::env::var("HOME"), app.base_path()));
     // Publish the system languages the ets side read through `@ohos.i18n`; upstream resolves the
     // UI locale and the date/time formats from the POSIX `LANGUAGE` list. See export_system_locale.
@@ -54,12 +59,25 @@ pub fn launch_app(app: openharmony_ability::OpenHarmonyApp) {
     gpui_ohos::set_system_bell_handler(audio::play_system_bell);
     // Launch Zed with only the information it truly needs: the sandbox base path
     // and the home directory the ets side resolved before this native module loaded.
-    start_zed_main(app.base_path(), app.home_directory());
+    start_zed_main(app.base_path(), home_directory);
 }
 
 /// Records the resolved data root so the next launch's ets-side check can find it
 /// without touching `paths` (which must not be initialized before it is set).
 const HOME_DIRECTORY_RECORD_FILE: &str = "custom_data_dir";
+
+/// Name of the data directory created under the selected folder (or the
+/// sandbox root when no folder was picked).
+///
+/// The leading dot keeps the directory out of the way when the user browses the
+/// folder they picked; it is application state, not documents.
+const DATA_DIR_NAME: &str = ".HiCodeer";
+
+/// Names used by builds before the data directory became hidden.
+///
+/// Both spellings exist in the field: the picker flow created `HiCodeer`, the
+/// sandbox fallback created `hicodeer`.
+const LEGACY_DATA_DIR_NAMES: [&str; 2] = ["HiCodeer", "hicodeer"];
 
 /// Resolves the data root, publishes it to `paths`, then enters Zed's own `main`.
 ///
@@ -88,10 +106,8 @@ fn start_zed_main(base_path: Option<String>, home_directory: Option<String>) {
             if let Some(base_path) = base_path {
                 // Product data subdirectory (not `zed`): the QEMU guest mounts the whole
                 // sandbox, so downloaded programs live under this directory of base_path.
-                let data_dir = PathBuf::from(base_path).join("hicodeer");
-                if let Some(data_dir) = data_dir.to_str() {
-                    paths::set_custom_data_dir(data_dir);
-                }
+                let data_dir = resolve_data_dir(Path::new(&base_path));
+                paths::set_custom_data_dir(&data_dir.to_string_lossy());
             }
         }
     }
@@ -120,13 +136,84 @@ fn export_system_locale(locales: Option<String>) {
 /// `set_custom_data_dir` panic on an unreachable path.
 fn resolve_home_directory(home_directory: Option<&str>) -> Option<String> {
     let home_directory = home_directory?;
-    match std::fs::create_dir_all(home_directory) {
-        Ok(()) => Some(home_directory.to_owned()),
+    let data_dir = resolve_data_dir(Path::new(home_directory));
+    match std::fs::create_dir_all(&data_dir) {
+        Ok(()) => Some(data_dir.to_string_lossy().into_owned()),
         Err(err) => {
-            log::error!("start_zed_main: home directory {home_directory} is unusable: {err}");
+            log::error!(
+                "start_zed_main: data directory {} is unusable: {err}",
+                data_dir.display()
+            );
             None
         }
     }
+}
+
+/// Returns the hidden data directory under a picked folder or sandbox root,
+/// migrating a legacy non-hidden directory when it is the only candidate.
+///
+/// `selected` may be the folder the user picked (`<root>`) or a data directory
+/// recorded by an older build (`<root>/HiCodeer`); both resolve to
+/// `<root>/.HiCodeer`.
+fn resolve_data_dir(selected: &Path) -> PathBuf {
+    let root = match selected.file_name().and_then(|name| name.to_str()) {
+        Some(name) if name == DATA_DIR_NAME || LEGACY_DATA_DIR_NAMES.contains(&name) => {
+            selected.parent().unwrap_or(selected)
+        }
+        _ => selected,
+    };
+    migrate_legacy_data_dir(root)
+}
+
+/// Renames a legacy data directory in `root` to [`DATA_DIR_NAME`].
+///
+/// Runs before `paths` is initialized, so it only touches the filesystem.
+/// On failure the legacy directory is returned, keeping the existing data
+/// reachable instead of starting from an empty hidden directory. When both
+/// names exist the hidden one wins and the legacy directory is left untouched
+/// rather than merged, so no data is silently combined.
+fn migrate_legacy_data_dir(root: &Path) -> PathBuf {
+    let target = root.join(DATA_DIR_NAME);
+    if target.exists() {
+        for name in LEGACY_DATA_DIR_NAMES {
+            let legacy = root.join(name);
+            if legacy.exists() {
+                log::warn!(
+                    "start_zed_main: both {} and {} exist; keeping the hidden directory",
+                    legacy.display(),
+                    target.display()
+                );
+            }
+        }
+        return target;
+    }
+
+    for name in LEGACY_DATA_DIR_NAMES {
+        let legacy = root.join(name);
+        if !legacy.exists() {
+            continue;
+        }
+        match std::fs::rename(&legacy, &target) {
+            Ok(()) => {
+                log::info!(
+                    "start_zed_main: migrated {} to {}",
+                    legacy.display(),
+                    target.display()
+                );
+                return target;
+            }
+            Err(err) => {
+                log::error!(
+                    "start_zed_main: cannot migrate {} to {}: {err}",
+                    legacy.display(),
+                    target.display()
+                );
+                return legacy;
+            }
+        }
+    }
+
+    target
 }
 
 /// Writes the resolved data root to `<base_path>/custom_data_dir`. Idempotent:

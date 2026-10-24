@@ -1,9 +1,10 @@
 use editor::{CursorLayout, EditorSettings, HighlightedRange, HighlightedRangeLine};
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Element,
-    ElementId, Entity, FocusHandle, Font, FontFeatures, FontStyle, FontWeight, GlobalElementId,
+    ElementId, Entity, FocusHandle, Font, FontFeatures, FontId, FontStyle, FontWeight,
+    GlobalElementId,
     HighlightStyle, Hitbox, Hsla, InputHandler, InteractiveElement, Interactivity, IntoElement,
-    LayoutId, Length, ModifiersChangedEvent, MouseButton, MouseMoveEvent, Pixels,
+    LayoutId, LineLayout, Length, ModifiersChangedEvent, MouseButton, MouseMoveEvent, Pixels,
     Point as GpuiPoint, StatefulInteractiveElement, StrikethroughStyle, Styled, TextRun, TextStyle,
     UTF16Selection, UnderlineStyle, WeakEntity, WhiteSpace, Window, div, fill, point, px, relative,
     size,
@@ -98,6 +99,9 @@ pub struct BatchedTextRun {
     pub start_point: LayoutPoint,
     pub text: String,
     pub cell_count: usize,
+    /// Grid cells occupied per char in `text`: 1 narrow, 2 wide, 0 zero-width
+    /// decoration chars. Used to derive per-glyph ink width budgets.
+    pub char_cell_widths: Vec<u8>,
     pub style: TextRun,
     pub font_size: AbsoluteLength,
 }
@@ -106,6 +110,7 @@ impl BatchedTextRun {
     fn new_from_char(
         start_point: LayoutPoint,
         c: char,
+        cell_width: u8,
         style: TextRun,
         font_size: AbsoluteLength,
     ) -> Self {
@@ -115,6 +120,7 @@ impl BatchedTextRun {
             start_point,
             text,
             cell_count: 1,
+            char_cell_widths: vec![cell_width],
             style,
             font_size,
         }
@@ -128,21 +134,22 @@ impl BatchedTextRun {
             && self.style.strikethrough == other_style.strikethrough
     }
 
-    fn append_char(&mut self, c: char) {
-        self.append_char_internal(c, true);
+    fn append_char(&mut self, c: char, cell_width: u8) {
+        self.append_char_internal(c, true, cell_width);
     }
 
     fn append_zero_width_chars(&mut self, chars: &[char]) {
         for &c in chars {
-            self.append_char_internal(c, false);
+            self.append_char_internal(c, false, 0);
         }
     }
 
-    fn append_char_internal(&mut self, c: char, counts_cell: bool) {
+    fn append_char_internal(&mut self, c: char, counts_cell: bool, cell_width: u8) {
         self.text.push(c);
         if counts_cell {
             self.cell_count += 1;
         }
+        self.char_cell_widths.push(cell_width);
         self.style.len += c.len_utf8();
     }
 
@@ -150,6 +157,7 @@ impl BatchedTextRun {
         &self,
         origin: GpuiPoint<Pixels>,
         dimensions: &TerminalBounds,
+        baseline_metrics: Option<(Pixels, Pixels)>,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -158,25 +166,102 @@ impl BatchedTextRun {
             origin.y + self.start_point.line as f32 * dimensions.line_height,
         );
 
-        window
-            .text_system()
-            .shape_line(
-                self.text.clone().into(),
-                self.font_size.to_pixels(window.rem_size()),
-                std::slice::from_ref(&self.style),
-                Some(dimensions.cell_width),
+        let shaped_line = window.text_system().shape_line(
+            self.text.clone().into(),
+            self.font_size.to_pixels(window.rem_size()),
+            std::slice::from_ref(&self.style),
+            Some(dimensions.cell_width),
+        );
+
+        // [OHOS PORT BEGIN] Center fallback glyphs in terminal grid cells;
+        // plain primary-font lines produce no widths and pay nothing. Delete
+        // this block to restore upstream rendering.
+        #[cfg(target_env = "ohos")]
+        let glyph_budgets: Option<Vec<Option<Pixels>>> = {
+            let primary_font = window.text_system().resolve_font(&self.style.font);
+            glyph_width_budgets(
+                shaped_line.layout(),
+                &self.text,
+                &self.char_cell_widths,
+                dimensions.cell_width,
+                primary_font,
             )
+        };
+        #[cfg(not(target_env = "ohos"))]
+        let glyph_budgets: Option<Vec<Option<Pixels>>> = None;
+        let glyph_budgets = glyph_budgets.as_deref();
+        // [OHOS PORT END]
+
+        shaped_line
+            .layout()
             .paint(
                 pos,
                 dimensions.line_height,
                 gpui::TextAlign::Left,
                 None,
+                shaped_line.decoration_runs(),
+                glyph_budgets,
+                baseline_metrics,
                 window,
                 cx,
             )
             .log_err();
     }
 }
+
+/// [OHOS PORT BEGIN] Per-glyph cell widths used to center terminal glyphs.
+///
+/// Returns `None` when every run uses the primary font, so ordinary text pays
+/// nothing. For mixed lines each glyph gets its cell's width (zero-width
+/// decoration chars inherit their base character's width); glyphs already
+/// shaped with the primary font get `None`.
+fn glyph_width_budgets(
+    layout: &LineLayout,
+    text: &str,
+    char_cell_widths: &[u8],
+    cell_width: Pixels,
+    primary_font: FontId,
+) -> Option<Vec<Option<Pixels>>> {
+    debug_assert_eq!(text.chars().count(), char_cell_widths.len());
+
+    if layout.runs.iter().all(|run| run.font_id == primary_font) {
+        return None;
+    }
+
+    // Resolve one budget per char up front so glyph lookup does not depend on
+    // glyph order (RTL runs may arrive out of order). Zero-width decoration
+    // chars inherit the preceding base char's budget.
+    let mut char_budgets: Vec<(usize, Option<Pixels>)> =
+        Vec::with_capacity(char_cell_widths.len());
+    let mut last_base_budget: Option<Pixels> = None;
+    for ((start, _ch), cells) in text.char_indices().zip(char_cell_widths.iter().copied()) {
+        if cells != 0 {
+            last_base_budget = Some(cell_width * cells as f32);
+        }
+        char_budgets.push((start, last_base_budget));
+    }
+
+    let glyph_count: usize = layout.runs.iter().map(|run| run.glyphs.len()).sum();
+    let mut budgets = Vec::with_capacity(glyph_count);
+    for run in &layout.runs {
+        for glyph in &run.glyphs {
+            let budget = char_budgets
+                .partition_point(|(start, _)| *start <= glyph.index)
+                .checked_sub(1)
+                .and_then(|index| char_budgets[index].1);
+            // Emoji are drawn as fixed-size glyphs; squeezing them distorts the
+            // artwork, so they keep their natural width.
+            budgets.push(if glyph.is_emoji || run.font_id == primary_font {
+                None
+            } else {
+                budget
+            });
+        }
+    }
+
+    Some(budgets)
+}
+// [OHOS PORT END]
 
 /// Block element glyphs are painted on a subcell grid: each terminal cell is
 /// divided into 8 columns (for eighth blocks) and 24 lines (LCM of the 8-way
@@ -552,7 +637,7 @@ impl TerminalElement {
                                 && batch.start_point.column + batch.cell_count as i32
                                     == cell_point.column
                             {
-                                batch.append_char(cell.character());
+                                batch.append_char(cell.character(), 1 + u8::from(cell.is_wide()));
                                 if let Some(chars) = zero_width_chars {
                                     batch.append_zero_width_chars(chars);
                                 }
@@ -563,6 +648,7 @@ impl TerminalElement {
                                 let mut new_batch = BatchedTextRun::new_from_char(
                                     cell_point,
                                     cell.character(),
+                                    1 + u8::from(cell.is_wide()),
                                     cell_style,
                                     text_style.font_size,
                                 );
@@ -576,6 +662,7 @@ impl TerminalElement {
                             let mut new_batch = BatchedTextRun::new_from_char(
                                 cell_point,
                                 cell.character(),
+                                1 + u8::from(cell.is_wide()),
                                 cell_style,
                                 text_style.font_size,
                             );
@@ -1679,8 +1766,35 @@ impl Element for TerminalElement {
 
                     // Paint batched text runs instead of individual cells
                     let text_paint_start = Instant::now();
+                    // [OHOS PORT BEGIN] Probe the primary font once per frame so
+                    // terminal rows share a stable baseline regardless of the
+                    // fallback metrics participating in each line.
+                    #[cfg(target_env = "ohos")]
+                    let baseline_metrics = {
+                        let text_system = window.text_system();
+                        let text_style = window.text_style();
+                        let font_size = text_style.font_size.to_pixels(window.rem_size());
+                        let probe_run = TextRun {
+                            len: 1,
+                            font: text_style.font(),
+                            color: text_style.color,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        };
+                        let probe = text_system.shape_line(
+                            "M".into(),
+                            font_size,
+                            std::slice::from_ref(&probe_run),
+                            None,
+                        );
+                        Some((probe.layout().ascent, probe.layout().descent))
+                    };
+                    #[cfg(not(target_env = "ohos"))]
+                    let baseline_metrics: Option<(Pixels, Pixels)> = None;
+                    // [OHOS PORT END]
                     for batch in &layout.batched_text_runs {
-                        batch.paint(origin, &layout.dimensions, window, cx);
+                        batch.paint(origin, &layout.dimensions, baseline_metrics, window, cx);
                     }
                     for block_element_rect in &layout.block_element_rects {
                         block_element_rect.paint(origin, &layout.dimensions, window);
@@ -2014,7 +2128,7 @@ pub fn convert_color(fg: &Color, theme: &Theme) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{AbsoluteLength, Hsla, TestAppContext, font};
+    use gpui::{AbsoluteLength, Hsla, TestAppContext, font, px};
     use ui::utils::apca_contrast;
 
     #[gpui::test]
@@ -2616,7 +2730,8 @@ mod tests {
         };
 
         let font_size = AbsoluteLength::Pixels(px(12.0));
-        let batch = BatchedTextRun::new_from_char(LayoutPoint::new(0, 0), 'a', style1, font_size);
+        let batch =
+            BatchedTextRun::new_from_char(LayoutPoint::new(0, 0), 'a', 1, style1, font_size);
 
         // Should be able to append same style
         assert!(batch.can_append(&style2));
@@ -2636,19 +2751,19 @@ mod tests {
 
         let font_size = AbsoluteLength::Pixels(px(12.0));
         let mut batch =
-            BatchedTextRun::new_from_char(LayoutPoint::new(0, 0), 'a', style, font_size);
+            BatchedTextRun::new_from_char(LayoutPoint::new(0, 0), 'a', 1, style, font_size);
 
         assert_eq!(batch.text, "a");
         assert_eq!(batch.cell_count, 1);
         assert_eq!(batch.style.len, 1);
 
-        batch.append_char('b');
+        batch.append_char('b', 1);
 
         assert_eq!(batch.text, "ab");
         assert_eq!(batch.cell_count, 2);
         assert_eq!(batch.style.len, 2);
 
-        batch.append_char('c');
+        batch.append_char('c', 1);
 
         assert_eq!(batch.text, "abc");
         assert_eq!(batch.cell_count, 3);
@@ -2666,24 +2781,25 @@ mod tests {
 
         let font_size = AbsoluteLength::Pixels(px(12.0));
         let mut batch =
-            BatchedTextRun::new_from_char(LayoutPoint::new(0, 0), 'x', style, font_size);
+            BatchedTextRun::new_from_char(LayoutPoint::new(0, 0), 'x', 1, style, font_size);
 
         assert_eq!(batch.text, "x");
         assert_eq!(batch.cell_count, 1);
         assert_eq!(batch.style.len, 1);
 
-        batch.append_char('y');
+        batch.append_char('y', 1);
 
         assert_eq!(batch.text, "xy");
         assert_eq!(batch.cell_count, 2);
         assert_eq!(batch.style.len, 2);
 
         // Test with multi-byte character
-        batch.append_char('😀');
+        batch.append_char('😀', 2);
 
         assert_eq!(batch.text, "xy😀");
         assert_eq!(batch.cell_count, 3);
         assert_eq!(batch.style.len, 6); // 1 + 1 + 4 bytes for emoji
+        assert_eq!(batch.char_cell_widths, vec![1, 1, 2]);
     }
 
     #[test]
@@ -2697,7 +2813,7 @@ mod tests {
 
         let font_size = AbsoluteLength::Pixels(px(12.0));
         let mut batch =
-            BatchedTextRun::new_from_char(LayoutPoint::new(0, 0), 'x', style, font_size);
+            BatchedTextRun::new_from_char(LayoutPoint::new(0, 0), 'x', 1, style, font_size);
 
         let combining = '\u{0301}';
         batch.append_zero_width_chars(&[combining]);
@@ -2705,6 +2821,7 @@ mod tests {
         assert_eq!(batch.text, format!("x{}", combining));
         assert_eq!(batch.cell_count, 1);
         assert_eq!(batch.style.len, 1 + combining.len_utf8());
+        assert_eq!(batch.char_cell_widths, vec![1, 0]);
     }
 
     #[test]

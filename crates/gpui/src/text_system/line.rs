@@ -81,6 +81,18 @@ impl ShapedLine {
         self.layout.len
     }
 
+    // [OHOS PORT BEGIN] Accessors for terminal grid fitting.
+    /// The underlying layout, shared with the text system cache.
+    pub fn layout(&self) -> &LineLayout {
+        &self.layout
+    }
+
+    /// The decoration runs that were used to shape this line.
+    pub fn decoration_runs(&self) -> &[DecorationRun] {
+        &self.decoration_runs
+    }
+    // [OHOS PORT END]
+
     /// The width of the shaped line in pixels.
     ///
     /// This is the glyph advance width computed by the text shaping system and is useful for
@@ -153,6 +165,8 @@ impl ShapedLine {
             window,
             cx,
             &mut paint_underline,
+            None,
+            None,
         )
     }
 
@@ -392,6 +406,10 @@ impl LineLayout {
         align: TextAlign,
         align_width: Option<Pixels>,
         decoration_runs: &[DecorationRun],
+        // [OHOS PORT BEGIN] Terminal-only knobs; other callers pass None.
+        glyph_width_budgets: Option<&[Option<Pixels>]>,
+        baseline_metrics: Option<(Pixels, Pixels)>,
+        // [OHOS PORT END]
         window: &mut Window,
         cx: &mut App,
     ) -> Result<()> {
@@ -406,6 +424,8 @@ impl LineLayout {
             window,
             cx,
             &mut |_, origin, width, style, window| window.paint_underline(origin, width, style),
+            glyph_width_budgets,
+            baseline_metrics,
         )
     }
 
@@ -482,6 +502,8 @@ impl WrappedLine {
             window,
             cx,
             &mut |_, origin, width, style, window| window.paint_underline(origin, width, style),
+            None,
+            None,
         )?;
 
         Ok(())
@@ -535,6 +557,10 @@ fn paint_line(
         &UnderlineStyle,
         &mut Window,
     ),
+    // [OHOS PORT BEGIN] Terminal-only knobs; other callers pass None.
+    glyph_width_budgets: Option<&[Option<Pixels>]>,
+    baseline_metrics: Option<(Pixels, Pixels)>,
+    // [OHOS PORT END]
 ) -> Result<()> {
     let line_bounds = line_paint_bounds(
         origin,
@@ -545,9 +571,12 @@ fn paint_line(
         wrap_boundaries,
     );
     window.paint_layer(line_bounds, |window| {
-        let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
-        let baseline_offset = point(px(0.), padding_top + layout.ascent);
-        let underline_y_offset = underline_y_offset(line_height, layout.ascent, layout.descent);
+        // [OHOS PORT BEGIN] Keep terminal baselines on primary-font metrics.
+        let (ascent, descent) = baseline_metrics.unwrap_or((layout.ascent, layout.descent));
+        // [OHOS PORT END]
+        let padding_top = (line_height - ascent - descent) / 2.;
+        let baseline_offset = point(px(0.), padding_top + ascent);
+        let underline_y_offset = underline_y_offset(line_height, ascent, descent);
         let mut decoration_runs = decoration_runs.iter();
         let mut wraps = wrap_boundaries.iter().peekable();
         let mut run_end = 0;
@@ -569,10 +598,16 @@ fn paint_line(
         let mut prev_glyph_position = Point::default();
         let mut max_glyph_size = size(px(0.), px(0.));
         let mut first_glyph_x = origin.x;
+        let mut flat_glyph_ix: usize = 0;
         for (run_ix, run) in layout.runs.iter().enumerate() {
             max_glyph_size = text_system.bounding_box(run.font_id, layout.font_size).size;
 
             for (glyph_ix, glyph) in run.glyphs.iter().enumerate() {
+                // [OHOS PORT BEGIN] Per-glyph cell width used for centering.
+                let glyph_width_budget = glyph_width_budgets
+                    .and_then(|budgets| budgets.get(flat_glyph_ix).copied().flatten());
+                flat_glyph_ix += 1;
+                // [OHOS PORT END]
                 glyph_origin.x += glyph.position.x - prev_glyph_position.x;
                 if glyph_ix == 0 && run_ix == 0 {
                     first_glyph_x = glyph_origin.x;
@@ -737,6 +772,7 @@ fn paint_line(
                             run.font_id,
                             glyph.id,
                             layout.font_size,
+                            glyph_width_budget,
                         )?;
                     } else {
                         window.paint_glyph(
@@ -745,6 +781,7 @@ fn paint_line(
                             glyph.id,
                             layout.font_size,
                             color,
+                            glyph_width_budget,
                         )?;
                     }
                 }
@@ -1014,6 +1051,7 @@ mod tests {
         Styled, TestAppContext, TextRun, Underline, canvas, font, hsla,
     };
     use std::rc::Rc;
+
 
     /// Helper: build a ShapedLine from glyph descriptors without the platform text system.
     /// Each glyph is described as (byte_index, x_position).
@@ -1402,6 +1440,8 @@ mod tests {
                         strokes.push((range, origin, width, *style));
                         window.paint_underline(origin, width, style);
                     },
+                    None,
+                    None,
                 )
                 .unwrap();
                 let (start, width) = if zero_advance {

@@ -412,6 +412,7 @@ impl Render for TerminalOutput {
                             line_height: text_line_height,
                             bounds,
                         },
+                        None,
                         window,
                         cx,
                     );

@@ -4739,6 +4739,7 @@ impl Window {
         glyph_id: GlyphId,
         font_size: Pixels,
         color: Hsla,
+        max_width: Option<Pixels>,
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
@@ -4779,10 +4780,19 @@ impl Window {
                     Ok(Some((size, Cow::Owned(bytes))))
                 })?
                 .expect("Callback above only errors or returns Some");
-            let bounds = Bounds {
+            let mut bounds = Bounds {
                 origin: integer_origin + raster_bounds.origin.map(Into::into),
                 size: tile.bounds.size.map(Into::into),
             };
+            // [OHOS PORT BEGIN] Center the glyph ink inside its terminal cell.
+            // Without a cell width (every non-terminal caller) this leaves
+            // bounds untouched.
+            if let Some(max_width) = max_width {
+                let cell_width = max_width * scale_factor;
+                let centering = ((cell_width.0 - bounds.size.width.0) / 2.).round();
+                bounds.origin.x.0 = integer_origin.x.0 + centering;
+            }
+            // [OHOS PORT END]
             let content_mask = self.snapped_content_mask();
 
             if subpixel_rendering {
@@ -4843,6 +4853,7 @@ impl Window {
         font_id: FontId,
         glyph_id: GlyphId,
         font_size: Pixels,
+        max_width: Option<Pixels>,
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
@@ -4870,10 +4881,19 @@ impl Window {
                 })?
                 .expect("Callback above only errors or returns Some");
 
-            let bounds = Bounds {
+            let mut bounds = Bounds {
                 origin: integer_origin + raster_bounds.origin.map(Into::into),
                 size: tile.bounds.size.map(Into::into),
             };
+            // [OHOS PORT BEGIN] Center the glyph ink inside its terminal cell.
+            // Without a cell width (every non-terminal caller) this leaves
+            // bounds untouched.
+            if let Some(max_width) = max_width {
+                let cell_width = max_width * scale_factor;
+                let centering = ((cell_width.0 - bounds.size.width.0) / 2.).round();
+                bounds.origin.x.0 = integer_origin.x.0 + centering;
+            }
+            // [OHOS PORT END]
             let content_mask = self.snapped_content_mask();
             let opacity = self.element_opacity();
 

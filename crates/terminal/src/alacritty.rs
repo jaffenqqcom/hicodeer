@@ -527,6 +527,13 @@ impl Cell {
         self.cell.flags.contains(Flags::WIDE_CHAR_SPACER)
     }
 
+    // [OHOS PORT BEGIN] Wide-cell flag used for terminal glyph width budgets.
+    #[inline]
+    pub fn is_wide(&self) -> bool {
+        self.cell.flags.contains(Flags::WIDE_CHAR)
+    }
+    // [OHOS PORT END]
+
     #[inline]
     pub fn is_dim(&self) -> bool {
         self.cell.flags.intersects(Flags::DIM)

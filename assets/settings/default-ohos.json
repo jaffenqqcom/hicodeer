@@ -1,4 +1,7 @@
 {
+  // Language servers default to off on OHOS; users can still turn them on per
+  // language or globally in the settings UI.
+  "enable_language_server": false,
   "buffer_font_family": "Default Mono",
   "ui_font_family": "Default Sans",
   "terminal": {

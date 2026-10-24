@@ -6602,21 +6602,7 @@ mod ohos_agent_settings {
         localization::localized_str!("Notification Popups")
     }
     fn toast_description() -> &'static str {
-        localization::localized_str!("Choose where background popup notifications should appear.")
-    }
-    /// The choices are matched by index, so their order is what matters. They
-    /// keep the client's own wording; the values are resolved on first use
-    /// because the dropdown holds a slice that outlives the call.
-    fn toast_choices() -> &'static [&'static str] {
-        static CHOICES: std::sync::OnceLock<[&'static str; 4]> = std::sync::OnceLock::new();
-        CHOICES.get_or_init(|| {
-            [
-                localization::localized_str!("Off"),
-                localization::localized_str!("Inside herdr"),
-                localization::localized_str!("Via terminal"),
-                localization::localized_str!("Via system"),
-            ]
-        })
+        localization::localized_str!("Show agent notifications outside the terminal.")
     }
     fn integrations_title() -> &'static str {
         localization::localized_str!("Agent Integrations")
@@ -6699,28 +6685,34 @@ mod ohos_agent_settings {
         })
         .into_any_element();
 
-        let toast_index = ToastDelivery::ALL
-            .iter()
-            .position(|delivery| *delivery == settings.toast)
-            .unwrap_or(0);
-        let toast = EnumVariantDropdown::new_indexed(
+        // One switch rather than the delivery modes: this build presents agent
+        // notifications itself, so "on" always means the system route and the
+        // terminal never draws a second copy of the same event.
+        let toast = Switch::new(
             "agent-terminal-toast",
-            toast_index,
-            toast_choices(),
-            {
-                move |index, window, cx| {
-                    let delivery = ToastDelivery::ALL[index];
-                    if let Err(error) = herdr_settings::set_toast_delivery(delivery, cx) {
-                        log::warn!("agent settings: {error}");
-                        window.refresh();
-                    }
-                    cx.refresh_windows();
-                }
+            if settings.toast == ToastDelivery::Off {
+                ToggleState::Unselected
+            } else {
+                ToggleState::Selected
             },
         )
-        .title_case(false)
         .tab_index(0_isize)
         .aria_label(toast_title())
+        .aria_description(toast_description())
+        .on_click({
+            move |state, _window, cx| {
+                let enabled = *state == ToggleState::Selected;
+                let delivery = if enabled {
+                    ToastDelivery::System
+                } else {
+                    ToastDelivery::Off
+                };
+                if let Err(error) = herdr_settings::set_toast_delivery(delivery, cx) {
+                    log::warn!("agent settings: {error}");
+                }
+                cx.refresh_windows();
+            }
+        })
         .into_any_element();
 
         let auto_install = Switch::new(

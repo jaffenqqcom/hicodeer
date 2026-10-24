@@ -2,11 +2,11 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codebuddy
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=5
 
 param([string]$Action = "")
 
-if ($Action -notin @("session", "working", "blocked", "idle")) { exit 0 }
+if ($Action -notin @("session", "working", "blocked", "idle", "notification")) { exit 0 }
 if ($env:HERDR_ENV -ne "1") { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { exit 0 }
 
@@ -27,6 +27,12 @@ if (-not [string]::IsNullOrWhiteSpace($payload.agent_id)) { exit 0 }
 $sessionId = $payload.session_id
 if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 
+if ($Action -eq "notification") {
+    $nt = ("$($payload.notification_type)$($payload.notificationType)").ToLowerInvariant()
+    if ($nt.Contains("permission") -or $nt.Contains("elicitation")) { $Action = "blocked" }
+    elseif ($nt.Contains("idle")) { $Action = "idle" }
+    else { exit 0 }
+}
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
 try {

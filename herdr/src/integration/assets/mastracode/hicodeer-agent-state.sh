@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=mastracode
-# HERDR_INTEGRATION_VERSION=4
+# HERDR_INTEGRATION_VERSION=5
 
 set -eu
 
@@ -13,7 +13,7 @@ trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
 case "$action" in
-  session|working|idle|blocked) ;;
+  session|working|idle|blocked|notification) ;;
   *) exit 0 ;;
 esac
 
@@ -37,6 +37,16 @@ hook_input_file = os.environ.get("HERDR_HOOK_INPUT_FILE")
 
 if not pane_id or not socket_path:
     raise SystemExit(0)
+
+# A Notification carries the wait reason; only the ones that park the turn on
+# the user count as blocked. agent_done arrives alongside AgentEnd (which
+# already reports idle), so reporting it here would flicker the panel.
+if action == "notification":
+    reason = hook_input.get("reason")
+    if reason in ("ask_question", "tool_approval", "plan_approval", "sandbox_access"):
+        action = "blocked"
+    else:
+        raise SystemExit(0)
 
 hook_input = {}
 if hook_input_file:

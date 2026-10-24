@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=copilot
-# HERDR_INTEGRATION_VERSION=5
+# HERDR_INTEGRATION_VERSION=6
 
 set -eu
 
@@ -54,29 +54,64 @@ def normalize_event(event):
     return event.replace("_", "").replace("-", "").lower()
 
 event = first_text("hook_event_name", "hookEventName")
-if event:
-    if normalize_event(event) != "sessionstart":
+normalized = normalize_event(event) if event else ""
+
+# Event -> the pane state it reports. A question or a permission dialog parks
+# the turn on the user (blocked); the working/idle edges come from the rest.
+# Copilot's notification covers both agent completion and waits, so only its
+# wait-shaped types count here; completion is reported by agentStop instead.
+state_by_event = {
+    "userpromptsubmitted": "working",
+    "pretooluse": "working",
+    "posttooluse": "working",
+    "permissionrequest": "blocked",
+    "agentstop": "idle",
+}
+if normalized == "sessionstart":
+    action = "session"
+elif normalized in state_by_event:
+    action = state_by_event[normalized]
+elif normalized == "notification":
+    notification_type = (first_text("notification_type", "notificationType") or "").lower()
+    if "elicitation" in notification_type or "permission" in notification_type:
+        action = "blocked"
+    else:
         raise SystemExit(0)
-elif "prompt" in hook_input or first_text("tool_name", "toolName", "notification_type", "notificationType", "stop_reason", "stopReason", "reason"):
+else:
     raise SystemExit(0)
 
 session_id = hook_input.get("session_id")
 if not isinstance(session_id, str) or not session_id:
     session_id = hook_input.get("sessionId")
-if not isinstance(session_id, str) or not session_id:
-    raise SystemExit(0)
 
-request = {
-    "id": f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):06d}",
-    "method": "pane.report_agent_session",
-    "params": {
-        "pane_id": pane_id,
-        "source": source,
-        "agent": "copilot",
-        "agent_session_id": session_id,
-        "seq": time.time_ns(),
-    },
-}
+if action == "session":
+    if not isinstance(session_id, str) or not session_id:
+        raise SystemExit(0)
+    request = {
+        "id": f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):06d}",
+        "method": "pane.report_agent_session",
+        "params": {
+            "pane_id": pane_id,
+            "source": source,
+            "agent": "copilot",
+            "agent_session_id": session_id,
+            "seq": time.time_ns(),
+        },
+    }
+else:
+    request = {
+        "id": f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):06d}",
+        "method": "pane.report_agent",
+        "params": {
+            "pane_id": pane_id,
+            "source": source,
+            "agent": "copilot",
+            "state": action,
+            "seq": time.time_ns(),
+        },
+    }
+    if isinstance(session_id, str) and session_id:
+        request["params"]["agent_session_id"] = session_id
 
 try:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

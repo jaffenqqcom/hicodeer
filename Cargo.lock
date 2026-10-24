@@ -202,6 +202,7 @@ name = "agent_panel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "audio",
  "cmd-client",
  "db",
  "editor",
@@ -210,6 +211,7 @@ dependencies = [
  "localization",
  "log",
  "menu",
+ "notifications",
  "serde_json",
  "settings",
  "terminal_view",

@@ -79,7 +79,7 @@ const CLAUDE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/claude/hicodeer-agent-state.sh")
 };
-const CLAUDE_INTEGRATION_VERSION: u32 = 12;
+const CLAUDE_INTEGRATION_VERSION: u32 = 15;
 const CODEBUDDY_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -90,7 +90,7 @@ const CODEBUDDY_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/codebuddy/hicodeer-agent-state.sh")
 };
-const CODEBUDDY_INTEGRATION_VERSION: u32 = 3;
+const CODEBUDDY_INTEGRATION_VERSION: u32 = 6;
 const CODEX_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -154,8 +154,16 @@ const COPILOT_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/copilot/hicodeer-agent-state.sh")
 };
-const COPILOT_INTEGRATION_VERSION: u32 = 5;
-const COPILOT_HOOK_EVENTS: [&str; 1] = ["SessionStart"];
+const COPILOT_INTEGRATION_VERSION: u32 = 6;
+const COPILOT_HOOK_EVENTS: [&str; 7] = [
+    "sessionStart",
+    "userPromptSubmitted",
+    "preToolUse",
+    "postToolUse",
+    "permissionRequest",
+    "notification",
+    "agentStop",
+];
 const COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS: [&str; 9] = [
     "UserPromptSubmit",
     "PreToolUse",
@@ -204,8 +212,17 @@ const DROID_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/droid/hicodeer-agent-state.sh")
 };
-const DROID_INTEGRATION_VERSION: u32 = 5;
-const DROID_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
+const DROID_INTEGRATION_VERSION: u32 = 8;
+const DROID_HOOK_EVENTS: [(&str, Option<&str>, &str); 8] = [
+    ("SessionStart", None, "session"),
+    ("UserPromptSubmit", None, "working"),
+    ("PreToolUse", Some("^AskUser$"), "blocked"),
+    ("PreToolUse", Some("^(?!AskUser$).*$"), "working"),
+    ("PostToolUse", None, "working"),
+    ("Notification", None, "notification"),
+    ("Stop", None, "idle"),
+    ("SubagentStop", None, "idle"),
+];
 const DROID_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 9] = [
     ("SessionStart", "idle"),
     ("UserPromptSubmit", "working"),
@@ -257,17 +274,25 @@ const QODERCLI_HOOK_ASSET: &str = if cfg!(windows) {
 const QODERCLI_INTEGRATION_VERSION: u32 = 5;
 const QODERCLI_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
 const QWEN_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "hicodeer-agent-session.ps1"
+    "hicodeer-agent-state.ps1"
 } else {
-    "hicodeer-agent-session.sh"
+    "hicodeer-agent-state.sh"
 };
 const QWEN_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/qwen/hicodeer-agent-session.ps1")
+    include_str!("assets/qwen/hicodeer-agent-state.ps1")
 } else {
-    include_str!("assets/qwen/hicodeer-agent-session.sh")
+    include_str!("assets/qwen/hicodeer-agent-state.sh")
 };
-const QWEN_INTEGRATION_VERSION: u32 = 3;
-const QWEN_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
+const QWEN_INTEGRATION_VERSION: u32 = 6;
+const QWEN_HOOK_EVENTS: [(&str, Option<&str>, &str); 7] = [
+    ("SessionStart", None, "session"),
+    ("UserPromptSubmit", None, "working"),
+    ("PreToolUse", Some("^AskUserQuestion$"), "blocked"),
+    ("PreToolUse", Some("^(?!AskUserQuestion$).*$"), "working"),
+    ("PermissionRequest", None, "blocked"),
+    ("Notification", None, "notification"),
+    ("Stop", None, "idle"),
+];
 const LETTA_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-session.ps1"
 } else {
@@ -315,7 +340,7 @@ const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
 #[cfg(not(windows))]
 const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
     include_str!("assets/antigravity_cli/hicodeer-agent-state.sh");
-const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 5;
+const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 6;
 /// Antigravity CLI keys `hooks.json` by hook name, so every Herdr entry lives
 /// under one Herdr-owned block that install rewrites and uninstall removes.
 const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "herdr";
@@ -329,7 +354,12 @@ const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
 /// `PreInvocation` takes a flat handler list; only the `PreToolUse`/`PostToolUse`
 /// events accept a `matcher`/`hooks` wrapper, and sending one here would
 /// invalidate the whole file.
-const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str); 1] = [("PreInvocation", "session")];
+const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, Option<&str>, &str); 4] = [
+    ("PreInvocation", None, "session"),
+    ("PreToolUse", Some("^ask_question$"), "blocked"),
+    ("PostToolUse", None, "working"),
+    ("Stop", None, "idle"),
+];
 const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
@@ -341,17 +371,18 @@ const MASTRACODE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/mastracode/hicodeer-agent-state.sh")
 };
-const MASTRACODE_INTEGRATION_VERSION: u32 = 4;
+const MASTRACODE_INTEGRATION_VERSION: u32 = 5;
 const MASTRACODE_HOOK_TIMEOUT_MS: u64 = 10_000;
 const MASTRACODE_REMOVED_HOOK_EVENTS: [(&str, &str); 2] =
     [("SessionStart", "idle"), ("SessionEnd", "release")];
-const MASTRACODE_HOOK_EVENTS: [(&str, &str); 11] = [
+const MASTRACODE_HOOK_EVENTS: [(&str, &str); 12] = [
     ("SessionStart", "session"),
     ("UserPromptSubmit", "working"),
     ("AgentStart", "working"),
     ("PreToolUse", "working"),
     ("PermissionRequest", "blocked"),
     ("PermissionResult", "working"),
+    ("Notification", "notification"),
     ("SubagentStart", "working"),
     ("SubagentEnd", "working"),
     ("Interrupt", "idle"),
@@ -369,7 +400,7 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/grok/hicodeer-agent-state.sh")
 };
-const GROK_INTEGRATION_VERSION: u32 = 4;
+const GROK_INTEGRATION_VERSION: u32 = 5;
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

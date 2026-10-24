@@ -1219,7 +1219,7 @@ fn windows_hooks_decode_stdin_as_utf8() {
             "qodercli",
             include_str!("assets/qodercli/hicodeer-agent-state.ps1"),
         ),
-        ("qwen", include_str!("assets/qwen/hicodeer-agent-session.ps1")),
+        ("qwen", include_str!("assets/qwen/hicodeer-agent-state.ps1")),
     ] {
         assert!(
             !asset.contains("[Console]::In.ReadToEnd()"),
@@ -2305,7 +2305,7 @@ fn install_droid_writes_hook_to_settings_and_cleans_legacy_hooks_json() {
     assert!(settings["hooks"]["SessionStart"][0]
         .get("matcher")
         .is_none());
-    for (event, action) in DROID_HOOK_EVENTS {
+    for (event, _matcher, action) in DROID_HOOK_EVENTS {
         let command = settings["hooks"][event][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
@@ -2336,7 +2336,7 @@ fn install_droid_is_idempotent_for_hook_entries() {
     let settings: Value =
         serde_json::from_str(&fs::read_to_string(droid_dir.join("settings.json")).unwrap())
             .unwrap();
-    for (event, _) in DROID_HOOK_EVENTS {
+    for (event, _, _) in DROID_HOOK_EVENTS {
         assert_eq!(
             settings["hooks"][event].as_array().unwrap().len(),
             1,
@@ -3966,7 +3966,7 @@ fn install_qodercli_errors_when_config_dir_missing() {
 }
 
 #[test]
-fn install_qwen_writes_session_hook_and_preserves_settings() {
+fn install_qwen_writes_state_hook_and_preserves_settings() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let qwen_dir = base.join(".qwen");
@@ -3991,7 +3991,7 @@ fn install_qwen_writes_session_hook_and_preserves_settings() {
         serde_json::from_str(&fs::read_to_string(&installed.settings_path).unwrap()).unwrap();
     let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0]["matcher"], "*");
+    assert_eq!(entries[0]["matcher"], Value::Null);
     assert_eq!(entries[0]["hooks"][0]["timeout"], 10_000);
     let command = entries[0]["hooks"][0]["command"].as_str().unwrap();
     assert!(command.contains(QWEN_HOOK_INSTALL_NAME));
@@ -3999,7 +3999,7 @@ fn install_qwen_writes_session_hook_and_preserves_settings() {
     assert!(settings.get("permissions").is_some());
     let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
     assert!(hook_asset.contains("HERDR_INTEGRATION_ID=qwen"));
-    assert!(hook_asset.contains("HERDR_INTEGRATION_VERSION=2"));
+    assert!(hook_asset.contains("HERDR_INTEGRATION_VERSION=6"));
     assert!(hook_asset.contains("herdr:qwen"));
 
     install_qwen().unwrap();
@@ -4837,17 +4837,26 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
         .and_then(Value::as_object)
         .unwrap();
 
-    for (event, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
+    for (event, matcher, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
         let entries = block.get(event).and_then(Value::as_array).unwrap();
         assert_eq!(entries.len(), 1, "{event} should hold one Herdr entry");
-        let handler = &entries[0];
-
-        // Handlers must be a flat list; the matcher/hooks wrapper is only
-        // valid for tool events and invalidates the whole file here.
-        assert!(
-            handler.get("matcher").is_none() && handler.get("hooks").is_none(),
-            "{event} must be a flat handler, got {handler}"
-        );
+        // Tool events carry the matcher/hooks wrapper; the other events must
+        // stay flat or Antigravity CLI rejects the whole file.
+        let handler = if matcher.is_some() {
+            assert_eq!(
+                entries[0].get("matcher").and_then(Value::as_str),
+                matcher,
+                "{event} matcher mismatch"
+            );
+            &entries[0]["hooks"][0]
+        } else {
+            assert!(
+                entries[0].get("matcher").is_none() && entries[0].get("hooks").is_none(),
+                "{event} must be a flat handler, got {}",
+                entries[0]
+            );
+            &entries[0]
+        };
 
         assert_eq!(handler.get("type").and_then(Value::as_str), Some("command"));
         assert_eq!(
@@ -4889,7 +4898,7 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
 }
 
 #[test]
-fn antigravity_cli_v3_install_is_outdated_until_reinstalled() {
+fn antigravity_cli_v5_install_is_outdated_until_reinstalled() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let agy_dir = base.join(".gemini").join("config");
@@ -4898,7 +4907,7 @@ fn antigravity_cli_v3_install_is_outdated_until_reinstalled() {
     fs::write(
         hook_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME),
         ANTIGRAVITY_CLI_HOOK_ASSET
-            .replace("HERDR_INTEGRATION_VERSION=5", "HERDR_INTEGRATION_VERSION=4"),
+            .replace("HERDR_INTEGRATION_VERSION=6", "HERDR_INTEGRATION_VERSION=5"),
     )
     .unwrap();
     std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
@@ -4911,8 +4920,8 @@ fn antigravity_cli_v3_install_is_outdated_until_reinstalled() {
     };
     let outdated = status();
     assert_eq!(outdated.state, IntegrationStatusKind::Outdated);
-    assert_eq!(outdated.installed_version, Some(4));
-    assert_eq!(outdated.expected_version, 5);
+    assert_eq!(outdated.installed_version, Some(5));
+    assert_eq!(outdated.expected_version, 6);
 
     install_antigravity_cli().unwrap();
     assert_eq!(status().state, IntegrationStatusKind::Current);

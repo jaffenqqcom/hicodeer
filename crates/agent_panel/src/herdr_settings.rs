@@ -7,6 +7,7 @@
 //! in the file is left byte for byte as the user wrote it.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use cmd_client::protocol::AgentControl;
@@ -35,6 +36,17 @@ const AGENT_STATE_DIR: &str = ".hicodeer";
 /// How long a completed integration check counts as current.
 const INTEGRATION_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Directory the agent client keeps its own configuration in.
+///
+/// This is the release build's name because the daemon ships as a release
+/// binary even though this crate is compiled in debug; deriving it from `cfg!`
+/// would point at the development directory and miss the file the client
+/// actually reads.
+const CLIENT_CONFIG_DIR: &str = "herdr";
+const CLIENT_CONFIG_FILE: &str = "config.toml";
+/// Top-level switch that makes the client skip its first-run welcome screen.
+const ONBOARDING_KEY: &str = "onboarding";
+
 /// Notification delivery modes, in the order the client's own settings page
 /// lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,13 +58,6 @@ pub enum ToastDelivery {
 }
 
 impl ToastDelivery {
-    pub const ALL: [ToastDelivery; 4] = [
-        ToastDelivery::Off,
-        ToastDelivery::Herdr,
-        ToastDelivery::Terminal,
-        ToastDelivery::System,
-    ];
-
     /// Value written to the settings file.
     fn as_str(self) -> &'static str {
         match self {
@@ -126,7 +131,11 @@ impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             sound_enabled: true,
-            toast: ToastDelivery::Off,
+            // Both switches read as on until the user turns them off: the
+            // editor presents the notifications itself, and the client's own
+            // default (off) means the terminal stays quiet when the file never
+            // names the key.
+            toast: ToastDelivery::System,
         }
     }
 }
@@ -398,6 +407,134 @@ pub fn set_toast_delivery(delivery: ToastDelivery, cx: &mut App) -> Result<(), S
     Ok(())
 }
 
+/// Whether the editor should present agent notifications at all.
+pub fn notifications_enabled(cx: &App) -> bool {
+    cached_settings(cx).toast != ToastDelivery::Off
+}
+
+/// Whether agent notifications may play a sound.
+pub fn sound_enabled(cx: &App) -> bool {
+    cached_settings(cx).sound_enabled
+}
+
+/// Turns the client's first-run welcome screen off for this installation.
+///
+/// That screen only writes `onboarding = false` and jumps to the client's
+/// integrations page; the integrations themselves are installed by the panel,
+/// so skipping it loses nothing. The key is forced rather than only defaulted,
+/// so an install that already answered the screen also stops showing it, and
+/// writing it before the client starts means a fresh install never sees it.
+pub fn disable_startup_onboarding() {
+    let Some(dir) = client_config_dir() else {
+        return;
+    };
+    let path = dir.join(CLIENT_CONFIG_FILE);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            log::warn!("agent settings: cannot read {}: {error}", path.display());
+            return;
+        }
+    };
+    let updated = set_top_level_bool(&content, ONBOARDING_KEY, false);
+    if updated == content {
+        return;
+    }
+    if let Err(error) = write_atomically(&path, &updated) {
+        log::warn!("agent settings: cannot turn off the startup onboarding: {error}");
+    }
+}
+
+/// Directory of the agent client's configuration, resolved the way the client
+/// resolves it.
+///
+/// The client prefers `XDG_CONFIG_HOME` and falls back to the sandbox files
+/// directory only when that variable is absent, so reading the same two in the
+/// same order is what guarantees the file written here is the file it loads.
+fn client_config_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(dir).join(CLIENT_CONFIG_DIR));
+    }
+    std::env::var_os(SANDBOX_FILES_DIR_ENV)
+        .map(|root| PathBuf::from(root).join(CLIENT_CONFIG_DIR))
+}
+
+/// Writes `key = value` as a top-level entry, replacing any value already
+/// there and dropping duplicates.
+fn set_top_level_bool(content: &str, key: &str, value: bool) -> String {
+    let assignment = format!("{key} = {value}");
+    let mut result = String::new();
+    let mut written = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let is_key = !trimmed.starts_with('#')
+            && !trimmed.starts_with('[')
+            && trimmed
+                .split_once('=')
+                .is_some_and(|(name, _)| name.trim() == key);
+        if is_key {
+            if !written {
+                // Keep a trailing comment so the file keeps the author's note.
+                // A `#` that starts a value (`"#fff"`) is not a comment.
+                let comment = line
+                    .find('#')
+                    .filter(|index| line[..*index].ends_with([' ', '\t']))
+                    .map(|index| &line[index..]);
+                match comment {
+                    Some(comment) => result.push_str(&format!("{assignment}  {comment}")),
+                    None => result.push_str(&assignment),
+                }
+                result.push('\n');
+                written = true;
+            }
+            continue;
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    if !written {
+        result.insert_str(0, &format!("{assignment}\n"));
+    }
+    // `lines()` drops the trailing newline; restore the file's original shape
+    // so an unchanged file compares equal and no redundant write happens.
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
+/// Set once the legacy delivery modes have been rewritten, so a failed write
+/// is retried by a later refresh but a successful one is not repeated.
+static LEGACY_DELIVERY_MIGRATED: AtomicBool = AtomicBool::new(false);
+
+/// Rewrites a delivery mode that renders inside the terminal to the system
+/// route, once per process.
+///
+/// The client reads the same file, so this has to be a real write rather than
+/// a display-only mapping: a leftover `terminal` value keeps sending escape
+/// sequences even while the settings page shows the switch as on.
+pub fn migrate_legacy_delivery(cx: &mut App) {
+    if LEGACY_DELIVERY_MIGRATED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let Some(path) = current_config_path() else {
+        // The sandbox root is not known yet; a later refresh retries.
+        LEGACY_DELIVERY_MIGRATED.store(false, Ordering::Release);
+        return;
+    };
+    if matches!(
+        load(&path).toast,
+        ToastDelivery::Herdr | ToastDelivery::Terminal
+    ) {
+        if let Err(error) = set_toast_delivery(ToastDelivery::System, cx) {
+            log::warn!("agent settings: cannot migrate the notification delivery: {error}");
+            LEGACY_DELIVERY_MIGRATED.store(false, Ordering::Release);
+            return;
+        }
+    }
+}
+
 /// Drops the cached value after a write, so the next repaint reads what was
 /// just saved instead of the value from before the click.
 fn forget_settings(cx: &App) {
@@ -529,6 +666,37 @@ pub fn automatic_check_due(cx: &App) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_top_level_bool_forces_the_value_and_keeps_the_file_shape() {
+        // Missing key: inserted before the first section.
+        assert_eq!(
+            set_top_level_bool("[ui]\nx = 1\n", ONBOARDING_KEY, false),
+            "onboarding = false\n[ui]\nx = 1\n"
+        );
+        // Existing value replaced either way.
+        assert_eq!(
+            set_top_level_bool("onboarding = true\n\n[ui]\nx = 1\n", ONBOARDING_KEY, false),
+            "onboarding = false\n\n[ui]\nx = 1\n"
+        );
+        // Already correct: unchanged, so the caller skips the write.
+        let same = "onboarding = false\n\n[ui]\nx = 1\n";
+        assert_eq!(set_top_level_bool(same, ONBOARDING_KEY, false), same);
+        // A trailing comment survives and duplicates collapse.
+        assert_eq!(
+            set_top_level_bool(
+                "onboarding = true  # keep me\nonboarding = true\n",
+                ONBOARDING_KEY,
+                false
+            ),
+            "onboarding = false  # keep me\n"
+        );
+        // A file without a trailing newline keeps that shape.
+        assert_eq!(
+            set_top_level_bool("onboarding = true", ONBOARDING_KEY, false),
+            "onboarding = false"
+        );
+    }
 
     #[test]
     fn upsert_keeps_other_keys_and_adds_a_missing_section() {

@@ -2080,12 +2080,30 @@ impl TerminalState {
             return false;
         }
         self.fallback_visible_blocker
-            && self.fallback_not_older_than_hook()
+            && (self.fallback_not_older_than_hook()
+                || self.hook_report_stale_beyond_waiting_floor())
             && self.hook_authority.as_ref().is_some_and(|authority| {
                 authority.state != AgentState::Blocked
                     && crate::detect::parse_agent_label(&authority.agent_label)
                         == self.detected_agent
             })
+    }
+
+    /// Upper bound on how long a hook report stays authoritative while the
+    /// screen keeps showing a blocker.
+    ///
+    /// The screen detector only republishes when the pane produces output, so
+    /// a static prompt (a picker waiting for a keypress) can leave
+    /// `fallback_observed_at` older than the last hook report forever. Without
+    /// this floor a stale working report would then outvote the visible
+    /// blocker and the panel never learns the agent is waiting. Once the wait
+    /// outlives the floor the screen wins; a real answer makes the agent emit
+    /// fresh hook events, which clears staleness on the next report.
+    fn hook_report_stale_beyond_waiting_floor(&self) -> bool {
+        const WAITING_STALE_FLOOR: Duration = Duration::from_secs(90);
+        self.hook_authority
+            .as_ref()
+            .is_some_and(|authority| authority.reported_at.elapsed() >= WAITING_STALE_FLOOR)
     }
 
     fn live_full_lifecycle_hook_authority(&self) -> bool {

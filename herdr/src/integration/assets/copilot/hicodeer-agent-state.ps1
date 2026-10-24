@@ -2,7 +2,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=copilot
-# HERDR_INTEGRATION_VERSION=5
+# HERDR_INTEGRATION_VERSION=6
 
 if ($env:HERDR_ENV -ne "1") { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { exit 0 }
@@ -36,12 +36,29 @@ function Normalize-Event {
 }
 
 $eventName = First-Text @("hook_event_name", "hookEventName")
-if ($eventName) {
-    if ((Normalize-Event $eventName) -ne "sessionstart") { exit 0 }
-} elseif (
-    ($payload.PSObject.Properties.Name -contains "prompt") -or
-    (First-Text @("tool_name", "toolName", "notification_type", "notificationType", "stop_reason", "stopReason", "reason"))
-) {
+$normalized = Normalize-Event $eventName
+
+# Event -> the pane state it reports; see the sh hook for the reasoning.
+$stateByEvent = @{
+    "userpromptsubmitted" = "working"
+    "pretooluse"          = "working"
+    "posttooluse"         = "working"
+    "permissionrequest"   = "blocked"
+    "agentstop"           = "idle"
+}
+
+if ($normalized -eq "sessionstart") {
+    $Action = "session"
+} elseif ($stateByEvent.ContainsKey($normalized)) {
+    $Action = $stateByEvent[$normalized]
+} elseif ($normalized -eq "notification") {
+    $notificationType = First-Text @("notification_type", "notificationType")
+    if ($notificationType -and ($notificationType.ToLowerInvariant().Contains("elicitation") -or $notificationType.ToLowerInvariant().Contains("permission"))) {
+        $Action = "blocked"
+    } else {
+        exit 0
+    }
+} else {
     exit 0
 }
 
@@ -49,8 +66,12 @@ $sessionId = $payload.session_id
 if ([string]::IsNullOrWhiteSpace($sessionId)) {
     $sessionId = $payload.sessionId
 }
-if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
-& $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:copilot --agent copilot --agent-session-id $sessionId --seq $seq 2>$null | Out-Null
+if ($Action -eq "session") {
+    if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
+    & $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:copilot --agent copilot --agent-session-id $sessionId --seq $seq 2>$null | Out-Null
+} else {
+    & $herdr pane report-agent $env:HERDR_PANE_ID --source herdr:copilot --agent copilot --state $Action --seq $seq 2>$null | Out-Null
+}

@@ -29,3 +29,8 @@ terminal_view = { path = "../terminal_view" }
 theme.workspace = true
 ui.workspace = true
 workspace.workspace = true
+
+# The notification and sound paths only exist in the OHOS build.
+[target.'cfg(target_env = "ohos")'.dependencies]
+audio.workspace = true
+notifications.workspace = true

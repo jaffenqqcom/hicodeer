@@ -1,5 +1,5 @@
 id = "codebuddy"
-version = "2026.10.23.1"
+version = "2026.10.24.1"
 min_engine_version = 2
 updated_at = "2026-10-23T00:00:00Z"
 aliases = ["codebuddy-code", "codebuddy-cli"]
@@ -37,15 +37,16 @@ contains = ["waiting for permission"]
 # Live turn: the footer renders "<glyph> <verb> … (<n>s · running <tool> · …)",
 # for example "✶ 实现 … (460s · running TaskOutput · ctrl+t to show todos)".
 # The elapsed seconds and the "running <tool>" clause exist only while a turn
-# is in flight, so the line shape carries the state. The glyph set covers every
-# frame CodeBuddy rotates through (✶ ✸ ✳ ✻ ✽ ✢ ·) plus the asterisk form.
+# is in flight, so the line shape carries the state. The glyph set spans the
+# whole U+2726-U+273F block CodeBuddy rotates through (✶ ✷ ✸ ✺ ✻ ✽ ✢), plus
+# the asterisk and middle-dot forms, so a new frame cannot silently drop it.
 [[rules]]
 id = "live_turn_working"
 state = "working"
 priority = 900
 region = "bottom_non_empty_lines(8)"
 visible_working = true
-line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2733}\x{2736}\x{2738}\x{273B}\x{273D}]\s+\S.*…\s+\(\d+[smh]\s*·']
+line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2726}-\x{273F}]\s+\S.*…\s+\(\d+[smh]\s*·']
 not = [
   { contains = ["do you want to proceed?"] },
   { contains = ["esc to cancel"] },

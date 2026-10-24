@@ -17,6 +17,13 @@ use super::config_edit::{
 // Claude's documented SessionStart sources. Grok imports Claude hooks but uses
 // `new`/`load`; filter before it starts an unnecessary hook process.
 const SESSION_START_MATCHER: &str = "^(startup|resume|clear|compact|fork)$";
+// Asking the user a question parks the turn on that answer, so the matching
+// tool call reports blocked while every other tool reports working. Without
+// the split a working report stays as the hook authority for the whole parked
+// turn and the panel keeps showing working.
+const ASK_USER_MATCHER_EVENT: &str = "PreToolUse";
+const ASK_USER_MATCHER: &str = "^AskUserQuestion$";
+const OTHER_TOOLS_MATCHER: &str = "^(?!AskUserQuestion$).*$";
 
 struct HookRemoval {
     event: &'static str,
@@ -53,6 +60,10 @@ const HOOK_REMOVALS: &[HookRemoval] = &[
         actions: &["working"],
     },
     HookRemoval {
+        event: "Notification",
+        actions: &["blocked"],
+    },
+    HookRemoval {
         event: "Stop",
         actions: &["idle"],
     },
@@ -79,6 +90,27 @@ pub(crate) fn install(content: &str, settings_path: &Path, hook_path: &Path) -> 
         hook_command(hook_path, Some("session")),
         10,
         Some(SESSION_START_MATCHER),
+    )?;
+    ensure_command_hook(
+        hooks,
+        ASK_USER_MATCHER_EVENT,
+        hook_command(hook_path, Some("blocked")),
+        10,
+        Some(ASK_USER_MATCHER),
+    )?;
+    ensure_command_hook(
+        hooks,
+        ASK_USER_MATCHER_EVENT,
+        hook_command(hook_path, Some("working")),
+        10,
+        Some(OTHER_TOOLS_MATCHER),
+    )?;
+    ensure_command_hook(
+        hooks,
+        "Notification",
+        hook_command(hook_path, Some("notification")),
+        10,
+        None,
     )?;
 
     if desired == original {

@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=grok
-# HERDR_INTEGRATION_VERSION=4
+# HERDR_INTEGRATION_VERSION=5
 
 set -eu
 
@@ -13,7 +13,7 @@ trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
 case "$action" in
-  session) ;;
+  session|working|blocked|idle) ;;
   *) exit 0 ;;
 esac
 
@@ -56,37 +56,54 @@ def first_text(*keys):
     return None
 
 
-# Backstop: only report on session-start payloads. Grok emits
+# Session reports only land on session-start payloads. Grok emits
 # "session_start" and accepts the Claude/Cursor spellings, so tolerate all
 # three; a missing field is allowed for forward compatibility.
 hook_event_name = first_text("hook_event_name", "hookEventName")
-if hook_event_name not in (None, "session_start", "SessionStart", "sessionStart"):
-    raise SystemExit(0)
+if action == "session":
+    if hook_event_name not in (None, "session_start", "SessionStart", "sessionStart"):
+        raise SystemExit(0)
 session_start_source = first_text("source")
 
 # Grok injects GROK_SESSION_ID into every hook process; prefer it and fall
 # back to the event payload's session id fields.
 session_id = os.environ.get("GROK_SESSION_ID") or first_text("session_id", "sessionId")
 agent_session_id = session_id if isinstance(session_id, str) and session_id else None
-if not agent_session_id:
-    raise SystemExit(0)
 
 request_id = f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):06d}"
 report_seq = time.time_ns()
-params = {
-    "pane_id": pane_id,
-    "source": source,
-    "agent": "grok",
-    "seq": report_seq,
-    "agent_session_id": agent_session_id,
-}
-if session_start_source:
-    params["session_start_source"] = session_start_source
-request = {
-    "id": request_id,
-    "method": "pane.report_agent_session",
-    "params": params,
-}
+if action == "session":
+    if not agent_session_id:
+        raise SystemExit(0)
+    params = {
+        "pane_id": pane_id,
+        "source": source,
+        "agent": "grok",
+        "seq": report_seq,
+        "agent_session_id": agent_session_id,
+    }
+    if session_start_source:
+        params["session_start_source"] = session_start_source
+    request = {
+        "id": request_id,
+        "method": "pane.report_agent_session",
+        "params": params,
+    }
+else:
+    params = {
+        "pane_id": pane_id,
+        "source": source,
+        "agent": "grok",
+        "state": action,
+        "seq": report_seq,
+    }
+    if agent_session_id:
+        params["agent_session_id"] = agent_session_id
+    request = {
+        "id": request_id,
+        "method": "pane.report_agent",
+        "params": params,
+    }
 
 try:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

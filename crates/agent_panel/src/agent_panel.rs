@@ -14,6 +14,11 @@ mod snapshot;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(target_env = "ohos")]
+use std::collections::HashMap;
+
+#[cfg(target_env = "ohos")]
+use audio::{Audio, Sound};
 use editor::{Editor, actions::SelectAll};
 use fs::Fs;
 use gpui::{
@@ -22,6 +27,8 @@ use gpui::{
     Task, TaskExt, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use menu;
+#[cfg(target_env = "ohos")]
+use notifications::status_toast::StatusToast;
 use settings::{IntoGpui, RegisterSetting, Settings, SettingsStore, update_settings_file};
 use terminal_view::TerminalView;
 use theme::ActiveTheme as _;
@@ -29,6 +36,8 @@ use ui::{
     Color, ContextMenu, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, prelude::*,
     right_click_menu,
 };
+#[cfg(target_env = "ohos")]
+use workspace::MultiWorkspace;
 use workspace::{
     SaveIntent, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
@@ -64,14 +73,6 @@ const ROW_SIDE_PADDING: Pixels = px(6.0);
 /// Name of the daemon the agent server runs in. It is a public HNP, so it is on
 /// `PATH` in a normal terminal.
 const AGENT_DAEMON_PROGRAM: &str = "hicodeerd";
-/// Key sequence that opens the agent client's own settings screen.
-///
-/// The client's `menu` entry routes to its settings action, but the menu itself
-/// only opens from a mouse click on the footer its sidebar draws -- and this
-/// build hides that sidebar. Its default keybinding reaches the same action, so
-/// the panel sends the prefix key (Ctrl-B) followed by `s` to the terminal it
-/// hosts, which is what selecting that menu entry does.
-const AGENT_SETTINGS_KEY_SEQUENCE: &[u8] = &[0x02, b's'];
 /// Size of a space's label: one step above the header entries, which stay
 /// small, so a space reads as the heading of its block.
 const SPACE_LABEL_SIZE: LabelSize = LabelSize::Default;
@@ -137,6 +138,51 @@ enum Unavailable {
     ServerUnavailable,
 }
 
+/// A state transition worth telling the user about.
+///
+/// The server owns this rule (its `notification_toast_for_state_change`), but
+/// the events built from it only reach a terminal client. The panel repeats
+/// the rule instead of subscribing to those events.
+///
+/// `Done` is the server's "finished and not looked at" state, and it only
+/// appears for a pane the server believes the user is away from. Here the
+/// agent terminal is the only client, and it never reports losing focus, so
+/// the server keeps considering the pane watched: a finished turn arrives as
+/// plain `Idle` and `Done` is never sent. Treating `Idle` as the finish as
+/// well is what makes the panel's own notification reachable at all; whether
+/// the user is actually looking is decided separately, from the window.
+#[cfg(target_env = "ohos")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AgentNotification {
+    /// The agent is waiting for the user.
+    NeedsAttention,
+    /// The agent stopped working on its own.
+    Finished,
+}
+
+#[cfg(target_env = "ohos")]
+impl AgentNotification {
+    fn from_transition(previous: AgentStatus, current: AgentStatus) -> Option<Self> {
+        match (previous, current) {
+            (previous, AgentStatus::Blocked) if previous != AgentStatus::Blocked => {
+                Some(Self::NeedsAttention)
+            }
+            (AgentStatus::Working, AgentStatus::Done | AgentStatus::Idle) => {
+                Some(Self::Finished)
+            }
+            (AgentStatus::Blocked, AgentStatus::Done) => Some(Self::Finished),
+            _ => None,
+        }
+    }
+
+    fn text(self) -> &'static str {
+        match self {
+            Self::NeedsAttention => localization::localized_str!("needs attention"),
+            Self::Finished => localization::localized_str!("finished"),
+        }
+    }
+}
+
 /// Where the panel docks, whether its status bar button shows, and how wide it
 /// opens. Written by the layout presets in the title bar as well as by dragging
 /// the panel to another dock.
@@ -173,6 +219,9 @@ pub fn init(cx: &mut App) {
     {
         cx.set_global(herdr_settings::AgentIntegrations::default());
         cx.set_global(herdr_settings::TerminalSettingsCache::default());
+        // Runs before the agent client can start, so a fresh install opens on
+        // the terminal instead of the client's welcome screen.
+        herdr_settings::disable_startup_onboarding();
     }
 
     cx.observe_new(|workspace: &mut Workspace, _, cx| {
@@ -234,6 +283,24 @@ pub struct AgentPanel {
     rename_subscription: Option<Subscription>,
     _settings_subscription: Subscription,
     _refresh: Task<()>,
+    /// Last state the server reported for each agent, keyed by its public pane
+    /// id. The refresh has no change feed, so a transition is only visible by
+    /// comparing one snapshot with the previous one.
+    #[cfg(target_env = "ohos")]
+    last_agent_status: HashMap<String, AgentStatus>,
+    /// Whether a snapshot has been recorded. The first one fills the map
+    /// without notifying: every agent in it would look newly changed.
+    #[cfg(target_env = "ohos")]
+    status_recorded: bool,
+    /// Whether the window was active as of the last activation change. A
+    /// notification is skipped while the user is looking at the agent's own
+    /// terminal.
+    #[cfg(target_env = "ohos")]
+    window_active: bool,
+    /// Keeps the activation observer alive. Registered on the first render,
+    /// because the panel has no window when it is constructed.
+    #[cfg(target_env = "ohos")]
+    window_activation: Option<gpui::Subscription>,
 }
 
 impl AgentPanel {
@@ -283,12 +350,22 @@ impl AgentPanel {
             rename_subscription: None,
             _settings_subscription: cx.observe_global::<SettingsStore>(|_, cx| cx.notify()),
             _refresh: refresh,
+            #[cfg(target_env = "ohos")]
+            last_agent_status: HashMap::new(),
+            #[cfg(target_env = "ohos")]
+            status_recorded: false,
+            #[cfg(target_env = "ohos")]
+            window_active: false,
+            #[cfg(target_env = "ohos")]
+            window_activation: None,
         }
     }
 
     fn apply(&mut self, fetched: Result<Snapshot, ClientError>, cx: &mut Context<Self>) {
         match fetched {
             Ok(snapshot) => {
+                #[cfg(target_env = "ohos")]
+                self.notify_agent_transitions(&snapshot.spaces, cx);
                 self.spaces = snapshot.spaces;
                 self.unavailable = None;
                 self.consecutive_failures = 0;
@@ -303,6 +380,10 @@ impl AgentPanel {
                 // cleared what it had reported. That is a disconnection just as
                 // much as a refused connection is, and the terminal it left
                 // behind is a dead tab, so it counts the same way.
+                #[cfg(target_env = "ohos")]
+                {
+                    self.status_recorded = false;
+                }
                 self.unavailable = Some(Unavailable::WaitingForServer);
                 self.note_disconnect();
             }
@@ -312,11 +393,150 @@ impl AgentPanel {
                 if self.consecutive_failures == 0 {
                     log::warn!("agent panel: refresh failed: {message}");
                 }
+                // Whatever changed while the endpoint was unreachable is not
+                // news the user needs one toast per agent for.
+                #[cfg(target_env = "ohos")]
+                {
+                    self.status_recorded = false;
+                }
                 self.unavailable = Some(Unavailable::ServerUnavailable);
                 self.note_disconnect();
             }
         }
         cx.notify();
+    }
+
+    /// Turns one refresh into at most one notification.
+    ///
+    /// The server reports states, not transitions, so a change is only visible
+    /// by comparing this snapshot with the previous one. The first snapshot
+    /// after the panel starts only records state: without that, every agent in
+    /// it would look newly changed.
+    #[cfg(target_env = "ohos")]
+    fn notify_agent_transitions(&mut self, spaces: &[Space], cx: &mut Context<Self>) {
+        let mut current = HashMap::new();
+        for space in spaces {
+            for agent in &space.agents {
+                current.insert(agent.pane_id.clone(), agent.status);
+            }
+        }
+        let first_snapshot = !self.status_recorded;
+        self.status_recorded = true;
+        let previous = std::mem::replace(&mut self.last_agent_status, current);
+
+        herdr_settings::migrate_legacy_delivery(cx);
+        if first_snapshot {
+            return;
+        }
+        let notifications_enabled = herdr_settings::notifications_enabled(cx);
+
+        // One status toast is shown at a time, so one event wins per refresh:
+        // an agent waiting for input outranks one that merely finished. Sound
+        // is tracked separately: both events are worth hearing even while the
+        // user is looking at the terminal that produced them.
+        let mut attention = false;
+        let mut finished = false;
+        let mut chosen: Option<(&Agent, &Space, AgentNotification)> = None;
+        for space in spaces {
+            for agent in &space.agents {
+                let Some(previous_status) = previous.get(&agent.pane_id).copied() else {
+                    continue;
+                };
+                let Some(kind) = AgentNotification::from_transition(previous_status, agent.status)
+                else {
+                    continue;
+                };
+                match kind {
+                    AgentNotification::NeedsAttention => attention = true,
+                    AgentNotification::Finished => finished = true,
+                }
+                if !notifications_enabled || self.notification_is_silent(agent, cx) {
+                    continue;
+                }
+                let outranks = chosen.is_none_or(|(_, _, chosen_kind)| {
+                    chosen_kind == AgentNotification::Finished
+                        && kind == AgentNotification::NeedsAttention
+                });
+                if outranks {
+                    chosen = Some((agent, space, kind));
+                }
+            }
+        }
+
+        // A block is the one event where the user's input is required, so it
+        // rings even when a finished turn also landed in this refresh. The
+        // finish sound is the agent's own chime; the block reuses the bell the
+        // terminal already uses, so no extra asset is needed.
+        if herdr_settings::sound_enabled(cx) {
+            if attention {
+                audio::play_system_bell();
+            } else if finished {
+                Audio::play_sound(Sound::AgentDone, cx);
+            }
+        }
+
+        let Some((agent, space, kind)) = chosen else {
+            return;
+        };
+
+        let text = format!("{} {}: {}", agent.name, kind.text(), space.label);
+        self.show_agent_notification(agent.pane_id.clone(), text, cx);
+    }
+
+    /// Whether the user is already looking at this agent, in which case its
+    /// terminal is the notification and a toast would only duplicate it.
+    #[cfg(target_env = "ohos")]
+    fn notification_is_silent(&self, agent: &Agent, cx: &App) -> bool {
+        if !self.window_active || !agent.focused {
+            return false;
+        }
+        self.workspace.upgrade().is_some_and(|workspace| {
+            workspace
+                .read(cx)
+                .active_item_as::<TerminalView>(cx)
+                .is_some_and(|view| view.read(cx).is_agent_terminal())
+        })
+    }
+
+    /// Shows one agent notification whose action jumps to that agent.
+    #[cfg(target_env = "ohos")]
+    fn show_agent_notification(&mut self, pane_id: String, text: String, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+        let panel = cx.entity();
+        // The toast's action runs after this call returns, so it owns its own
+        // handle to the workspace.
+        let toast_workspace = workspace.clone();
+        let toast = StatusToast::new(text, cx, move |this, _cx| {
+            this.icon(Icon::new(IconName::Bell).size(IconSize::Small))
+                .action(localization::localized_str!("Open"), move |window, cx| {
+                    let Some(handle) = window.window_handle().downcast::<MultiWorkspace>() else {
+                        log::error!("agent panel: the window root is not a MultiWorkspace");
+                        return;
+                    };
+                    cx.activate(true);
+                    let pane_id = pane_id.clone();
+                    let workspace = toast_workspace.clone();
+                    let panel = panel.clone();
+                    cx.defer(move |cx| {
+                        if let Err(error) = handle.update(cx, |multi_workspace, window, cx| {
+                            multi_workspace.activate(workspace.clone(), None, window, cx);
+                            panel.update(cx, |panel, cx| {
+                                panel.focus_agent(pane_id.clone(), window, cx);
+                            });
+                        }) {
+                            log::error!(
+                                "agent panel: cannot open the notification target: {error:?}"
+                            );
+                        }
+                    });
+                })
+                .dismiss_button(true)
+        });
+        workspace.update(cx, |workspace, cx| {
+            workspace.toggle_status_toast(toast, cx);
+        });
     }
 
     /// Installs missing agent integrations once the endpoint can answer, and
@@ -504,32 +724,6 @@ impl AgentPanel {
             if let Some(view) = agent_view {
                 workspace.activate_item(&view, true, true, window, cx);
             }
-        });
-    }
-
-    /// Asks the agent client to open its own settings screen.
-    ///
-    /// This is the client's settings, not the editor's: the panel drives that
-    /// client, so the entry has to act on it. The terminal is brought forward
-    /// first, otherwise the screen would open where the user cannot see it.
-    fn open_agent_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.reveal_agent_terminal(window, cx);
-        let Some(workspace) = self.workspace.upgrade() else {
-            return;
-        };
-        workspace.update(cx, |workspace, cx| {
-            let agent_view = workspace.panes().iter().find_map(|pane| {
-                pane.read(cx)
-                    .items_of_type::<TerminalView>()
-                    .find(|view| view.read(cx).is_agent_terminal())
-            });
-            let Some(view) = agent_view else {
-                log::warn!("agent panel: no Agent terminal to send the settings key to");
-                return;
-            };
-            view.update(cx, |view, cx| {
-                view.send_input(AGENT_SETTINGS_KEY_SEQUENCE, cx);
-            });
         });
     }
 
@@ -865,8 +1059,9 @@ impl AgentPanel {
             .into_any_element()
     }
 
-    /// Header of the panel: the two global entries, settings first and the
-    /// space creator under it. Both stay pinned above the scrolling tree.
+    /// Header of the panel: the space creator, pinned above the scrolling tree.
+    /// Settings live in the editor's own settings page, so the panel has no
+    /// entry of its own.
     fn render_actions(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         v_flex()
             .id("agent-panel-actions")
@@ -874,16 +1069,6 @@ impl AgentPanel {
             .px_1()
             .py_1()
             .gap_0p5()
-            .child(
-                row_container("agent-panel-settings", px(0.0), false, cx)
-                    .child(action_content(
-                        IconName::Settings,
-                        localization::localized_str!("Settings"),
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_agent_settings(window, cx);
-                    })),
-            )
             .child(
                 row_container("agent-panel-new-space", px(0.0), false, cx)
                     .child(action_content(
@@ -955,7 +1140,7 @@ fn log_client_error(action: &str, err: ClientError) {
 /// state but is not what carries it.
 fn status_marker(status: AgentStatus) -> (SharedString, Color) {
     match status {
-        AgentStatus::Blocked => ("×".into(), Color::Error),
+        AgentStatus::Blocked => ("!".into(), Color::Warning),
         AgentStatus::Working => ("◐".into(), Color::Warning),
         AgentStatus::Done => ("✓".into(), Color::Created),
         AgentStatus::Idle => ("○".into(), Color::Success),
@@ -996,6 +1181,18 @@ impl EventEmitter<PanelEvent> for AgentPanel {}
 
 impl Render for AgentPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_env = "ohos")]
+        if self.window_activation.is_none() {
+            // Subscribed rather than sampled here: a window that loses focus
+            // stops rendering, so a value read on the last frame would keep
+            // claiming the user is still looking at the agent.
+            self.window_activation = Some(cx.observe_window_activation(
+                window,
+                |this, window, _cx| {
+                    this.window_active = window.is_window_active();
+                },
+            ));
+        }
         self.schedule_agent_terminal_sync(window, cx);
         let tree = if self.unavailable.is_some() {
             self.render_disconnected(cx)

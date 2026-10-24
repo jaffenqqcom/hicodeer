@@ -452,16 +452,17 @@ pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
     for (event, action) in DROID_REMOVED_LIFECYCLE_HOOK_EVENTS {
         remove_hook_commands(hooks, event, &hook_path, Some(action))?;
     }
-    for (event, action) in DROID_HOOK_EVENTS {
+    for (event, _matcher, action) in DROID_HOOK_EVENTS {
         remove_hook_commands(hooks, event, &hook_path, Some(action))?;
     }
-    for (event, action) in DROID_HOOK_EVENTS {
+    remove_hook_commands(hooks, "Notification", &hook_path, None)?;
+    for (event, matcher, action) in DROID_HOOK_EVENTS {
         ensure_command_hook(
             hooks,
             event,
             hook_command(&hook_path, Some(action)),
             10,
-            None,
+            matcher,
         )?;
     }
     remove_legacy_bash_hook_file(&hook_path)?;
@@ -486,7 +487,7 @@ pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
                 updated_legacy_hooks |=
                     remove_hook_commands(hooks, event, &hook_path, Some(action))?;
             }
-            for (event, action) in DROID_HOOK_EVENTS {
+            for (event, _matcher, action) in DROID_HOOK_EVENTS {
                 updated_legacy_hooks |=
                     remove_hook_commands(hooks, event, &hook_path, Some(action))?;
             }
@@ -666,16 +667,30 @@ pub(crate) fn uninstall_claude() -> io::Result<ClaudeUninstallResult> {
 }
 
 /// CodeBuddy hook events mapped to the state the hook reports.
-const CODEBUDDY_HOOK_EVENTS: &[(&str, &str)] = &[
-    ("SessionStart", "session"),
-    ("UserPromptSubmit", "working"),
-    ("PreToolUse", "working"),
-    ("PostToolUse", "working"),
-    ("PermissionRequest", "blocked"),
-    ("Stop", "idle"),
-    ("SessionEnd", "idle"),
+///
+/// The matcher splits `PreToolUse` in two: asking the user a question parks
+/// the turn on that answer, so it reports `blocked`, while every other tool
+/// reports `working`. Without the split the working report stays as the hook
+/// authority for the whole parked turn and the panel keeps showing working.
+const CODEBUDDY_HOOK_EVENTS: &[(&str, Option<&str>, &str)] = &[
+    ("SessionStart", Some(CODEBUDDY_SESSION_START_MATCHER), "session"),
+    ("UserPromptSubmit", None, "working"),
+    (CODEBUDDY_ASK_MATCHER_EVENT, Some(CODEBUDDY_ASK_MATCHER), "blocked"),
+    (
+        CODEBUDDY_ASK_MATCHER_EVENT,
+        Some(CODEBUDDY_OTHER_TOOLS_MATCHER),
+        "working",
+    ),
+    ("PostToolUse", None, "working"),
+    ("PermissionRequest", None, "blocked"),
+    ("Notification", None, "notification"),
+    ("Stop", None, "idle"),
+    ("SessionEnd", None, "idle"),
 ];
 const CODEBUDDY_SESSION_START_MATCHER: &str = "^(startup|resume|clear|compact|fork)$";
+const CODEBUDDY_ASK_MATCHER_EVENT: &str = "PreToolUse";
+const CODEBUDDY_ASK_MATCHER: &str = "^AskUserQuestion$";
+const CODEBUDDY_OTHER_TOOLS_MATCHER: &str = "^(?!AskUserQuestion$).*$";
 
 pub(crate) fn install_codebuddy() -> io::Result<ClaudeInstallPaths> {
     let dir = codebuddy_dir()?;
@@ -709,15 +724,17 @@ pub(crate) fn install_codebuddy() -> io::Result<ClaudeInstallPaths> {
         "codebuddy settings",
         "codebuddy settings hooks",
     )?;
-    for (event, action) in CODEBUDDY_HOOK_EVENTS {
+    // An earlier integration reported Notification as "blocked"; clear every
+    // herdr entry for the event so the stale report cannot outlive the fix.
+    remove_hook_commands(hooks, "Notification", &hook_path, None)?;
+    for (event, matcher, action) in CODEBUDDY_HOOK_EVENTS {
         remove_hook_commands(hooks, event, &hook_path, Some(action))?;
-        let matcher = (*event == "SessionStart").then_some(CODEBUDDY_SESSION_START_MATCHER);
         ensure_command_hook(
             hooks,
             event,
             hook_command(&hook_path, Some(action)),
             10,
-            matcher,
+            *matcher,
         )?;
     }
     write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
@@ -746,7 +763,7 @@ pub(crate) fn uninstall_codebuddy() -> io::Result<ClaudeUninstallResult> {
             "codebuddy settings",
             "codebuddy settings hooks",
         )? {
-            for (event, action) in CODEBUDDY_HOOK_EVENTS {
+            for (event, _matcher, action) in CODEBUDDY_HOOK_EVENTS {
                 updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
             }
         }
@@ -958,7 +975,7 @@ pub(crate) fn uninstall_droid() -> io::Result<DroidUninstallResult> {
             for (event, action) in DROID_REMOVED_LIFECYCLE_HOOK_EVENTS {
                 updated_hooks |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
             }
-            for (event, action) in DROID_HOOK_EVENTS {
+            for (event, _matcher, action) in DROID_HOOK_EVENTS {
                 updated_hooks |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
             }
         }
@@ -986,7 +1003,7 @@ pub(crate) fn uninstall_droid() -> io::Result<DroidUninstallResult> {
             for (event, action) in DROID_REMOVED_LIFECYCLE_HOOK_EVENTS {
                 updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
             }
-            for (event, action) in DROID_HOOK_EVENTS {
+            for (event, _matcher, action) in DROID_HOOK_EVENTS {
                 updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
             }
         }
@@ -1226,14 +1243,15 @@ pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
         "qwen settings",
         "qwen settings hooks",
     )?;
-    for (event, action) in QWEN_HOOK_EVENTS {
+    remove_hook_commands(hooks, "Notification", &hook_path, None)?;
+    for (event, matcher, action) in QWEN_HOOK_EVENTS {
         remove_hook_commands(hooks, event, &hook_path, Some(action))?;
         ensure_command_hook(
             hooks,
             event,
             hook_command(&hook_path, Some(action)),
             10_000,
-            Some("*"),
+            matcher,
         )?;
     }
 
@@ -1571,7 +1589,7 @@ pub(crate) fn uninstall_qwen() -> io::Result<QwenUninstallResult> {
             "qwen settings",
             "qwen settings hooks",
         )? {
-            for (event, action) in QWEN_HOOK_EVENTS {
+            for (event, _matcher, action) in QWEN_HOOK_EVENTS {
                 updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
             }
         }
@@ -1850,13 +1868,20 @@ pub(crate) fn antigravity_cli_hook_command(hook_path: &Path, action: &str) -> St
 /// group is only valid for the tool events, which Herdr does not use.
 fn antigravity_cli_hook_block(hook_path: &Path) -> Value {
     let mut block = Map::new();
-    for (event, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
+    for (event, matcher, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
         let handler = json!({
             "type": "command",
             "command": antigravity_cli_hook_command(hook_path, action),
             "timeout": ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC,
         });
-        block.insert(event.to_string(), json!([handler]));
+        // Antigravity only accepts the matcher/hooks wrapper on tool events;
+        // wrapping the other events invalidates the whole hooks file.
+        let entries = if matcher.is_some() {
+            json!([{ "matcher": matcher, "hooks": [handler] }])
+        } else {
+            json!([handler])
+        };
+        block.insert(event.to_string(), entries);
     }
     Value::Object(block)
 }
@@ -1916,20 +1941,53 @@ fn grok_hook_command(hook_path: &Path) -> String {
 
 pub(crate) fn grok_hook_config(hook_path: &Path) -> Value {
     let session_command = grok_hook_command(hook_path);
-    json!({
-        "hooks": {
-            "SessionStart": [
+    let state_command = |action: &str| -> String {
+        #[cfg(windows)]
+        {
+            hook_command(hook_path, Some(action))
+        }
+        #[cfg(not(windows))]
+        {
+            format!(
+                "sh {} {}",
+                shell_single_quote(&hook_path.display().to_string()),
+                action
+            )
+        }
+    };
+    let handler = |action: &str| -> Value {
+        json!({
+            "hooks": [
                 {
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": session_command,
-                            "timeout": 10,
-                        }
-                    ]
+                    "type": "command",
+                    "command": state_command(action),
+                    "timeout": 10,
                 }
             ]
+        })
+    };
+    let mut ask = handler("blocked");
+    ask["matcher"] = json!("^AskUserQuestion$");
+    json!({
+        "hooks": {
+            "SessionStart": [session_entry(&session_command)],
+            "UserPromptSubmit": [handler("working")],
+            "PreToolUse": [ask],
+            "PostToolUse": [handler("working")],
+            "Stop": [handler("idle")],
         }
+    })
+}
+
+fn session_entry(command: &str) -> Value {
+    json!({
+        "hooks": [
+            {
+                "type": "command",
+                "command": command,
+                "timeout": 10,
+            }
+        ]
     })
 }
 

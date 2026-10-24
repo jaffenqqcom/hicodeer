@@ -2,11 +2,11 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=grok
-# HERDR_INTEGRATION_VERSION=3
+# HERDR_INTEGRATION_VERSION=5
 
 param([string]$Action = "")
 
-if ($Action -ne "session") { exit 0 }
+if ($Action -ne "session" -and $Action -ne "working" -and $Action -ne "blocked" -and $Action -ne "idle") { exit 0 }
 if ($env:HERDR_ENV -ne "1") { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { exit 0 }
 
@@ -27,7 +27,7 @@ $event = if ($null -ne $payload -and $payload.hook_event_name -is [string]) {
 } else {
     $null
 }
-if ($null -ne $event -and $event -notin @("session_start", "SessionStart", "sessionStart")) { exit 0 }
+if ($Action -eq "session" -and $null -ne $event -and $event -notin @("session_start", "SessionStart", "sessionStart")) { exit 0 }
 
 $sessionStartSource = if ($null -ne $payload -and $payload.source -is [string]) {
     $payload.source
@@ -40,21 +40,34 @@ if ([string]::IsNullOrWhiteSpace($sessionId) -and $null -ne $payload) {
     if ($payload.session_id -is [string]) { $sessionId = $payload.session_id }
     elseif ($payload.sessionId -is [string]) { $sessionId = $payload.sessionId }
 }
-if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
-
 $seq = [DateTime]::UtcNow.Ticks
 $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
-$herdrArgs = @(
-    "pane", "report-agent-session", $env:HERDR_PANE_ID,
-    "--source", "herdr:grok",
-    "--agent", "grok",
-    "--seq", "$seq",
-    "--agent-session-id", "$sessionId"
-)
-if (-not [string]::IsNullOrWhiteSpace($sessionStartSource)) {
-    $herdrArgs += @("--session-start-source", "$sessionStartSource")
-}
 try {
-    & $herdr @herdrArgs 2>$null | Out-Null
+    if ($Action -eq "session") {
+        if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
+        $herdrArgs = @(
+            "pane", "report-agent-session", $env:HERDR_PANE_ID,
+            "--source", "herdr:grok",
+            "--agent", "grok",
+            "--seq", "$seq",
+            "--agent-session-id", "$sessionId"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($sessionStartSource)) {
+            $herdrArgs += @("--session-start-source", "$sessionStartSource")
+        }
+        & $herdr @herdrArgs 2>$null | Out-Null
+    } else {
+        $herdrArgs = @(
+            "pane", "report-agent", $env:HERDR_PANE_ID,
+            "--source", "herdr:grok",
+            "--agent", "grok",
+            "--state", "$Action",
+            "--seq", "$seq"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+            $herdrArgs += @("--agent-session-id", "$sessionId")
+        }
+        & $herdr @herdrArgs 2>$null | Out-Null
+    }
 } catch {
 }

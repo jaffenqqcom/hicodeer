@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Agent panel · 历史会话界面设计</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --panel: #252526;
+    --panel-2: #2d2d30;
+    --border: #3c3c3c;
+    --text: #d4d4d4;
+    --muted: #8b8b8b;
+    --accent: #4a9eff;
+    --working: #d7ba7d;
+    --blocked: #f14c4c;
+    --done: #56b6c2;
+    --idle: #98c379;
+    --unknown: #6b6b6b;
+    --ghost-hover: rgba(255,255,255,.06);
+    --ghost-selected: rgba(255,255,255,.10);
+    --element-bg: rgba(255,255,255,.08);
+    --element-active: rgba(255,255,255,.13);
+    --row-hover: #302f31;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: #111214;
+    color: var(--text);
+    font-family: "HarmonyOS Sans SC", "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .window {
+    width: 1280px;
+    height: 820px;
+    background: var(--bg);
+    border: 1px solid #000;
+    box-shadow: 0 18px 60px rgba(0,0,0,.55);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .titlebar {
+    height: 38px; flex: 0 0 38px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 8px 0 10px;
+    font-size: 12.5px;
+  }
+  .logo { width: 18px; height: 18px; border-radius: 4px; background: linear-gradient(135deg, #4a9eff, #7b61ff); }
+  .appname { color: var(--muted); }
+  .branch { color: var(--muted); font-size: 11.5px; display: flex; align-items: center; gap: 4px; }
+  .branch .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); }
+  .titlebar .spacer { flex: 1; }
+  .winbtns { display: flex; gap: 2px; margin-left: 4px; }
+  .winbtn { width: 34px; height: 26px; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+
+  .body { flex: 1; display: flex; min-height: 0; }
+
+  /* ================= left dock ================= */
+  .agent-panel {
+    width: 268px; flex: 0 0 268px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .panel-head {
+    height: 30px; flex: 0 0 30px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 10px;
+    font-size: 10.5px; letter-spacing: .1em; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-head .add { width: 18px; height: 18px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+
+  .panel-scroll { flex: 1; overflow-y: auto; padding-bottom: 10px; }
+  .panel-scroll::-webkit-scrollbar { width: 8px; }
+  .panel-scroll::-webkit-scrollbar-thumb { background: #3a3a3d; border-radius: 4px; }
+  .panel-scroll::-webkit-scrollbar-track { background: transparent; }
+
+  /* ---- opened agents ---- */
+  .space-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 10px; font-size: 12.5px; color: #d8d8d8;
+  }
+  .space-row .caret { width: 10px; font-size: 9px; color: var(--muted); }
+  .space-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .space-row .count { color: var(--muted); font-size: 10.5px; }
+
+  .agent-row {
+    display: flex; align-items: center; gap: 7px;
+    padding: 4px 10px 4px 30px; font-size: 12px; color: #c0c0c0;
+    border-radius: 4px; margin: 1px 6px;
+  }
+  .agent-row.active { background: var(--ghost-selected); color: #fff; }
+  .agent-row .status { width: 8px; flex: 0 0 8px; text-align: center; font-size: 10px; }
+  .agent-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-row .state { font-size: 10px; }
+  .st-working { color: var(--working); }
+  .st-blocked { color: var(--blocked); }
+  .st-done { color: var(--done); }
+  .st-idle { color: var(--idle); }
+  .st-unknown { color: var(--unknown); }
+
+  /* ---- section divider ---- */
+  .section-gap {
+    margin: 20px 10px 0;
+    padding-top: 14px;
+    border-top: 1px solid #35353a;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 10.5px; letter-spacing: .1em; color: var(--muted);
+  }
+  .section-gap .hint { letter-spacing: 0; color: #6f6f73; font-size: 10px; }
+
+  /* ---- history groups ---- */
+  .group-head {
+    display: flex; align-items: center; gap: 6px;
+    height: 28px;
+    padding: 0 10px; margin-top: 2px;
+    font-size: 12px; color: #d8d8d8;
+    cursor: pointer; user-select: none;
+  }
+  .group-head:hover { background: var(--ghost-hover); }
+  .group-head .caret {
+    width: 12px; flex: 0 0 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; color: var(--muted);
+  }
+  .group-head .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .group-head .count { color: var(--muted); font-size: 10.5px; }
+
+  /* pinned group sits above every space */
+  .group.pinned .group-head .name { color: var(--accent); }
+  .group.pinned .group-head .caret { color: var(--accent); }
+
+  /* archived group sits at the bottom, collapsed by default */
+  .group.archived-group .group-head .name { color: #77777c; }
+  .group.collapsed .session-row { display: none; }
+
+  /* 32px row, 16px icon, 30px indent: same metrics as thread_item */
+  .session-row {
+    display: flex; align-items: center; gap: 6px;
+    height: 32px;
+    padding: 0 6px 0 30px;
+    margin: 0 4px;
+    border-radius: 4px;
+    font-size: 12px; color: #c0c0c0;
+    position: relative;
+    cursor: pointer;
+  }
+  .session-row:hover { background: var(--ghost-hover); }
+  .session-row.selected { background: var(--ghost-selected); color: #fff; }
+
+  .session-row .ico {
+    width: 16px; height: 16px; flex: 0 0 16px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .session-row .ico img { width: 16px; height: 16px; display: block; }
+  .session-row .ico.text { font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
+  .session-row .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-row .when { color: var(--muted); font-size: 11px; }
+
+  /* archived rows are grouped by space, one level deeper than a space header */
+  .archived-group .session-row .ico img { opacity: .4; }
+  .archived-group .session-row .title { color: #8b8b8b; }
+  .group.archived-group.collapsed .subgroup { display: none; }
+
+  .subgroup-head {
+    display: flex; align-items: center; gap: 6px;
+    height: 24px;
+    padding: 0 10px 0 30px;
+    font-size: 11.5px; color: #8b8b8b;
+  }
+  .subgroup-head .dot { width: 4px; height: 4px; border-radius: 50%; background: #55555a; }
+  .subgroup-head .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subgroup-head .count { font-size: 10px; color: #6f6f73; }
+
+  /* follows the pointer while hovering a pinned row, so its space is not lost */
+  .cursor-tip {
+    position: fixed; z-index: 20;
+    background: rgba(28,28,30,.97);
+    border: 1px solid #45454a; border-radius: 5px;
+    padding: 2px 7px; font-size: 10.5px; color: #cfcfcf;
+    pointer-events: none; opacity: 0; transition: opacity .1s;
+    box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  }
+  .cursor-tip.show { opacity: 1; }
+
+  /* hover action strip: gradient mask then buttons, like thread_item */
+  .session-actions {
+    display: none;
+    position: absolute; right: 4px; top: 0; bottom: 0;
+    align-items: center; gap: 1px;
+    padding-left: 44px;
+    background: linear-gradient(to right, rgba(48,47,49,0), var(--row-hover) 40%);
+  }
+  .session-row:hover .session-actions { display: flex; }
+  .session-actions .btn {
+    width: 21px; height: 21px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 4px; color: var(--muted);
+  }
+  .session-actions .btn:hover { background: var(--element-bg); color: var(--text); }
+  .session-actions .btn:active { background: var(--element-active); }
+  .session-actions .btn svg { width: 13px; height: 13px; display: block; }
+  .session-actions .btn img { width: 13px; height: 13px; display: block; }
+  .session-actions .btn.on { color: var(--accent); }
+
+  /* inline rename */
+  .session-row .rename-input {
+    flex: 1; min-width: 0;
+    height: 22px;
+    background: #1c1c1e;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--text); font-size: 12px;
+    padding: 0 6px; outline: none;
+    font-family: inherit;
+  }
+
+  /* opening state: row spins, then leaves the history list */
+  .session-row.opening { background: var(--ghost-selected); color: #fff; }
+  .session-row.opening .session-actions { display: none; }
+  .session-row.opening .when { color: var(--accent); }
+  .spinner {
+    width: 11px; height: 11px; flex: 0 0 11px;
+    border: 1.4px solid rgba(255,255,255,.2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ================= center ================= */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #181818; }
+  .tabbar {
+    height: 34px; flex: 0 0 34px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: flex-end; gap: 2px;
+    padding: 0 8px;
+  }
+  .tab {
+    height: 29px; padding: 0 12px;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; color: var(--muted);
+    border-radius: 5px 5px 0 0;
+  }
+  .tab.active {
+    background: #181818; color: var(--text);
+    border: 1px solid var(--border); border-bottom-color: #181818;
+  }
+  .tab .pin { font-size: 9px; color: var(--accent); }
+  .term { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #141414; }
+  .term-head {
+    height: 26px; flex: 0 0 26px;
+    background: #202020; border-bottom: 1px solid #333;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 10px; font-size: 11px; color: var(--muted);
+  }
+  .term-head .right { margin-left: auto; display: flex; gap: 10px; }
+  .term-body {
+    flex: 1; padding: 10px 12px;
+    font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
+    font-size: 11.5px; line-height: 1.7; color: #c8c8c8; overflow: hidden;
+  }
+  .term-body .dim { color: #777; }
+  .term-body .green { color: var(--idle); }
+  .term-body .yellow { color: var(--working); }
+  .term-body .blue { color: #6cb6ff; }
+  .cursor { display: inline-block; width: 7px; height: 13px; background: #c8c8c8; vertical-align: -2px; opacity: .8; }
+
+  /* ================= right dock ================= */
+  .gitpanel {
+    width: 240px; flex: 0 0 240px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  .git-tabs { height: 32px; flex: 0 0 32px; display: flex; border-bottom: 1px solid var(--border); }
+  .git-tab { padding: 0 14px; display: flex; align-items: center; font-size: 11.5px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .git-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .git-branch { padding: 8px 12px; font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .git-branch .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); }
+  .git-section { padding: 6px 12px 4px; font-size: 10.5px; letter-spacing: .08em; color: var(--muted); display: flex; justify-content: space-between; }
+  .git-file { display: flex; align-items: center; gap: 8px; padding: 4px 12px; font-size: 12px; font-family: ui-monospace, monospace; color: #c8c8c8; }
+  .git-file .m { color: var(--working); width: 10px; }
+
+  .statusbar {
+    height: 24px; flex: 0 0 24px;
+    background: var(--panel-2);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 6px; font-size: 11px; color: var(--muted); gap: 4px;
+  }
+  .statusbar .item { display: flex; align-items: center; gap: 5px; padding: 0 6px; height: 20px; border-radius: 4px; }
+  .statusbar .item.on { color: var(--text); }
+  .statusbar .spacer { flex: 1; }
+  .statusbar .vdiv { width: 1px; height: 14px; background: var(--border); margin: 0 4px; }
+  .statusbar .ok { width: 6px; height: 6px; border-radius: 50%; background: var(--idle); }
+
+  .legend {
+    position: absolute; right: 16px; bottom: 36px;
+    background: rgba(20,20,22,.95);
+    border: 1px solid #3a3a3d; border-radius: 8px;
+    padding: 11px 13px; font-size: 11px; line-height: 1.85;
+    color: #bdbdbd; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+    width: 404px;
+  }
+  .legend h4 { margin: 0 0 6px; font-size: 11.5px; color: #e8e8e8; font-weight: 600; letter-spacing: .04em; }
+  .legend .row { display: flex; gap: 8px; }
+  .legend .row .k { flex: 0 0 auto; color: #8fb8e8; }
+  .legend .note { color: #8b8b8b; font-size: 10.5px; margin-top: 6px; line-height: 1.7; }
+  .legend code { color: #a8c0dc; font-family: ui-monospace, monospace; font-size: 10px; }
+
+  .toast {
+    position: absolute; left: 50%; bottom: 52px; transform: translateX(-50%) translateY(12px);
+    background: rgba(28,28,30,.97); border: 1px solid #45454a; border-radius: 8px;
+    padding: 9px 14px; font-size: 11.5px; color: #dcdcdc;
+    box-shadow: 0 12px 34px rgba(0,0,0,.55);
+    opacity: 0; pointer-events: none; transition: all .18s ease;
+    max-width: 620px;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast .tag { color: var(--accent); margin-right: 6px; }
+</style>
+</head>
+<body>
+<div class="window">
+
+  <div class="titlebar">
+    <div class="logo"></div>
+    <span class="appname">hicodeer</span>
+    <span>hicodeer</span>
+    <span class="branch"><i class="dot"></i>main</span>
+    <div class="spacer"></div>
+    <div class="winbtns">
+      <div class="winbtn">—</div><div class="winbtn">□</div><div class="winbtn close">×</div>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <aside class="agent-panel">
+      <div class="panel-head"><span>AGENT</span><span class="add">+</span></div>
+
+      <div class="panel-scroll">
+
+        <div class="space-row"><span class="caret">▾</span><span class="name">hicodeer</span><span class="count">2</span></div>
+        <div class="agent-row active"><span class="status st-working">●</span><span class="name">codebuddy · 修状态</span><span class="state st-working">working</span></div>
+        <div class="agent-row"><span class="status st-idle">○</span><span class="name">shell</span><span class="state st-idle">idle</span></div>
+
+        <div class="space-row"><span class="caret">▾</span><span class="name">warp-ohos</span><span class="count">1</span></div>
+        <div class="agent-row"><span class="status st-blocked">●</span><span class="name">claude · 权限</span><span class="state st-blocked">blocked</span></div>
+
+        <div class="section-gap"><span>历史会话</span><span class="hint">单击打开</span></div>
+
+        <!-- pinned, above every space -->
+        <div class="group pinned" data-kind="pinned">
+          <div class="group-head"><span class="caret">▾</span><span class="name">置顶</span><span class="count">1</span></div>
+          <div class="session-row" data-space="hicodeer" data-open="false">
+            <span class="ico"><img src="icons/ai_code_buddy.svg" alt=""></span>
+            <span class="title">把通知从 herdr 移到 hicodeer</span>
+            <span class="when">4w</span>
+            <span class="session-actions">
+              <span class="btn on" data-act="pin" title="取消置顶">
+                <img src="icons/unpin.svg" alt="">
+              </span>
+              <span class="btn" data-act="rename" title="重命名">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13l.9-3.1 6.8-6.8 2.2 2.2-6.8 6.8z"/><path d="M9.9 3.9l2.2 2.2"/></svg>
+              </span>
+              <span class="btn" data-act="archive" title="归档">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4.5" width="11" height="9" rx="1.5"/><path d="M2 4.5h12M6 4.5V3h4v1.5"/></svg>
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <div class="group" data-space="hicodeer" data-kind="space">
+          <div class="group-head"><span class="caret">▾</span><span class="name">hicodeer</span><span class="count">3</span></div>
+          <div class="session-row" data-space="hicodeer" data-open="true">
+            <span class="ico"><img src="icons/ai_code_buddy.svg" alt=""></span>
+            <span class="title">修正 agent 状态检测与通知</span>
+            <span class="when">12m</span>
+            <span class="session-actions">
+              <span class="btn" data-act="pin" title="置顶">
+                <img src="icons/pin.svg" alt="">
+              </span>
+              <span class="btn" data-act="rename" title="重命名">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13l.9-3.1 6.8-6.8 2.2 2.2-6.8 6.8z"/><path d="M9.9 3.9l2.2 2.2"/></svg>
+              </span>
+              <span class="btn" data-act="archive" title="归档">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4.5" width="11" height="9" rx="1.5"/><path d="M2 4.5h12M6 4.5V3h4v1.5"/></svg>
+              </span>
+            </span>
+          </div>
+          <div class="session-row" data-space="hicodeer" data-open="true">
+            <span class="ico"><img src="icons/ai_claude.svg" alt=""></span>
+            <span class="title">重构 terminal 面板的输入路由</span>
+            <span class="when">1d</span>
+            <span class="session-actions">
+              <span class="btn" data-act="pin" title="置顶">
+                <img src="icons/pin.svg" alt="">
+              </span>
+              <span class="btn" data-act="rename" title="重命名">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13l.9-3.1 6.8-6.8 2.2 2.2-6.8 6.8z"/><path d="M9.9 3.9l2.2 2.2"/></svg>
+              </span>
+              <span class="btn" data-act="archive" title="归档">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4.5" width="11" height="9" rx="1.5"/><path d="M2 4.5h12M6 4.5V3h4v1.5"/></svg>
+              </span>
+            </span>
+          </div>
+          <div class="session-row" data-space="hicodeer" data-open="true">
+            <span class="ico"><img src="icons/ai_open_ai.svg" alt=""></span>
+            <span class="title">补齐 command 代理的失败路径测试</span>
+            <span class="when">3d</span>
+            <span class="session-actions">
+              <span class="btn" data-act="pin" title="置顶">
+                <img src="icons/pin.svg" alt="">
+              </span>
+              <span class="btn" data-act="rename" title="重命名">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13l.9-3.1 6.8-6.8 2.2 2.2-6.8 6.8z"/><path d="M9.9 3.9l2.2 2.2"/></svg>
+              </span>
+              <span class="btn" data-act="archive" title="归档">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4.5" width="11" height="9" rx="1.5"/><path d="M2 4.5h12M6 4.5V3h4v1.5"/></svg>
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <div class="group" data-space="warp-ohos" data-kind="space">
+          <div class="group-head"><span class="caret">▾</span><span class="name">warp-ohos</span><span class="count">2</span></div>
+          <div class="session-row" data-space="warp-ohos" data-open="false">
+            <span class="ico"><img src="icons/ai_code_buddy.svg" alt=""></span>
+            <span class="title">QEMU 启动参数与磁盘镜像布局</span>
+            <span class="when">1w</span>
+            <span class="session-actions">
+              <span class="btn" data-act="pin" title="置顶">
+                <img src="icons/pin.svg" alt="">
+              </span>
+              <span class="btn" data-act="rename" title="重命名">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13l.9-3.1 6.8-6.8 2.2 2.2-6.8 6.8z"/><path d="M9.9 3.9l2.2 2.2"/></svg>
+              </span>
+              <span class="btn" data-act="archive" title="归档">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4.5" width="11" height="9" rx="1.5"/><path d="M2 4.5h12M6 4.5V3h4v1.5"/></svg>
+              </span>
+            </span>
+          </div>
+          <div class="session-row" data-space="warp-ohos" data-open="false">
+            <span class="ico"><img src="icons/ai_claude.svg" alt=""></span>
+            <span class="title">音频后端的设备选择修正</span>
+            <span class="when">2w</span>
+            <span class="session-actions">
+              <span class="btn" data-act="pin" title="置顶">
+                <img src="icons/pin.svg" alt="">
+              </span>
+              <span class="btn" data-act="rename" title="重命名">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13l.9-3.1 6.8-6.8 2.2 2.2-6.8 6.8z"/><path d="M9.9 3.9l2.2 2.2"/></svg>
+              </span>
+              <span class="btn" data-act="archive" title="归档">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4.5" width="11" height="9" rx="1.5"/><path d="M2 4.5h12M6 4.5V3h4v1.5"/></svg>
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <div class="group" data-space="gpui-mcp" data-kind="space">
+          <div class="group-head"><span class="caret">▾</span><span class="name">gpui-mcp</span><span class="count">2</span></div>
+          <div class="session-row" data-space="gpui-mcp" data-open="false">
+            <span class="ico"><img src="icons/ai_claude.svg" alt=""></span>
+            <span class="title">inspector 的连接受理顺序</span>
+            <span class="when">3w</span>
+            <span class="session-actions">
+              <span class="btn" data-act="pin" title="置顶">
+                <img src="icons/pin.svg" alt="">
+              </span>
+              <span class="btn" data-act="rename" title="重命名">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13l.9-3.1 6.8-6.8 2.2 2.2-6.8 6.8z"/><path d="M9.9 3.9l2.2 2.2"/></svg>
+              </span>
+              <span class="btn" data-act="archive" title="归档">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4.5" width="11" height="9" rx="1.5"/><path d="M2 4.5h12M6 4.5V3h4v1.5"/></svg>
+              </span>
+            </span>
+          </div>
+          <div class="session-row" data-space="gpui-mcp" data-open="false">
+            <span class="ico"><span class="ico text">&gt;_</span></span>
+            <span class="title">手动跑一次 inspector 的 smoke 脚本</span>
+            <span class="when">4w</span>
+            <span class="session-actions">
+              <span class="btn" data-act="pin" title="置顶">
+                <img src="icons/pin.svg" alt="">
+              </span>
+              <span class="btn" data-act="rename" title="重命名">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13l.9-3.1 6.8-6.8 2.2 2.2-6.8 6.8z"/><path d="M9.9 3.9l2.2 2.2"/></svg>
+              </span>
+              <span class="btn" data-act="archive" title="归档">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4.5" width="11" height="9" rx="1.5"/><path d="M2 4.5h12M6 4.5V3h4v1.5"/></svg>
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <!-- archived, collapsed by default, grouped by space inside -->
+        <div class="group archived-group collapsed" data-kind="archived">
+          <div class="group-head"><span class="caret">▸</span><span class="name">已归档</span><span class="count">2</span></div>
+
+          <div class="subgroup" data-space="hicodeer">
+            <div class="subgroup-head"><span class="dot"></span><span class="name">hicodeer</span><span class="count">1</span></div>
+            <div class="session-row" data-space="hicodeer" data-open="false" data-archived="true">
+              <span class="ico"><img src="icons/ai_code_buddy.svg" alt=""></span>
+              <span class="title">旧版命令代理的重试策略</span>
+              <span class="when">6w</span>
+              <span class="session-actions">
+                <span class="btn" data-act="restore" title="恢复">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 8a5 5 0 1 0 1.6-3.7"/><path d="M3 3.2v3.4h3.4"/></svg>
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div class="subgroup" data-space="gpui-mcp">
+            <div class="subgroup-head"><span class="dot"></span><span class="name">gpui-mcp</span><span class="count">1</span></div>
+            <div class="session-row" data-space="gpui-mcp" data-open="false" data-archived="true">
+              <span class="ico"><img src="icons/ai_claude.svg" alt=""></span>
+              <span class="title">调试截图工具的一次性脚本</span>
+              <span class="when">2mo</span>
+              <span class="session-actions">
+                <span class="btn" data-act="restore" title="恢复">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 8a5 5 0 1 0 1.6-3.7"/><path d="M3 3.2v3.4h3.4"/></svg>
+                </span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="tabbar">
+        <div class="tab active"><span class="pin">◆</span><span>Agent</span></div>
+        <div class="tab"><span>title_bar.rs</span></div>
+      </div>
+      <div class="term">
+        <div class="term-head">
+          <span class="st-working">●</span>
+          <span>codebuddy · 修正 agent 状态检测</span>
+          <span class="right"><span>hicodeer</span><span>pane 1</span><span>herdr TUI</span></span>
+        </div>
+        <div class="term-body">
+<span class="dim">✻</span> 正在处理：历史会话界面的数据来源<br />
+<span class="blue">&gt;</span> 列出各 agent 的历史会话<br />
+<br />
+<span class="green">●</span> 扫描 codebuddy 的会话目录<br />
+<span class="green">●</span> 读取每个会话的标题与最后更新时间<br />
+<span class="green">●</span> 与 agent.list 里已打开的会话做差集<br />
+<br />
+<span class="dim">────────────────────</span><br />
+<span class="yellow">?</span> 需要确认：置顶和归档记录存在哪一层<br />
+<span class="cursor"></span>
+        </div>
+      </div>
+    </main>
+
+    <aside class="gitpanel">
+      <div class="git-tabs"><div class="git-tab active">更改</div><div class="git-tab">历史记录</div></div>
+      <div class="git-branch"><i class="dot"></i>main</div>
+      <div class="git-section"><span>更改</span><span>2</span></div>
+      <div class="git-file"><span class="m">M</span><span>crates/agent_panel/src/agent_panel.rs</span></div>
+      <div class="git-file"><span class="m">M</span><span>crates/settings_ui/src/settings_ui.rs</span></div>
+    </aside>
+
+  </div>
+
+  <div class="statusbar">
+    <span class="item on"><span>☰</span>Agent</span>
+    <span class="vdiv"></span>
+    <span class="item"><i class="ok"></i>rust-analyzer</span>
+    <span class="item">UTF-8</span>
+    <span class="spacer"></span>
+    <span class="item">Spaces: 4</span>
+  </div>
+
+  <div class="legend">
+    <h4>这一版：单击打开 + 三个操作 + 归档去处</h4>
+    <div class="row"><span class="k">打开</span><span>单击整行打开；打开期间行内转圈并标「opening」，完成后从历史里消失</span></div>
+    <div class="row"><span class="k">操作</span><span>悬停出三个按钮：置顶（图钉）/ 重命名（铅笔）/ 归档（箱子）</span></div>
+    <div class="row"><span class="k">置顶</span><span>独立「置顶」组，跨 space 排在最前；悬停时鼠标旁显示该会话所属 space</span></div>
+    <div class="row"><span class="k">重命名</span><span>标题就地变输入框，Enter 保存、Esc 取消、失焦保存</span></div>
+    <div class="row"><span class="k">归档</span><span>移到最底部「已归档」，组内再按 space 分一层；再次点击图钉可取消置顶</span></div>
+    <div class="row"><span class="k">恢复</span><span>归档行悬停出逆时针箭头，点后回到原 space 组；空掉的 space 子组自动消失</span></div>
+    <div class="note">三种状态（置顶 / 归档 / 自定义标题）都要落盘，跨进程保留；滚动沿用整体滚动区。</div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+  const toast = document.getElementById('toast');
+  let toastTimer = null;
+  function showToast(html) {
+    toast.innerHTML = html;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+  }
+
+  const pinnedGroup = document.querySelector('.group.pinned');
+  const archivedGroup = document.querySelector('.group.archived-group');
+
+  document.querySelectorAll('.group-head').forEach(head => {
+    head.addEventListener('click', () => {
+      const group = head.parentElement;
+      group.classList.toggle('collapsed');
+      head.querySelector('.caret').textContent =
+        group.classList.contains('collapsed') ? '▸' : '▾';
+    });
+  });
+
+  function refreshCount(group) {
+    const count = group.querySelectorAll('.session-row').length;
+    const label = group.querySelector('.group-head .count');
+    if (label) label.textContent = count;
+
+    if (group.dataset.kind === 'archived') {
+      group.querySelectorAll('.subgroup').forEach(sub => {
+        const rows = sub.querySelectorAll('.session-row').length;
+        sub.querySelector('.count').textContent = rows;
+        if (rows === 0) sub.remove();
+      });
+    }
+
+    if (group.dataset.kind === 'pinned' || group.dataset.kind === 'space'
+      || group.dataset.kind === 'archived') {
+      group.style.display = count === 0 ? 'none' : '';
+    }
+  }
+
+  function groupFor(space) {
+    return document.querySelector('.group[data-kind="space"][data-space="' + space + '"]');
+  }
+
+  // The demo data can pin a session whose space has no group yet; create one
+  // rather than dropping the click on the floor.
+  function createSpaceGroup(space) {
+    const group = document.createElement('div');
+    group.className = 'group';
+    group.dataset.space = space;
+    group.dataset.kind = 'space';
+    group.innerHTML = '<div class="group-head"><span class="caret">▾</span>'
+      + '<span class="name">' + space + '</span><span class="count">0</span></div>';
+    archivedGroup.parentElement.insertBefore(group, archivedGroup);
+    return group;
+  }
+
+  function makePinButton(pinned) {
+    const span = document.createElement('span');
+    span.className = 'btn' + (pinned ? ' on' : '');
+    span.dataset.act = 'pin';
+    span.title = pinned ? '取消置顶' : '置顶';
+    span.innerHTML = pinned
+      ? '<img src="icons/unpin.svg" alt="">'
+      : '<img src="icons/pin.svg" alt="">';
+    bindAction(span);
+    return span;
+  }
+
+  function bindAction(btn) {
+    btn.addEventListener('click', event => {
+      event.stopPropagation();
+      const row = btn.closest('.session-row');
+      const act = btn.dataset.act;
+      if (act === 'pin') {
+        togglePin(row);
+      } else if (act === 'rename') {
+        startRename(row);
+      } else if (act === 'archive') {
+        archiveRow(row);
+      } else if (act === 'restore') {
+        restoreRow(row);
+      }
+    });
+  }
+
+  function togglePin(row) {
+    const space = row.dataset.space;
+    const inPinned = row.closest('.group').dataset.kind === 'pinned';
+    const actions = row.querySelector('.session-actions');
+    const pinBtn = actions.querySelector('[data-act="pin"]');
+    const dest = inPinned ? (groupFor(space) || createSpaceGroup(space)) : pinnedGroup;
+    pinBtn.replaceWith(makePinButton(!inPinned));
+    dest.appendChild(row);
+    pinnedGroup.classList.remove('collapsed');
+    refreshCount(pinnedGroup);
+    document.querySelectorAll('.group[data-kind="space"]').forEach(refreshCount);
+    showToast(inPinned
+      ? '<span class="tag">已取消置顶</span>回到 ' + space
+      : '<span class="tag">已置顶</span>移到了历史列表最前面');
+  }
+
+  function startRename(row) {
+    const titleEl = row.querySelector('.title');
+    if (!titleEl) return;
+    const input = document.createElement('input');
+    input.className = 'rename-input';
+    input.value = titleEl.textContent;
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+    const finish = save => {
+      const span = document.createElement('span');
+      span.className = 'title';
+      span.innerHTML = titleEl.innerHTML;
+      span.textContent = save && input.value.trim() ? input.value.trim() : titleEl.textContent;
+      input.replaceWith(span);
+      if (save) showToast('<span class="tag">已重命名</span>标题已保存');
+    };
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+    input.addEventListener('click', e => e.stopPropagation());
+    input.addEventListener('dblclick', e => e.stopPropagation());
+  }
+
+  function archiveRow(row) {
+    row.dataset.archived = 'true';
+    const space = row.dataset.space;
+
+    const actions = row.querySelector('.session-actions');
+    actions.innerHTML = '';
+    const restore = document.createElement('span');
+    restore.className = 'btn';
+    restore.dataset.act = 'restore';
+    restore.title = '恢复';
+    restore.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 8a5 5 0 1 0 1.6-3.7"/><path d="M3 3.2v3.4h3.4"/></svg>';
+    bindAction(restore);
+    actions.appendChild(restore);
+
+    let sub = archivedGroup.querySelector('.subgroup[data-space="' + space + '"]');
+    if (!sub) {
+      sub = document.createElement('div');
+      sub.className = 'subgroup';
+      sub.dataset.space = space;
+      sub.innerHTML = '<div class="subgroup-head"><span class="dot"></span>'
+        + '<span class="name">' + space + '</span><span class="count">0</span></div>';
+      archivedGroup.appendChild(sub);
+    }
+
+    const from = row.closest('.group');
+    sub.appendChild(row);
+    archivedGroup.classList.remove('collapsed');
+    archivedGroup.querySelector('.caret').textContent = '▾';
+    refreshCount(archivedGroup);
+    refreshCount(from);
+    showToast('<span class="tag">已归档</span>放到了「已归档 › ' + space + '」');
+  }
+
+  function restoreRow(row) {
+    const space = row.dataset.space;
+    const dest = groupFor(space);
+    if (!dest) return;
+    row.dataset.archived = 'false';
+
+    const actions = row.querySelector('.session-actions');
+    actions.innerHTML = '';
+    actions.appendChild(makePinButton(false));
+    const rename = document.createElement('span');
+    rename.className = 'btn';
+    rename.dataset.act = 'rename';
+    rename.title = '重命名';
+    rename.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13l.9-3.1 6.8-6.8 2.2 2.2-6.8 6.8z"/><path d="M9.9 3.9l2.2 2.2"/></svg>';
+    bindAction(rename);
+    actions.appendChild(rename);
+    const archive = document.createElement('span');
+    archive.className = 'btn';
+    archive.dataset.act = 'archive';
+    archive.title = '归档';
+    archive.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4.5" width="11" height="9" rx="1.5"/><path d="M2 4.5h12M6 4.5V3h4v1.5"/></svg>';
+    bindAction(archive);
+    actions.appendChild(archive);
+
+    dest.appendChild(row);
+    refreshCount(dest);
+    refreshCount(archivedGroup);
+    showToast('<span class="tag">已恢复</span>回到 ' + space);
+  }
+
+  // single click opens the session
+  document.querySelectorAll('.session-row').forEach(row => {
+    row.addEventListener('click', () => {
+      if (row.classList.contains('opening')) return;
+      if (row.dataset.archived === 'true') {
+        showToast('<span class="tag">已归档</span>先恢复再打开，或用恢复按钮');
+        return;
+      }
+      const space = row.dataset.space;
+      const title = row.querySelector('.title').textContent;
+      document.querySelectorAll('.session-row').forEach(r => r.classList.remove('selected'));
+      row.classList.add('selected', 'opening');
+
+      const ico = row.querySelector('.ico');
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      spinner.style.marginLeft = '-6px';
+      ico.replaceWith(spinner);
+
+      const when = row.querySelector('.when');
+      when.textContent = 'opening';
+
+      setTimeout(() => {
+        const from = row.closest('.group');
+        row.remove();
+        refreshCount(from);
+        showToast('<span class="tag">已打开</span>' + space + '：' + title + '（打开后从历史里移除）');
+      }, 1500);
+    });
+  });
+
+  document.querySelectorAll('.btn').forEach(bindAction);
+
+  // a pinned row no longer sits under its space, so the pointer carries the name
+  const cursorTip = document.createElement('div');
+  cursorTip.className = 'cursor-tip';
+  document.body.appendChild(cursorTip);
+  document.addEventListener('mousemove', event => {
+    const row = event.target.closest('.group.pinned .session-row');
+    if (!row) {
+      cursorTip.classList.remove('show');
+      return;
+    }
+    cursorTip.textContent = row.dataset.space;
+    cursorTip.style.left = (event.clientX + 14) + 'px';
+    cursorTip.style.top = (event.clientY + 16) + 'px';
+    cursorTip.classList.add('show');
+  });
+</script>
+</body>
+</html>

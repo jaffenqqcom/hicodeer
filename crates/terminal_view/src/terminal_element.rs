@@ -1417,6 +1417,14 @@ impl Element for TerminalElement {
 
                 let background_color = theme.colors().terminal_background;
 
+                // [OHOS PORT BEGIN] `TerminalView::render` reads the scrollback
+                // state before this sync runs, so a single scroll would leave
+                // the floating "jump to bottom" button one frame stale. Repaint
+                // once when it flips; the extra pass is a no-op afterwards.
+                #[cfg(target_env = "ohos")]
+                let was_scrolled_to_bottom = self.terminal.read(cx).scrolled_to_bottom();
+                // [OHOS PORT END]
+
                 let (hover_tooltip, hover_match) = self.terminal.update(cx, |terminal, cx| {
                     terminal.set_size(dimensions);
                     terminal.sync(window, cx);
@@ -1440,6 +1448,13 @@ impl Element for TerminalElement {
                         (None, None)
                     }
                 });
+
+                // [OHOS PORT BEGIN]
+                #[cfg(target_env = "ohos")]
+                if self.terminal.read(cx).scrolled_to_bottom() != was_scrolled_to_bottom {
+                    cx.notify(self.terminal_view.entity_id());
+                }
+                // [OHOS PORT END]
 
                 let scroll_top = self.terminal_view.read(cx).scroll_top;
                 let hyperlink_tooltip = hover_tooltip.map(|hover_tooltip| {

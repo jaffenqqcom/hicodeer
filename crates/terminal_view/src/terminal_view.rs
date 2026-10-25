@@ -1461,6 +1461,49 @@ impl ScrollbarVisibility for TerminalScrollbarSettingsWrapper {
     }
 }
 
+// [OHOS PORT BEGIN] Floating "jump to bottom" button. Touch devices have no
+// `shift-end`, so returning to the live prompt after scrolling back needs a
+// tappable affordance. Hidden while already at the bottom (which includes the
+// alternate screen, as it has no scrollback).
+#[cfg(target_env = "ohos")]
+impl TerminalView {
+    fn render_scroll_to_bottom_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors();
+        div()
+            // Split panes can show several terminals at once, so the id must
+            // be per terminal, not a fixed string.
+            .id(("terminal-scroll-to-bottom", self.terminal.entity_id()))
+            .absolute()
+            .bottom(px(16.))
+            .right(px(20.))
+            .size(px(40.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(colors.element_background.opacity(0.6))
+            .border_1()
+            .border_color(colors.border.opacity(0.4))
+            .shadow_sm()
+            .cursor_pointer()
+            .hover(|style| style.bg(colors.element_hover.opacity(0.8)))
+            // Swallow the press so the terminal underneath does not start a
+            // selection at the tapped cell.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                Icon::new(IconName::ArrowDown)
+                    .size(IconSize::Medium)
+                    .color(Color::Muted),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.scroll_to_bottom(&ScrollToBottom, window, cx);
+            }))
+            .into_any_element()
+    }
+}
+// [OHOS PORT END]
+
 impl TerminalView {
     /// Attempts to process a keystroke in the terminal. Returns true if handled.
     ///
@@ -1556,6 +1599,15 @@ impl Render for TerminalView {
 
         let focused = self.focus_handle.is_focused(window);
 
+        // [OHOS PORT BEGIN] See `render_scroll_to_bottom_button`.
+        #[cfg(target_env = "ohos")]
+        let scroll_to_bottom_button: Option<AnyElement> = {
+            let show = matches!(self.mode, TerminalMode::Standalone)
+                && !self.terminal.read(cx).scrolled_to_bottom();
+            show.then(|| self.render_scroll_to_bottom_button(cx))
+        };
+        // [OHOS PORT END]
+
         div()
             .id("terminal-view")
             .size_full()
@@ -1646,6 +1698,16 @@ impl Render for TerminalView {
                         )
                     }),
             )
+            // [OHOS PORT BEGIN]
+            .map(|this| {
+                #[cfg(target_env = "ohos")]
+                let this = match scroll_to_bottom_button {
+                    Some(button) => this.child(button),
+                    None => this,
+                };
+                this
+            })
+            // [OHOS PORT END]
             .children(self.context_menu.as_ref().map(|(menu, position, _)| {
                 deferred(
                     anchored()

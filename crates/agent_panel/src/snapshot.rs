@@ -29,6 +29,7 @@ impl AgentStatus {
 }
 
 /// One space: what the server calls a workspace.
+#[derive(Clone)]
 pub(crate) struct Space {
     pub id: String,
     pub label: String,
@@ -36,6 +37,7 @@ pub(crate) struct Space {
 }
 
 /// One agent, named the way the server names it in its own sidebar.
+#[derive(Clone)]
 pub(crate) struct Agent {
     /// The server's terminal id. Stable for the life of the terminal, and unique
     /// across the server, so it identifies the row.
@@ -50,9 +52,14 @@ pub(crate) struct Agent {
     pub kind: String,
     pub status: AgentStatus,
     pub focused: bool,
+    /// `(agent, session value)` as the agent itself reported, when it runs
+    /// inside a recognized session. Values only line up with history entries
+    /// of the same agent.
+    pub agent_session: Option<(String, String)>,
 }
 
 /// Everything the panel draws in one frame.
+#[derive(Clone)]
 pub(crate) struct Snapshot {
     pub spaces: Vec<Space>,
 }
@@ -97,6 +104,17 @@ impl Snapshot {
                 kind: text(entry, "agent"),
                 status: AgentStatus::parse(entry.get("agent_status")),
                 focused: flag(entry, "focused"),
+                // The session the agent itself reports (source + value). The
+                // value is the id the resume path knows; the history view
+                // uses it to hide sessions that are already open.
+                agent_session: entry
+                    .get("agent_session")
+                    .and_then(|session| {
+                        Some((
+                            session.get("agent")?.as_str()?.to_owned(),
+                            session.get("value")?.as_str()?.to_owned(),
+                        ))
+                    }),
             });
         }
 

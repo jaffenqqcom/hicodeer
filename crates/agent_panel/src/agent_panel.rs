@@ -8,14 +8,16 @@
 
 pub mod agent_display;
 mod client;
+pub(crate) mod controller;
 pub mod herdr_settings;
+mod session_service;
 mod snapshot;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[cfg(target_env = "ohos")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 #[cfg(target_env = "ohos")]
 use audio::{Audio, Sound};
@@ -33,8 +35,8 @@ use settings::{IntoGpui, RegisterSetting, Settings, SettingsStore, update_settin
 use terminal_view::TerminalView;
 use theme::ActiveTheme as _;
 use ui::{
-    Color, ContextMenu, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, prelude::*,
-    right_click_menu,
+    Color, ContextMenu, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, Tooltip,
+    prelude::*, right_click_menu,
 };
 #[cfg(target_env = "ohos")]
 use workspace::MultiWorkspace;
@@ -44,6 +46,8 @@ use workspace::{
 };
 
 use crate::client::ClientError;
+use crate::controller::AgentController as _;
+use crate::session_service::{HistoryView, SessionKey, SessionService};
 use crate::snapshot::{Agent, AgentStatus, Snapshot, Space};
 
 /// Cadence of the refresh loop. The API path used here has no push channel for
@@ -301,6 +305,31 @@ pub struct AgentPanel {
     /// because the panel has no window when it is constructed.
     #[cfg(target_env = "ohos")]
     window_activation: Option<gpui::Subscription>,
+    /// History-session state store and view builder (design doc §5).
+    session_service: SessionService,
+    /// The history view as of the last session scan. `None` until the first
+    /// scan answers.
+    history: Option<HistoryView>,
+    /// The last scan, kept so pin/archive/rename can rebuild the view without
+    /// asking the daemon again.
+    last_sessions: Vec<controller::RawSession>,
+    /// Open sessions as of the last snapshot, `(agent, session value)` pairs.
+    last_open_sessions: Vec<(String, String)>,
+    /// Whether the last session scan failed. The history area shows an empty
+    /// state with a retry hint instead of pretending there is no history.
+    sessions_failed: bool,
+    /// Session whose row is in the "opening" state.
+    opening: Option<SessionKey>,
+    /// History session whose title is being edited in place.
+    history_renaming: Option<SessionKey>,
+    history_rename_editor: Option<Entity<Editor>>,
+    history_rename_subscription: Option<Subscription>,
+    /// History group ids the user collapsed. The archive group starts
+    /// collapsed by design.
+    collapsed_history_groups: HashSet<String>,
+    /// Set while a history scan is in flight, so collapsing and expanding a
+    /// group in quick succession does not queue two scans.
+    history_loading: bool,
 }
 
 impl AgentPanel {
@@ -324,16 +353,16 @@ impl AgentPanel {
                 } else {
                     Err(ClientError::NotReady)
                 };
-                if this
-                    .update(cx, |this, cx| this.apply(fetched, cx))
-                    .is_err()
-                {
+                if this.update(cx, |this, cx| this.apply(fetched, cx)).is_err() {
                     return;
                 }
                 cx.background_executor().timer(REFRESH_INTERVAL).await;
             }
         });
 
+        // Data files live under a directory per feature, matching the rest of
+        // the app's data dir (`config/`, `db/`, `logs/`, …).
+        let state_path = paths::data_dir().join("agent").join("history.json");
         Self {
             focus_handle: cx.focus_handle(),
             workspace: workspace.weak_handle(),
@@ -358,6 +387,18 @@ impl AgentPanel {
             window_active: false,
             #[cfg(target_env = "ohos")]
             window_activation: None,
+            session_service: SessionService::load(state_path),
+            history: None,
+            last_sessions: Vec::new(),
+            last_open_sessions: Vec::new(),
+            sessions_failed: false,
+            opening: None,
+            history_renaming: None,
+            history_rename_editor: None,
+            history_rename_subscription: None,
+            // The archive group is folded by design; everything else starts open.
+            collapsed_history_groups: HashSet::from(["archived".to_owned()]),
+            history_loading: false,
         }
     }
 
@@ -366,7 +407,7 @@ impl AgentPanel {
             Ok(snapshot) => {
                 #[cfg(target_env = "ohos")]
                 self.notify_agent_transitions(&snapshot.spaces, cx);
-                self.spaces = snapshot.spaces;
+                self.spaces = snapshot.spaces.clone();
                 self.unavailable = None;
                 self.consecutive_failures = 0;
                 self.wanted = true;
@@ -374,6 +415,22 @@ impl AgentPanel {
                 self.reconcile_pending_focus();
                 #[cfg(target_env = "ohos")]
                 self.ensure_integrations(cx);
+                let open_sessions_changed = self.refresh_open_sessions(&snapshot);
+                if open_sessions_changed && self.history.is_some() {
+                    // The history view filters on which sessions are already
+                    // open, so a status change can move a row between groups —
+                    // but only rebuild when that set actually changed, not on
+                    // every one-second status refresh.
+                    self.rebuild_history();
+                }
+                // The history list is a separate endpoint from the status poll
+                // and is not refreshed on a timer. It is primed here until the
+                // first scan lands: right after startup the agent endpoint is
+                // often not ready yet, and a single attempt would leave the
+                // section empty for the rest of the session.
+                if self.history.is_none() && !self.history_loading {
+                    self.refresh_history(cx);
+                }
             }
             Err(ClientError::NotReady) => {
                 // No endpoint at all: the daemon went away and the bootstrap
@@ -386,6 +443,7 @@ impl AgentPanel {
                 }
                 self.unavailable = Some(Unavailable::WaitingForServer);
                 self.note_disconnect();
+                self.clear_history();
             }
             Err(ClientError::Failed(message)) => {
                 // One line per outage: the refresh runs once a second, so
@@ -401,6 +459,7 @@ impl AgentPanel {
                 }
                 self.unavailable = Some(Unavailable::ServerUnavailable);
                 self.note_disconnect();
+                self.clear_history();
             }
         }
         cx.notify();
@@ -1012,6 +1071,938 @@ impl AgentPanel {
         .into_any_element()
     }
 
+    // ------------------------------------------------------------------
+    // History sessions (design doc §5–§7)
+    // ------------------------------------------------------------------
+
+    /// Keeps the "which sessions are already open" bookkeeping the history view
+    /// filters on. Runs on every status refresh, does no I/O, and reports
+    /// whether anything the history view depends on actually moved.
+    ///
+    /// Only the open set matters: group names come from the session's own
+    /// folder, so a space being created, closed or renamed does not change any
+    /// group header.
+    fn refresh_open_sessions(&mut self, snapshot: &Snapshot) -> bool {
+        let open_sessions: Vec<(String, String)> = snapshot
+            .spaces
+            .iter()
+            .flat_map(|space| space.agents.iter().filter_map(|agent| agent.agent_session.clone()))
+            .collect();
+        let changed = open_sessions != self.last_open_sessions;
+        self.last_open_sessions = open_sessions;
+        changed
+    }
+
+    /// Pulls the history list once.
+    ///
+    /// This is a separate endpoint from the once-a-second status poll and is
+    /// deliberately not polled: the list only changes when an agent writes a
+    /// session file, not while the panel sits open. The scan itself is cheap on
+    /// the daemon side (an indexed stat walk unless a file changed).
+    fn refresh_history(&mut self, cx: &mut Context<Self>) {
+        if self.history_loading || cmd_client::agent_control().is_none() {
+            return;
+        }
+        self.history_loading = true;
+        cx.spawn(async move |this, cx| {
+            let scan = cx.background_spawn(async { client::fetch_sessions() }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.history_loading = false;
+                this.apply_history_scan(scan, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Drops the history view when the endpoint is gone. The rows describe
+    /// sessions on the other side of a connection that no longer exists, and
+    /// every one of them would fail to open, so they are removed rather than
+    /// left as a dead list. A later successful refresh primes it again.
+    fn clear_history(&mut self) {
+        if self.history.is_some() || !self.last_sessions.is_empty() {
+            self.history = None;
+            self.last_sessions.clear();
+        }
+        self.history_loading = false;
+        self.opening = None;
+    }
+
+    /// Applies one scan answer. Runs only when a scan actually landed; every
+    /// other refresh keeps the previous view.
+    fn apply_history_scan(
+        &mut self,
+        scan: Result<Vec<controller::RawSession>, ClientError>,
+        cx: &mut Context<Self>,
+    ) {
+        match scan {
+            Ok(list) => {
+                self.last_sessions = list;
+                self.sessions_failed = false;
+                self.rebuild_history();
+            }
+            Err(err) => {
+                if !self.sessions_failed {
+                    log::warn!("agent panel: session scan failed: {err}");
+                }
+                self.sessions_failed = true;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Rebuilds the view from the cached scan plus current state. Called after
+    /// a scan and after every pin/archive/rename, so the row moves instantly.
+    fn rebuild_history(&mut self) {
+        let view = self.session_service.history(
+            self.last_sessions.clone(),
+            &self.last_open_sessions,
+        );
+        self.history = Some(view);
+    }
+
+    /// Opens one history session in a fresh space (creating it at the
+    /// session's root first when needed).
+    ///
+    /// `agent.start` succeeding does not mean the CLI actually restored the
+    /// session (a corrupt store only shows inside the TUI), so the spawn is
+    /// followed by a short watch: if the agent does not report that session
+    /// within ten seconds, the user gets a toast instead of silence.
+    fn open_history_session(&mut self, key: SessionKey, cx: &mut Context<Self>) {
+        let Some(view) = self.history.as_ref() else {
+            return;
+        };
+        let Some(entry) = view.find(&key).cloned() else {
+            return;
+        };
+        let Some(root) = entry.workspace_root.clone() else {
+            self.show_history_toast(
+                localization::localized_str!("Session has no working directory"),
+                None,
+                cx,
+            );
+            return;
+        };
+        let kind = match key.agent.as_str() {
+            "claude" => Some("claude".to_owned()),
+            "codebuddy" => Some("codebuddy".to_owned()),
+            _ => None,
+        };
+        let Some(kind) = kind else {
+            self.show_history_toast(
+                localization::localized_str!("This agent cannot open history sessions"),
+                None,
+                cx,
+            );
+            return;
+        };
+        self.opening = Some(key.clone());
+        cx.notify();
+
+        let request = controller::OpenSessionRequest {
+            workspace_root: PathBuf::from(&root),
+            workspace_id: entry.workspace_id.clone(),
+            agent_kind: kind,
+            session_id: key.session_id.clone(),
+        };
+        cx.spawn(async move |this, cx| {
+            let opened = cx
+                .background_spawn(async move {
+                    controller::HerdrController.open_session(request)
+                })
+                .await;
+            match opened {
+                Ok(opened) => {
+                    // Compensation watch: the session has to show up in
+                    // `agents()` within ten seconds, or the resume probably
+                    // failed silently inside the CLI.
+                    let watched_key = key.clone();
+                    let mut observed = false;
+                    for _ in 0..10 {
+                        cx.background_executor()
+                            .timer(Duration::from_secs(1))
+                            .await;
+                        let found = cx
+                            .background_spawn(async { client::fetch() })
+                            .await
+                            .ok()
+                            .map(|snapshot| {
+                                snapshot.spaces.iter().any(|space| {
+                                    space.agents.iter().any(|agent| {
+                                        agent
+                                            .agent_session
+                                            .as_ref()
+                                            .is_some_and(|(agent, value)| {
+                                                agent == &watched_key.agent
+                                                    && value == &watched_key.session_id
+                                            })
+                                    })
+                                })
+                            })
+                            .unwrap_or(false);
+                        if found {
+                            observed = true;
+                            break;
+                        }
+                    }
+                    let _ = this.update(cx, |this, cx| {
+                        this.opening = None;
+                        if !observed {
+                            this.show_history_toast(
+                            localization::localized_str!("Session may not have been resumed"),
+                            None,
+                            cx,
+                        );
+                        }
+                        // Focus the new agent and bring the terminal forward.
+                        this.pending_agent = Some(PendingFocus {
+                            target: opened.pane_id.clone(),
+                            at: Instant::now(),
+                        });
+                    });
+                }
+                Err(err) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.opening = None;
+                        this.show_history_toast(
+                            &format!(
+                                "{}: {err}",
+                                localization::localized_str!("Failed to open session")
+                            ),
+                            None,
+                            cx,
+                        );
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn toggle_history_pin(&mut self, key: SessionKey, pinned: bool, cx: &mut Context<Self>) {
+        if let Err(err) = self.session_service.pin(&key, pinned) {
+            log::error!("agent panel: cannot pin session: {err}");
+            self.show_history_toast(
+                localization::localized_str!("Failed to pin session"),
+                None,
+                cx,
+            );
+            return;
+        }
+        self.rebuild_history();
+        cx.notify();
+    }
+
+    fn archive_history_session(
+        &mut self,
+        key: SessionKey,
+        archived: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(err) = self.session_service.archive(&key, archived) {
+            log::error!("agent panel: cannot archive session: {err}");
+            self.show_history_toast(
+                localization::localized_str!("Failed to archive session"),
+                None,
+                cx,
+            );
+            return;
+        }
+        self.rebuild_history();
+        let message = if archived {
+            localization::localized_str!("Moved to archived")
+        } else {
+            localization::localized_str!("Restored from archived")
+        };
+        self.show_history_toast(message, None, cx);
+        cx.notify();
+    }
+
+    fn begin_history_rename(&mut self, key: SessionKey, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self.history.as_ref() else {
+            return;
+        };
+        let Some(entry) = view.find(&key) else {
+            return;
+        };
+        let title = entry.title.clone();
+
+        let editor = cx.new(|cx| Editor::single_line(window, cx));
+        let subscription = cx.subscribe_in(&editor, window, {
+            let editor = editor.clone();
+            move |_this, _, event, window, cx| {
+                if let editor::EditorEvent::Blurred = event {
+                    let editor = editor.clone();
+                    cx.defer_in(window, move |this, window, cx| {
+                        let still_current = this
+                            .history_rename_editor
+                            .as_ref()
+                            .is_some_and(|current| current == &editor);
+                        if still_current && !editor.focus_handle(cx).is_focused(window) {
+                            this.finish_history_rename(false, window, cx);
+                        }
+                    });
+                }
+            }
+        });
+        self.history_renaming = Some(key);
+        self.history_rename_editor = Some(editor.clone());
+        self.history_rename_subscription = Some(subscription);
+        editor.update(cx, |editor, cx| {
+            editor.set_text(title, window, cx);
+            editor.select_all(&SelectAll, window, cx);
+            editor.focus_handle(cx).focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn finish_history_rename(
+        &mut self,
+        save: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self.history_rename_editor.take() else {
+            return;
+        };
+        self.history_rename_subscription = None;
+        let Some(key) = self.history_renaming.take() else {
+            return;
+        };
+        if save {
+            let title = editor.read(cx).text(cx).trim().to_string();
+            if !title.is_empty() {
+                if let Err(err) = self
+                    .session_service
+                    .rename(&key, Some(title.clone()))
+                {
+                    log::error!("agent panel: cannot rename session: {err}");
+                } else {
+                    self.rebuild_history();
+                }
+            }
+        }
+        cx.notify();
+        self.focus_handle.focus(window, cx);
+    }
+
+    /// One status toast from the history view. The panel shares the
+    /// workspace's single toast slot with the agent notifications.
+    fn show_history_toast(&mut self, text: &str, _cx_kind: Option<()>, cx: &mut Context<Self>) {
+        #[cfg(target_env = "ohos")]
+        {
+            let Some(workspace) = self.workspace.upgrade() else {
+                return;
+            };
+            let toast = StatusToast::new(text.to_owned(), cx, |this, _cx| {
+                this.dismiss_button(true)
+            });
+            workspace.update(cx, |workspace, cx| {
+                workspace.toggle_status_toast(toast, cx);
+            });
+        }
+        #[cfg(not(target_env = "ohos"))]
+        {
+            log::info!("agent panel: {text}");
+        }
+    }
+
+    /// Deletes one session from the agent's own store and from the list.
+    ///
+    /// The daemon does the unlinking: an app process gets `EPERM` removing a
+    /// file from the agent's store. The row only disappears once the daemon
+    /// confirms it, so a refused delete leaves the list honest.
+    ///
+    /// The path comes from the row that was clicked rather than from a lookup
+    /// in the last scan: a scan that landed between the render and the click
+    /// would otherwise make the button do nothing at all.
+    fn delete_history_session(
+        &mut self,
+        key: SessionKey,
+        source_path: String,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let deleted = cx
+                .background_spawn(async move { client::delete_session(&source_path) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match deleted {
+                    Ok(()) => {
+                        this.last_sessions.retain(|session| {
+                            !(session.agent == key.agent && session.session_id == key.session_id)
+                        });
+                        if let Err(error) = this.session_service.forget(&key) {
+                            log::warn!(
+                                "agent panel: dropping deleted session state failed: {error}"
+                            );
+                        }
+                        this.rebuild_history();
+                        this.show_history_toast(
+                            localization::localized_str!("Session deleted"),
+                            None,
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        log::error!("agent panel: deleting session failed: {error}");
+                        this.show_history_toast(
+                            localization::localized_str!("Failed to delete session"),
+                            None,
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The history area: separator, groups, rows. Rendered under the tree of
+    /// open spaces inside the same scroll region.
+    fn render_history(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        // Cloned so the per-group renderers can take `&mut self`.
+        let Some(view) = self.history.clone() else {
+            // No scan has landed yet. A failure is the only thing worth saying
+            // here: returning early skips the per-tree blocks below, so the
+            // message cannot be emitted from down there.
+            if self.sessions_failed {
+                return v_flex()
+                    .w_full()
+                    .pt_3()
+                    .border_t_1()
+                    .border_color(cx.theme().colors().border)
+                    .child(
+                        Label::new(localization::localized_str!(
+                            "History could not be loaded - retrying"
+                        ))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                    )
+                    .into_any_element();
+            }
+            return div().into_any_element();
+        };
+
+        // Two trees: "History" (pinned, open spaces, and folders that are not
+        // open) and "Archived", which is a sibling section, not a group inside
+        // the first one.
+        let mut history_blocks: Vec<AnyElement> = Vec::new();
+        if !view.pinned.is_empty() {
+            history_blocks.push(self.render_history_group(
+                "pinned",
+                localization::localized_str!("Pinned"),
+                &view.pinned,
+                false,
+                cx,
+            ));
+        }
+        for (key, label, sessions) in &view.groups {
+            history_blocks.push(self.render_history_group(
+                &format!("folder:{key}"),
+                label,
+                sessions,
+                false,
+                cx,
+            ));
+        }
+
+        let mut archived_blocks: Vec<AnyElement> = Vec::new();
+        for (key, label, sessions) in &view.archived {
+            archived_blocks.push(self.render_history_group(
+                &format!("archived:{key}"),
+                label,
+                sessions,
+                true,
+                cx,
+            ));
+        }
+
+        let history_ids = history_group_ids(&view);
+        let archived_ids = archived_group_ids(&view);
+        let history_collapsed = !history_ids.is_empty()
+            && history_ids
+                .iter()
+                .all(|id| self.collapsed_history_groups.contains(id));
+        let archived_collapsed = !archived_ids.is_empty()
+            && archived_ids
+                .iter()
+                .all(|id| self.collapsed_history_groups.contains(id));
+        let history_section = self.render_history_section(
+            localization::localized_str!("History"),
+            history_collapsed,
+            false,
+            cx,
+        );
+        let has_archived = !view.archived.is_empty();
+        let archived_section = has_archived.then(|| {
+            self.render_history_section(
+                localization::localized_str!("Archived"),
+                archived_collapsed,
+                true,
+                cx,
+            )
+        });
+
+        v_flex()
+            .w_full()
+            .pt_3()
+            .border_t_1()
+            .border_color(cx.theme().colors().border)
+            .child(history_section)
+            .children(history_blocks)
+            .when(has_archived, |this| {
+                this.child(
+                    v_flex()
+                        .w_full()
+                        .mt_2()
+                        .pt_2()
+                        .border_t_1()
+                        .border_color(cx.theme().colors().border)
+                        .child(archived_section.unwrap_or_else(|| div().into_any_element()))
+                        .children(archived_blocks),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// Section header for one of the two history trees: the label on the left,
+    /// and on the right a chevron that expands or collapses every group at
+    /// once — the same plain chevron the diff view puts next to a file, rather
+    /// than a bordered button.
+    fn render_history_section(
+        &mut self,
+        label: &'static str,
+        collapsed: bool,
+        archived: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let panel = cx.entity();
+        h_flex()
+            .w_full()
+            .px_2()
+            .pb_1()
+            .justify_between()
+            .child(
+                Label::new(label)
+                    .size(LabelSize::Small)
+                    .weight(FontWeight::BOLD)
+                    .color(Color::Muted),
+            )
+            .child(
+                h_flex()
+                    .id(ElementId::Name(SharedString::from(format!(
+                        "history-collapse-{}",
+                        if archived { "archived" } else { "history" }
+                    ))))
+                    .cursor_pointer()
+                    .tooltip(move |_, cx| {
+                        Tooltip::simple(
+                            if collapsed {
+                                localization::localized_str!("Expand all")
+                            } else {
+                                localization::localized_str!("Collapse all")
+                            },
+                            cx,
+                        )
+                    })
+                    .on_click(move |_, _, cx| {
+                        let _ = panel.update(cx, |panel, cx| {
+                            panel.toggle_all_history_groups(archived, cx);
+                        });
+                    })
+                    .child(
+                        // Expanded shows the "collapse" glyph, collapsed shows
+                        // the "expand" one — the same pair the search results
+                        // and the solo diff view use for their columns.
+                        Icon::new(if collapsed {
+                            IconName::ChevronUpDown
+                        } else {
+                            IconName::ChevronDownUp
+                        })
+                        .size(IconSize::Small)
+                        .color(Color::Muted),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Expands or collapses every group of one tree, so a long list does not
+    /// have to be opened one group at a time.
+    fn toggle_all_history_groups(&mut self, archived: bool, cx: &mut Context<Self>) {
+        let Some(view) = self.history.clone() else {
+            return;
+        };
+        let ids = if archived {
+            archived_group_ids(&view)
+        } else {
+            history_group_ids(&view)
+        };
+        let all_collapsed =
+            !ids.is_empty() && ids.iter().all(|id| self.collapsed_history_groups.contains(id));
+        for id in ids {
+            if all_collapsed {
+                self.collapsed_history_groups.remove(&id);
+            } else {
+                self.collapsed_history_groups.insert(id);
+            }
+        }
+        if all_collapsed {
+            // Expanding means the user is about to read history, so this is
+            // when the list is refreshed — the same rule as opening one group.
+            self.refresh_history(cx);
+        }
+        cx.notify();
+    }
+
+    /// One collapsible group header plus its session rows.
+    fn render_history_group(
+        &mut self,
+        group_id: &str,
+        label: &str,
+        sessions: &[session_service::SessionEntry],
+        archived: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let collapsed = self.collapsed_history_groups.contains(group_id);
+        let mut block = v_flex().w_full();
+        block = block.child(
+            row_container(
+                ElementId::Name(SharedString::from(format!("history-group-{group_id}"))),
+                px(0.0),
+                false,
+                cx,
+            )
+            .on_click({
+                let group_id = group_id.to_owned();
+                let panel = cx.entity();
+                move |_, _, cx| {
+                    let _ = panel.update(cx, |panel, cx| {
+                        if panel.collapsed_history_groups.remove(&group_id) {
+                            // Expanding means the user is looking at history
+                            // now, so this is when the list is refreshed.
+                            panel.refresh_history(cx);
+                        } else {
+                            panel.collapsed_history_groups.insert(group_id.clone());
+                        }
+                    });
+                }
+            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_1p5()
+                    .child(
+                        h_flex().min_w(STATUS_SLOT_SIZE).justify_center().child(
+                            Icon::new(if collapsed {
+                                IconName::ChevronRight
+                            } else {
+                                IconName::ChevronDown
+                            })
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                        ),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                Label::new(label.to_owned())
+                                    .size(LabelSize::Small)
+                                    .weight(FontWeight::BOLD),
+                            )
+                            .child(
+                                Label::new(sessions.len().to_string())
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            ),
+                    ),
+            ),
+        );
+        if !collapsed {
+            for entry in sessions {
+                block = block.child(self.render_history_row(entry, archived, cx));
+            }
+        }
+        block.into_any_element()
+    }
+
+    /// One history row: agent icon, title (or the rename editor), relative
+    /// time, and the hover actions on the right.
+    fn render_history_row(
+        &mut self,
+        entry: &session_service::SessionEntry,
+        archived: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = entry.key.clone();
+        let opening = self
+            .opening
+            .as_ref()
+            .is_some_and(|opening| *opening == key);
+        let renaming = self
+            .history_renaming
+            .as_ref()
+            .is_some_and(|renaming| *renaming == key);
+        let panel = cx.entity();
+        let click_key = key.clone();
+        let pin_key = key.clone();
+        let archive_key = key.clone();
+        let rename_key = key.clone();
+        let delete_key = key.clone();
+        let delete_path = entry.source_path.clone();
+        let editor = if renaming {
+            self.history_rename_editor.clone()
+        } else {
+            None
+        };
+
+        let title: AnyElement = if let Some(editor) = editor {
+            let confirm_panel = panel.clone();
+            let cancel_panel = panel.clone();
+            div()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "history-rename-{}:{}",
+                    key.agent, key.session_id
+                ))))
+                .relative()
+                .flex_1()
+                .h_6()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(editor)
+                        .on_action(move |_: &menu::Confirm, window, cx| {
+                            let _ = confirm_panel.update(cx, |panel, cx| {
+                                panel.finish_history_rename(true, window, cx)
+                            });
+                        })
+                        .on_action(move |_: &menu::Cancel, window, cx| {
+                            let _ = cancel_panel.update(cx, |panel, cx| {
+                                panel.finish_history_rename(false, window, cx)
+                            });
+                        }),
+                )
+                .into_any_element()
+        } else {
+            let mut label = Label::new(entry.title.clone())
+                .size(LabelSize::Default)
+                .single_line()
+                .truncate();
+            if archived {
+                label = label.color(Color::Muted);
+            }
+            // Session titles are whole sentences, so the row shows a single
+            // truncated line and the hover card carries the full text.
+            let full_title = entry.title.clone();
+            h_flex()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "history-title-{}:{}",
+                    key.agent, key.session_id
+                ))))
+                .flex_1()
+                .min_w_0()
+                .child(label)
+                .tooltip(Tooltip::text(full_title.clone()))
+                .into_any_element()
+        };
+
+        let time_label = relative_history_time(entry.updated_at);
+        let (marker, marker_color) = if opening {
+            (SharedString::from("◐"), Color::Warning)
+        } else {
+            (SharedString::from(""), Color::Muted)
+        };
+
+        let row_id = SharedString::from(format!(
+            "history-row-{}:{}",
+            key.agent, key.session_id
+        ));
+        let mut row = row_container(ElementId::Name(row_id.clone()), AGENT_INDENT, false, cx)
+        .group(row_id.clone())
+        .when(archived, |row| row.opacity(0.6))
+        .child(
+            h_flex()
+                .relative()
+                .w_full()
+                .gap_1p5()
+                .child(status_slot(marker, marker_color))
+                .child(history_agent_icon(&key.agent))
+                .child(title)
+                // The time sits at the right edge, lined up with the section's
+                // "click to open" hint above the list.
+                .child(
+                    h_flex().ml_auto().flex_none().child(
+                        Label::new(time_label)
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+                )
+                // The actions float over the row's right edge and cover the end
+                // of the title while the pointer is on the row.
+                .child(
+                    h_flex()
+                        .absolute()
+                        .right_0()
+                        .top_0()
+                        .bottom_0()
+                        .items_center()
+                        .gap_0p5()
+                        .px_1()
+                        .bg(cx.theme().colors().ghost_element_hover)
+                        .visible_on_hover(row_id.clone())
+                        .when(!archived, |this| {
+                            this.child({
+                                let pinned_label = if entry.pinned {
+                                    localization::localized_str!("Unpin")
+                                } else {
+                                    localization::localized_str!("Pin")
+                                };
+                                IconButton::new(
+                                    ElementId::Name(SharedString::from(format!(
+                                        "history-pin-{}:{}",
+                                        key.agent, key.session_id
+                                    ))),
+                                    if entry.pinned {
+                                        IconName::Unpin
+                                    } else {
+                                        IconName::Pin
+                                    },
+                                )
+                                .icon_size(IconSize::Small)
+                                .icon_color(if entry.pinned {
+                                    Color::Accent
+                                } else {
+                                    Color::Muted
+                                })
+                                .tooltip(move |_, cx| {
+                                    Tooltip::simple(pinned_label, cx)
+                                })
+                                .on_click({
+                                    let panel = panel.clone();
+                                    let pinned = entry.pinned;
+                                    move |_, _, cx| {
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            panel.toggle_history_pin(
+                                                pin_key.clone(),
+                                                !pinned,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                })
+                            })
+                            .child({
+                                IconButton::new(
+                                    ElementId::Name(SharedString::from(format!(
+                                        "history-rename-{}:{}",
+                                        key.agent, key.session_id
+                                    ))),
+                                    IconName::Pencil,
+                                )
+                                .icon_size(IconSize::Small)
+                                .icon_color(Color::Muted)
+                                .tooltip(move |_, cx| {
+                                    Tooltip::simple(localization::localized_str!("Rename"), cx)
+                                })
+                                .on_click({
+                                    let panel = panel.clone();
+                                    let windowless_key = rename_key.clone();
+                                    move |_, window, cx| {
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            panel.begin_history_rename(
+                                                windowless_key.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                })
+                            })
+                        })
+                        .child({
+                            let archive_label = if archived {
+                                localization::localized_str!("Unarchive")
+                            } else {
+                                localization::localized_str!("Archive")
+                            };
+                            IconButton::new(
+                                ElementId::Name(SharedString::from(format!(
+                                    "history-archive-{}:{}",
+                                    key.agent, key.session_id
+                                ))),
+                                if archived {
+                                    IconName::RotateCcw
+                                } else {
+                                    IconName::Archive
+                                },
+                            )
+                            .icon_size(IconSize::Small)
+                            .icon_color(Color::Muted)
+                            .tooltip(move |_, cx| Tooltip::simple(archive_label, cx))
+                            .on_click({
+                                let panel = panel.clone();
+                                let was_archived = archived;
+                                move |_, _, cx| {
+                                    let _ = panel.update(cx, |panel, cx| {
+                                        panel.archive_history_session(
+                                            archive_key.clone(),
+                                            !was_archived,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            })
+                        })
+                        .child({
+                            IconButton::new(
+                                ElementId::Name(SharedString::from(format!(
+                                    "history-delete-{}:{}",
+                                    key.agent, key.session_id
+                                ))),
+                                IconName::Trash,
+                            )
+                            .icon_size(IconSize::Small)
+                            .icon_color(Color::Muted)
+                            .tooltip(move |_, cx| {
+                                Tooltip::simple(localization::localized_str!("Delete"), cx)
+                            })
+                            .on_click({
+                                let panel = panel.clone();
+                                let delete_key = delete_key.clone();
+                                let delete_path = delete_path.clone();
+                                move |_, _, cx| {
+                                    let _ = panel.update(cx, |panel, cx| {
+                                        panel.delete_history_session(
+                                            delete_key.clone(),
+                                            delete_path.clone(),
+                                            cx,
+                                        );
+                                    });
+                                }
+                            })
+                        }),
+                ),
+        );
+
+        if !renaming {
+            let open_key = click_key.clone();
+            row = row.on_click(move |_, _, cx| {
+                let _ = panel.update(cx, |panel, cx| {
+                    panel.open_history_session(open_key.clone(), cx);
+                });
+            });
+        }
+        row.into_any_element()
+    }
+
     /// Closes one space and its terminal.
     fn close_space(&self, workspace_id: String, cx: &mut Context<Self>) {
         cx.spawn(async move |_this, cx| {
@@ -1063,10 +2054,11 @@ impl AgentPanel {
     /// Settings live in the editor's own settings page, so the panel has no
     /// entry of its own.
     fn render_actions(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // No horizontal padding here: the rows below it carry their own side
+        // padding, and an extra layer shifted this row 4px right of the tree.
         v_flex()
             .id("agent-panel-actions")
             .w_full()
-            .px_1()
             .py_1()
             .gap_0p5()
             .child(
@@ -1194,6 +2186,7 @@ impl Render for AgentPanel {
             ));
         }
         self.schedule_agent_terminal_sync(window, cx);
+        let history = self.render_history(cx);
         let tree = if self.unavailable.is_some() {
             self.render_disconnected(cx)
         } else if self.spaces.is_empty() {
@@ -1242,8 +2235,79 @@ impl Render for AgentPanel {
                     .id("agent-panel-tree")
                     .flex_1()
                     .overflow_y_scroll()
-                    .child(tree),
+                    .child(tree)
+                    .child(history),
             )
+    }
+}
+
+/// Group identifiers of the "History" tree, in render order. Used to expand or
+/// collapse the whole tree at once. The identifiers match the ones
+/// `render_history` gives the group rows.
+fn history_group_ids(view: &HistoryView) -> Vec<String> {
+    let mut ids = Vec::new();
+    if !view.pinned.is_empty() {
+        ids.push("pinned".to_owned());
+    }
+    ids.extend(view.groups.iter().map(|(key, _, _)| format!("folder:{key}")));
+    ids
+}
+
+/// The same for the archive tree.
+fn archived_group_ids(view: &HistoryView) -> Vec<String> {
+    view.archived
+        .iter()
+        .map(|(key, _, _)| format!("archived:{key}"))
+        .collect()
+}
+
+/// The history row's time, in the thread sidebar's coarse style.
+fn relative_history_time(updated_at: Option<i64>) -> SharedString {
+    let Some(updated_at) = updated_at else {
+        return "".to_owned().into();
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let elapsed = (now_ms - updated_at).max(0);
+    let label = if elapsed < 60_000 {
+        localization::localized_str!("now").to_owned()
+    } else if elapsed < 3_600_000 {
+        format!(
+            "{}{}",
+            elapsed / 60_000,
+            localization::localized_str!("min")
+        )
+    } else if elapsed < 86_400_000 {
+        format!(
+            "{}{}",
+            elapsed / 3_600_000,
+            localization::localized_str!("hour")
+        )
+    } else if elapsed < 604_800_000 {
+        format!(
+            "{}{}",
+            elapsed / 86_400_000,
+            localization::localized_str!("day")
+        )
+    } else {
+        format!(
+            "{}{}",
+            elapsed / 604_800_000,
+            localization::localized_str!("week")
+        )
+    };
+    label.into()
+}
+
+/// The agent icon for a history row; agents without a known glyph fall back to
+/// the generic terminal icon.
+fn history_agent_icon(agent: &str) -> Icon {
+    if agent == "codebuddy" || agent == "claude" {
+        Icon::new(agent_display::agent_icon(agent)).size(IconSize::Small)
+    } else {
+        Icon::new(IconName::Terminal).size(IconSize::Small)
     }
 }
 

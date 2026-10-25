@@ -39,6 +39,29 @@ pub struct ErrorBody {
     pub message: String,
 }
 
+/// One historical agent session as scanned by the daemon. The daemon only
+/// collects: dedup, ordering, pin/archive state and open-session filtering
+/// all live in the panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RawSessionDto {
+    /// Agent slug, e.g. `claude` or `codebuddy`.
+    pub agent: String,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Working directory the session ran in; matched against workspace
+    /// identity cwds by the daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
+    /// Milliseconds since the Unix epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+    pub source_path: String,
+    /// `Some` = the space this session belongs to is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
@@ -107,6 +130,10 @@ pub enum ResponseResult {
     AgentList {
         agents: Vec<AgentInfo>,
     },
+    AgentSessions {
+        sessions: Vec<RawSessionDto>,
+    },
+    AgentSessionDeleted {},
     AgentView {
         active: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]

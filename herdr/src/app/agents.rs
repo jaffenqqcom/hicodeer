@@ -20,6 +20,42 @@ fn valid_agent_name(name: &str) -> bool {
 }
 
 impl App {
+    pub(super) fn handle_agent_sessions(&self, id: String) -> String {
+        let workspace_roots: Vec<(String, std::path::PathBuf)> = self
+            .state
+            .workspaces
+            .iter()
+            .map(|ws| (ws.id.clone(), ws.identity_cwd.clone()))
+            .collect();
+        // Scanned on every request rather than on a timer. Each scanner keeps
+        // its own index, so unless a session file changed this is just a walk
+        // of `stat` calls over the two stores.
+        let sessions = crate::sessions::collect_sessions(&workspace_roots);
+        crate::app::api::responses::encode_success(
+            id,
+            crate::api::schema::response::ResponseResult::AgentSessions { sessions },
+        )
+    }
+
+    /// Removes one session file. The panel asks for this instead of deleting it
+    /// itself: an app process gets `EPERM` unlinking from the user's store, while
+    /// the daemon runs as the user and can.
+    pub(super) fn handle_agent_session_delete(
+        &self,
+        id: String,
+        params: crate::api::schema::AgentSessionDeleteParams,
+    ) -> String {
+        match crate::sessions::delete_session(&params.source_path) {
+            Ok(()) => crate::app::api::responses::encode_success(
+                id,
+                crate::api::schema::response::ResponseResult::AgentSessionDeleted {},
+            ),
+            Err(message) => {
+                crate::app::api::responses::encode_error(id, "session_delete_failed", message)
+            }
+        }
+    }
+
     pub(super) fn collect_agent_infos(&self) -> Vec<crate::api::schema::AgentInfo> {
         self.state
             .workspaces

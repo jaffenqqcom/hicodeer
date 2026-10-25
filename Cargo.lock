@@ -212,6 +212,8 @@ dependencies = [
  "log",
  "menu",
  "notifications",
+ "paths",
+ "serde",
  "serde_json",
  "settings",
  "terminal_view",

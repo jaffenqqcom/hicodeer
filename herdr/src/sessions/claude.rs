@@ -71,6 +71,7 @@ fn scan() -> Vec<CollectedSession> {
 
     conversations
         .into_iter()
+        .filter(|conversation| is_session_transcript(&conversation.source_path))
         .map(|conversation| {
             let source_path = conversation.source_path;
             let updated_at = conversation
@@ -79,10 +80,7 @@ fn scan() -> Vec<CollectedSession> {
                 .or_else(|| path_mtime_ms(&source_path));
             CollectedSession {
                 agent: "claude",
-                session_id: conversation
-                    .external_id
-                    .clone()
-                    .unwrap_or_else(|| fallback_id(&source_path)),
+                session_id: resume_id(&conversation.metadata, &source_path),
                 title: conversation.title,
                 workspace_root: conversation.workspace,
                 updated_at,
@@ -152,6 +150,41 @@ pub(super) fn store_root() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(|home| PathBuf::from(home).join(".claude").join("projects"))
+}
+
+/// The id `claude --resume` takes: the session UUID the transcript records for
+/// itself, falling back to the file name.
+///
+/// FAD's `external_id` is a *store* identifier — the path relative to the
+/// projects root, e.g. `-storage-Users-…/1e07f734-….jsonl` — and passing it to
+/// the CLI makes it reject the whole argument as an unknown option. The
+/// transcript's own `sessionId` is the value the CLI recognises.
+fn resume_id(metadata: &serde_json::Value, path: &Path) -> String {
+    ["sessionId", "cliSessionId"]
+        .iter()
+        .find_map(|key| {
+            metadata
+                .get(*key)
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+        })
+        .map(str::to_owned)
+        .unwrap_or_else(|| fallback_id(path))
+}
+
+/// Whether a transcript is a session the CLI can resume.
+///
+/// Only files sitting directly in a project directory qualify. Sub-agent
+/// transcripts live deeper (`<session-id>/subagents/agent-*.jsonl`) and carry
+/// the parent's `sessionId`, so listing them would add a duplicate row that
+/// resumes the parent instead of anything of its own.
+fn is_session_transcript(path: &Path) -> bool {
+    let Some(root) = store_root() else {
+        return true;
+    };
+    path.strip_prefix(&root)
+        .map(|relative| relative.components().count() == 2)
+        .unwrap_or(true)
 }
 
 fn fallback_id(path: &std::path::Path) -> String {

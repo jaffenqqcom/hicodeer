@@ -63,6 +63,15 @@ const DISCONNECT_CLOSE_THRESHOLD: usize = 3;
 /// asynchronous, so without this a refresh that lands mid-deploy would start a
 /// second terminal while the first is still being placed.
 const DEPLOY_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+/// How often the panel re-reads the server's launch state while a resumed
+/// session is starting. The server reports `launch_pending` / `interactive_ready`
+/// itself; this is only the poll cadence, not a deadline.
+const START_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// A hard cap on watching one launch, so a server that stops answering cannot
+/// leave an observer running forever. The server's own start deadline is thirty
+/// seconds, so anything still unresolved here is a broken endpoint, not a slow
+/// agent.
+const START_WATCH_LIMIT: Duration = Duration::from_secs(90);
 /// How long a click may claim a row's highlight before the server's own state
 /// has to confirm it. A refresh plus one slow request has to fit inside this,
 /// so a dropped request does not leave the wrong row highlighted forever.
@@ -1212,46 +1221,60 @@ impl AgentPanel {
                 .await;
             match opened {
                 Ok(opened) => {
-                    // Compensation watch: the session has to show up in
-                    // `agents()` within ten seconds, or the resume probably
-                    // failed silently inside the CLI.
-                    let watched_key = key.clone();
-                    let mut observed = false;
-                    for _ in 0..10 {
-                        cx.background_executor()
-                            .timer(Duration::from_secs(1))
-                            .await;
-                        let found = cx
-                            .background_spawn(async { client::fetch() })
-                            .await
-                            .ok()
-                            .map(|snapshot| {
-                                snapshot.spaces.iter().any(|space| {
-                                    space.agents.iter().any(|agent| {
-                                        agent
-                                            .agent_session
-                                            .as_ref()
-                                            .is_some_and(|(agent, value)| {
-                                                agent == &watched_key.agent
-                                                    && value == &watched_key.session_id
-                                            })
-                                    })
-                                })
-                            })
-                            .unwrap_or(false);
-                        if found {
-                            observed = true;
+                    // The server owns the start state. It reports
+                    // `launch_pending` until the agent reaches its prompt, and
+                    // drops the agent from the list once its own deadline
+                    // passes. The panel follows that instead of timing the start
+                    // itself: a slow CLI start is not a failed resume, and the
+                    // server already knows how long to wait.
+                    let watched_pane = opened.pane_id.clone();
+                    let started_at = Instant::now();
+                    let mut failed = false;
+                    loop {
+                        if started_at.elapsed() > START_WATCH_LIMIT {
+                            // Only a server that never answers back can get
+                            // here; its own deadline is well inside this one.
+                            failed = true;
                             break;
+                        }
+                        cx.background_executor()
+                            .timer(START_POLL_INTERVAL)
+                            .await;
+                        let snapshot = cx.background_spawn(async { client::fetch() }).await;
+                        let Ok(snapshot) = snapshot else {
+                            // No endpoint: the refresh loop is already tearing
+                            // the history view down, so stop watching.
+                            break;
+                        };
+                        let agent = snapshot
+                            .spaces
+                            .iter()
+                            .flat_map(|space| space.agents.iter())
+                            .find(|agent| agent.pane_id == watched_pane);
+                        match agent {
+                            // The only success signal the server reports.
+                            Some(agent) if agent.interactive_ready => break,
+                            // Still starting, by the server's own clock.
+                            Some(agent) if agent.launch_pending => continue,
+                            // Present but no longer managed (a restored
+                            // session, for instance): nothing left to follow.
+                            Some(_) => break,
+                            // The server gave up on this launch and released the
+                            // name, which is how it reports a failed start.
+                            None => {
+                                failed = true;
+                                break;
+                            }
                         }
                     }
                     let _ = this.update(cx, |this, cx| {
                         this.opening = None;
-                        if !observed {
+                        if failed {
                             this.show_history_toast(
-                            localization::localized_str!("Session may not have been resumed"),
-                            None,
-                            cx,
-                        );
+                                localization::localized_str!("Session could not be resumed"),
+                                None,
+                                cx,
+                            );
                         }
                         // Focus the new agent and bring the terminal forward.
                         this.pending_agent = Some(PendingFocus {

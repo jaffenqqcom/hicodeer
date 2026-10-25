@@ -56,6 +56,13 @@ pub(crate) struct Agent {
     /// inside a recognized session. Values only line up with history entries
     /// of the same agent.
     pub agent_session: Option<(String, String)>,
+    /// The server is still waiting for the agent it started here to become
+    /// ready. The wait has the server's own deadline; the panel must not apply
+    /// one of its own, or a slow start reads as a failure.
+    pub launch_pending: bool,
+    /// The server has seen this agent reach its interactive prompt, which is
+    /// the only success signal it reports.
+    pub interactive_ready: bool,
 }
 
 /// Everything the panel draws in one frame.
@@ -115,6 +122,8 @@ impl Snapshot {
                             session.get("value")?.as_str()?.to_owned(),
                         ))
                     }),
+                launch_pending: flag(entry, "launch_pending"),
+                interactive_ready: flag(entry, "interactive_ready"),
             });
         }
 

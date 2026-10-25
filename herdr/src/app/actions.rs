@@ -1744,6 +1744,36 @@ impl AppState {
                 completion_reset,
             )
         };
+        // Naming lives in one place. An agent started from the command line has
+        // no name yet; give it the same name a panel start would have, so the
+        // two paths cannot drift apart.
+        if let Some(terminal) = self.terminals.get(&terminal_id) {
+            if terminal.agent_name.is_none() {
+                if let Some(kind) = terminal.effective_known_agent() {
+                    if let Some(tab_idx) = self
+                        .workspaces
+                        .get(ws_idx)
+                        .and_then(|workspace| workspace.find_tab_index_for_pane(pane_id))
+                    {
+                        let name = crate::app::agents::auto_agent_name_with(
+                            &self.workspaces,
+                            ws_idx,
+                            tab_idx,
+                            kind,
+                            |name| {
+                                self.terminals
+                                    .values()
+                                    .any(|terminal| terminal.agent_name.as_deref() == Some(name))
+                            },
+                        );
+                        if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
+                            terminal.set_agent_name(name);
+                        }
+                        self.mark_session_dirty();
+                    }
+                }
+            }
+        }
         if completion_reset {
             self.pending_agent_notifications.remove(&pane_id);
             self.workspaces[ws_idx].pane_state_mut(pane_id)?.seen = true;

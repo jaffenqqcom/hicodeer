@@ -96,7 +96,7 @@ fn agent_start_and_prompt_requests_round_trip() {
     let start = Request {
         id: "start".into(),
         method: Method::AgentStart(AgentStartParams {
-            name: "reviewer".into(),
+            name: Some("reviewer".into()),
             kind: "pi".into(),
             pane_id: "w1:p2".into(),
             args: vec!["--no-session".into()],

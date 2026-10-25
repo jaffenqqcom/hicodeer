@@ -95,6 +95,10 @@ impl App {
         let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
         let host_terminal_theme = self.state.host_terminal_theme;
         let host_terminal_appearance = self.state.host_terminal_appearance;
+        // Every tab gets its number here, at creation. Later closes never
+        // renumber the survivors, so a name written against a tab's number stays
+        // true for the life of that tab.
+        let label = label.or_else(|| Some(self.next_tab_label(ws_idx)));
         let (tab_idx, terminal, runtime) = self
             .state
             .workspaces
@@ -136,6 +140,28 @@ impl App {
         self.schedule_session_save();
         self.emit_tab_created_events(ws_idx, tab_idx);
         Ok(tab_idx)
+    }
+
+    /// The next number in the strip: one past the highest numeric name in use.
+    /// Non-numeric names (a tab the user renamed) do not consume a number.
+    fn next_tab_label(&self, ws_idx: usize) -> String {
+        let next = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .map(|workspace| {
+                (0..workspace.tabs.len())
+                    .filter_map(|tab_idx| {
+                        workspace
+                            .tab_display_name(tab_idx)
+                            .and_then(|label| label.parse::<usize>().ok())
+                    })
+                    .max()
+                    .unwrap_or(0)
+                    + 1
+            })
+            .unwrap_or(1);
+        next.to_string()
     }
 
     pub(super) fn handle_tab_focus(&mut self, id: String, target: TabTarget) -> String {
@@ -336,6 +362,52 @@ mod tests {
         config::{Config, ShellModeConfig},
         workspace::Workspace,
     };
+
+    #[test]
+    fn created_tabs_number_from_the_highest_name_and_keep_it_after_closes() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.default_shell = exiting_test_command().into();
+        app.state.shell_mode = ShellModeConfig::NonLogin;
+        app.state.workspaces = vec![Workspace::test_new("numbers")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.ensure_test_terminals();
+        let cwd = app.state.workspaces[0].identity_cwd.clone();
+
+        let second = app
+            .create_tab_in_workspace(0, cwd.clone(), false, None, Vec::new())
+            .unwrap();
+        let third = app
+            .create_tab_in_workspace(0, cwd.clone(), false, None, Vec::new())
+            .unwrap();
+        assert_eq!(
+            app.state.workspaces[0].tab_display_name(second).as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            app.state.workspaces[0].tab_display_name(third).as_deref(),
+            Some("3")
+        );
+
+        // Closing a middle tab must not renumber the survivors: the next tab
+        // continues from the highest name, not from the tab count.
+        assert!(app.state.workspaces[0].close_tab(0));
+        let fourth = app
+            .create_tab_in_workspace(0, cwd, false, None, Vec::new())
+            .unwrap();
+        assert_eq!(
+            app.state.workspaces[0].tab_display_name(fourth).as_deref(),
+            Some("4")
+        );
+        shutdown_test_runtimes(&mut app);
+    }
 
     #[test]
     fn api_tab_close_last_tab_closes_workspace_and_emits_both_events() {

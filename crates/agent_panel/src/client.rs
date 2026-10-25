@@ -199,17 +199,7 @@ pub(crate) fn open_session(
     )?;
     let (workspace_id, _) = parse_workspace_created(&created)?;
     let pane_id = root_pane_id(&created, "workspace.create")?;
-    // Name the agent after the number the TUI shows for its tab. The server
-    // keeps two values: `number` is a stable id that keeps climbing across
-    // restarts, `label` is what the tab strip draws. Use the label, so the name
-    // and the strip never disagree.
-    let tab_number = created
-        .get("tab")
-        .and_then(|tab| tab.get("label"))
-        .and_then(Value::as_str)
-        .and_then(|label| label.parse::<u64>().ok())
-        .unwrap_or(0);
-    start_agent_resuming(&control, &request, &pane_id, &workspace_id, tab_number)?;
+    start_agent_resuming(&control, &request, &pane_id)?;
     Ok(crate::controller::OpenedSession {
         workspace_id,
         pane_id,
@@ -236,28 +226,18 @@ fn start_agent_resuming(
     control: &AgentControl,
     request: &crate::controller::OpenSessionRequest,
     pane_id: &str,
-    workspace_id: &str,
-    tab_number: u64,
 ) -> Result<(), ClientError> {
     const ATTEMPTS: usize = 8;
     const RETRY_DELAY: Duration = Duration::from_millis(300);
 
-    let kind = sanitize_agent_kind(&request.agent_kind);
-    // The name carries the space so it is unique across spaces; the panel hides
-    // that prefix when it shows the agent.
-    let base = sanitize_agent_kind(&format!("{workspace_id}-{kind}-{tab_number}"));
-    let mut name = base.clone();
     let mut last_error = None;
-    let mut name_conflict = false;
     for attempt in 0..ATTEMPTS {
-        if attempt > 0 && !name_conflict {
-            // A taken name is a cheap answer; only a busy pane is worth waiting
-            // for. Sleeping on every conflict turned a full name walk into a
-            // long pause.
+        if attempt > 0 {
             std::thread::sleep(RETRY_DELAY);
         }
+        // The server names the agent; the panel only says which pane and which
+        // session, so the name rule has a single home.
         let params = json!({
-            "name": name.clone(),
             "kind": request.agent_kind,
             "pane_id": pane_id,
             "args": ["--resume", request.session_id],
@@ -267,13 +247,8 @@ fn start_agent_resuming(
             Ok(_) => return Ok(()),
             Err(error) => {
                 let message = error_message(&error);
-                name_conflict = message.contains("agent_name_taken");
-                if name_conflict {
-                    name = format!("{base}-{}", attempt + 2);
-                }
                 let retry = message.contains("agent_pane_busy")
-                    || message.contains("agent_pane_unavailable")
-                    || message.contains("agent_name_taken");
+                    || message.contains("agent_pane_unavailable");
                 if !retry {
                     return Err(error);
                 }
@@ -314,21 +289,6 @@ pub(crate) fn delete_session(source_path: &str) -> Result<(), ClientError> {
     Ok(())
 }
 
-/// Keeps only `[a-z0-9-]` so the name passes the server's agent-name rules.
-fn sanitize_agent_kind(kind: &str) -> String {
-    let mut name: String = kind
-        .to_lowercase()
-        .chars()
-        .map(|ch| match ch {
-            'a'..='z' | '0'..='9' | '-' | '_' => ch,
-            _ => '-',
-        })
-        .collect();
-    if !name.chars().next().is_some_and(|first| first.is_ascii_lowercase()) {
-        name.insert(0, 'a');
-    }
-    name
-}
 
 /// Asks the server to re-read its configuration. The server answers by asking
 /// every connected client to reload its own settings, which is the same path

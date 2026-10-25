@@ -12,6 +12,44 @@ const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
     "agent start timeout must be greater than 3000ms and at most 300000ms";
 const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
 
+/// The one place an agent name is built. `taken` decides what uniqueness means
+/// for the caller, so the app and its state machine share the naming rule
+/// instead of each holding a copy.
+pub(super) fn auto_agent_name_with(
+    workspaces: &[crate::workspace::Workspace],
+    ws_idx: usize,
+    tab_idx: usize,
+    kind: crate::detect::Agent,
+    taken: impl Fn(&str) -> bool,
+) -> String {
+    let Some(workspace) = workspaces.get(ws_idx) else {
+        return crate::detect::agent_label(kind).to_owned();
+    };
+    let space = workspace.id.to_lowercase();
+    let tab = workspace
+        .tab_display_name(tab_idx)
+        .unwrap_or_else(|| (tab_idx + 1).to_string());
+    let base = format!("{space}-{}-{tab}", crate::detect::agent_label(kind));
+    let base: String = base
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .take(24)
+        .collect();
+    let mut name = base.clone();
+    let mut suffix = 2;
+    while taken(&name) {
+        name = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    name
+}
+
 fn valid_agent_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some('a'..='z'))
@@ -182,10 +220,6 @@ impl App {
         &mut self,
         params: AgentStartParams,
     ) -> Result<(crate::api::schema::AgentInfo, Vec<String>), AgentStartError> {
-        let name = params.name;
-        if !valid_agent_name(&name) {
-            return Err(AgentStartError::InvalidName);
-        }
         let Some(kind) = crate::detect::parse_agent_label(&params.kind) else {
             return Err(AgentStartError::UnsupportedKind(params.kind));
         };
@@ -198,15 +232,35 @@ impl App {
         }
         let persisted_agent_session =
             crate::agent_resume::persisted_session_from_launch_args(kind, &params.args);
-        let conflicts = self.agent_name_conflicts(&name, "");
-        if !conflicts.is_empty() {
-            return Err(AgentStartError::DuplicateName {
-                name,
-                candidates: conflicts,
-            });
-        }
         let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(&params.pane_id) else {
             return Err(AgentStartError::TargetNotFound(params.pane_id));
+        };
+        // Naming has one home: the server. An explicit name is validated, and
+        // an absent one is generated from space, kind and tab — the same call
+        // the detection path uses for agents started from the command line.
+        let name = match params.name {
+            Some(name) => {
+                if !valid_agent_name(&name) {
+                    return Err(AgentStartError::InvalidName);
+                }
+                let conflicts = self.agent_name_conflicts(&name, "");
+                if !conflicts.is_empty() {
+                    return Err(AgentStartError::DuplicateName {
+                        name,
+                        candidates: conflicts,
+                    });
+                }
+                name
+            }
+            None => {
+                let tab_idx = self
+                    .state
+                    .workspaces
+                    .get(ws_idx)
+                    .and_then(|workspace| workspace.find_tab_index_for_pane(pane_id))
+                    .ok_or_else(|| AgentStartError::TargetNotFound(params.pane_id.clone()))?;
+                self.auto_agent_name(ws_idx, tab_idx, kind)
+            }
         };
         let terminal_id = self
             .state
@@ -442,6 +496,21 @@ impl App {
         })
     }
 
+    /// The name every agent gets when nobody supplies one: its space, its kind
+    /// and the number the tab strip shows. Both the explicit `agent.start` path
+    /// and the detection path call `auto_agent_name_with`, so the rule lives in
+    /// one place.
+    pub(super) fn auto_agent_name(
+        &self,
+        ws_idx: usize,
+        tab_idx: usize,
+        kind: crate::detect::Agent,
+    ) -> String {
+        auto_agent_name_with(&self.state.workspaces, ws_idx, tab_idx, kind, |name| {
+            !self.agent_name_conflicts(name, "").is_empty()
+        })
+    }
+
     fn agent_name_conflicts(
         &self,
         name: &str,
@@ -527,7 +596,52 @@ pub(super) enum AgentRenameError {
 
 #[cfg(test)]
 mod tests {
-    use super::valid_agent_name;
+    use super::{auto_agent_name_with, valid_agent_name};
+
+    #[test]
+    fn auto_agent_name_uses_space_kind_and_tab_number() {
+        let workspace = crate::workspace::Workspace::test_new("proj");
+        let space = workspace.id.to_lowercase();
+
+        let name = auto_agent_name_with(
+            &[workspace],
+            0,
+            0,
+            crate::detect::Agent::CodeBuddy,
+            |_| false,
+        );
+
+        assert_eq!(name, format!("{space}-codebuddy-1"));
+    }
+
+    #[test]
+    fn auto_agent_name_appends_the_next_free_suffix() {
+        let workspace = crate::workspace::Workspace::test_new("proj");
+        let space = workspace.id.to_lowercase();
+        let base = format!("{space}-codebuddy-1");
+
+        let name = auto_agent_name_with(
+            &[workspace],
+            0,
+            0,
+            crate::detect::Agent::CodeBuddy,
+            |candidate| candidate == base,
+        );
+
+        assert_eq!(name, format!("{base}-2"));
+    }
+
+    #[test]
+    fn auto_agent_name_keeps_a_renamed_tab() {
+        let mut workspace = crate::workspace::Workspace::test_new("proj");
+        workspace.tabs[0].set_custom_name("build".into());
+        let space = workspace.id.to_lowercase();
+
+        let name =
+            auto_agent_name_with(&[workspace], 0, 0, crate::detect::Agent::Claude, |_| false);
+
+        assert_eq!(name, format!("{space}-claude-build"));
+    }
 
     #[test]
     fn agent_names_use_a_small_cli_safe_grammar() {

@@ -345,9 +345,9 @@ pub struct AgentPanel {
     history_renaming: Option<SessionKey>,
     history_rename_editor: Option<Entity<Editor>>,
     history_rename_subscription: Option<Subscription>,
-    /// History group ids the user collapsed. The archive group starts
-    /// collapsed by design.
-    collapsed_history_groups: HashSet<String>,
+    /// History group ids the user expanded. Empty means every group starts
+    /// collapsed, which is how the panel first draws History and Archived.
+    expanded_history_groups: HashSet<String>,
     /// Set while a history scan is in flight, so collapsing and expanding a
     /// group in quick succession does not queue two scans.
     history_loading: bool,
@@ -419,7 +419,7 @@ impl AgentPanel {
             history_rename_editor: None,
             history_rename_subscription: None,
             // The archive group is folded by design; everything else starts open.
-            collapsed_history_groups: HashSet::from(["archived".to_owned()]),
+            expanded_history_groups: HashSet::new(),
             history_loading: false,
         }
     }
@@ -1653,11 +1653,11 @@ impl AgentPanel {
         let history_collapsed = !history_ids.is_empty()
             && history_ids
                 .iter()
-                .all(|id| self.collapsed_history_groups.contains(id));
+                .all(|id| !self.expanded_history_groups.contains(id));
         let archived_collapsed = !archived_ids.is_empty()
             && archived_ids
                 .iter()
-                .all(|id| self.collapsed_history_groups.contains(id));
+                .all(|id| !self.expanded_history_groups.contains(id));
         let history_section = self.render_history_section(
             localization::localized_str!("History"),
             history_collapsed,
@@ -1769,12 +1769,12 @@ impl AgentPanel {
             history_group_ids(&view)
         };
         let all_collapsed =
-            !ids.is_empty() && ids.iter().all(|id| self.collapsed_history_groups.contains(id));
+            !ids.is_empty() && ids.iter().all(|id| !self.expanded_history_groups.contains(id));
         for id in ids {
             if all_collapsed {
-                self.collapsed_history_groups.remove(&id);
+                self.expanded_history_groups.insert(id);
             } else {
-                self.collapsed_history_groups.insert(id);
+                self.expanded_history_groups.remove(&id);
             }
         }
         if all_collapsed {
@@ -1794,7 +1794,7 @@ impl AgentPanel {
         archived: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let collapsed = self.collapsed_history_groups.contains(group_id);
+        let collapsed = !self.expanded_history_groups.contains(group_id);
         let mut block = v_flex().w_full();
         block = block.child(
             row_container(
@@ -1808,12 +1808,12 @@ impl AgentPanel {
                 let panel = cx.entity();
                 move |_, _, cx| {
                     let _ = panel.update(cx, |panel, cx| {
-                        if panel.collapsed_history_groups.remove(&group_id) {
-                            // Expanding means the user is looking at history
-                            // now, so this is when the list is refreshed.
+                        // Groups start collapsed, so the first click expands.
+                        // Expanding means the user is looking at history now,
+                        // which is when the list is refreshed.
+                        if !panel.expanded_history_groups.remove(&group_id) {
+                            panel.expanded_history_groups.insert(group_id.clone());
                             panel.refresh_history(cx);
-                        } else {
-                            panel.collapsed_history_groups.insert(group_id.clone());
                         }
                     });
                 }

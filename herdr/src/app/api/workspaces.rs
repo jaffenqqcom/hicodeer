@@ -52,7 +52,7 @@ impl App {
                         Ok(env) => env,
                         Err((code, message)) => return encode_error(id, &code, message),
                     };
-                    let label = Some(self.next_tab_label(ws_idx));
+                    let label = params.label;
                     return match self.create_tab_in_workspace(
                         ws_idx,
                         cwd,
@@ -62,12 +62,20 @@ impl App {
                     ) {
                         Ok(tab_idx) => {
                             let workspace = self.workspace_info(ws_idx);
-                            let tab = self
-                                .tab_info(ws_idx, tab_idx)
-                                .expect("reused tab should produce a complete response");
-                            let root_pane = self
-                                .root_pane_info(ws_idx, tab_idx)
-                                .expect("reused tab should produce a root pane");
+                            let Some(tab) = self.tab_info(ws_idx, tab_idx) else {
+                                return encode_error(
+                                    id,
+                                    "tab_create_failed",
+                                    "the new tab disappeared before it could be reported".to_owned(),
+                                );
+                            };
+                            let Some(root_pane) = self.root_pane_info(ws_idx, tab_idx) else {
+                                return encode_error(
+                                    id,
+                                    "tab_create_failed",
+                                    "the new tab has no root pane".to_owned(),
+                                );
+                            };
                             encode_success(
                                 id,
                                 crate::api::schema::ResponseResult::WorkspaceCreated {
@@ -114,18 +122,6 @@ impl App {
                         crate::logging::workspace_renamed(&workspace.id);
                     }
                 }
-                if params.reuse_root {
-                    // The reused path numbers the tab it adds; a freshly made
-                    // space starts its strip the same way.
-                    if let Some(tab) = self
-                        .state
-                        .workspaces
-                        .get_mut(index)
-                        .and_then(|ws| ws.tabs.get_mut(0))
-                    {
-                        tab.set_custom_name("1".to_owned());
-                    }
-                }
                 self.emit_workspace_open_events(index);
                 encode_success(
                     id,
@@ -154,18 +150,6 @@ impl App {
             }
         }
         self.state.workspaces.iter().position(|ws| matches(ws))
-    }
-
-    /// The tab strip names tabs by number, so a tab added to an existing space
-    /// takes the highest number in use plus one.
-    fn next_tab_label(&self, ws_idx: usize) -> String {
-        let next = self
-            .state
-            .workspaces
-            .get(ws_idx)
-            .map(|ws| ws.tabs.iter().map(|tab| tab.number).max().unwrap_or(0) + 1)
-            .unwrap_or(1);
-        next.to_string()
     }
 
     pub(super) fn handle_workspace_focus(&mut self, id: String, target: WorkspaceTarget) -> String {
@@ -552,6 +536,81 @@ mod tests {
         );
         shutdown_test_runtimes(&mut app);
         let _ = std::fs::remove_dir_all(&focused_cwd);
+    }
+
+    #[test]
+    fn workspace_create_with_reuse_root_attaches_to_the_space_of_that_root() {
+        use super::super::test_support::{exiting_test_command, shutdown_test_runtimes};
+        use crate::config::ShellModeConfig;
+
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.default_shell = exiting_test_command().into();
+        app.state.shell_mode = ShellModeConfig::NonLogin;
+
+        let root = std::env::temp_dir().join(format!(
+            "herdr-reuse-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let other = std::env::temp_dir().join(format!(
+            "herdr-reuse-other-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&other).unwrap();
+
+        let mut target = Workspace::test_new("target");
+        target.identity_cwd = root.clone();
+        target.cached_identity_cwd = root.clone();
+        let mut second = Workspace::test_new("second");
+        second.identity_cwd = other.clone();
+        second.cached_identity_cwd = other.clone();
+        app.state.workspaces = vec![target, second];
+        // Focus is on the other space, so reuse has to match by root, not focus.
+        app.state.active = Some(1);
+        app.state.selected = 1;
+        app.state.ensure_test_terminals();
+
+        let expected_id = app.state.workspaces[0].id.clone();
+        let response = app.handle_workspace_create(
+            "req".into(),
+            WorkspaceCreateParams {
+                source_workspace_id: None,
+                cwd: Some(root.to_string_lossy().into_owned()),
+                focus: true,
+                label: None,
+                env: Default::default(),
+                reuse_root: true,
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        match success.result {
+            ResponseResult::WorkspaceCreated { workspace, .. } => {
+                assert_eq!(workspace.workspace_id, expected_id);
+            }
+            other => panic!("expected a created workspace, got {other:?}"),
+        }
+        assert_eq!(app.state.workspaces.len(), 2, "reuse must not add a space");
+        assert_eq!(app.state.workspaces[0].tabs.len(), 2, "reuse adds a tab");
+
+        shutdown_test_runtimes(&mut app);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&other);
     }
 
     #[tokio::test]

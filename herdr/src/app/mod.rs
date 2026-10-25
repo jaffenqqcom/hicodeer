@@ -2970,7 +2970,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "req_agent_start_target".into(),
             method: crate::api::schema::Method::AgentStart(crate::api::schema::AgentStartParams {
-                name: "worker".into(),
+                name: Some("worker".into()),
                 kind: "pi".into(),
                 pane_id,
                 args: Vec::new(),
@@ -3012,7 +3012,7 @@ mod tests {
         let request = || crate::api::schema::Request {
             id: "req_agent_start_input".into(),
             method: crate::api::schema::Method::AgentStart(crate::api::schema::AgentStartParams {
-                name: "worker".into(),
+                name: Some("worker".into()),
                 kind: "codex".into(),
                 pane_id: pane_id.clone(),
                 args: vec!["resume".into(), "codex-session".into()],

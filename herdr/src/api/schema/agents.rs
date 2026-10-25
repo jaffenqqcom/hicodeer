@@ -165,7 +165,10 @@ pub enum AgentViewSortOrder {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentStartParams {
-    pub name: String,
+    /// Optional: the server names the agent after its space, kind and tab when
+    /// this is absent, so the panel and the command line share one rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub kind: String,
     pub pane_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

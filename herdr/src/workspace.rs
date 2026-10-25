@@ -441,6 +441,9 @@ impl Workspace {
 
     pub fn tab_display_name(&self, tab_idx: usize) -> Option<String> {
         let tab = self.tabs.get(tab_idx)?;
+        // Every tab is named when it is created, so this is the number the strip
+        // draws and the number an agent started in it is named after. Falling
+        // back to the position only covers tabs restored from older snapshots.
         Some(
             tab.custom_name
                 .clone()

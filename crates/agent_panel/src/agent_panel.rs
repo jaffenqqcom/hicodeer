@@ -35,8 +35,7 @@ use settings::{IntoGpui, RegisterSetting, Settings, SettingsStore, update_settin
 use terminal_view::TerminalView;
 use theme::ActiveTheme as _;
 use ui::{
-    Color, ContextMenu, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, Tooltip,
-    prelude::*, right_click_menu,
+    Color, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, Tooltip, prelude::*,
 };
 #[cfg(target_env = "ohos")]
 use workspace::MultiWorkspace;
@@ -269,6 +268,15 @@ fn workspace_has_agent_terminal(workspace: &Workspace, cx: &App) -> bool {
     })
 }
 
+/// A session this panel opened and is hiding from history until the server's
+/// snapshot catches up. Tied to the pane that runs it, so the entry cannot
+/// outlive the launch it describes.
+struct OptimisticOpenSession {
+    agent: String,
+    session: String,
+    pane_id: String,
+}
+
 pub struct AgentPanel {
     focus_handle: FocusHandle,
     workspace: WeakEntity<Workspace>,
@@ -324,6 +332,10 @@ pub struct AgentPanel {
     last_sessions: Vec<controller::RawSession>,
     /// Open sessions as of the last snapshot, `(agent, session value)` pairs.
     last_open_sessions: Vec<(String, String)>,
+    /// Sessions this panel has just opened but the status snapshot does not
+    /// report yet. Without them the row stays clickable between "open finished"
+    /// and the next poll, so a second click starts the same session again.
+    optimistic_open_sessions: Vec<OptimisticOpenSession>,
     /// Whether the last session scan failed. The history area shows an empty
     /// state with a retry hint instead of pretending there is no history.
     sessions_failed: bool,
@@ -400,6 +412,7 @@ impl AgentPanel {
             history: None,
             last_sessions: Vec::new(),
             last_open_sessions: Vec::new(),
+            optimistic_open_sessions: Vec::new(),
             sessions_failed: false,
             opening: None,
             history_renaming: None,
@@ -547,7 +560,12 @@ impl AgentPanel {
             return;
         };
 
-        let text = format!("{} {}: {}", agent.name, kind.text(), space.label);
+        let text = format!(
+            "{} {}: {}",
+            client::display_name(&agent.pane_id, &agent.name),
+            kind.text(),
+            space.label
+        );
         self.show_agent_notification(agent.pane_id.clone(), text, cx);
     }
 
@@ -921,7 +939,6 @@ impl AgentPanel {
     /// rename and close. Rename edits the label in place, in the row itself.
     fn render_space(&self, space: &Space, cx: &mut Context<Self>) -> AnyElement {
         let id = space.id.clone();
-        let menu_space_id = space.id.clone();
         let rename_editor = if self
             .renaming
             .as_ref()
@@ -984,55 +1001,87 @@ impl AgentPanel {
                 .into_any_element()
         };
 
-        let row = row_container(
-            ElementId::Name(SharedString::from(format!("agent-space-{}", space.id))),
-            px(0.0),
-            false,
-            cx,
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1p5()
-                .child(space_icon_slot())
-                .child(h_flex().flex_1().min_w_0().h_6().child(title)),
-        )
-        .on_click({
-            let panel = panel.clone();
-            move |_, window, cx| {
-                let _ = panel.update(cx, |panel, cx| panel.focus_space(id.clone(), window, cx));
-            }
-        });
-
-        right_click_menu(ElementId::Name(SharedString::from(format!(
-            "agent-space-menu-{}",
-            menu_space_id
-        ))))
-        .trigger(|_, _, _| row)
-        .menu(move |window, cx| {
-            let rename_panel = panel.clone();
-            let close_panel = panel.clone();
-            let rename_target = menu_space_id.clone();
-            let close_target = menu_space_id.clone();
-            ContextMenu::build(window, cx, move |mut menu, window, _cx| {
-                menu = menu.entry(
-                    localization::localized_str!("Rename"),
-                    None,
-                    window.handler_for(&rename_panel, move |panel, window, cx| {
-                        panel.begin_rename(&rename_target, window, cx);
-                    }),
-                );
-                menu = menu.entry(
-                    localization::localized_str!("Close"),
-                    None,
-                    window.handler_for(&close_panel, move |panel, _window, cx| {
-                        panel.close_space(close_target.clone(), cx);
-                    }),
-                );
-                menu
+        let row_id = SharedString::from(format!("agent-space-{}", space.id));
+        row_container(ElementId::Name(row_id.clone()), px(0.0), false, cx)
+            .group(row_id.clone())
+            .child(
+                h_flex()
+                    .relative()
+                    .w_full()
+                    .gap_1p5()
+                    .child(space_icon_slot())
+                    .child(h_flex().flex_1().min_w_0().h_6().child(title))
+                    // Same affordance as the history rows: the actions appear
+                    // on hover at the row's right edge instead of behind a
+                    // context menu.
+                    .child(
+                        h_flex()
+                            .absolute()
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .items_center()
+                            .gap_0p5()
+                            .px_1()
+                            .bg(cx.theme().colors().ghost_element_hover)
+                            .visible_on_hover(row_id.clone())
+                            .child(
+                                IconButton::new(
+                                    ElementId::Name(SharedString::from(format!(
+                                        "agent-space-rename-button-{}",
+                                        space.id
+                                    ))),
+                                    IconName::Pencil,
+                                )
+                                .icon_size(IconSize::Small)
+                                .icon_color(Color::Muted)
+                                .tooltip(move |_, cx| {
+                                    Tooltip::simple(localization::localized_str!("Rename"), cx)
+                                })
+                                .on_click({
+                                    let panel = panel.clone();
+                                    let target = space.id.clone();
+                                    move |_, window, cx| {
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            panel.begin_rename(&target, window, cx);
+                                        });
+                                    }
+                                }),
+                            )
+                            .child(
+                                IconButton::new(
+                                    ElementId::Name(SharedString::from(format!(
+                                        "agent-space-close-button-{}",
+                                        space.id
+                                    ))),
+                                    IconName::Trash,
+                                )
+                                .icon_size(IconSize::Small)
+                                .icon_color(Color::Muted)
+                                .tooltip(move |_, cx| {
+                                    Tooltip::simple(localization::localized_str!("Close"), cx)
+                                })
+                                .on_click({
+                                    let panel = panel.clone();
+                                    let target = space.id.clone();
+                                    move |_, _, cx| {
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            panel.close_space(target.clone(), cx);
+                                        });
+                                    }
+                                }),
+                            ),
+                    ),
+            )
+            .on_click({
+                let panel = panel.clone();
+                move |_, window, cx| {
+                    let _ = panel.update(cx, |panel, cx| {
+                        panel.focus_space(id.clone(), window, cx);
+                    });
+                }
             })
-        })
-        .into_any_element()
+            .into_any_element()
     }
 
     /// One agent, drawn one level under the space it works in. Only this row
@@ -1071,7 +1120,10 @@ impl AgentPanel {
                         .flex_1()
                         .min_w_0()
                         .h_6()
-                        .child(Label::new(agent_display::capitalize(&agent.name))),
+                        .child(Label::new(agent_display::capitalize(client::display_name(
+                            &agent.pane_id,
+                            &agent.name,
+                        )))),
                 ),
         )
         .on_click(move |_, window, cx| {
@@ -1092,11 +1144,34 @@ impl AgentPanel {
     /// folder, so a space being created, closed or renamed does not change any
     /// group header.
     fn refresh_open_sessions(&mut self, snapshot: &Snapshot) -> bool {
-        let open_sessions: Vec<(String, String)> = snapshot
+        let reported: Vec<(String, String)> = snapshot
             .spaces
             .iter()
             .flat_map(|space| space.agents.iter().filter_map(|agent| agent.agent_session.clone()))
             .collect();
+        let live_panes: Vec<&str> = snapshot
+            .spaces
+            .iter()
+            .flat_map(|space| space.agents.iter().map(|agent| agent.pane_id.as_str()))
+            .collect();
+        // Keep the optimism only while it can still come true: drop it once the
+        // session is reported, and also once its pane is gone from the list —
+        // a launch that died before its first report must not hide the history
+        // row for the rest of the session.
+        self.optimistic_open_sessions.retain(|entry| {
+            let reported_now = reported
+                .iter()
+                .any(|(agent, value)| agent == &entry.agent && value == &entry.session);
+            let pane_lives = live_panes.iter().any(|pane_id| *pane_id == entry.pane_id);
+            !reported_now && pane_lives
+        });
+        let mut open_sessions = reported;
+        for entry in &self.optimistic_open_sessions {
+            let pair = (entry.agent.clone(), entry.session.clone());
+            if !open_sessions.contains(&pair) {
+                open_sessions.push(pair);
+            }
+        }
         let changed = open_sessions != self.last_open_sessions;
         self.last_open_sessions = open_sessions;
         changed
@@ -1177,6 +1252,11 @@ impl AgentPanel {
     /// followed by a short watch: if the agent does not report that session
     /// within ten seconds, the user gets a toast instead of silence.
     fn open_history_session(&mut self, key: SessionKey, cx: &mut Context<Self>) {
+        // One session is opened at a time. A second click while that open is in
+        // flight would create another space and start the same session twice.
+        if self.opening.is_some() {
+            return;
+        }
         let Some(view) = self.history.as_ref() else {
             return;
         };
@@ -1205,11 +1285,11 @@ impl AgentPanel {
             return;
         };
         self.opening = Some(key.clone());
+        let opened_key = (key.agent.clone(), key.session_id.clone());
         cx.notify();
 
         let request = controller::OpenSessionRequest {
             workspace_root: PathBuf::from(&root),
-            workspace_id: entry.workspace_id.clone(),
             agent_kind: kind,
             session_id: key.session_id.clone(),
         };
@@ -1269,7 +1349,33 @@ impl AgentPanel {
                     }
                     let _ = this.update(cx, |this, cx| {
                         this.opening = None;
+                        if !failed {
+                            // Hide the row now: the next status poll would only
+                            // do it a moment later, and a click in between used
+                            // to start the same session a second time. The entry
+                            // follows the pane, so it is dropped as soon as that
+                            // pane stops being reported.
+                            let entry = OptimisticOpenSession {
+                                agent: opened_key.0.clone(),
+                                session: opened_key.1.clone(),
+                                pane_id: watched_pane.clone(),
+                            };
+                            if !this
+                                .optimistic_open_sessions
+                                .iter()
+                                .any(|open| open.pane_id == entry.pane_id)
+                            {
+                                this.optimistic_open_sessions.push(entry);
+                            }
+                            if !this.last_open_sessions.contains(&opened_key) {
+                                this.last_open_sessions.push(opened_key.clone());
+                            }
+                            this.rebuild_history();
+                        }
                         if failed {
+                            log::warn!(
+                                "agent panel: session in pane {watched_pane} never became ready"
+                            );
                             this.show_history_toast(
                                 localization::localized_str!("Session could not be resumed"),
                                 None,
@@ -1284,6 +1390,7 @@ impl AgentPanel {
                     });
                 }
                 Err(err) => {
+                    log::warn!("agent panel: opening a history session failed: {err}");
                     let _ = this.update(cx, |this, cx| {
                         this.opening = None;
                         this.show_history_toast(

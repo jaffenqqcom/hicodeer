@@ -170,10 +170,6 @@ pub(crate) fn fetch_sessions() -> Result<Vec<crate::controller::RawSession>, Cli
                 .map(str::to_owned),
             updated_at: entry.get("updated_at").and_then(Value::as_i64),
             source_path: source_path.to_owned(),
-            workspace_id: entry
-                .get("workspace_id")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
         });
     }
     Ok(sessions)
@@ -192,54 +188,28 @@ pub(crate) fn open_session(
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
     let cwd = request.workspace_root.to_string_lossy().into_owned();
 
-    // A space already open at this root is reused: creating a second one would
-    // split the same project across two spaces in the history view.
-    let (workspace_id, pane_id) = match request.workspace_id.clone() {
-        Some(workspace_id) => {
-            // Tabs are numbered instead of titled with the session name: those
-            // are whole sentences and wreck the tab strip.
-            let label = next_tab_label(&control, &workspace_id)?;
-            let tab = call(
-                &control,
-                "tab.create",
-                json!({
-                    "workspace_id": workspace_id,
-                    "cwd": cwd,
-                    "focus": true,
-                    "label": label,
-                }),
-            )?;
-            let pane_id = root_pane_id(&tab, "tab.create")?;
-            (workspace_id, pane_id)
-        }
-        None => {
-            // `workspace.create` already opens a tab with a shell in it, so the
-            // agent takes over that pane. Asking for a second tab here is what
-            // left an empty shell tab next to every resumed session.
-            let created = call(
-                &control,
-                "workspace.create",
-                json!({ "cwd": cwd, "focus": true }),
-            )?;
-            let (workspace_id, _) = parse_workspace_created(&created)?;
-            let pane_id = root_pane_id(&created, "workspace.create")?;
-            if let Some(tab_id) = created
-                .get("tab")
-                .and_then(|tab| tab.get("tab_id"))
-                .and_then(Value::as_str)
-            {
-                if let Err(error) = call(
-                    &control,
-                    "tab.rename",
-                    json!({ "tab_id": tab_id, "label": "1" }),
-                ) {
-                    log::warn!("agent panel: naming the new space's tab failed: {error}");
-                }
-            }
-            (workspace_id, pane_id)
-        }
-    };
-    start_agent_resuming(&control, &request, &pane_id)?;
+    // The server resolves the space: an existing one for this directory gets a
+    // new tab, otherwise a new space is created. The panel cannot do this
+    // itself — its session list is a snapshot, and resolving from it is what
+    // used to leave a second space for a project that already had one.
+    let created = call(
+        &control,
+        "workspace.create",
+        json!({ "cwd": cwd, "focus": true, "reuse_root": true }),
+    )?;
+    let (workspace_id, _) = parse_workspace_created(&created)?;
+    let pane_id = root_pane_id(&created, "workspace.create")?;
+    // Name the agent after the number the TUI shows for its tab. The server
+    // keeps two values: `number` is a stable id that keeps climbing across
+    // restarts, `label` is what the tab strip draws. Use the label, so the name
+    // and the strip never disagree.
+    let tab_number = created
+        .get("tab")
+        .and_then(|tab| tab.get("label"))
+        .and_then(Value::as_str)
+        .and_then(|label| label.parse::<u64>().ok())
+        .unwrap_or(0);
+    start_agent_resuming(&control, &request, &pane_id, &workspace_id, tab_number)?;
     Ok(crate::controller::OpenedSession {
         workspace_id,
         pane_id,
@@ -255,24 +225,6 @@ fn root_pane_id(response: &Value, method: &str) -> Result<String, ClientError> {
         .ok_or_else(|| ClientError::Failed(format!("{method} carried no root pane")))
 }
 
-/// The tab strip names tabs by number, so a new tab takes the highest existing
-/// number plus one. Counting the tabs instead would repeat a number as soon as a
-/// middle tab had been closed.
-fn next_tab_label(control: &AgentControl, workspace_id: &str) -> Result<String, ClientError> {
-    let listed = call(control, "tab.list", json!({ "workspace_id": workspace_id }))?;
-    let highest = listed
-        .get("tabs")
-        .and_then(Value::as_array)
-        .map(|tabs| {
-            tabs.iter()
-                .filter_map(|tab| tab.get("number").and_then(Value::as_u64))
-                .max()
-                .unwrap_or(0)
-        })
-        .unwrap_or(0);
-    Ok((highest + 1).to_string())
-}
-
 /// Starts the agent with its resume argv.
 ///
 /// A tab's shell is not interactive the instant the tab exists, so the first
@@ -284,15 +236,24 @@ fn start_agent_resuming(
     control: &AgentControl,
     request: &crate::controller::OpenSessionRequest,
     pane_id: &str,
+    workspace_id: &str,
+    tab_number: u64,
 ) -> Result<(), ClientError> {
-    const ATTEMPTS: usize = 6;
+    const ATTEMPTS: usize = 8;
     const RETRY_DELAY: Duration = Duration::from_millis(300);
 
     let kind = sanitize_agent_kind(&request.agent_kind);
-    let mut name = kind.clone();
+    // The name carries the space so it is unique across spaces; the panel hides
+    // that prefix when it shows the agent.
+    let base = sanitize_agent_kind(&format!("{workspace_id}-{kind}-{tab_number}"));
+    let mut name = base.clone();
     let mut last_error = None;
+    let mut name_conflict = false;
     for attempt in 0..ATTEMPTS {
-        if attempt > 0 {
+        if attempt > 0 && !name_conflict {
+            // A taken name is a cheap answer; only a busy pane is worth waiting
+            // for. Sleeping on every conflict turned a full name walk into a
+            // long pause.
             std::thread::sleep(RETRY_DELAY);
         }
         let params = json!({
@@ -306,8 +267,9 @@ fn start_agent_resuming(
             Ok(_) => return Ok(()),
             Err(error) => {
                 let message = error_message(&error);
-                if message.contains("agent_name_taken") {
-                    name = format!("{kind}-{}", attempt + 2);
+                name_conflict = message.contains("agent_name_taken");
+                if name_conflict {
+                    name = format!("{base}-{}", attempt + 2);
                 }
                 let retry = message.contains("agent_pane_busy")
                     || message.contains("agent_pane_unavailable")
@@ -320,6 +282,14 @@ fn start_agent_resuming(
         }
     }
     Err(last_error.unwrap_or_else(|| ClientError::Failed("agent.start failed".to_owned())))
+}
+
+/// The name the panel shows: the space prefix is bookkeeping for uniqueness,
+/// not something the user needs to read in every row.
+pub(crate) fn display_name<'a>(pane_id: &str, name: &'a str) -> &'a str {
+    let workspace = pane_id.split(':').next().unwrap_or_default().to_lowercase();
+    let prefix = format!("{workspace}-");
+    name.strip_prefix(&prefix).unwrap_or(name)
 }
 
 fn error_message(error: &ClientError) -> String {

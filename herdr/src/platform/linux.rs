@@ -636,16 +636,95 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
     let argv = process_allows_remote_memory_read(state, &name, running_inside_wsl())
         .then(|| process_argv(process_group_id))
         .flatten();
+    let mut processes = vec![ForegroundProcess {
+        pid: process_group_id,
+        name,
+        argv0: None,
+        cmdline: argv.as_ref().map(|parts| parts.join(" ")),
+        argv,
+    }];
+    // OHOS cannot enumerate the members of a process group (`children` is
+    // missing and tpgid is always 0), so a job degrades to its leader. When a
+    // launcher wraps the agent (`zsh -c '… codebuddy …'`) the leader is the
+    // wrapper, and the agent stayed invisible. Walking the leader's descendants
+    // restores what the group members would have shown.
+    #[cfg(target_env = "ohos")]
+    processes.extend(ohos_descendant_processes(process_group_id));
     Some(ForegroundJob {
         process_group_id,
-        processes: vec![ForegroundProcess {
-            pid: process_group_id,
-            name,
-            argv0: None,
-            cmdline: argv.as_ref().map(|parts| parts.join(" ")),
-            argv,
-        }],
+        processes,
     })
+}
+
+/// The pane shell's descendants as a job. On OHOS the PTY's foreground group
+/// can point at a launcher that already exited while the agent keeps running in
+/// a group of its own, so the shell subtree is the reliable place to look.
+#[cfg(target_env = "ohos")]
+pub fn descendant_job(root: u32) -> Option<ForegroundJob> {
+    let processes = ohos_descendant_processes(root);
+    (!processes.is_empty()).then_some(ForegroundJob {
+        process_group_id: root,
+        processes,
+    })
+}
+
+#[cfg(target_env = "ohos")]
+fn ohos_descendant_processes(root: u32) -> Vec<ForegroundProcess> {
+    use std::collections::{HashMap, VecDeque};
+
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut parent_of: HashMap<u32, u32> = HashMap::new();
+    let mut details: HashMap<u32, (String, Option<Vec<String>>)> = HashMap::new();
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        let (Some(open), Some(close)) = (stat.find('('), stat.rfind(')')) else {
+            continue;
+        };
+        let comm = stat.get(open + 1..close).unwrap_or_default().to_owned();
+        let rest: Vec<&str> = stat
+            .get(close + 2..)
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect();
+        let Some(ppid) = rest.get(1).and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        parent_of.insert(pid, ppid);
+        details.insert(pid, (comm, process_argv(pid)));
+    }
+
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (pid, ppid) in &parent_of {
+        children.entry(*ppid).or_default().push(*pid);
+    }
+    let mut order = VecDeque::from([root]);
+    let mut found = Vec::new();
+    while let Some(current) = order.pop_front() {
+        for child in children.get(&current).into_iter().flatten() {
+            if let Some((comm, argv)) = details.get(child) {
+                found.push(ForegroundProcess {
+                    pid: *child,
+                    name: comm.clone(),
+                    argv0: argv.as_ref().and_then(|parts| parts.first().cloned()),
+                    cmdline: argv.as_ref().map(|parts| parts.join(" ")),
+                    argv: argv.clone(),
+                });
+            }
+            order.push_back(*child);
+        }
+    }
+    found
 }
 
 pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {

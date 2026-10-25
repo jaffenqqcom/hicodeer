@@ -52,10 +52,6 @@ pub struct SessionRef {
 
 pub struct OpenSessionRequest {
     pub workspace_root: PathBuf,
-    /// The space the daemon matched to this session, when one is open at its
-    /// root. Present means "open a tab there"; absent means the root has no
-    /// space yet and one has to be created.
-    pub workspace_id: Option<String>,
     pub agent_kind: String,
     pub session_id: String,
 }
@@ -78,7 +74,6 @@ pub struct RawSession {
     pub workspace_root: Option<String>,
     pub updated_at: Option<i64>,
     pub source_path: String,
-    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug)]

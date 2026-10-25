@@ -65,68 +65,77 @@ impl App {
         let cwd = cwd.map(PathBuf::from).unwrap_or_else(|| {
             self.resolve_new_terminal_cwd(self.focused_pane_cwd_in_workspace(ws_idx))
         });
+        let extra_env = match super::env::normalize_launch_env(env) {
+            Ok(env) => env,
+            Err((code, message)) => return encode_error(id, &code, message),
+        };
+        match self.create_tab_in_workspace(ws_idx, cwd, focus, label, extra_env) {
+            Ok(tab_idx) => encode_success(
+                id,
+                self.tab_created_result(ws_idx, tab_idx)
+                    .expect("new tab should produce a complete create response"),
+            ),
+            Err(err) => encode_error(id, "tab_create_failed", err.to_string()),
+        }
+    }
+
+    /// Creates a tab in an existing workspace and finishes the bookkeeping both
+    /// `tab.create` and the reuse branch of `workspace.create` need: runtime
+    /// registration, alias shadowing, label, focus, persistence and events.
+    pub(super) fn create_tab_in_workspace(
+        &mut self,
+        ws_idx: usize,
+        cwd: PathBuf,
+        focus: bool,
+        label: Option<String>,
+        extra_env: Vec<(String, String)>,
+    ) -> std::io::Result<usize> {
         let (rows, cols) = self.state.new_pane_size(crate::ui::NewPanePlacement::Alone);
         let default_shell = self.state.default_shell.clone();
         let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
         let host_terminal_theme = self.state.host_terminal_theme;
         let host_terminal_appearance = self.state.host_terminal_appearance;
-        let extra_env = match super::env::normalize_launch_env(env) {
-            Ok(env) => env,
-            Err((code, message)) => return encode_error(id, &code, message),
-        };
-        let result = self
+        let (tab_idx, terminal, runtime) = self
             .state
             .workspaces
             .get_mut(ws_idx)
-            .ok_or_else(|| std::io::Error::other("workspace disappeared"))
-            .and_then(|ws| {
-                ws.create_tab(
-                    rows,
-                    cols,
-                    cwd,
-                    scrollback_limit_bytes,
-                    host_terminal_theme,
-                    host_terminal_appearance,
-                    crate::pane::PaneShellConfig::new(&default_shell, self.state.shell_mode),
-                    extra_env,
-                )
+            .ok_or_else(|| std::io::Error::other("workspace disappeared"))?
+            .create_tab(
+                rows,
+                cols,
+                cwd,
+                scrollback_limit_bytes,
+                host_terminal_theme,
+                host_terminal_appearance,
+                crate::pane::PaneShellConfig::new(&default_shell, self.state.shell_mode),
+                extra_env,
+            )?;
+        self.terminal_runtimes.insert(terminal.id.clone(), runtime);
+        self.state.terminals.insert(terminal.id.clone(), terminal);
+        self.state
+            .remove_alias_shadowed_by_new_pane(self.state.workspaces[ws_idx].tabs[tab_idx].root_pane);
+        if let Some(label) = label {
+            let workspace_id = self.state.workspaces[ws_idx].id.clone();
+            let tab_id = self.public_tab_id(ws_idx, tab_idx).unwrap_or_else(|| {
+                crate::workspace::public_tab_id_for_number(&workspace_id, tab_idx + 1)
             });
-        match result {
-            Ok((tab_idx, terminal, runtime)) => {
-                self.terminal_runtimes.insert(terminal.id.clone(), runtime);
-                self.state.terminals.insert(terminal.id.clone(), terminal);
-                self.state.remove_alias_shadowed_by_new_pane(
-                    self.state.workspaces[ws_idx].tabs[tab_idx].root_pane,
-                );
-                if let Some(label) = label {
-                    let workspace_id = self.state.workspaces[ws_idx].id.clone();
-                    let tab_id = self.public_tab_id(ws_idx, tab_idx).unwrap_or_else(|| {
-                        crate::workspace::public_tab_id_for_number(&workspace_id, tab_idx + 1)
-                    });
-                    if let Some(tab) = self
-                        .state
-                        .workspaces
-                        .get_mut(ws_idx)
-                        .and_then(|ws| ws.tabs.get_mut(tab_idx))
-                    {
-                        tab.set_custom_name(label);
-                        crate::logging::tab_renamed(&workspace_id, &tab_id);
-                    }
-                }
-                if focus {
-                    self.state.switch_workspace_tab(ws_idx, tab_idx);
-                    self.state.mode = Mode::Terminal;
-                }
-                self.schedule_session_save();
-                self.emit_tab_created_events(ws_idx, tab_idx);
-                encode_success(
-                    id,
-                    self.tab_created_result(ws_idx, tab_idx)
-                        .expect("new tab should produce a complete create response"),
-                )
+            if let Some(tab) = self
+                .state
+                .workspaces
+                .get_mut(ws_idx)
+                .and_then(|ws| ws.tabs.get_mut(tab_idx))
+            {
+                tab.set_custom_name(label);
+                crate::logging::tab_renamed(&workspace_id, &tab_id);
             }
-            Err(err) => encode_error(id, "tab_create_failed", err.to_string()),
         }
+        if focus {
+            self.state.switch_workspace_tab(ws_idx, tab_idx);
+            self.state.mode = Mode::Terminal;
+        }
+        self.schedule_session_save();
+        self.emit_tab_created_events(ws_idx, tab_idx);
+        Ok(tab_idx)
     }
 
     pub(super) fn handle_tab_focus(&mut self, id: String, target: TabTarget) -> String {

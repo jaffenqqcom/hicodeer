@@ -426,6 +426,13 @@ impl TerminalState {
             };
         }
         self.detected_agent = agent;
+        // A released agent takes its name with it. Without this a managed name
+        // keeps the pane in `agent.list` after the process it named is gone.
+        if agent_released {
+            // The name is launch bookkeeping, so it leaves with the agent.
+            // The session itself is cleared by the exit branch above.
+            self.clear_agent_name();
+        }
         if process_exited || agent != Some(Agent::Codex) || fallback_state == AgentState::Blocked {
             self.codex_prompt_ready = false;
         }
@@ -457,6 +464,10 @@ impl TerminalState {
             self.recent_agent_process_exit = None;
         }
         if process_exited {
+            // A release event names no agent: it means "this pane's agent is
+            // gone". Match the cleanups against the identity the pane held,
+            // not against the empty label, or none of them fire.
+            let released_agent = agent.or(previous_known_agent);
             let mut reset_sources = Vec::new();
             let mut stale_sessions = Vec::new();
             for (source, suppressed) in &mut self.suppressed_full_lifecycle_hook_reports {
@@ -505,7 +516,7 @@ impl TerminalState {
                     crate::agent_resume::is_official_agent_source(
                         &authority.source,
                         &authority.agent_label,
-                    ) && crate::detect::parse_agent_label(&authority.agent_label) == agent
+                    ) && crate::detect::parse_agent_label(&authority.agent_label) == released_agent
                 })
                 .map(|authority| {
                     (
@@ -519,7 +530,7 @@ impl TerminalState {
                         (crate::agent_resume::is_official_agent_source(
                             &session.source,
                             &session.agent,
-                        ) && crate::detect::parse_agent_label(&session.agent) == agent)
+                        ) && crate::detect::parse_agent_label(&session.agent) == released_agent)
                             .then(|| {
                                 (
                                     session.source.clone(),
@@ -540,7 +551,7 @@ impl TerminalState {
                 );
             }
             let cleared_hook_source = self.hook_authority.as_ref().and_then(|authority| {
-                (crate::detect::parse_agent_label(&authority.agent_label) == agent
+                (crate::detect::parse_agent_label(&authority.agent_label) == released_agent
                     && !newer_custom_authority)
                     .then(|| authority.source.clone())
             });
@@ -548,14 +559,9 @@ impl TerminalState {
                 self.hook_report_sequences.remove(&source);
                 self.hook_authority = None;
             }
-            if !newer_custom_authority
-                && self
-                    .persisted_agent_session
-                    .as_ref()
-                    .is_some_and(|session| {
-                        crate::detect::parse_agent_label(&session.agent) == agent
-                    })
-            {
+            if !newer_custom_authority {
+                // The pane lost its agent: a session left behind here would be
+                // resumed on the next start, whatever source wrote it.
                 self.persisted_agent_session = None;
             }
             if !newer_custom_authority
@@ -563,7 +569,7 @@ impl TerminalState {
                 && self
                     .reported_resume
                     .as_ref()
-                    .is_some_and(|resume| crate::detect::parse_agent_label(&resume.agent) == agent)
+                    .is_some_and(|resume| crate::detect::parse_agent_label(&resume.agent) == released_agent)
             {
                 self.set_reported_resume(None);
             }
@@ -1299,7 +1305,7 @@ impl TerminalState {
             })
     }
 
-    fn current_session_identity_for_persistence(
+    pub(crate) fn current_session_identity_for_persistence(
         &self,
     ) -> Option<(
         String,
@@ -1307,6 +1313,12 @@ impl TerminalState {
         crate::agent_resume::AgentSessionRefKind,
         String,
     )> {
+        // Persist a session only for a pane that currently holds an agent.
+        // Restore resumes from this field, so writing it for a pane whose
+        // agent already exited brings that agent back on the next start.
+        if self.effective_agent_label().is_none() {
+            return None;
+        }
         if let Some(authority) = self.hook_authority.as_ref() {
             if let Some(session_ref) = authority.session_ref.as_ref() {
                 return Some((
@@ -2365,7 +2377,15 @@ impl TerminalState {
     }
 
     pub fn is_agent_terminal(&self) -> bool {
-        self.agent_name.is_some() || self.effective_agent_label().is_some()
+        // A name is a label, not evidence that an agent exists. Counting it let
+        // a leftover name keep the pane in `agent.list` after the process it
+        // named was gone. Only an observed identity counts, plus the one case
+        // that has no observation yet: a managed launch still in progress.
+        // A managed agent that already became active and then lost its
+        // observed label is a leftover: active means it had been seen, so no
+        // label now means no agent. Only a launch still in progress may list
+        // the pane without an observation.
+        self.effective_agent_label().is_some() || self.managed_agent_launch_pending()
     }
 
     fn reconcile_agent_name_owner(

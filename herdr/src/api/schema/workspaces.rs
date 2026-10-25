@@ -17,6 +17,14 @@ pub struct WorkspaceCreateParams {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
+    /// Reuse the space that already stands for this directory instead of
+    /// creating a second one.
+    ///
+    /// Only the agent panel's "open a history session" path sets this. Manual
+    /// space creation leaves it false, so deliberately creating a second space
+    /// for the same directory stays allowed.
+    #[serde(default)]
+    pub reuse_root: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

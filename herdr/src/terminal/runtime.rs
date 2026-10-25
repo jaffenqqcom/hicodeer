@@ -149,6 +149,44 @@ impl TerminalRuntime {
         .map(Self)
     }
 
+    /// Wrapper around [`crate::pane::PaneRuntime::spawn_with_known_agent`] for
+    /// the deferred agent resume, which knows the agent before its process runs.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn spawn_with_known_agent(
+        pane_id: PaneId,
+        rows: u16,
+        cols: u16,
+        cwd: std::path::PathBuf,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        shell_config: crate::pane::PaneShellConfig<'_>,
+        launch_env: &crate::pane::PaneLaunchEnv,
+        initial_history_ansi: Option<&str>,
+        initial_agent: Option<crate::detect::Agent>,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> std::io::Result<Self> {
+        crate::pane::PaneRuntime::spawn_with_known_agent(
+            pane_id,
+            rows,
+            cols,
+            cwd,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            shell_config,
+            launch_env,
+            initial_history_ansi,
+            initial_agent,
+            events,
+            render_notify,
+            render_dirty,
+        )
+        .map(Self)
+    }
+
     // Wrapper mirrors pane runtime construction arguments.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_shell_command(

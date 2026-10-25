@@ -57,7 +57,6 @@ pub(crate) struct SessionEntry {
     pub updated_at: Option<i64>,
     pub source_path: String,
     pub workspace_root: Option<String>,
-    pub workspace_id: Option<String>,
     pub pinned: bool,
     pub archived: bool,
 }
@@ -177,7 +176,6 @@ impl SessionService {
                 updated_at: raw.updated_at,
                 source_path: raw.source_path,
                 workspace_root: raw.workspace_root.clone(),
-                workspace_id: raw.workspace_id.clone(),
                 pinned,
                 archived,
             };
@@ -316,7 +314,6 @@ mod tests {
             workspace_root: Some("/repo".to_owned()),
             updated_at: Some(updated_at),
             source_path: format!("/store/{id}.jsonl"),
-            workspace_id: Some("w1".to_owned()),
         }
     }
 

@@ -10,6 +10,7 @@ struct PendingAgentResumeCandidate {
     terminal_id: crate::terminal::TerminalId,
     cwd: std::path::PathBuf,
     plan: crate::agent_resume::AgentResumePlan,
+    initial_agent: Option<crate::detect::Agent>,
     rows: u16,
     cols: u16,
 }
@@ -61,6 +62,7 @@ impl App {
             terminal_id,
             cwd,
             plan,
+            initial_agent,
             rows,
             cols,
         } in pending
@@ -73,6 +75,7 @@ impl App {
                 terminal_id,
                 cwd,
                 plan,
+                initial_agent,
                 rows,
                 cols,
                 allow_empty_theme,
@@ -130,6 +133,7 @@ impl App {
                         terminal_id: pane.attached_terminal_id.clone(),
                         cwd: terminal.cwd.clone(),
                         plan,
+                        initial_agent: terminal.detected_agent,
                         rows: info.inner_rect.height,
                         cols: info.inner_rect.width,
                     });
@@ -186,22 +190,25 @@ impl App {
         if self.terminal_runtimes.get(terminal_id).is_some() {
             return false;
         }
-        let Some((pane_id, cwd, plan)) = self.state.workspaces.iter().find_map(|ws| {
-            ws.tabs.iter().find_map(|tab| {
-                tab.layout.pane_ids().into_iter().find_map(|pane_id| {
-                    let pane = tab.panes.get(&pane_id)?;
-                    if &pane.attached_terminal_id != terminal_id {
-                        return None;
-                    }
-                    let terminal = self.state.terminals.get(terminal_id)?;
-                    Some((
-                        pane_id,
-                        terminal.cwd.clone(),
-                        terminal.pending_agent_resume_plan.clone()?,
-                    ))
+        let Some((pane_id, cwd, plan, initial_agent)) =
+            self.state.workspaces.iter().find_map(|ws| {
+                ws.tabs.iter().find_map(|tab| {
+                    tab.layout.pane_ids().into_iter().find_map(|pane_id| {
+                        let pane = tab.panes.get(&pane_id)?;
+                        if &pane.attached_terminal_id != terminal_id {
+                            return None;
+                        }
+                        let terminal = self.state.terminals.get(terminal_id)?;
+                        Some((
+                            pane_id,
+                            terminal.cwd.clone(),
+                            terminal.pending_agent_resume_plan.clone()?,
+                            terminal.detected_agent,
+                        ))
+                    })
                 })
             })
-        }) else {
+        else {
             return false;
         };
 
@@ -210,6 +217,7 @@ impl App {
             terminal_id.clone(),
             cwd,
             plan,
+            initial_agent,
             rows,
             cols,
             allow_empty_theme,
@@ -229,6 +237,7 @@ impl App {
         terminal_id: crate::terminal::TerminalId,
         cwd: std::path::PathBuf,
         plan: crate::agent_resume::AgentResumePlan,
+        initial_agent: Option<crate::detect::Agent>,
         rows: u16,
         cols: u16,
         allow_empty_theme: bool,
@@ -263,7 +272,7 @@ impl App {
             return true;
         }
 
-        let runtime = match crate::terminal::TerminalRuntime::spawn(
+        let runtime = match crate::terminal::TerminalRuntime::spawn_with_known_agent(
             pane_id,
             rows,
             cols,
@@ -273,6 +282,8 @@ impl App {
             self.state.host_terminal_appearance,
             crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
             &launch_env,
+            None,
+            initial_agent,
             self.event_tx.clone(),
             self.render_notify.clone(),
             self.render_dirty.clone(),

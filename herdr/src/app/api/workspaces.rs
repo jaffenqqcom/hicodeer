@@ -41,6 +41,47 @@ impl App {
         id: String,
         params: WorkspaceCreateParams,
     ) -> String {
+        // Panel-opened history sessions attach to the space that already
+        // stands for their directory; a second space for the same project
+        // splits its history in two. Manual creation never sets this, so
+        // deliberately creating a same-named space stays allowed.
+        if params.reuse_root {
+            if let Some(cwd) = params.cwd.as_deref().map(PathBuf::from) {
+                if let Some(ws_idx) = self.workspace_for_root(&cwd) {
+                    let extra_env = match super::env::normalize_launch_env(params.env) {
+                        Ok(env) => env,
+                        Err((code, message)) => return encode_error(id, &code, message),
+                    };
+                    let label = Some(self.next_tab_label(ws_idx));
+                    return match self.create_tab_in_workspace(
+                        ws_idx,
+                        cwd,
+                        params.focus,
+                        label,
+                        extra_env,
+                    ) {
+                        Ok(tab_idx) => {
+                            let workspace = self.workspace_info(ws_idx);
+                            let tab = self
+                                .tab_info(ws_idx, tab_idx)
+                                .expect("reused tab should produce a complete response");
+                            let root_pane = self
+                                .root_pane_info(ws_idx, tab_idx)
+                                .expect("reused tab should produce a root pane");
+                            encode_success(
+                                id,
+                                crate::api::schema::ResponseResult::WorkspaceCreated {
+                                    workspace,
+                                    tab,
+                                    root_pane,
+                                },
+                            )
+                        }
+                        Err(err) => encode_error(id, "tab_create_failed", err.to_string()),
+                    };
+                }
+            }
+        }
         let source_workspace_index = if params.cwd.is_some() {
             None
         } else {
@@ -73,6 +114,18 @@ impl App {
                         crate::logging::workspace_renamed(&workspace.id);
                     }
                 }
+                if params.reuse_root {
+                    // The reused path numbers the tab it adds; a freshly made
+                    // space starts its strip the same way.
+                    if let Some(tab) = self
+                        .state
+                        .workspaces
+                        .get_mut(index)
+                        .and_then(|ws| ws.tabs.get_mut(0))
+                    {
+                        tab.set_custom_name("1".to_owned());
+                    }
+                }
                 self.emit_workspace_open_events(index);
                 encode_success(
                     id,
@@ -82,6 +135,37 @@ impl App {
             }
             Err(err) => encode_error(id, "workspace_create_failed", err.to_string()),
         }
+    }
+
+    /// The space that already stands for `root`, if any: the focused one first,
+    /// then the oldest. Matching is on the directory, not the display name, so
+    /// two different folders that happen to share a basename never merge.
+    fn workspace_for_root(&self, root: &std::path::Path) -> Option<usize> {
+        let target = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let matches = |ws: &crate::workspace::Workspace| {
+            ws.identity_cwd
+                .canonicalize()
+                .unwrap_or_else(|_| ws.identity_cwd.clone())
+                == target
+        };
+        if let Some(active) = self.state.active {
+            if self.state.workspaces.get(active).is_some_and(matches) {
+                return Some(active);
+            }
+        }
+        self.state.workspaces.iter().position(|ws| matches(ws))
+    }
+
+    /// The tab strip names tabs by number, so a tab added to an existing space
+    /// takes the highest number in use plus one.
+    fn next_tab_label(&self, ws_idx: usize) -> String {
+        let next = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .map(|ws| ws.tabs.iter().map(|tab| tab.number).max().unwrap_or(0) + 1)
+            .unwrap_or(1);
+        next.to_string()
     }
 
     pub(super) fn handle_workspace_focus(&mut self, id: String, target: WorkspaceTarget) -> String {
@@ -448,6 +532,7 @@ mod tests {
                 focus: false,
                 label: None,
                 env: Default::default(),
+                reuse_root: false,
             },
         );
 
@@ -509,6 +594,7 @@ mod tests {
                 focus: false,
                 label: None,
                 env: Default::default(),
+                reuse_root: false,
             },
         );
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -529,6 +615,7 @@ mod tests {
                 focus: false,
                 label: None,
                 env: Default::default(),
+                reuse_root: false,
             },
         );
         let error: ErrorResponse = serde_json::from_str(&invalid).unwrap();
@@ -542,6 +629,7 @@ mod tests {
                 focus: false,
                 label: None,
                 env: Default::default(),
+                reuse_root: false,
             },
         );
         let success: SuccessResponse = serde_json::from_str(&captured).unwrap();

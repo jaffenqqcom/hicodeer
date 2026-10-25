@@ -350,28 +350,25 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
+        // A resumable session belongs to a pane that currently holds an agent.
+        // Restore launches whatever session is written here, so writing one for
+        // a pane whose agent already exited brings that agent back on restart.
+        // The identity check and the value live in one place,
+        // `current_session_identity_for_persistence`.
         let agent_session = terminal.and_then(|terminal| {
-            if let Some(authority) = terminal.hook_authority.as_ref() {
-                if let Some(session_ref) = authority.session_ref.as_ref() {
-                    return Some(PaneAgentSessionSnapshot {
-                        source: authority.source.clone(),
-                        agent: authority.agent_label.clone(),
-                        kind: session_ref.kind,
-                        value: session_ref.value.clone(),
-                    });
-                }
-            }
-            terminal
-                .persisted_agent_session
-                .as_ref()
-                .map(|session| PaneAgentSessionSnapshot {
-                    source: session.source.clone(),
-                    agent: session.agent.clone(),
-                    kind: session.session_ref.kind,
-                    value: session.session_ref.value.clone(),
-                })
+            let (source, agent, kind, value) =
+                terminal.current_session_identity_for_persistence()?;
+            Some(PaneAgentSessionSnapshot {
+                source,
+                agent,
+                kind,
+                value,
+            })
         });
+        let holds_agent =
+            terminal.is_some_and(|terminal| terminal.effective_agent_label().is_some());
         let agent_resume = terminal
+            .filter(|_| holds_agent)
             .and_then(|terminal| terminal.reported_resume())
             .map(|resume| PaneAgentResumeSnapshot {
                 source: resume.source.clone(),

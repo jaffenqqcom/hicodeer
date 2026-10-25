@@ -616,6 +616,19 @@ fn observe_foreground_agent(
         *foreground_shell_exit_reported,
         agent_job_status,
     );
+    // A shell seen in front is not an exit: a CLI that is booting leaves the
+    // shell in front. The pane keeps its identity until the process that
+    // carried it is gone, and that verdict is delivered by the tick, not here.
+    let action = match action {
+        ForegroundShellAgentAction::ReportProcessExit
+            if observation.agent.is_none()
+                && observation.foreground_is_pane_shell
+                && agent_job_status != AgentJobStatus::ExitedInBackground =>
+        {
+            ForegroundShellAgentAction::ObserveProbe
+        }
+        other => other,
+    };
     let changed = apply_foreground_shell_agent_action(
         agent_presence,
         action,
@@ -914,13 +927,32 @@ fn probe_foreground_process_from_jobs(
 }
 
 fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessProbeResult {
-    probe_foreground_process_from_jobs(
+    let probed = probe_foreground_process_from_jobs(
         pid,
         foreground_pgid,
         foreground_pgid.and_then(crate::detect::foreground_group_leader_job),
         || crate::detect::foreground_job(pid),
         crate::platform::process_agent_hint,
-    )
+    );
+    if probed.agent.is_some() {
+        return probed;
+    }
+    // The PTY's foreground group can outlive its leader while the agent runs in
+    // a group of its own; the pane shell's subtree still holds it.
+    #[cfg(target_env = "ohos")]
+    if let Some(job) = crate::platform::descendant_job(pid) {
+        if let Some((agent, name, agent_pid)) = crate::detect::identify_agent_process_in_job(&job)
+        {
+            return ProcessProbeResult {
+                process_group_id: Some(agent_pid),
+                foreground_is_pane_shell: false,
+                agent: Some(agent),
+                agent_pid: Some(agent_pid),
+                process_name: Some(name),
+            };
+        }
+    }
+    probed
 }
 
 // OHOS: procfs reports tpgid as 0 for every process and lacks
@@ -1102,21 +1134,23 @@ fn spawn_basic_detection_task(
                     }
                 }
                 let previous_agent = agent_presence.current_agent();
-                let (foreground_action, changed) = observe_foreground_agent(
-                    &mut agent_presence,
-                    &mut agent_job,
-                    &mut pending_foreground_shell_clear,
-                    &mut foreground_shell_exit_reported,
-                    ForegroundAgentObservation {
-                        shell_pid: pid,
-                        agent: new_agent,
-                        agent_pid: new_agent.and(probe.agent_pid),
-                        process_group_id,
-                        foreground_is_pane_shell,
-                    },
-                    &PlatformAgentProcesses,
-                    pane_id,
-                );
+                let (foreground_action, changed) = {
+                    observe_foreground_agent(
+                        &mut agent_presence,
+                        &mut agent_job,
+                        &mut pending_foreground_shell_clear,
+                        &mut foreground_shell_exit_reported,
+                        ForegroundAgentObservation {
+                            shell_pid: pid,
+                            agent: new_agent,
+                            agent_pid: new_agent.and(probe.agent_pid),
+                            process_group_id,
+                            foreground_is_pane_shell,
+                        },
+                        &PlatformAgentProcesses,
+                        pane_id,
+                    )
+                };
                 last_foreground_pgid = tracked_process_group_id;
                 if new_agent.is_some() {
                     acquisition_started_at = None;
@@ -2420,6 +2454,51 @@ impl PaneRuntime {
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
+        Self::spawn_with_known_agent(
+            pane_id,
+            rows,
+            cols,
+            cwd,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            shell_config,
+            launch_env,
+            initial_history_ansi,
+            None,
+            events,
+            render_notify,
+            render_dirty,
+        )
+    }
+
+    /// Spawns the shell for a pane whose agent is already known — the deferred
+    /// resume path, where the pane was restored with a session before its
+    /// process existed.
+    ///
+    /// The identity goes into the detector's initial state instead of being
+    /// discovered again. Without it the detector starts out believing the pane
+    /// holds no agent and publishes that on its first tick, which erases the
+    /// restored identity and hides the pane from `agent.list` until the agent
+    /// is detected again — minutes, for a CLI that starts slowly.
+    // Runtime construction needs to thread PTY size, environment, theme, and render hooks together.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn spawn_with_known_agent(
+        pane_id: PaneId,
+        rows: u16,
+        cols: u16,
+        cwd: std::path::PathBuf,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        shell_config: PaneShellConfig<'_>,
+        launch_env: &PaneLaunchEnv,
+        initial_history_ansi: Option<&str>,
+        initial_agent: Option<Agent>,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> std::io::Result<Self> {
         let windows_powershell_prompt_cwd_reporting =
             uses_windows_powershell_pane_shell(shell_config);
         let mut cmd = pane_shell_command_builder(shell_config)?;
@@ -2439,7 +2518,7 @@ impl PaneRuntime {
             cmd,
             "failed to spawn shell",
             SpawnInitialState {
-                detected_agent: None,
+                detected_agent: initial_agent,
                 history_ansi: initial_history_ansi,
                 windows_powershell_prompt_cwd_reporting,
             },
@@ -2929,8 +3008,10 @@ impl PaneRuntime {
                 let mut last_codex_prompt_ready = false;
                 let mut last_self_reported_shell_check = None;
                 let mut agent_job = AgentJobTracker::default();
+                let mut last_agent_process: Option<(u32, Option<u64>)> = None;
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
+
 
                 loop {
                     let now_for_tick = Instant::now();
@@ -3037,6 +3118,50 @@ impl PaneRuntime {
                     }
                     let process_group_changed =
                         foreground_group_changed(foreground_pgid, last_foreground_pgid);
+                    // Remember which process stands behind the agent, and check
+                    // it on every tick. Hook authority switches the regular
+                    // process probe off, so without this the death of a hooked
+                    // agent is only noticed if a hook happens to report it.
+                    // Adopt a process only while nothing is being watched, so
+                    // an unrelated job that later comes to the front (an
+                    // editor, a build) never takes over an identity that is
+                    // still alive. The pane's own shell is never the agent.
+                    let watched_alive = last_agent_process
+                        .is_some_and(|(wpid, token)| crate::platform::process_start_token(wpid) == token);
+                    if !watched_alive {
+                        if let Some(job_pgid) = foreground_pgid.filter(|pgid| *pgid != pid) {
+                            if let Some(token) = crate::platform::process_start_token(job_pgid) {
+                                last_agent_process = Some((job_pgid, Some(token)));
+                            }
+                        }
+                    }
+                    let agent_process_died = last_agent_process.is_some_and(|(pid, token)| {
+                        crate::platform::process_start_token(pid) != token
+                    });
+                    // The one release signal: the watched process is gone. It
+                    // goes up as a plain exit report and the app releases
+                    // whatever identity it holds — probe-derived or hook-derived
+                    // — through the same path.
+                    if agent_process_died {
+                        // Reported with no agent so the same publish both flags
+                        // the release and clears the identity; the app still
+                        // knows which agent it was from its own state.
+                        publish_state_changed_event(
+                            state_events.clone(),
+                            pane_id,
+                            None,
+                            AgentState::Unknown,
+                            false,
+                            false,
+                            true,
+                            now,
+                        )
+                        .await;
+                        last_agent_process = None;
+                        agent_presence = AgentDetectionPresence::from_agent(None);
+                        state = AgentState::Unknown;
+                        agent = None;
+                    }
                     let should_check_process = pid > 0 && {
                         let process_probe_input = ProcessProbeInput {
                             foreground_pgid,
@@ -3075,22 +3200,40 @@ impl PaneRuntime {
                                 }
                             }
 
+                            // A probe that read no process at all carries no
+                            // verdict, unless the very process that identified
+                            // the agent is gone: then the pane really lost it,
+                            // however blind the foreground reading is.
+                            if new_agent.is_some() {
+                                last_agent_process = probe
+                                    .agent_pid
+                                    .map(|pid| (pid, crate::platform::process_start_token(pid)));
+                            }
+                            // While the watched process lives, a probe that
+                            // finds no agent says nothing: the agent may still
+                            // be booting, backgrounded, or simply unreadable.
+                            // Only that process's death releases the identity.
+                            let probe_ignored = new_agent.is_none() && !agent_process_died;
                             let previous_agent = agent_presence.current_agent();
-                            let (foreground_action, changed) = observe_foreground_agent(
-                                &mut agent_presence,
-                                &mut agent_job,
-                                &mut pending_foreground_shell_clear,
-                                &mut foreground_shell_exit_reported,
-                                ForegroundAgentObservation {
-                                    shell_pid: pid,
-                                    agent: new_agent,
-                                    agent_pid: new_agent.and(probe.agent_pid),
-                                    process_group_id,
-                                    foreground_is_pane_shell,
-                                },
-                                &PlatformAgentProcesses,
-                                pane_id,
-                            );
+                            let (foreground_action, changed) = if probe_ignored {
+                                (ForegroundShellAgentAction::ObserveProbe, false)
+                            } else {
+                                observe_foreground_agent(
+                                    &mut agent_presence,
+                                    &mut agent_job,
+                                    &mut pending_foreground_shell_clear,
+                                    &mut foreground_shell_exit_reported,
+                                    ForegroundAgentObservation {
+                                        shell_pid: pid,
+                                        agent: new_agent,
+                                        agent_pid: new_agent.and(probe.agent_pid),
+                                        process_group_id,
+                                        foreground_is_pane_shell,
+                                    },
+                                    &PlatformAgentProcesses,
+                                    pane_id,
+                                )
+                            };
                             last_foreground_pgid = tracked_process_group_id;
                             if new_agent.is_some() {
                                 acquisition_started_at = None;
@@ -5753,6 +5896,9 @@ mod tests {
             }
 
             pub(super) fn assert_exit_reported_then_cleared(&mut self) {
+                // The held agent's process ends; a shell in front alone is not
+                // an exit, the process leaving the live set is.
+                self.processes.exit(AGENT_PID);
                 assert_eq!(
                     self.probe(None, SHELL),
                     (ForegroundShellAgentAction::ReportProcessExit, false)

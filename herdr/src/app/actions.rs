@@ -1725,7 +1725,10 @@ impl AppState {
             if completion_reset {
                 terminal.last_agent_completion_seq = None;
             }
-            let managed_changed = terminal.reconcile_managed_agent_at(now, false);
+            // A released agent's process is gone, so the managed bookkeeping
+            // must learn about it; otherwise a managed name keeps the pane in
+            // `agent.list` forever.
+            let managed_changed = terminal.reconcile_managed_agent_at(now, mutation.agent_released);
             let suppress_acquisition_completion = terminal.finish_agent_process_acquisition();
             let agent_name_changed = terminal.agent_name != previous_agent_name;
             let unchanged_change = (mutation.agent_released

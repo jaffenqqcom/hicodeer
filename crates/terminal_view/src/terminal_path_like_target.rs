@@ -115,9 +115,13 @@ fn possibly_open_target(
     cx: &mut Context<TerminalView>,
     #[cfg(test)] background_path_checks: BackgroundPathChecks,
 ) -> Task<Result<Option<OpenTarget>>> {
-    if terminal_view.hover.is_none() {
+    // [OHOS PORT BEGIN] A pointer can land on a path before its hover target
+    // has been resolved, so gating on `hover` would silently drop the open.
+    // `resolve_open_target` still validates that the path exists.
+    if !cfg!(target_env = "ohos") && terminal_view.hover.is_none() {
         return Task::ready(Ok(None));
     }
+    // [OHOS PORT END]
     let workspace = workspace.clone();
     let path_like_target = path_like_target.clone();
     cx.spawn_in(window, async move |terminal_view, cx| {

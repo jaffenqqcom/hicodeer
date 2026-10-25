@@ -22,7 +22,12 @@ use terminal::{
 use theme::{ActiveTheme, Theme};
 use theme_settings::ThemeSettings;
 use ui::utils::ensure_minimum_contrast;
-use ui::{ParentElement, Tooltip};
+use ui::{Label, LabelCommon, LabelSize, ParentElement};
+// [OHOS PORT BEGIN] Only the upstream path builds a tooltip; this platform
+// draws the link hint itself.
+#[cfg(not(target_env = "ohos"))]
+use ui::Tooltip;
+// [OHOS PORT END]
 use util::ResultExt;
 use workspace::Workspace;
 
@@ -1425,11 +1430,39 @@ impl Element for TerminalElement {
                 let was_scrolled_to_bottom = self.terminal.read(cx).scrolled_to_bottom();
                 // [OHOS PORT END]
 
+                // [OHOS PORT BEGIN] Link tooltips follow plain hover, matching
+                // the underline and pointer cursor (no modifier on hover).
+                let hover_probe_enabled =
+                    cfg!(target_env = "ohos") || window.modifiers().secondary();
+                // [OHOS PORT END]
+
                 let (hover_tooltip, hover_match) = self.terminal.update(cx, |terminal, cx| {
                     terminal.set_size(dimensions);
                     terminal.sync(window, cx);
 
-                    if window.modifiers().secondary()
+                    // [OHOS PORT BEGIN] A resolved hover target already means the
+                    // pointer is over an openable link, so the underline and the
+                    // tooltip follow it directly. Upstream compares link ids to
+                    // avoid stale tooltips, which makes both flicker while the
+                    // pointer moves within one link.
+                    #[cfg(target_env = "ohos")]
+                    {
+                        return if hover_probe_enabled
+                            && bounds.contains(&window.mouse_position())
+                            && let Some(registered_hover) =
+                                self.terminal_view.read(cx).hover.as_ref()
+                        {
+                            (
+                                Some(registered_hover.tooltip.clone()),
+                                Some(registered_hover.hovered_word.word_match),
+                            )
+                        } else {
+                            (None, None)
+                        };
+                    }
+                    // [OHOS PORT END]
+
+                    if hover_probe_enabled
                         && bounds.contains(&window.mouse_position())
                         && let Some(registered_hover) = self.terminal_view.read(cx).hover.as_ref()
                     {
@@ -1457,6 +1490,47 @@ impl Element for TerminalElement {
                 // [OHOS PORT END]
 
                 let scroll_top = self.terminal_view.read(cx).scroll_top;
+                // [OHOS PORT BEGIN] Draw the hint ourselves instead of using the
+                // tooltip machinery: its request is rebuilt on every pointer
+                // move, so the hint blinked out as soon as the pointer moved
+                // within the same link. The hint carries no target, only the
+                // localized click instruction.
+                #[cfg(target_env = "ohos")]
+                let hyperlink_tooltip = hover_tooltip.map(|_| {
+                    let hint = localization::localized_str!("Ctrl+Click to open");
+                    let colors = cx.theme().colors();
+                    let mut element = div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(colors.element_background)
+                        .border_1()
+                        .border_color(colors.border)
+                        .shadow_sm()
+                        .child(
+                            Label::new(hint)
+                                .size(LabelSize::Small)
+                                .color(ui::Color::Muted),
+                        )
+                        .into_any_element();
+                    let mouse = window.mouse_position();
+                    let available = AvailableSpace::min_size();
+                    let hint_size = element.layout_as_root(available, window, cx);
+                    let window_bounds = window.bounds();
+                    let gap = px(12.);
+                    let mut origin = mouse + point(gap, px(16.));
+                    if origin.x + hint_size.width > window_bounds.right() {
+                        origin.x = (mouse.x - hint_size.width - gap).max(window_bounds.left());
+                    }
+                    if origin.y + hint_size.height > window_bounds.bottom() {
+                        origin.y = (mouse.y - hint_size.height - gap).max(window_bounds.top());
+                    }
+                    element.prepaint_as_root(origin, available, window, cx);
+                    element
+                });
+                // [OHOS PORT END]
+                // [OHOS PORT BEGIN] Other platforms keep the upstream tooltip.
+                #[cfg(not(target_env = "ohos"))]
                 let hyperlink_tooltip = hover_tooltip.map(|hover_tooltip| {
                     let offset = dimensions.bounds.origin - point(px(0.), scroll_top);
                     let mut element = div()
@@ -1467,6 +1541,7 @@ impl Element for TerminalElement {
                     element.prepaint_as_root(offset, bounds.size.into(), window, cx);
                     element
                 });
+                // [OHOS PORT END]
 
                 let Content {
                     cells,
@@ -1719,10 +1794,13 @@ impl Element for TerminalElement {
                 mouse_input_mode,
                 window,
             );
-            if window.modifiers().secondary()
+            // [OHOS PORT BEGIN] Show the pointing hand on plain hover, matching
+            // the underline; the modifier is only required to open.
+            let cursor_over_link = (cfg!(target_env = "ohos") || window.modifiers().secondary())
                 && bounds.contains(&window.mouse_position())
-                && self.terminal_view.read(cx).hover.is_some()
-            {
+                && self.terminal_view.read(cx).hover.is_some();
+            // [OHOS PORT END]
+            if cursor_over_link {
                 window.set_cursor_style(gpui::CursorStyle::PointingHand, &layout.hitbox);
             } else {
                 window.set_cursor_style(gpui::CursorStyle::IBeam, &layout.hitbox);

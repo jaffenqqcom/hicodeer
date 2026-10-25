@@ -2608,8 +2608,14 @@ impl Terminal {
         position: GpuiPoint<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        // [OHOS PORT BEGIN] Probe for links on plain hover so the underline,
+        // pointer cursor and tooltip appear without a modifier; opening still
+        // requires the secondary modifier so a stray click cannot navigate.
+        let wants_link_probe = cfg!(target_env = "ohos") || modifiers.secondary();
+        // [OHOS PORT END]
+
         if self.selection_phase == SelectionPhase::Selecting
-            || !modifiers.secondary()
+            || !wants_link_probe
             || !self.last_content.terminal_bounds.bounds.contains(&position)
         {
             self.clear_hyperlink(cx);
@@ -2637,6 +2643,14 @@ impl Terminal {
         } else {
             throttle
         };
+
+        // [OHOS PORT BEGIN] Pointer hovering has no modifier to re-trigger the
+        // probe, so a throttled move would leave a stale link highlight (and
+        // pointer cursor) behind after the pointer leaves the link. Probe on
+        // every move instead; a lookup only scans the hovered line.
+        #[cfg(target_env = "ohos")]
+        let throttle = false;
+        // [OHOS PORT END]
 
         if throttle {
             return;

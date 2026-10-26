@@ -313,6 +313,15 @@ pub struct AgentPanel {
     /// without notifying: every agent in it would look newly changed.
     #[cfg(target_env = "ohos")]
     status_recorded: bool,
+    /// Agents whose last transition still needs the user's attention, keyed by
+    /// public pane id. The row shows a bell beside the state marker until the
+    /// user opens that agent, from the row or from the notification toast.
+    ///
+    /// Unlike the sound and the toast, this mark has no setting: it is the
+    /// panel's own record of which agent changed, so it stays visible when
+    /// either notification is switched off.
+    #[cfg(target_env = "ohos")]
+    attention_agents: HashSet<String>,
     /// Whether the window was active as of the last activation change. A
     /// notification is skipped while the user is looking at the agent's own
     /// terminal.
@@ -404,6 +413,8 @@ impl AgentPanel {
             last_agent_status: HashMap::new(),
             #[cfg(target_env = "ohos")]
             status_recorded: false,
+            #[cfg(target_env = "ohos")]
+            attention_agents: HashSet::new(),
             #[cfg(target_env = "ohos")]
             window_active: false,
             #[cfg(target_env = "ohos")]
@@ -503,6 +514,10 @@ impl AgentPanel {
         }
         let first_snapshot = !self.status_recorded;
         self.status_recorded = true;
+        // An agent that left the list takes its mark with it, so a pane id
+        // reused later does not inherit a stale bell.
+        self.attention_agents
+            .retain(|pane_id| current.contains_key(pane_id));
         let previous = std::mem::replace(&mut self.last_agent_status, current);
 
         herdr_settings::migrate_legacy_delivery(cx);
@@ -511,15 +526,21 @@ impl AgentPanel {
         }
         let notifications_enabled = herdr_settings::notifications_enabled(cx);
 
-        // One status toast is shown at a time, so one event wins per refresh:
-        // an agent waiting for input outranks one that merely finished. Sound
-        // is tracked separately: both events are worth hearing even while the
-        // user is looking at the terminal that produced them.
-        let mut attention = false;
-        let mut finished = false;
-        let mut chosen: Option<(&Agent, &Space, AgentNotification)> = None;
+        let sound_enabled = herdr_settings::sound_enabled(cx);
+
+        // One event feeds all three outputs: the row mark, the sound and the
+        // toast. They share the transition test, and each adds only its own
+        // switch, so a refresh carrying several events shows, rings and toasts
+        // every one of them instead of letting one win.
         for space in spaces {
             for agent in &space.agents {
+                // A new working turn means the user has taken the agent over:
+                // they answered the block or sent the next prompt. The bell has
+                // done its job, even when the agent was opened from the client's
+                // own TUI rather than from this row.
+                if agent.status == AgentStatus::Working {
+                    self.attention_agents.remove(&agent.pane_id);
+                }
                 let Some(previous_status) = previous.get(&agent.pane_id).copied() else {
                     continue;
                 };
@@ -527,60 +548,63 @@ impl AgentPanel {
                 else {
                     continue;
                 };
-                match kind {
-                    AgentNotification::NeedsAttention => attention = true,
-                    AgentNotification::Finished => finished = true,
-                }
-                if !notifications_enabled || self.notification_is_silent(agent, cx) {
+                // The state alone cannot tell a finished turn from one the
+                // user stopped: both go Working -> Idle. The server marks real
+                // completions on `completion_seq` and leaves it unset when the
+                // turn was interrupted, so an unmarked finish is not an event.
+                if kind == AgentNotification::Finished && agent.completion_seq.is_none() {
                     continue;
                 }
-                let outranks = chosen.is_none_or(|(_, _, chosen_kind)| {
-                    chosen_kind == AgentNotification::Finished
-                        && kind == AgentNotification::NeedsAttention
-                });
-                if outranks {
-                    chosen = Some((agent, space, kind));
+                // The row mark needs no switch: it is the panel's own record of
+                // which agent changed.
+                self.attention_agents.insert(agent.pane_id.clone());
+                if sound_enabled {
+                    match kind {
+                        AgentNotification::NeedsAttention => audio::play_system_bell(),
+                        AgentNotification::Finished => {
+                            Audio::play_sound(Sound::AgentDone, cx);
+                        }
+                    }
                 }
+                // The toast is skipped for the agent in the tab the user is
+                // already looking at: its output is on screen, so a toast would
+                // only repeat it.
+                if !notifications_enabled || self.toast_is_silent(space, agent, cx) {
+                    continue;
+                }
+                let text = format!(
+                    "{} {}: {}",
+                    client::display_name(&agent.pane_id, &agent.name),
+                    kind.text(),
+                    space.label
+                );
+                self.show_agent_notification(agent.pane_id.clone(), text, cx);
             }
         }
-
-        // A block is the one event where the user's input is required, so it
-        // rings even when a finished turn also landed in this refresh. The
-        // finish sound is the agent's own chime; the block reuses the bell the
-        // terminal already uses, so no extra asset is needed.
-        if herdr_settings::sound_enabled(cx) {
-            if attention {
-                audio::play_system_bell();
-            } else if finished {
-                Audio::play_sound(Sound::AgentDone, cx);
-            }
-        }
-
-        let Some((agent, space, kind)) = chosen else {
-            return;
-        };
-
-        let text = format!(
-            "{} {}: {}",
-            client::display_name(&agent.pane_id, &agent.name),
-            kind.text(),
-            space.label
-        );
-        self.show_agent_notification(agent.pane_id.clone(), text, cx);
     }
 
-    /// Whether the user is already looking at this agent, in which case its
-    /// terminal is the notification and a toast would only duplicate it.
+    /// Whether a toast about this agent would duplicate what is on screen.
+    ///
+    /// The test is the space and tab the server has in front, not the pane:
+    /// `Agent::focused` also requires the agent's own pane to hold pane focus,
+    /// so it goes false when the user moved pane focus somewhere else in the
+    /// same tab (a split, or the client's own sidebar) and the toast then
+    /// repeats a tab the user is already watching.
+    ///
+    /// Any terminal in front counts, not only the fixed Agent terminal: an
+    /// agent can also run in a terminal the user opened themselves, and that
+    /// tab is still the agent's own output. Only when something else is in
+    /// front -- a settings page, an editor -- does the news need a toast.
     #[cfg(target_env = "ohos")]
-    fn notification_is_silent(&self, agent: &Agent, cx: &App) -> bool {
-        if !self.window_active || !agent.focused {
+    fn toast_is_silent(&self, space: &Space, agent: &Agent, cx: &App) -> bool {
+        if !self.window_active || !space.focused || space.active_tab_id != agent.tab_id {
             return false;
         }
         self.workspace.upgrade().is_some_and(|workspace| {
             workspace
                 .read(cx)
                 .active_item_as::<TerminalView>(cx)
-                .is_some_and(|view| view.read(cx).is_agent_terminal())
+                .is_some()
         })
     }
 
@@ -833,6 +857,10 @@ impl AgentPanel {
     /// in. The row is claimed so the highlight moves on the click, not a refresh
     /// later.
     fn focus_agent(&mut self, pane_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        // Both ways of opening an agent -- its row and the notification toast
+        // -- come through here, so this is the one place the mark is cleared.
+        #[cfg(target_env = "ohos")]
+        self.attention_agents.remove(&pane_id);
         self.reveal_agent_terminal(window, cx);
         self.pending_agent = Some(PendingFocus {
             target: pane_id.clone(),
@@ -1107,6 +1135,15 @@ impl AgentPanel {
             h_flex()
                 .w_full()
                 .gap_1p5()
+                // The bell sits at the row's leading edge, before the state
+                // marker, so the eye lands on it before reading the row.
+                .when(self.agent_needs_attention(&agent.pane_id), |this| {
+                    this.child(
+                        Icon::new(IconName::BellRing)
+                            .size(IconSize::Small)
+                            .color(Color::Warning),
+                    )
+                })
                 .child(status_slot(marker, marker_color))
                 .when(!agent.kind.is_empty(), |this| {
                     this.child(
@@ -1130,6 +1167,23 @@ impl AgentPanel {
             let _ = panel.update(cx, |panel, cx| panel.focus_agent(pane_id.clone(), window, cx));
         })
         .into_any_element()
+    }
+
+    /// Whether this agent's row should wear the attention bell.
+    ///
+    /// Kept separate from the status marker: the marker describes what the
+    /// server reports now, while the bell says the row has not been opened
+    /// since its last transition.
+    fn agent_needs_attention(&self, pane_id: &str) -> bool {
+        #[cfg(target_env = "ohos")]
+        {
+            self.attention_agents.contains(pane_id)
+        }
+        #[cfg(not(target_env = "ohos"))]
+        {
+            let _ = pane_id;
+            false
+        }
     }
 
     // ------------------------------------------------------------------
@@ -2305,9 +2359,10 @@ impl Render for AgentPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(target_env = "ohos")]
         if self.window_activation.is_none() {
-            // Subscribed rather than sampled here: a window that loses focus
-            // stops rendering, so a value read on the last frame would keep
-            // claiming the user is still looking at the agent.
+            // The callback only fires on changes, and the window is already
+            // active by the time the panel first renders, so sampling once
+            // before subscribing is what makes the first frames truthful.
+            self.window_active = window.is_window_active();
             self.window_activation = Some(cx.observe_window_activation(
                 window,
                 |this, window, _cx| {

@@ -2434,6 +2434,11 @@ impl HeadlessServer {
                     interaction && self.promote_client_to_foreground(client_id);
                 let geometry_changed =
                     interaction && self.claim_shell_tab_geometry(client_id, false);
+                // Recorded before the runtime borrow below: the mark belongs to
+                // the pane, not to the PTY write.
+                if client_pane_input_presses_esc(&events) {
+                    self.note_esc_interrupt(runtime_pane_id);
+                }
                 let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
                     &self.app.terminal_runtimes,
                     workspace_index,
@@ -2527,6 +2532,9 @@ impl HeadlessServer {
                     interaction && self.promote_client_to_foreground(client_id);
                 let geometry_changed =
                     interaction && self.claim_shell_tab_geometry(client_id, false);
+                if client_pane_input_presses_esc(&events) {
+                    self.note_esc_interrupt(popup_pane_id);
+                }
                 let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
                     return foreground_changed | geometry_changed;
                 };
@@ -3399,6 +3407,23 @@ fn client_pane_input_has_interaction(events: &[protocol::ClientPaneInputEvent]) 
     events
         .iter()
         .any(|event| !client_pane_input_releases_press(event))
+}
+
+/// Whether this batch of input contains a user pressing Esc.
+///
+/// The client eats Esc itself while it is in copy/resize/navigate mode, so an
+/// Esc that reaches the server is one the user aimed at the pane's program.
+fn client_pane_input_presses_esc(events: &[protocol::ClientPaneInputEvent]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            protocol::ClientPaneInputEvent::Key {
+                code: protocol::ClientKeyCode::Esc,
+                kind: protocol::ClientKeyKind::Press | protocol::ClientKeyKind::Repeat,
+                ..
+            }
+        )
+    })
 }
 
 impl Drop for HeadlessServer {

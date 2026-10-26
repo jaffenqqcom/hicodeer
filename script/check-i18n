@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Check that every user-visible string can reach the locale catalog.
+
+Two checks, because the i18n extractor only sees strings that are passed to
+`localized_str!` / `format_message`. A literal left in a settings row is
+invisible to it and stays English in every language, which is exactly how the
+"Suggest Extensions" / "Mermaid Font" rows were missed.
+
+  1. No bare literals in the UI positions we know about (title, description,
+     section header, label, button, tooltip, aria text).
+  2. Every key the code asks for exists in all bundles under assets/locales.
+
+Run after merging an upstream version and after re-running the i18n extractor:
+
+    python3 script/check-i18n
+
+Exit status is 1 when anything is missing, so it can gate a release.
+"""
+
+import glob
+import json
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Files whose strings are all user-visible. Extend this list when a new
+# user-facing crate is added.
+UI_SOURCES = [
+    "crates/settings_ui/src/page_data.rs",
+    "crates/settings_ui/src/settings_ui.rs",
+    "crates/agent_panel/src/agent_panel.rs",
+]
+
+# Positions that draw text. A literal here is a string the extractor cannot see.
+BARE_LITERAL_PATTERNS = [
+    (re.compile(r'title:\s*"'), "title"),
+    (re.compile(r'description:\s*"'), "description"),
+    (re.compile(r"SectionHeader\(\s*\""), "section header"),
+    (re.compile(r"Label::new\(\s*\""), "label"),
+    (re.compile(r"(?<![A-Za-z])Button::new\([^,]*,\s*\""), "button"),
+    (re.compile(r"Tooltip::(?:simple|text)\(\s*\""), "tooltip"),
+    (re.compile(r"\.aria_label\(\s*\""), "aria label"),
+    (re.compile(r"\.aria_description\(\s*\""), "aria description"),
+    (re.compile(r"\.placeholder\(\s*\""), "placeholder"),
+]
+
+# Rows that are deliberately not localized: protocol values, element ids and
+# the like. Keep this list empty unless a false positive has no better fix.
+BARE_LITERAL_ALLOW = set()
+
+# Keys that only exist inside test code, so no bundle should carry them.
+# `Unknown {}` is the placeholder catalog in localization.rs's own tests.
+KEY_ALLOW = {
+    "Unknown {}",
+}
+
+KEY_PATTERN = re.compile(
+    r'(?:localized_str!|format_message)\(\s*"((?:[^"\\]|\\.)*)"', re.S
+)
+LITERAL_PATTERN = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+def rust_string(raw: str) -> str:
+    """Decode a Rust string literal body, including `\\` line continuations."""
+    raw = re.sub(r"\\\n[ \t]*", "", raw)
+    out = []
+    i = 0
+    simple = {
+        "n": "\n",
+        "t": "\t",
+        "r": "\r",
+        "\\": "\\",
+        '"': '"',
+        "'": "'",
+        "0": "\0",
+    }
+    while i < len(raw):
+        char = raw[i]
+        if char == "\\" and i + 1 < len(raw):
+            following = raw[i + 1]
+            if following == "u" and i + 2 < len(raw) and raw[i + 2] == "{":
+                end = raw.index("}", i)
+                out.append(chr(int(raw[i + 3 : end], 16)))
+                i = end + 1
+                continue
+            out.append(simple.get(following, following))
+            i += 2
+            continue
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def check_bare_literals() -> list[str]:
+    problems = []
+    for relative in UI_SOURCES:
+        path = os.path.join(ROOT, relative)
+        if not os.path.exists(path):
+            continue
+        for number, line in enumerate(open(path, encoding="utf-8"), 1):
+            stripped = line.strip()
+            if stripped.startswith("//"):
+                continue
+            for pattern, kind in BARE_LITERAL_PATTERNS:
+                match = pattern.search(line)
+                if not match:
+                    continue
+                body = LITERAL_PATTERN.search(line[match.end() - 1 :])
+                text = rust_string(body.group(1)) if body else ""
+                # Punctuation-only labels (a separator, a check mark) carry no
+                # words to translate.
+                if not any(char.isalpha() for char in text):
+                    continue
+                if text in BARE_LITERAL_ALLOW:
+                    continue
+                problems.append(f"{relative}:{number}: bare {kind} {text!r}")
+    return problems
+
+
+def code_keys() -> dict[str, str]:
+    """Every key the code asks for, with one file that asks for it."""
+    keys = {}
+    for path in glob.glob(os.path.join(ROOT, "crates/**/*.rs"), recursive=True):
+        if "/target/" in path:
+            continue
+        text = open(path, encoding="utf-8", errors="ignore").read()
+        for match in KEY_PATTERN.findall(text):
+            key = rust_string(match)
+            if key in KEY_ALLOW:
+                continue
+            keys.setdefault(key, os.path.relpath(path, ROOT))
+    return keys
+
+
+def missing_per_locale(keys: dict[str, str]) -> dict[str, list[str]]:
+    missing = {}
+    for path in sorted(glob.glob(os.path.join(ROOT, "assets/locales/*.json"))):
+        if path.endswith("index.json"):
+            continue
+        bundle = json.load(open(path, encoding="utf-8"))
+        present = set(bundle.get("messages", {})) | set(bundle.get("formats", {}))
+        absent = sorted(set(keys) - present)
+        if absent:
+            missing[os.path.basename(path)] = absent
+    return missing
+
+
+def main() -> int:
+    failed = False
+
+    bare = check_bare_literals()
+    if bare:
+        failed = True
+        print("UI strings that bypass localization (the extractor cannot see these):")
+        for problem in bare:
+            print(f"  {problem}")
+        print()
+
+    keys = code_keys()
+    missing = missing_per_locale(keys)
+    if missing:
+        failed = True
+        print("Keys the code asks for but a bundle does not carry:")
+        for locale, absent in missing.items():
+            print(f"  {locale}: {len(absent)} missing")
+            for key in absent[:20]:
+                print(f"    {key!r}  <- {keys[key]}")
+            if len(absent) > 20:
+                print(f"    ... and {len(absent) - 20} more")
+        print()
+
+    if failed:
+        print("i18n check failed.")
+        return 1
+
+    print(f"i18n check passed: {len(keys)} keys, all bundles complete.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

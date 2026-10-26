@@ -363,8 +363,8 @@ mod tests {
         workspace::Workspace,
     };
 
-    #[test]
-    fn created_tabs_number_from_the_highest_name_and_keep_it_after_closes() {
+    #[tokio::test]
+    async fn created_tabs_number_from_the_highest_name_and_keep_it_after_closes() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),

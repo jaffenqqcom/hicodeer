@@ -33,6 +33,18 @@ impl AgentStatus {
 pub(crate) struct Space {
     pub id: String,
     pub label: String,
+    /// Whether this is the space the server has in front.
+    ///
+    /// Paired with `active_tab_id`, this is the tab-level view of what the
+    /// user is looking at, which the toast needs: `Agent::focused` is
+    /// pane-level and goes false as soon as pane focus moves elsewhere in the
+    /// same tab.
+    #[cfg(target_env = "ohos")]
+    pub focused: bool,
+    /// The tab this space has in front, as a public tab id that lines up with
+    /// `Agent::tab_id`.
+    #[cfg(target_env = "ohos")]
+    pub active_tab_id: String,
     pub agents: Vec<Agent>,
 }
 
@@ -51,7 +63,21 @@ pub(crate) struct Agent {
     /// Empty when the server could not identify the program in the pane.
     pub kind: String,
     pub status: AgentStatus,
+    /// Pane-level focus: true only while the agent's own pane holds pane focus
+    /// in the tab in front. `Space::active_tab_id` is the tab-level test.
     pub focused: bool,
+    /// The public id of the tab this agent is drawn in, matching the space's
+    /// `active_tab_id`.
+    #[cfg(target_env = "ohos")]
+    pub tab_id: String,
+    /// The server's completion marker for the current idle transition.
+    ///
+    /// It is set when the transition completed work and left unset when the
+    /// server suppressed the completion (the user stopped the turn with Esc).
+    /// The panel uses it to tell those two cases apart; the state alone looks
+    /// identical in both.
+    #[cfg(target_env = "ohos")]
+    pub completion_seq: Option<u64>,
     /// `(agent, session value)` as the agent itself reported, when it runs
     /// inside a recognized session. Values only line up with history entries
     /// of the same agent.
@@ -89,6 +115,10 @@ impl Snapshot {
             .map(|entry| Space {
                 id: text(entry, "workspace_id"),
                 label: text(entry, "label"),
+                #[cfg(target_env = "ohos")]
+                focused: flag(entry, "focused"),
+                #[cfg(target_env = "ohos")]
+                active_tab_id: text(entry, "active_tab_id"),
                 agents: Vec::new(),
             })
             .collect();
@@ -111,6 +141,10 @@ impl Snapshot {
                 kind: text(entry, "agent"),
                 status: AgentStatus::parse(entry.get("agent_status")),
                 focused: flag(entry, "focused"),
+                #[cfg(target_env = "ohos")]
+                tab_id: text(entry, "tab_id"),
+                #[cfg(target_env = "ohos")]
+                completion_seq: entry.get("completion_seq").and_then(Value::as_u64),
                 // The session the agent itself reports (source + value). The
                 // value is the id the resume path knows; the history view
                 // uses it to hide sessions that are already open.

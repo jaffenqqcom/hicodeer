@@ -258,7 +258,9 @@ impl App {
                     .workspaces
                     .get(ws_idx)
                     .and_then(|workspace| workspace.find_tab_index_for_pane(pane_id))
-                    .ok_or_else(|| AgentStartError::TargetNotFound(params.pane_id.clone()))?;
+                    // The pane resolved; only its tab is gone, so reporting
+                    // "pane not found" would point at the wrong level.
+                    .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
                 self.auto_agent_name(ws_idx, tab_idx, kind)
             }
         };

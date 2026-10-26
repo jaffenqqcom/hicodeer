@@ -8,6 +8,41 @@ impl HeadlessServer {
             .insert(pane_id, now + INTERACTIVE_RENDER_WINDOW);
     }
 
+    /// Records that the user pressed Esc on an agent that is Working or
+    /// Blocked. The next state change consumes the mark and decides whether the
+    /// completion was the user's own interruption.
+    ///
+    /// Esc pressed while the agent is Idle (a shell prompt, a text field) is
+    /// ignored: there is no turn to interrupt.
+    pub(super) fn note_esc_interrupt(&mut self, pane_id: crate::layout::PaneId) {
+        let state = &mut self.app.state;
+        let Some(ws_idx) = state
+            .workspaces
+            .iter()
+            .position(|ws| ws.pane_state(pane_id).is_some())
+        else {
+            return;
+        };
+        let Some(terminal_id) = state.workspaces[ws_idx]
+            .pane_state(pane_id)
+            .map(|pane| pane.attached_terminal_id.clone())
+        else {
+            return;
+        };
+        let active = state.terminals.get(&terminal_id).is_some_and(|terminal| {
+            matches!(
+                terminal.state,
+                crate::detect::AgentState::Working | crate::detect::AgentState::Blocked
+            )
+        });
+        if !active {
+            return;
+        }
+        if let Some(pane) = state.workspaces[ws_idx].pane_state_mut(pane_id) {
+            pane.interrupted_at = Some(Instant::now());
+        }
+    }
+
     pub(super) fn can_render_interactive(&self, now: Instant) -> bool {
         if self.interactive_render_budget.is_some_and(|(epoch, used)| {
             now.duration_since(epoch) < crate::app::MIN_RENDER_INTERVAL

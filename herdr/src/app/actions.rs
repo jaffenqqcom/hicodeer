@@ -19,6 +19,13 @@ use super::state::{
     ToastKind, ToastNotification, ToastTarget,
 };
 
+/// How long after Esc a completion still counts as the user's own interruption.
+///
+/// The agent usually returns to its prompt within one render pass. Keeping the
+/// window short is what keeps a real completion from being swallowed when the
+/// user pressed Esc for something else (closing the agent's own dialog).
+const ESC_INTERRUPT_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
 fn is_background_completion_transition(prev_state: AgentState, new_state: AgentState) -> bool {
     matches!(new_state, AgentState::Idle)
         && matches!(prev_state, AgentState::Working | AgentState::Blocked)
@@ -1783,8 +1790,21 @@ impl AppState {
         }
         let agent_released = mutation.agent_released;
         let change = mutation.effective_state_change.or(unchanged_change)?;
+        // A state change consumes any pending Esc mark, whatever it turns
+        // into. Only a completion inside the window is treated as the user's
+        // interruption; a change back to Working, Blocked, or a process exit
+        // just clears the mark so it cannot reach a later real completion.
+        let interrupted = if change.previous_state != change.state {
+            self.workspaces[ws_idx]
+                .pane_state_mut(pane_id)
+                .and_then(|pane| pane.interrupted_at.take())
+                .is_some_and(|at| now.duration_since(at) <= ESC_INTERRUPT_WINDOW)
+        } else {
+            false
+        };
         let suppress_completion = force_suppress_completion
-            || (change.state == AgentState::Idle && suppress_acquisition_completion);
+            || (change.state == AgentState::Idle && suppress_acquisition_completion)
+            || (interrupted && is_completion_transition(&change));
         if change.previous_state != change.state {
             self.next_agent_state_change_seq += 1;
             if let Some(terminal) = self.terminals.get_mut(&terminal_id) {

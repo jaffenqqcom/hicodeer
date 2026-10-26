@@ -63,6 +63,7 @@ impl App {
                         Ok(tab_idx) => {
                             let workspace = self.workspace_info(ws_idx);
                             let Some(tab) = self.tab_info(ws_idx, tab_idx) else {
+                                self.rollback_created_tab(ws_idx, tab_idx);
                                 return encode_error(
                                     id,
                                     "tab_create_failed",
@@ -70,6 +71,7 @@ impl App {
                                 );
                             };
                             let Some(root_pane) = self.root_pane_info(ws_idx, tab_idx) else {
+                                self.rollback_created_tab(ws_idx, tab_idx);
                                 return encode_error(
                                     id,
                                     "tab_create_failed",
@@ -435,6 +437,30 @@ impl App {
             .map(|(idx, _)| self.workspace_info(idx))
             .collect()
     }
+    /// Removes a tab whose creation already succeeded but whose report failed,
+    /// so a retried `workspace.create` cannot pile empty tabs into the space.
+    fn rollback_created_tab(&mut self, ws_idx: usize, tab_idx: usize) {
+        let terminal_ids = self.state.terminal_ids_for_tab(ws_idx, tab_idx);
+        let pane_ids = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|workspace| workspace.tabs.get(tab_idx))
+            .map(|tab| tab.layout.pane_ids())
+            .unwrap_or_default();
+        let closed = self
+            .state
+            .workspaces
+            .get_mut(ws_idx)
+            .is_some_and(|workspace| workspace.close_tab(tab_idx));
+        if !closed {
+            return;
+        }
+        self.state.remove_plugin_pane_records(pane_ids);
+        self.state.remove_unattached_terminal_ids(terminal_ids);
+        self.shutdown_detached_terminal_runtimes();
+        self.schedule_session_save();
+    }
 }
 
 fn workspace_not_found(id: String, workspace_id: &str) -> String {
@@ -538,8 +564,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&focused_cwd);
     }
 
-    #[test]
-    fn workspace_create_with_reuse_root_attaches_to_the_space_of_that_root() {
+    #[tokio::test]
+    async fn workspace_create_with_reuse_root_attaches_to_the_space_of_that_root() {
         use super::super::test_support::{exiting_test_command, shutdown_test_runtimes};
         use crate::config::ShellModeConfig;
 

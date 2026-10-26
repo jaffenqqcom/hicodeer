@@ -11,8 +11,9 @@ use editor::{
 use gpui::{
     Action, AnyElement, App, ClipboardEntry, Corners, DismissEvent, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, Font, KeyContext, KeyDownEvent, Keystroke, MouseButton,
-    MouseDownEvent, Pixels, Point as GpuiPoint, Rems, Render, ScrollWheelEvent, SharedString,
-    Styled, Subscription, Task, TaskExt, WeakEntity, actions, anchored, deferred, div,
+    MouseDownEvent, PathPromptOptions, Pixels, Point as GpuiPoint, Rems, Render, ScrollWheelEvent,
+    SharedString, Styled, Subscription, Task, TaskExt, WeakEntity, actions, anchored, deferred,
+    div,
 };
 use menu;
 use persistence::TerminalDb;
@@ -1011,16 +1012,7 @@ impl TerminalView {
     }
 
     fn scroll_to_bottom(&mut self, _: &ScrollToBottom, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_alt_screen(cx) {
-            cx.propagate();
-            return;
-        }
-
-        self.terminal.update(cx, |term, _| term.scroll_to_bottom());
-        if self.block_below_cursor.is_some() {
-            self.scroll_top = self.max_scroll_top(cx);
-        }
-        cx.notify();
+        self.jump_to_bottom(cx);
     }
 
     fn toggle_vi_mode(&mut self, _: &ToggleViMode, _: &mut Window, cx: &mut Context<Self>) {
@@ -1490,44 +1482,151 @@ impl ScrollbarVisibility for TerminalScrollbarSettingsWrapper {
     }
 }
 
-// Floating "jump to bottom" button. Touch input has no `shift-end`, so
-// returning to the live prompt after scrolling back needs a tappable
-// affordance. Hidden while already at the bottom (which includes the alternate
-// screen, as it has no scrollback).
+/// Background opacity of the floating controls: translucent enough to read as
+/// an overlay over terminal output, opaque enough to stay legible.
+const FLOATING_CONTROL_OPACITY: f32 = 0.7;
+
+/// A floating control drawn over the terminal. `bottom` and `right` are the
+/// distances from the view's bottom-right corner, so adding a control is just
+/// picking a slot, an icon and a callback.
+struct FloatingButton {
+    id: &'static str,
+    icon: IconName,
+    bottom: Pixels,
+    right: Pixels,
+}
+
+// Floating controls of a standalone terminal. They are always present: touch
+// input has no `shift-end`, and a full-screen app that captures the mouse keeps
+// the terminal's own offset at zero, so both need a tappable entry point.
 impl TerminalView {
-    fn render_scroll_to_bottom_button(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_floating_controls(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if !matches!(self.mode, TerminalMode::Standalone) {
+            return Vec::new();
+        }
+
+        vec![
+            self.render_floating_button(
+                FloatingButton {
+                    id: "terminal-insert-files",
+                    icon: IconName::FolderOpen,
+                    bottom: px(16.),
+                    right: px(76.),
+                },
+                |this, window, cx| this.insert_picked_paths(window, cx),
+                cx,
+            ),
+            self.render_floating_button(
+                FloatingButton {
+                    id: "terminal-scroll-to-bottom",
+                    icon: IconName::ArrowDown,
+                    bottom: px(16.),
+                    right: px(28.),
+                },
+                |this, _window, cx| this.jump_to_bottom(cx),
+                cx,
+            ),
+        ]
+    }
+
+    fn render_floating_button(
+        &self,
+        button: FloatingButton,
+        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let colors = cx.theme().colors();
         div()
             // Split panes can show several terminals at once, so the id must
-            // be per terminal, not a fixed string.
-            .id(("terminal-scroll-to-bottom", self.terminal.entity_id()))
+            // include the terminal.
+            .id((button.id, self.terminal.entity_id()))
             .absolute()
-            .bottom(px(16.))
-            .right(px(20.))
+            .bottom(button.bottom)
+            .right(button.right)
             .size(px(40.))
             .flex()
             .items_center()
             .justify_center()
             .rounded_full()
-            .bg(colors.element_background.opacity(0.6))
+            .bg(colors.element_background.opacity(FLOATING_CONTROL_OPACITY))
             .border_1()
             .border_color(colors.border.opacity(0.4))
             .shadow_sm()
             .cursor_pointer()
-            .hover(|style| style.bg(colors.element_hover.opacity(0.8)))
+            .hover(|style| style.bg(colors.element_hover.opacity(0.85)))
             // Swallow the press so the terminal underneath does not start a
             // selection at the tapped cell.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                Icon::new(IconName::ArrowDown)
+                Icon::new(button.icon)
                     .size(IconSize::Medium)
                     .color(Color::Muted),
             )
-            .on_click(cx.listener(|this, _, window, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
-                this.scroll_to_bottom(&ScrollToBottom, window, cx);
+                on_click(this, window, cx);
             }))
             .into_any_element()
+    }
+
+    /// `End` means "go to the newest output" in every case, so no branch is
+    /// needed: any terminal input queues `Scroll::Bottom` (`write_input`), so the
+    /// terminal scrolls its own scrollback, and a full-screen app that owns the
+    /// viewport (herdr and similar TUIs) treats the same key as "jump to the
+    /// newest output" and scrolls itself.
+    fn jump_to_bottom(&mut self, cx: &mut Context<Self>) {
+        if let Ok(keystroke) = Keystroke::parse("end")
+            && self.process_keystroke(&keystroke, cx)
+        {
+            cx.notify();
+        }
+    }
+
+    /// Asks the platform for files and inserts their absolute paths at the
+    /// cursor, separated by commas so the result reads as an argument list.
+    fn insert_picked_paths(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Insert into terminal".into()),
+        });
+
+        cx.spawn_in(window, async move |terminal_view, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+
+            let joined = paths
+                .iter()
+                .filter_map(|path| shlex::try_quote(path.to_str()?).ok())
+                .collect::<Vec<_>>()
+                .join(", ");
+            if joined.is_empty() {
+                return;
+            }
+            // Trailing space so typing continues after the last path.
+            let text = format!("{joined} ");
+
+            terminal_view
+                .update_in(cx, |terminal_view, window, cx| {
+                    terminal_view.clear_bell(cx);
+                    terminal_view
+                        .blink_manager
+                        .update(cx, BlinkManager::pause_blinking);
+                    terminal_view
+                        .terminal
+                        .update(cx, |terminal, _| terminal.paste(&text));
+                    let focus_handle = terminal_view.focus_handle(cx);
+                    window.focus(&focus_handle, cx);
+                })
+                .ok();
+        })
+        .detach();
     }
 }
 
@@ -1626,12 +1725,8 @@ impl Render for TerminalView {
 
         let focused = self.focus_handle.is_focused(window);
 
-        // See `render_scroll_to_bottom_button`.
-        let scroll_to_bottom_button: Option<AnyElement> = {
-            let show = matches!(self.mode, TerminalMode::Standalone)
-                && !self.terminal.read(cx).scrolled_to_bottom();
-            show.then(|| self.render_scroll_to_bottom_button(cx))
-        };
+        // See `render_floating_controls`.
+        let floating_controls = self.render_floating_controls(cx);
 
         div()
             .id("terminal-view")
@@ -1723,10 +1818,7 @@ impl Render for TerminalView {
                         )
                     }),
             )
-            .map(|this| match scroll_to_bottom_button {
-                Some(button) => this.child(button),
-                None => this,
-            })
+            .children(floating_controls)
             .children(self.context_menu.as_ref().map(|(menu, position, _)| {
                 deferred(
                     anchored()

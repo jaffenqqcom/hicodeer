@@ -132,16 +132,21 @@ fn suggest_for_buffer(
                         cx,
                     )
                 });
-                MessageNotification::new_from_builder(cx, move |window, cx| {
+                let notification = MessageNotification::new_from_builder(cx, move |window, cx| {
                     MarkdownElement::new(markdown.clone(), markdown_style(window, cx))
                         .text_size(TextSize::Default.rems(cx))
                         .into_any_element()
                 })
-                .with_title(suggestion.title)
-                .more_info_message(localization::localized_str!("Learn more"))
-                .more_info_url(suggestion.docs_url)
-                .primary_message(suggestion.install_message)
-                .secondary_message(localization::localized_str!("Don't show again"))
+                .with_title(suggestion.title);
+                // [OHOS PORT BEGIN] suggestion docs live on zed.dev.
+                #[cfg(not(target_env = "ohos"))]
+                let notification = notification
+                    .more_info_message(localization::localized_str!("Learn more"))
+                    .more_info_url(suggestion.docs_url);
+                // [OHOS PORT END]
+                notification
+                    .primary_message(suggestion.install_message)
+                    .secondary_message(localization::localized_str!("Don't show again"))
             });
         }
         None => {

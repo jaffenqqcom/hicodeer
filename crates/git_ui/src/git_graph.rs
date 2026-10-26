@@ -1408,6 +1408,12 @@ impl RefMenuEntry {
             });
         }
 
+        // [OHOS PORT BEGIN] the custom git command docs live on zed.dev, so an
+        // empty task list must not leave a header-only section behind.
+        if cfg!(target_env = "ohos") && self.git_tasks.is_empty() {
+            return menu;
+        }
+        // [OHOS PORT END]
         menu = menu.separator().header("Custom Commands");
 
         if self.git_tasks.is_empty() {

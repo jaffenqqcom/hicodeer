@@ -283,6 +283,34 @@ impl http_client::HttpClient for ReqwestClient {
     > {
         let (parts, body) = req.into_parts();
 
+        // [OHOS PORT BEGIN] HiCodeer does not ship Zed's services. Requests to a
+        // Zed-owned host are refused here, the single send path shared by
+        // telemetry, cloud API and RPC clients. To restore upstream behavior,
+        // delete this block.
+        #[cfg(target_env = "ohos")]
+        if let Some(host) = parts.uri.host() {
+            let host = host.to_ascii_lowercase();
+            let is_zed_host = host == "zed.dev"
+                || host.ends_with(".zed.dev")
+                || host == "zed.com"
+                || host.ends_with(".zed.com");
+            // The extension registry is deliberately kept: browsing, updating and
+            // downloading extensions still targets Zed's API until the registry
+            // is rehosted.
+            let path = parts.uri.path();
+            let is_extension_api = path == "/extensions" || path.starts_with("/extensions/");
+            if is_zed_host && !is_extension_api {
+                let uri = parts.uri.to_string();
+                log::warn!("blocked request to zed service on OHOS: {uri}");
+                return Box::pin(async move {
+                    Err(anyhow::anyhow!(
+                        "blocked request to zed service on OHOS: {uri}"
+                    ))
+                });
+            }
+        }
+        // [OHOS PORT END]
+
         let mut request_builder = self.client.request(parts.method, parts.uri.to_string());
         request_builder = request_builder.headers(parts.headers);
         if let Some(redirect_policy) = parts.extensions.get::<RedirectPolicy>() {

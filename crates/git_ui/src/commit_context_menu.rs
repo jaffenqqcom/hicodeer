@@ -181,6 +181,12 @@ pub(crate) fn commit_context_menu(
                 })
             })
             .map(|mut menu| {
+                // [OHOS PORT BEGIN] the custom git command docs live on zed.dev, so
+                // an empty task list must not leave a header-only section behind.
+                if cfg!(target_env = "ohos") && git_tasks.is_empty() {
+                    return menu;
+                }
+                // [OHOS PORT END]
                 menu = menu.separator().header(localization::localized_str!("Custom Commands"));
 
                 if git_tasks.is_empty() {

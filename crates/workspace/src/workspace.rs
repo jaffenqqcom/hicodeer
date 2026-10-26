@@ -162,7 +162,11 @@ pub use workspace_settings::{
     RestoreOnStartupBehavior, StatusBarSettings, TabBarSettings, WorkspaceSettings,
     closing_last_window_quits_app, observe_accessible_mode,
 };
-use zed_actions::{Spawn, feedback::FileBugReport, theme::ToggleMode};
+use zed_actions::{Spawn, theme::ToggleMode};
+// [OHOS PORT BEGIN] feedback files issues on Zed's GitHub repository.
+#[cfg(not(target_env = "ohos"))]
+use zed_actions::feedback::FileBugReport;
+// [OHOS PORT END]
 
 use crate::{dock::PanelSizeState, item::ItemBufferKind, notifications::NotificationId};
 use crate::{
@@ -9510,12 +9514,17 @@ fn notify_if_database_failed(window: WindowHandle<MultiWorkspace>, cx: &mut Asyn
                         cx,
                         |cx| {
                             cx.new(|cx| {
-                                MessageNotification::new(localization::localized_str!("Failed to load the database file."), cx)
+                                let notification = MessageNotification::new(localization::localized_str!("Failed to load the database file."), cx);
+                                // [OHOS PORT BEGIN] feedback files issues on Zed's GitHub repository.
+                                #[cfg(not(target_env = "ohos"))]
+                                let notification = notification
                                     .primary_message(localization::localized_str!("File an Issue"))
                                     .primary_icon(IconName::Plus)
                                     .primary_on_click(|window, cx| {
                                         window.dispatch_action(Box::new(FileBugReport), cx)
-                                    })
+                                    });
+                                // [OHOS PORT END]
+                                notification
                             })
                         },
                     );

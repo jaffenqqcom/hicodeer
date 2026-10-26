@@ -17,7 +17,10 @@ actions!(
     ]
 );
 
+// [OHOS PORT BEGIN] the install docs live on zed.dev.
+#[cfg(not(target_env = "ohos"))]
 const CANT_INSTALL_DOCS_URL: &str = "https://zed.dev/docs/macos#cant-install-cli";
+// [OHOS PORT END]
 
 /// Attempts to install the CLI symlink. Returns the installed path on success,
 /// or `None` if the user dismissed the macOS administrator authentication
@@ -107,13 +110,18 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                         cx,
                         |cx| {
                             cx.new(|cx| {
-                                MessageNotification::new(
+                                let notification = MessageNotification::new(
                                     localization::localized_str!("You can add `zed` to your PATH manually."),
                                     cx,
                                 )
-                                .with_title(localization::localized_str!("Couldn't install the Zed CLI"))
-                                .more_info_message(localization::localized_str!("Show me how"))
-                                .more_info_url(CANT_INSTALL_DOCS_URL)
+                                .with_title(localization::localized_str!("Couldn't install the Zed CLI"));
+                                // [OHOS PORT BEGIN] the install docs live on zed.dev.
+                                #[cfg(not(target_env = "ohos"))]
+                                let notification = notification
+                                    .more_info_message(localization::localized_str!("Show me how"))
+                                    .more_info_url(CANT_INSTALL_DOCS_URL);
+                                // [OHOS PORT END]
+                                notification
                             })
                         },
                     );

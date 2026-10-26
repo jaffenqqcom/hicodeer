@@ -8171,7 +8171,9 @@ fn network_page() -> SettingsPage {
                     },
                 }),
                 metadata: Some(Box::new(SettingsFieldMetadata {
-                    placeholder: Some("https://zed.dev"),
+                    // [OHOS PORT BEGIN] no Zed server is referenced by this build.
+                    placeholder: if cfg!(target_env = "ohos") { None } else { Some("https://zed.dev") },
+                    // [OHOS PORT END]
                     ..Default::default()
                 })),
                 files: USER,

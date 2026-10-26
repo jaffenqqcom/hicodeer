@@ -1,7 +1,10 @@
 // Disable command line from opening on release mode
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// [OHOS PORT BEGIN] reliability uploads diagnostics to Zed.
+#[cfg(not(target_env = "ohos"))]
 mod reliability;
+// [OHOS PORT END]
 mod watcher_debug;
 mod zed;
 
@@ -665,11 +668,15 @@ fn main() {
         // [OHOS PORT BEGIN] HiCodeer has no update feed, so the updater never
         // starts and no update affordance is created.
         #[cfg(not(target_env = "ohos"))]
-        auto_update::init(client.clone(), cx);
-        #[cfg(not(target_env = "ohos"))]
-        auto_update_ui::init(cx);
+        {
+            auto_update::init(client.clone(), cx);
+            auto_update_ui::init(cx);
+        }
         // [OHOS PORT END]
+        // [OHOS PORT BEGIN] reliability uploads minidumps and diagnostics to Zed.
+        #[cfg(not(target_env = "ohos"))]
         reliability::init(client.clone(), app_state.workspace_store.clone(), cx);
+        // [OHOS PORT END]
         extension_host::init(
             extension_host_proxy.clone(),
             app_state.fs.clone(),
@@ -738,7 +745,10 @@ fn main() {
         theme_selector::init(cx);
         settings_profile_selector::init(cx);
         language_tools::init(cx);
+        // [OHOS PORT BEGIN] the notification store subscribes to Zed's RPC server.
+        #[cfg(not(target_env = "ohos"))]
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
+        // [OHOS PORT END]
         title_bar::init(cx);
         git_ui::init(cx);
         // [OHOS PORT] Registers the Agent panel's actions. It has to run before
@@ -747,7 +757,10 @@ fn main() {
         // never get them and the panel's status bar button would do nothing.
         #[cfg(target_env = "ohos")]
         agent_panel::init(cx);
+        // [OHOS PORT BEGIN] feedback files issues on Zed's GitHub repository.
+        #[cfg(not(target_env = "ohos"))]
         feedback::init(cx);
+        // [OHOS PORT END]
         markdown_preview::init(cx);
         tabular_data_preview::init(cx);
         svg_preview::init(cx);
@@ -845,11 +858,14 @@ fn main() {
 
         cx.activate(true);
 
+        // [OHOS PORT BEGIN] HiCodeer does not sign in to a Zed account.
+        #[cfg(not(target_env = "ohos"))]
         cx.spawn({
             let client = app_state.client.clone();
             async move |cx| authenticate(client, cx).await
         })
         .detach_and_log_err(cx);
+        // [OHOS PORT END]
 
         let urls: Vec<_> = args
             .paths_or_urls
@@ -1269,6 +1285,8 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
     }
 }
 
+// [OHOS PORT BEGIN] HiCodeer does not sign in to a Zed account.
+#[cfg(not(target_env = "ohos"))]
 async fn authenticate(client: Arc<Client>, cx: &AsyncApp) -> Result<()> {
     if stdout_is_a_pty() {
         if client::IMPERSONATE_LOGIN.is_some() {

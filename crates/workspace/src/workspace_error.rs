@@ -196,6 +196,11 @@ impl WorkspaceError for PortalError {
     }
 
     fn primary_action(&self) -> ErrorAction {
+        // [OHOS PORT BEGIN] the troubleshooting docs live on zed.dev.
+        if cfg!(target_env = "ohos") {
+            return ErrorAction::dismiss();
+        }
+        // [OHOS PORT END]
         ErrorAction::link(
             localization::localized_str!("See docs"),
             "https://zed.dev/docs/linux#i-cant-open-any-files",

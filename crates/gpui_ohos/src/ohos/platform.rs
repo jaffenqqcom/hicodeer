@@ -638,6 +638,16 @@ impl Platform for OhosPlatform {
     }
 
     fn open_url(&self, url: &str) {
+        // [OHOS PORT BEGIN] HiCodeer ships without Zed's web properties, so any
+        // link pointing at a Zed-owned site must not leave the app. This is the
+        // single choke point for every `open_url` caller. Non-HTTP schemes
+        // (`file:`, `zed:`, `mailto:`, ...) are unaffected.
+        // To restore upstream behavior, delete this block.
+        if is_zed_web_url(url) {
+            warn!("open_url blocked (zed web url): {url}");
+            return;
+        }
+        // [OHOS PORT END]
         let url = url.to_string();
         if let Some(app) = self.app.borrow().clone() {
             self.foreground_executor.spawn(async move {
@@ -985,4 +995,28 @@ impl Platform for OhosPlatform {
     }
 
     fn write_to_primary(&self, _item: ClipboardItem) {}
+}
+
+/// Returns true when `url` is an HTTP(S) URL whose host belongs to Zed.
+///
+/// HiCodeer does not own any Zed web property, so such a link would strand the
+/// user on a third-party site. Matching is host-based and case-insensitive:
+/// `zed.dev` and every subdomain (`cloud.zed.dev`, `api.zed.dev`, ...), plus the
+/// corporate `zed.com` domain. Non-HTTP schemes are never matched.
+fn is_zed_web_url(url: &str) -> bool {
+    let normalized = url.trim().to_ascii_lowercase();
+    let remainder = match normalized
+        .strip_prefix("https://")
+        .or_else(|| normalized.strip_prefix("http://"))
+    {
+        Some(remainder) => remainder,
+        None => return false,
+    };
+
+    let authority = remainder.split(['/', '?', '#']).next().unwrap_or_default();
+    // Drop userinfo, then the port, leaving the bare host.
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = host.split(':').next().unwrap_or_default();
+
+    host == "zed.dev" || host.ends_with(".zed.dev") || host == "zed.com" || host.ends_with(".zed.com")
 }

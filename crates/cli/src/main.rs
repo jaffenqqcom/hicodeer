@@ -33,6 +33,14 @@ use std::io::IsTerminal;
 
 const URL_PREFIX: [&'static str; 5] = ["zed://", "http://", "https://", "file://", "ssh://"];
 
+// [OHOS PORT BEGIN] the remote development docs live on zed.dev.
+const REMOTE_DEVELOPMENT_DOCS_HINT: &str = if cfg!(target_env = "ohos") {
+    ""
+} else {
+    ": https://zed.dev/docs/remote-development"
+};
+// [OHOS PORT END]
+
 struct Detect;
 
 trait InstalledApp {
@@ -693,7 +701,8 @@ fn run() -> Result<()> {
 
     anyhow::ensure!(
         args.dev_server_token.is_none(),
-        "Dev servers were removed in v0.157.x please upgrade to SSH remoting: https://zed.dev/docs/remote-development"
+        "Dev servers were removed in v0.157.x please upgrade to SSH remoting{}",
+        REMOTE_DEVELOPMENT_DOCS_HINT
     );
 
     rayon::ThreadPoolBuilder::new()

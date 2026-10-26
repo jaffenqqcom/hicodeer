@@ -164,6 +164,14 @@ impl Settings for ProxySettings {
 }
 
 pub fn init(client: &Arc<Client>, cx: &mut App) {
+    // [OHOS PORT BEGIN] Sign in, sign out and reconnect all target Zed's server.
+    // Registering them would leave dead entries in the command palette, and the
+    // browser sign-in path binds a local HTTP port and waits for a callback that
+    // can never arrive. To restore upstream behavior, delete this block.
+    if cfg!(target_env = "ohos") {
+        return;
+    }
+    // [OHOS PORT END]
     let client = Arc::downgrade(client);
     cx.on_action({
         let client = client.clone();

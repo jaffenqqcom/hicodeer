@@ -331,7 +331,9 @@ impl PickerDelegate for IconThemeSelectorDelegate {
                 .gap_2()
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
-                .child(
+                // [OHOS PORT BEGIN] the icon theme docs live on zed.dev.
+                .when(!cfg!(target_env = "ohos"), |this| {
+                    this.child(
                     Button::new("docs", localization::localized_str!("View Icon Theme Docs"))
                         .end_icon(
                             Icon::new(IconName::ArrowUpRight)
@@ -341,7 +343,9 @@ impl PickerDelegate for IconThemeSelectorDelegate {
                         .on_click(|_event, _window, cx| {
                             cx.open_url("https://zed.dev/docs/icon-themes");
                         }),
-                )
+                    )
+                })
+                // [OHOS PORT END]
                 .child(
                     Button::new("more-icon-themes", localization::localized_str!("Install Icon Themes")).on_click(
                         move |_event, window, cx| {

@@ -296,6 +296,11 @@ impl Onboarding {
     }
 
     fn handle_sign_in(&mut self, _: &SignIn, window: &mut Window, cx: &mut Context<Self>) {
+        // [OHOS PORT BEGIN] HiCodeer does not sign in to a Zed account.
+        if cfg!(target_env = "ohos") {
+            return;
+        }
+        // [OHOS PORT END]
         let client = Client::global(cx);
         let workspace = self.workspace.clone();
 
@@ -310,6 +315,11 @@ impl Onboarding {
     }
 
     fn handle_open_account(_: &OpenAccount, _: &mut Window, cx: &mut App) {
+        // [OHOS PORT BEGIN] HiCodeer has no Zed account page.
+        if cfg!(target_env = "ohos") {
+            return;
+        }
+        // [OHOS PORT END]
         cx.open_url(&zed_urls::account_url(cx))
     }
 
@@ -332,8 +342,12 @@ impl Render for Onboarding {
             .size_full()
             .bg(cx.theme().colors().editor_background)
             .on_action(Self::on_finish)
-            .on_action(cx.listener(Self::handle_sign_in))
-            .on_action(Self::handle_open_account)
+            // [OHOS PORT BEGIN] signing in and opening the account page target Zed.
+            .when(!cfg!(target_env = "ohos"), |this| {
+                this.on_action(cx.listener(Self::handle_sign_in))
+                    .on_action(Self::handle_open_account)
+            })
+            // [OHOS PORT END]
             .on_action(cx.listener(|_, _: &menu::SelectNext, window, cx| {
                 window.focus_next(cx);
                 cx.notify();

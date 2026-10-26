@@ -3908,12 +3908,19 @@ impl Project {
             SettingsObserverEvent::LocalTasksUpdated(result) => match result {
                 Err(InvalidSettingsError::Tasks { message, path }) => {
                     let message = format!("Failed to set local tasks in {path:?}:\n{message}");
-                    cx.emit(Event::Toast {
-                        notification_id: format!("local-tasks-{path:?}").into(),
-                        link: Some(ToastLink {
+                    // [OHOS PORT BEGIN] the tasks docs live on zed.dev.
+                    let link = if cfg!(target_env = "ohos") {
+                        None
+                    } else {
+                        Some(ToastLink {
                             label: "Open Tasks Documentation",
                             url: "https://zed.dev/docs/tasks",
-                        }),
+                        })
+                    };
+                    // [OHOS PORT END]
+                    cx.emit(Event::Toast {
+                        notification_id: format!("local-tasks-{path:?}").into(),
+                        link,
                         message,
                     });
                 }

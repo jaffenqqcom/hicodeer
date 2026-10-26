@@ -54,14 +54,18 @@ impl Render for BasedPyrightBanner {
                         .action_slot(
                             h_flex()
                                 .gap_0p5()
-                                .child(
+                                // [OHOS PORT BEGIN] the Python docs live on zed.dev.
+                                .when(!cfg!(target_env = "ohos"), |this| {
+                                    this.child(
                                     Button::new("learn-more", localization::localized_str!("Learn More"))
                                         .label_size(LabelSize::Small)
                                         .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::XSmall).color(Color::Muted))
                                         .on_click(|_, _, cx| {
                                             cx.open_url("https://zed.dev/docs/languages/python")
                                         }),
-                                )
+                                    )
+                                })
+                                // [OHOS PORT END]
                                 .child(IconButton::new("dismiss", IconName::Close).icon_size(IconSize::Small).on_click(
                                     cx.listener(|this, _, _, cx| {
                                         this.dismissed = true;

@@ -102,13 +102,12 @@ use workspace::{
 use workspace::{CloseProject, CloseWindow, RestoreBanner, with_active_or_new_workspace};
 use workspace::{Pane, notifications::DetachAndPromptErr};
 use zed_actions::{
-    About, GetMerch, OpenAccountSettings, OpenBrowser, OpenDocs, OpenProjectTasks,
-    OpenServerSettings, OpenSettingsFile, OpenStatusPage, OpenZedUrl, Quit,
+    About, OpenBrowser, OpenProjectTasks, OpenServerSettings, OpenSettingsFile, OpenZedUrl, Quit,
 };
-
-const DOCS_URL: &str = "https://zed.dev/docs/";
-const STATUS_URL: &str = "https://status.zed.dev";
-const MERCH_URL: &str = "https://merch.zed.dev/";
+// [OHOS PORT BEGIN] HiCodeer has no Zed web properties or account page.
+#[cfg(not(target_env = "ohos"))]
+use zed_actions::{GetMerch, OpenAccountSettings, OpenDocs, OpenStatusPage};
+// [OHOS PORT END]
 
 pub struct CrashHandler(pub Arc<crashes::Client>);
 
@@ -263,11 +262,6 @@ pub fn init(cx: &mut App) {
             );
         });
     })
-    .on_action(|_: &OpenAccountSettings, cx| {
-        with_active_or_new_workspace(cx, |_, _, cx| {
-            cx.open_url(&zed_urls::account_url(cx));
-        });
-    })
     .on_action(|_: &OpenTasks, cx| {
         with_active_or_new_workspace(cx, |_, window, cx| {
             open_settings_file(
@@ -327,6 +321,16 @@ pub fn init(cx: &mut App) {
     .on_action(|_: &About, cx| {
         open_about_window(cx);
     });
+    // [OHOS PORT BEGIN] HiCodeer has no Zed account page. Registering the action
+    // would leave a dead entry in the command palette, so it is skipped entirely.
+    // To restore upstream behavior, delete this block.
+    #[cfg(not(target_env = "ohos"))]
+    cx.on_action(|_: &OpenAccountSettings, cx| {
+        with_active_or_new_workspace(cx, |_, _, cx| {
+            cx.open_url(&zed_urls::account_url(cx));
+        });
+    });
+    // [OHOS PORT END]
 }
 
 fn bind_on_window_closed(cx: &mut App) -> Option<gpui::Subscription> {
@@ -671,6 +675,13 @@ fn show_software_emulation_warning_if_needed(
                 "https://zed.dev/docs/linux#zed-fails-to-open-windows",
             )
         };
+        // [OHOS PORT BEGIN] HiCodeer has no GPU troubleshooting page to link to.
+        let troubleshooting = if cfg!(target_env = "ohos") {
+            String::new()
+        } else {
+            format!("For troubleshooting see: {docs_url}")
+        };
+        // [OHOS PORT END]
         let message = format!(
             db::indoc! {r#"
             Zed uses {} for rendering and requires a compatible GPU.
@@ -678,10 +689,10 @@ fn show_software_emulation_warning_if_needed(
             Currently you are using a software emulated GPU ({}) which
             will result in awful performance.
 
-            For troubleshooting see: {}
+            {}
             Set ZED_ALLOW_EMULATED_GPU=1 env var to permanently override.
             "#},
-            graphics_api, specs.device_name, docs_url
+            graphics_api, specs.device_name, troubleshooting
         );
         let prompt = window.prompt(
             PromptLevel::Critical,
@@ -693,7 +704,11 @@ fn show_software_emulation_warning_if_needed(
         cx.spawn(async move |_, cx| {
             if prompt.await == Ok(1) {
                 cx.update(|cx| {
-                    cx.open_url(open_url);
+                    // [OHOS PORT BEGIN] the GPU troubleshooting docs live on zed.dev.
+                    if !cfg!(target_env = "ohos") {
+                        cx.open_url(open_url);
+                    }
+                    // [OHOS PORT END]
                     cx.quit();
                 });
             }
@@ -756,10 +771,15 @@ fn register_actions(
     _: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
+    // [OHOS PORT BEGIN] HiCodeer has no Zed web properties, so these actions are
+    // not registered and never appear in the command palette.
+    #[cfg(not(target_env = "ohos"))]
     workspace
-        .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
-        .register_action(|_, _: &OpenStatusPage, _, cx| cx.open_url(STATUS_URL))
-        .register_action(|_, _: &GetMerch, _, cx| cx.open_url(MERCH_URL))
+        .register_action(|_, _: &OpenDocs, _, cx| cx.open_url("https://zed.dev/docs/"))
+        .register_action(|_, _: &OpenStatusPage, _, cx| cx.open_url("https://status.zed.dev"))
+        .register_action(|_, _: &GetMerch, _, cx| cx.open_url("https://merch.zed.dev/"));
+    // [OHOS PORT END]
+    workspace
         .register_action(
             |workspace: &mut Workspace,
              _: &input_latency_ui::DumpInputLatencyHistogram,
@@ -1553,7 +1573,9 @@ fn open_about_window(cx: &mut App) {
     cx.open_window(
         WindowOptions {
             titlebar: Some(TitlebarOptions {
-                title: Some("About Zed".into()),
+                // [OHOS PORT BEGIN] HiCodeer is not branded as Zed.
+                title: Some(if cfg!(target_env = "ohos") { "About HiCodeer" } else { "About Zed" }.into()),
+                // [OHOS PORT END]
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(12.), px(12.))),
             }),

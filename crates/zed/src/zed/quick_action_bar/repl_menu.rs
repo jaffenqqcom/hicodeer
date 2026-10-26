@@ -16,7 +16,10 @@ use util::ResultExt;
 
 use super::QuickActionBar;
 
+// [OHOS PORT BEGIN] only the non-OHOS branch below uses this URL.
+#[cfg_attr(target_env = "ohos", allow(dead_code))]
 const ZED_REPL_DOCUMENTATION: &str = "https://zed.dev/docs/repl";
+// [OHOS PORT END]
 
 struct ReplMenuState {
     tooltip: SharedString,
@@ -402,7 +405,9 @@ impl QuickActionBar {
             h_flex()
                 .gap(DynamicSpacing::Base06.rems(cx))
                 .child(self.render_kernel_selector(cx))
-                .child(
+                // [OHOS PORT BEGIN] the REPL installation docs live on zed.dev.
+                .when(!cfg!(target_env = "ohos"), |this| {
+                    this.child(
                     IconButton::new("toggle_repl_icon", IconName::ReplNeutral)
                         .style(ButtonStyle::Subtle)
                         .shape(ui::IconButtonShape::Square)
@@ -412,7 +417,9 @@ impl QuickActionBar {
                         .on_click(|_, _window, cx| {
                             cx.open_url(&format!("{}#installation", ZED_REPL_DOCUMENTATION))
                         }),
-                )
+                    )
+                })
+                // [OHOS PORT END]
                 .into_any_element(),
         )
     }

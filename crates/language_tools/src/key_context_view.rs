@@ -198,11 +198,15 @@ impl Render for KeyContextView {
                 h_flex()
                     .mt_4()
                     .gap_4()
-                    .child(
+                    // [OHOS PORT BEGIN] the key binding docs live on zed.dev.
+                    .when(!cfg!(target_env = "ohos"), |this| {
+                        this.child(
                         Button::new("open_documentation", localization::localized_str!("Open Documentation"))
                             .style(ButtonStyle::Filled)
                             .on_click(|_, _, cx| cx.open_url("https://zed.dev/docs/key-bindings")),
-                    )
+                        )
+                    })
+                    // [OHOS PORT END]
                     .child(
                         Button::new("view_default_keymap", localization::localized_str!("View Default Keymap"))
                             .style(ButtonStyle::Filled)

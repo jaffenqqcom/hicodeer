@@ -245,7 +245,17 @@ impl Telemetry {
         });
 
         let (tx, mut rx) = mpsc::unbounded();
-        ::telemetry::init(tx);
+        // [OHOS PORT BEGIN] HiCodeer has no telemetry backend. Leaving the global
+        // queue unset makes every `telemetry::event!` call a no-op, so no event is
+        // ever queued and no flush request is ever issued. Dropping the sender
+        // closes the receiver, ending the forwarding task immediately.
+        // To restore upstream behavior, delete this block.
+        if cfg!(target_env = "ohos") {
+            drop(tx);
+        } else {
+            ::telemetry::init(tx);
+        }
+        // [OHOS PORT END]
 
         cx.background_spawn({
             let this = Arc::downgrade(&this);

@@ -540,7 +540,9 @@ impl PickerDelegate for ThemeSelectorDelegate {
                 .gap_2()
                 .border_t_1()
                 .border_color(cx.theme().colors().border_variant)
-                .child(
+                // [OHOS PORT BEGIN] the theme docs live on zed.dev.
+                .when(!cfg!(target_env = "ohos"), |this| {
+                    this.child(
                     Button::new("docs", localization::localized_str!("View Theme Docs"))
                         .end_icon(
                             Icon::new(IconName::ArrowUpRight)
@@ -550,7 +552,9 @@ impl PickerDelegate for ThemeSelectorDelegate {
                         .on_click(cx.listener(|_, _, _, cx| {
                             cx.open_url("https://zed.dev/docs/themes");
                         })),
-                )
+                    )
+                })
+                // [OHOS PORT END]
                 .child(
                     Button::new("more-themes", localization::localized_str!("Install Themes")).on_click(cx.listener({
                         move |_, _, window, cx| {

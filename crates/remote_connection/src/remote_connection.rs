@@ -492,6 +492,16 @@ impl remote::RemoteClientDelegate for RemoteClientDelegate {
         version: Option<Version>,
         cx: &mut AsyncApp,
     ) -> Task<anyhow::Result<PathBuf>> {
+        // [OHOS PORT BEGIN] remote server binaries come from Zed's release server,
+        // which this build does not use. SSH connections to a server that already
+        // has a matching binary are unaffected. To restore upstream behavior,
+        // delete this block.
+        if cfg!(target_env = "ohos") {
+            return Task::ready(Err(anyhow::anyhow!(
+                "remote server downloads from Zed's release server are disabled on OHOS"
+            )));
+        }
+        // [OHOS PORT END]
         let this = self.clone();
         cx.spawn(async move |cx| {
             AutoUpdater::download_remote_server_release(
@@ -524,6 +534,11 @@ impl remote::RemoteClientDelegate for RemoteClientDelegate {
         version: Option<Version>,
         cx: &mut AsyncApp,
     ) -> Task<Result<Option<String>>> {
+        // [OHOS PORT BEGIN] remote server downloads come from Zed's release server.
+        if cfg!(target_env = "ohos") {
+            return Task::ready(Ok(None));
+        }
+        // [OHOS PORT END]
         cx.spawn(async move |cx| {
             AutoUpdater::get_remote_server_release_url(
                 release_channel,
@@ -659,6 +674,16 @@ impl remote::RemoteClientDelegate for BackgroundRemoteClientDelegate {
         version: Option<Version>,
         cx: &mut AsyncApp,
     ) -> Task<anyhow::Result<PathBuf>> {
+        // [OHOS PORT BEGIN] remote server binaries come from Zed's release server,
+        // which this build does not use. SSH connections to a server that already
+        // has a matching binary are unaffected. To restore upstream behavior,
+        // delete this block.
+        if cfg!(target_env = "ohos") {
+            return Task::ready(Err(anyhow::anyhow!(
+                "remote server downloads from Zed's release server are disabled on OHOS"
+            )));
+        }
+        // [OHOS PORT END]
         cx.spawn(async move |cx| {
             AutoUpdater::download_remote_server_release(
                 release_channel,
@@ -690,6 +715,11 @@ impl remote::RemoteClientDelegate for BackgroundRemoteClientDelegate {
         version: Option<Version>,
         cx: &mut AsyncApp,
     ) -> Task<Result<Option<String>>> {
+        // [OHOS PORT BEGIN] remote server downloads come from Zed's release server.
+        if cfg!(target_env = "ohos") {
+            return Task::ready(Ok(None));
+        }
+        // [OHOS PORT END]
         cx.spawn(async move |cx| {
             AutoUpdater::get_remote_server_release_url(
                 release_channel,

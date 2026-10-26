@@ -433,7 +433,9 @@ impl PickerDelegate for KernelPickerDelegate {
                 .border_color(cx.theme().colors().border_variant)
                 .p_1()
                 .gap_4()
-                .child(
+                // [OHOS PORT BEGIN] the REPL docs live on zed.dev.
+                .when(!cfg!(target_env = "ohos"), |this| {
+                    this.child(
                     Button::new("kernel-docs", localization::localized_str!("Kernel Docs"))
                         .end_icon(
                             Icon::new(IconName::ArrowUpRight)
@@ -441,7 +443,9 @@ impl PickerDelegate for KernelPickerDelegate {
                                 .color(Color::Muted),
                         )
                         .on_click(move |_, _, cx| cx.open_url(KERNEL_DOCS_URL)),
-                )
+                    )
+                })
+                // [OHOS PORT END]
                 .into_any(),
         )
     }

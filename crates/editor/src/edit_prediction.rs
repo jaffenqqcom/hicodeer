@@ -2559,9 +2559,13 @@ impl Render for MissingEditPredictionKeybindingTooltip {
                         .child(Button::new("open-keymap", localization::localized_str!("Assign Keybinding")).size(ButtonSize::Compact).on_click(|_ev, window, cx| {
                             window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx)
                         }))
-                        .child(Button::new("see-docs", localization::localized_str!("See Docs")).size(ButtonSize::Compact).on_click(|_ev, _window, cx| {
-                            cx.open_url("https://zed.dev/docs/completions#edit-predictions-missing-keybinding");
-                        })),
+                        // [OHOS PORT BEGIN] the edit prediction docs live on zed.dev.
+                        .when(!cfg!(target_env = "ohos"), |this| {
+                            this.child(Button::new("see-docs", localization::localized_str!("See Docs")).size(ButtonSize::Compact).on_click(|_ev, _window, cx| {
+                                cx.open_url("https://zed.dev/docs/completions#edit-predictions-missing-keybinding");
+                            }))
+                        })
+                        // [OHOS PORT END]
                 )
         })
     }

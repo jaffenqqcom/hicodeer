@@ -246,7 +246,9 @@ impl Render for ReplSessionsPage {
 
             return ReplSessionsContainer::new("No Jupyter Kernels Available")
                 .child(Label::new(instructions))
-                .child(
+                // [OHOS PORT BEGIN] the REPL docs live on zed.dev.
+                .when(!cfg!(target_env = "ohos"), |this| {
+                    this.child(
                     h_flex().w_full().p_4().justify_center().gap_2().child(
                         ButtonLike::new("install-kernels")
                             .style(ButtonStyle::Filled)
@@ -259,7 +261,9 @@ impl Render for ReplSessionsPage {
                                 )
                             }),
                     ),
-                );
+                    )
+                })
+                // [OHOS PORT END];
         }
 
         // When there are no sessions, show the command to run code in an editor

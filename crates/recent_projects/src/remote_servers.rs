@@ -2530,7 +2530,9 @@ impl RemoteServerProjects {
                                         .color(Color::Muted)
                                         .size(LabelSize::Small),
                                     )
-                                    .child(
+                                    // [OHOS PORT BEGIN] the remote development docs live on zed.dev.
+                                    .when(!cfg!(target_env = "ohos"), |this| {
+                                        this.child(
                                         Button::new("learn-more", localization::localized_str!("Learn More"))
                                             .label_size(LabelSize::Small)
                                             .end_icon(
@@ -2542,7 +2544,9 @@ impl RemoteServerProjects {
                                                     "https://zed.dev/docs/remote-development",
                                                 );
                                             }),
-                                    ),
+                                        )
+                                    })
+                                    // [OHOS PORT END]
                             )
                         }
                     }),

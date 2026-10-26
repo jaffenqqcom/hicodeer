@@ -20,6 +20,14 @@ pub mod mock;
 pub mod ssh;
 pub mod wsl;
 
+// [OHOS PORT BEGIN] the remote development docs live on zed.dev.
+pub(crate) const REMOTE_DEVELOPMENT_DOCS_HINT: &str = if cfg!(target_env = "ohos") {
+    ""
+} else {
+    " See https://zed.dev/docs/remote-development"
+};
+// [OHOS PORT END]
+
 /// Parses the output of `uname -sm` to determine the remote platform.
 /// Takes the last line to skip possible shell initialization output.
 fn parse_platform(output: &str) -> Result<RemotePlatform> {
@@ -33,7 +41,8 @@ fn parse_platform(output: &str) -> Result<RemotePlatform> {
         "Darwin" => RemoteOs::MacOs,
         "Linux" => RemoteOs::Linux,
         _ => anyhow::bail!(
-            "Prebuilt remote servers are not yet available for {os:?}. See https://zed.dev/docs/remote-development"
+            "Prebuilt remote servers are not yet available for {os:?}.{}",
+            REMOTE_DEVELOPMENT_DOCS_HINT
         ),
     };
 
@@ -48,7 +57,8 @@ fn parse_platform(output: &str) -> Result<RemotePlatform> {
         RemoteArch::X86_64
     } else {
         anyhow::bail!(
-            "Prebuilt remote servers are not yet available for {arch:?}. See https://zed.dev/docs/remote-development"
+            "Prebuilt remote servers are not yet available for {arch:?}.{}",
+            REMOTE_DEVELOPMENT_DOCS_HINT
         )
     };
 

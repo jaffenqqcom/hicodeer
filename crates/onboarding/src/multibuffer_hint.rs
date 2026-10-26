@@ -158,7 +158,9 @@ impl Render for MultibufferHint {
                                 localization::localized_str!("Edit and save files directly in the results multibuffer!"),
                             )),
                     )
-                    .child(
+                    // [OHOS PORT BEGIN] the multibuffer docs live on zed.dev.
+                    .when(!cfg!(target_env = "ohos"), |this| {
+                        this.child(
                         Button::new("open_docs", localization::localized_str!("Learn More"))
                             .end_icon(
                                 Icon::new(IconName::ArrowUpRight)
@@ -168,7 +170,9 @@ impl Render for MultibufferHint {
                             .on_click(move |_event, _, cx| {
                                 cx.open_url("https://zed.dev/docs/multibuffers")
                             }),
-                    ),
+                        )
+                    })
+                    // [OHOS PORT END]
             )
             .child(
                 IconButton::new("dismiss", IconName::Close)

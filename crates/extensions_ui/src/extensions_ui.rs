@@ -1218,7 +1218,14 @@ impl ExtensionsPage {
             .into_any_element()
     }
 
-    fn render_feature_upsells(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn render_feature_upsells(&self, cx: &Context<Self>) -> AnyElement {
+        // [OHOS PORT BEGIN] every feature upsell banner links to zed.dev docs,
+        // which this build does not own. To restore upstream behavior, delete
+        // this block.
+        if cfg!(target_env = "ohos") {
+            return v_flex().into_any_element();
+        }
+        // [OHOS PORT END]
         v_flex().children(self.upsells.iter().map(|feature| match feature {
             Feature::AgentClaude => self.render_feature_upsell_banner(
                 localization::localized_str!("Claude Agent support is built-in to HiCodeer!"),
@@ -1329,6 +1336,7 @@ impl ExtensionsPage {
                 cx,
             ),
         }))
+        .into_any_element()
     }
 }
 

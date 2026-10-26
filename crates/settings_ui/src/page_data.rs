@@ -526,10 +526,12 @@ fn general_page(cx: &App) -> SettingsPage {
 
     fn extensions_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Extensions"),
+            SettingsPageItem::SectionHeader(localization::localized_str!("Extensions")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Suggest Extensions",
-                description: "Whether to suggest installing extensions based on the files you open.",
+                title: localization::localized_str!("Suggest Extensions"),
+                description: localization::localized_str!(
+                    "Whether to suggest installing extensions based on the files you open."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("suggest_extensions"),
@@ -1271,8 +1273,10 @@ fn appearance_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Heading Font Weight",
-                description: "Font weight for headings in the markdown preview, in CSS units from 100 to 900.",
+                title: localization::localized_str!("Heading Font Weight"),
+                description: localization::localized_str!(
+                    "Font weight for headings in the markdown preview, in CSS units from 100 to 900."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.heading_font_weight"),
@@ -1298,10 +1302,12 @@ fn appearance_page() -> SettingsPage {
 
     fn mermaid_font_section() -> [SettingsPageItem; 2] {
         [
-            SettingsPageItem::SectionHeader("Mermaid Font"),
+            SettingsPageItem::SectionHeader(localization::localized_str!("Mermaid Font")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Font Family",
-                description: "Font family for Mermaid diagrams in the agent panel and markdown preview. Falls back to the UI font family.",
+                title: localization::localized_str!("Font Family"),
+                description: localization::localized_str!(
+                    "Font family for Mermaid diagrams in the agent panel and markdown preview. Falls back to the UI font family."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("mermaid_font_family"),
@@ -3930,8 +3936,10 @@ fn search_and_files_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: "Prefill Query From Selection",
-                description: "Whether to pre-fill the file finder's query with the text selected in the focused item (e.g. an editor or a terminal).",
+                title: localization::localized_str!("Prefill Query From Selection"),
+                description: localization::localized_str!(
+                    "Whether to pre-fill the file finder's query with the text selected in the focused item (e.g. an editor or a terminal)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_finder.prefill_query_from_selection"),
@@ -9788,7 +9796,13 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                         SemanticTokens::VARIANTS
                             .iter()
                             .filter_map(|v| {
-                                v.get_documentation().map(|doc| format!("{v:?}: {doc}"))
+                                v.get_documentation().map(|doc| {
+                                    // The variant docs are ordinary catalog
+                                    // entries, so each line goes through the
+                                    // same lookup as a `localized_str!` call.
+                                    let doc = localization::lookup(doc).unwrap_or(doc);
+                                    format!("{v:?}: {doc}")
+                                })
                             })
                             .join("\n")
                             .leak()

@@ -46,6 +46,8 @@ urlencoding.workspace = true
 vte.workspace = true
 parking_lot.workspace = true
 percent-encoding.workspace = true
+unicode-general-category.workspace = true
+urlocator.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

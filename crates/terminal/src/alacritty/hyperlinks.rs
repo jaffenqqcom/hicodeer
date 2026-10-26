@@ -17,6 +17,12 @@ use std::{
 use url::Url;
 use util::paths::{PathStyle, UrlExt};
 
+// Boundary detection follows Unicode general categories so every script is
+// covered, and URL scanning streams characters through a state machine that
+// knows how many trailing characters are not part of the link.
+use unicode_general_category::{GeneralCategory, get_general_category};
+use urlocator::{UrlLocation, UrlLocator};
+
 use crate::Range;
 
 const URL_REGEX: &str = r#"(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file://|git://|ssh:|ftp://|zed://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>"\s{-}\^⟨⟩`']+"#;
@@ -26,7 +32,11 @@ const WIDE_CHAR_SPACERS: Flags =
 
 pub(crate) struct RegexSearches {
     url_regex: Option<RegexSearch>,
+    // Kept so `terminal.path_hyperlink_regexes` still parses; path detection is
+    // pointer based now and no longer consults them.
+    #[allow(dead_code, reason = "superseded by pointer-based path detection")]
     path_hyperlink_regexes: Vec<Regex>,
+    #[allow(dead_code, reason = "superseded by pointer-based path detection")]
     path_hyperlink_timeout: Duration,
 }
 
@@ -35,7 +45,14 @@ pub(crate) struct HyperlinkMatch {
     pub(crate) text: String,
     pub(crate) is_url: bool,
     pub(crate) range: Range,
+    /// Path detection enumerates several text fragments around the pointer
+    /// because a regex can only pick one run of characters. The view layer
+    /// walks these candidates and keeps the first one that resolves to a real
+    /// file.
+    pub(crate) alternatives: Vec<PathCandidate>,
 }
+
+pub(crate) use crate::PathCandidate;
 
 impl From<(String, bool, Match)> for HyperlinkMatch {
     fn from((text, is_url, range): (String, bool, Match)) -> Self {
@@ -43,6 +60,7 @@ impl From<(String, bool, Match)> for HyperlinkMatch {
             text,
             is_url,
             range: Range::from_alacritty(range),
+            alternatives: Vec::new(),
         }
     }
 }
@@ -88,6 +106,8 @@ impl RegexSearches {
     }
 }
 
+// Detection order: OSC 8 hyperlink, then a URL on the hovered line, then a path
+// around the pointer. The hovered line is built once and shared.
 pub(crate) fn find_from_grid_point<T: EventListener>(
     term: &Term<T>,
     point: AlacPoint,
@@ -96,7 +116,7 @@ pub(crate) fn find_from_grid_point<T: EventListener>(
 ) -> Option<HyperlinkMatch> {
     let grid = term.grid();
     let link = grid.index(point).hyperlink();
-    let found_word = if let Some(ref url) = link {
+    if let Some(ref url) = link {
         let mut min_index = point;
         loop {
             let new_min_index = min_index.sub(term, Boundary::Cursor, 1);
@@ -120,34 +140,48 @@ pub(crate) fn find_from_grid_point<T: EventListener>(
         let url = url.uri().to_owned();
         let url_match = min_index..=max_index;
 
-        Some((url, true, url_match))
-    } else {
-        let (line_start, line_end) = (term.line_search_left(point), term.line_search_right(point));
-        let url_match = regex_searches.url_regex.as_mut().and_then(|url_regex| {
-            RegexIter::new(line_start, line_end, AlacDirection::Right, term, url_regex)
-                .find(|rm| rm.contains(&point))
-                .map(|url_match| {
-                    let url = term.bounds_to_string(*url_match.start(), *url_match.end());
-                    sanitize_url_punctuation(url, url_match, term)
-                })
-        });
+        return Some(normalize_found_word((url, true, url_match), path_style));
+    }
 
-        if let Some((url, url_match)) = url_match {
-            Some((url, true, url_match))
-        } else {
-            path_match(
-                &term,
-                line_start,
-                line_end,
-                point,
-                &mut regex_searches.path_hyperlink_regexes,
-                regex_searches.path_hyperlink_timeout,
-            )
-            .map(|(path, path_match)| (path, false, path_match))
-        }
-    };
+    let (line_start, line_end) = (term.line_search_left(point), term.line_search_right(point));
 
-    found_word.map(|found_word| normalize_found_word(found_word, path_style))
+    // Build the hovered line once and share it between URL and path detection.
+    // Prefer the streaming locator: it understands where a URL ends for every
+    // script. The regex below stays as a fallback for the schemes the locator
+    // does not know (ipfs, ipns, magnet, zed).
+    let hovered_line = collect_hovered_line(term, line_start, line_end, point);
+
+    if let Some(hovered_line) = hovered_line.as_ref()
+        && let Some(hyperlink) = url_hyperlink_at_point(term, hovered_line)
+    {
+        return Some(hyperlink);
+    }
+
+    let url_match = regex_searches.url_regex.as_mut().and_then(|url_regex| {
+        RegexIter::new(line_start, line_end, AlacDirection::Right, term, url_regex)
+            .find(|rm| rm.contains(&point))
+            .map(|url_match| {
+                let url = term.bounds_to_string(*url_match.start(), *url_match.end());
+                sanitize_url_punctuation(url, url_match, term)
+            })
+    });
+
+    if let Some((url, url_match)) = url_match {
+        // The fallback regex does not know script boundaries, so
+        // `magnet:...，然后` would swallow the prose after the comma. Trim
+        // trailing separators the same way the locator does.
+        let (url, url_match) = match hovered_line.as_ref() {
+            Some(hovered_line) => trim_url_trailing_separators(term, hovered_line, url, url_match),
+            None => (url, url_match),
+        };
+        return Some(normalize_found_word((url, true, url_match), path_style));
+    }
+
+    // Detect paths from the pointer position instead of matching the longest
+    // run of text on the line.
+    hovered_line
+        .as_ref()
+        .and_then(|hovered_line| path_hyperlink_at_point(term, hovered_line))
 }
 
 fn normalize_found_word(
@@ -182,6 +216,7 @@ fn normalize_hyperlink_match(
                         text: path.to_string_lossy().into_owned(),
                         is_url: false,
                         range,
+                        alternatives: Vec::new(),
                     };
                 } else if let Some(path) = try_osc8_url_to_path(url)
                     && path_style.is_posix()
@@ -190,6 +225,7 @@ fn normalize_hyperlink_match(
                         text: path,
                         is_url: false,
                         range,
+                        alternatives: Vec::new(),
                     };
                 }
             }
@@ -201,12 +237,14 @@ fn normalize_hyperlink_match(
                 text: path.to_string(),
                 is_url: false,
                 range,
+                alternatives: Vec::new(),
             }
         } else {
             HyperlinkMatch {
                 text: maybe_url_or_path,
                 is_url: true,
                 range,
+                alternatives: Vec::new(),
             }
         }
     } else {
@@ -214,6 +252,7 @@ fn normalize_hyperlink_match(
             text: maybe_url_or_path,
             is_url: false,
             range,
+            alternatives: Vec::new(),
         }
     }
 }
@@ -285,200 +324,549 @@ fn sanitize_url_punctuation<T: EventListener>(
     }
 }
 
-/// Returns the byte offset just past the first unbalanced `(` in `s`, or `None`
-/// if all parentheses are balanced. Used to strip prefixes like `Update(` from
-/// path matches while preserving balanced parens in filenames like `file(copy).txt`.
-fn first_unbalanced_open_paren(s: &str) -> Option<usize> {
-    let mut balance: i32 = 0;
-    let mut first_unmatched = None;
-    for (i, c) in s.char_indices() {
-        match c {
-            '(' => {
-                if balance == 0 {
-                    first_unmatched = Some(i + c.len_utf8());
-                }
-                balance += 1;
-            }
-            ')' => {
-                balance -= 1;
-                if balance <= 0 {
-                    balance = 0;
-                    first_unmatched = None;
-                }
-            }
-            _ => {}
-        }
-    }
-    first_unmatched.filter(|_| balance > 0)
+// Pointer-driven path detection.
+//
+// A regex can only return one run of characters, so it either swallows the
+// prose around a path (`TerminalView::scroll_to_bottom（crates/...`) or drops
+// the path entirely. Instead, split the hovered line into separator-delimited
+// fragments and enumerate every prefix/suffix combination around the pointer.
+// The view layer then keeps the first candidate that resolves to a real file,
+// which makes the filesystem - not the shape of the text - the source of truth.
+// CJK punctuation separates a path from prose; CJK ideographs do not, so a
+// filename written in Chinese survives intact.
+const PATH_FRAGMENTS_PER_SIDE: usize = 16;
+
+const MAX_PATH_CANDIDATES: usize = 64;
+
+/// Resolving a candidate costs a filesystem lookup, so only the fragments
+/// closest to the pointer are handed to the view layer.
+const MAX_RESOLVE_CANDIDATES: usize = 8;
+
+/// Upper bound on how far a URL scan may run in either direction.
+const URL_SCAN_CHARACTER_MAX_COUNT: usize = 1000;
+
+/// A candidate wider than this is not a path worth a filesystem lookup; it is
+/// usually a whole log line that happens to contain a slash.
+const MAX_PATH_CANDIDATE_BYTES: usize = 4096;
+
+#[derive(Debug)]
+struct PathFragment {
+    start_byte: usize,
+    end_byte: usize,
 }
 
-fn path_match<T>(
+/// A character that separates a path from surrounding prose. Path separators
+/// themselves are not boundaries, and neither are letters in any script: only
+/// Unicode punctuation and whitespace end a path, so a filename written in
+/// Chinese, Arabic or Cyrillic stays intact.
+fn is_path_separator(c: char) -> bool {
+    if c == '/' {
+        return false;
+    }
+
+    if c.is_ascii() {
+        return c.is_whitespace()
+            || matches!(
+                c,
+                '\0' | '\t'
+                    | ' '
+                    | '('
+                    | ')'
+                    | ':'
+                    | '\\'
+                    | ','
+                    | '"'
+                    | '\''
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '<'
+                    | '>'
+                    | ';'
+                    | '|'
+                    | '`'
+                    | '='
+            );
+    }
+
+    if c.is_whitespace() {
+        return true;
+    }
+
+    // Box-drawing glyphs used by tree-style directory listers. They are
+    // symbols rather than punctuation, so the category check below misses them.
+    if matches!(
+        c,
+        '│' | '├'
+            | '└'
+            | '─'
+            | '┬'
+            | '┴'
+            | '┼'
+            | '║'
+            | '╠'
+            | '╚'
+            | '═'
+            | '╦'
+            | '╩'
+            | '╬'
+    ) {
+        return true;
+    }
+
+    matches!(
+        get_general_category(c),
+        GeneralCategory::OpenPunctuation
+            | GeneralCategory::ClosePunctuation
+            | GeneralCategory::InitialPunctuation
+            | GeneralCategory::FinalPunctuation
+            | GeneralCategory::OtherPunctuation
+    )
+}
+
+/// Returns true when `c` should terminate a clickable URL. The ASCII set is
+/// deliberately narrow because most ASCII punctuation is legal inside a URL;
+/// non-ASCII punctuation usually belongs to the prose around it.
+fn is_url_link_separator(c: char) -> bool {
+    if matches!(
+        c,
+        ' ' | '<' | '>' | '"' | '{' | '}' | '|' | '\\' | '^' | '`'
+    ) {
+        return true;
+    }
+
+    if c.is_ascii() {
+        return false;
+    }
+
+    if c.is_whitespace() {
+        return true;
+    }
+
+    matches!(
+        get_general_category(c),
+        GeneralCategory::OpenPunctuation
+            | GeneralCategory::ClosePunctuation
+            | GeneralCategory::InitialPunctuation
+            | GeneralCategory::FinalPunctuation
+            | GeneralCategory::OtherPunctuation
+    )
+}
+
+/// Splits a line into fragments where every separator is its own fragment, so
+/// combining fragments on both sides of a separator reproduces the original
+/// text byte for byte.
+fn split_path_fragments(line: &str) -> Vec<PathFragment> {
+    let mut fragments = Vec::new();
+    let mut current_start = 0;
+    let mut in_fragment = false;
+
+    for (offset, c) in line.char_indices() {
+        if is_path_separator(c) {
+            if in_fragment {
+                fragments.push(PathFragment {
+                    start_byte: current_start,
+                    end_byte: offset,
+                });
+                in_fragment = false;
+            }
+
+            fragments.push(PathFragment {
+                start_byte: offset,
+                end_byte: offset + c.len_utf8(),
+            });
+            current_start = offset + c.len_utf8();
+        } else if !in_fragment {
+            current_start = offset;
+            in_fragment = true;
+        }
+    }
+
+    if in_fragment {
+        fragments.push(PathFragment {
+            start_byte: current_start,
+            end_byte: line.len(),
+        });
+    }
+
+    fragments
+}
+
+fn is_trailing_sentence_punctuation(c: char) -> bool {
+    if c == '.' {
+        return true;
+    }
+
+    if c.is_ascii() {
+        return false;
+    }
+
+    matches!(
+        get_general_category(c),
+        GeneralCategory::ClosePunctuation
+            | GeneralCategory::FinalPunctuation
+            | GeneralCategory::OtherPunctuation
+    )
+}
+
+/// Strips prose punctuation that trails a path at the end of a sentence, such
+/// as `notes/README.md。`. A trailing dot that belongs to a real path component
+/// (`.`, `..`, `foo/.`) is preserved.
+fn trim_trailing_sentence_punctuation(path: &str) -> (&str, usize) {
+    let mut trimmed = path;
+    let mut removed_bytes = 0;
+
+    while let Some(c) = trimmed.chars().next_back() {
+        if !is_trailing_sentence_punctuation(c) {
+            break;
+        }
+
+        let Some(shorter) = trimmed.strip_suffix(c) else {
+            break;
+        };
+        if shorter.is_empty() {
+            break;
+        }
+
+        if c == '.' {
+            match shorter.chars().next_back() {
+                None | Some('.') | Some('/') | Some('\\') => break,
+                _ => {}
+            }
+        }
+
+        trimmed = shorter;
+        removed_bytes += c.len_utf8();
+    }
+
+    (trimmed, removed_bytes)
+}
+
+/// A candidate is only worth a filesystem lookup when it either contains a path
+/// separator or looks like a bare filename with an extension (`main.rs`).
+/// Without the second rule plain reported paths like `main.rs` would lose the
+/// worktree suffix lookup they had before.
+fn looks_like_path(text: &str) -> bool {
+    if text.len() < 3 || text.chars().any(char::is_whitespace) {
+        return false;
+    }
+
+    if text.contains('/') || text.contains('\\') {
+        return true;
+    }
+
+    text.rsplit_once('.').is_some_and(|(stem, extension)| {
+        !stem.is_empty()
+            && extension
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+    })
+}
+
+/// Enumerates path candidates around `hovered_byte`, longest first.
+fn path_candidates_around(line: &str, hovered_byte: usize) -> Vec<(String, StdRange<usize>)> {
+    let fragments = split_path_fragments(line);
+    let Some(hit) = fragments.iter().position(|fragment| {
+        fragment.start_byte <= hovered_byte && hovered_byte < fragment.end_byte
+    }) else {
+        return Vec::new();
+    };
+
+    let first_left = hit.saturating_sub(PATH_FRAGMENTS_PER_SIDE);
+    let last_right = (hit + PATH_FRAGMENTS_PER_SIDE).min(fragments.len().saturating_sub(1));
+
+    let mut candidates = Vec::new();
+    'outer: for left in (first_left..=hit).rev() {
+        for right in hit..=last_right {
+            let start_byte = fragments[left].start_byte;
+            let end_byte = fragments[right].end_byte;
+            if end_byte - start_byte > MAX_PATH_CANDIDATE_BYTES {
+                continue;
+            }
+
+            let text = &line[start_byte..end_byte];
+            let (trimmed, removed_bytes) = trim_trailing_sentence_punctuation(text);
+            if !looks_like_path(trimmed) {
+                continue;
+            }
+
+            candidates.push((trimmed.to_string(), start_byte..end_byte - removed_bytes));
+
+            // Git Bash marks symlinks by appending `@` when listing a directory.
+            if let Some(stripped) = trimmed.strip_suffix('@')
+                && looks_like_path(stripped)
+            {
+                candidates.push((
+                    stripped.to_string(),
+                    start_byte..end_byte - removed_bytes - 1,
+                ));
+            }
+
+            // A CJK word glued to a path without any punctuation
+            // (`见crates/main.rs`) forms a single fragment, so retry from the
+            // first ASCII character to expose the path itself.
+            if !trimmed.starts_with(|c: char| c.is_ascii())
+                && let Some(offset) = trimmed.find(|c: char| c.is_ascii_alphanumeric())
+            {
+                let variant = &trimmed[offset..];
+                if looks_like_path(variant) {
+                    candidates.push((
+                        variant.to_string(),
+                        start_byte + offset..end_byte - removed_bytes,
+                    ));
+                }
+            }
+
+            if candidates.len() >= MAX_PATH_CANDIDATES {
+                break 'outer;
+            }
+        }
+    }
+
+    candidates.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    candidates
+}
+
+/// The hovered logical line plus a byte-offset to grid-point map for every
+/// character. Mapping each character to the cell it actually occupies removes
+/// the guesswork of advancing cell by cell: a glyph that occupies two cells but
+/// contributes one character (box drawing, fullwidth forms) made every advanced
+/// range land one cell to the left.
+struct HoveredLine {
+    text: String,
+    hovered_byte: usize,
+    chars: Vec<(usize, AlacPoint)>,
+}
+
+impl HoveredLine {
+    fn char_index_at(&self, byte: usize) -> usize {
+        self.chars.partition_point(|(offset, _)| *offset < byte)
+    }
+}
+
+fn byte_range_to_grid_match<T: EventListener>(
+    term: &Term<T>,
+    hovered: &HoveredLine,
+    byte_range: StdRange<usize>,
+) -> Option<Match> {
+    if byte_range.end <= byte_range.start || byte_range.end > hovered.text.len() {
+        return None;
+    }
+
+    let start_index = hovered.char_index_at(byte_range.start);
+    let end_index = hovered.char_index_at(byte_range.end);
+    if start_index >= end_index || end_index > hovered.chars.len() {
+        return None;
+    }
+
+    let start = hovered.chars[start_index].1;
+    let last = hovered.chars[end_index - 1].1;
+
+    // `Match` is an inclusive range, so the end point is the cell of the last
+    // character. A range that wrapped onto the next row is clipped to the last
+    // cell of this row.
+    let end = if last.line == start.line {
+        last
+    } else {
+        AlacPoint::new(start.line, Column(term.grid().columns() - 1))
+    };
+
+    (start <= end).then(|| Match::new(start, end))
+}
+
+/// Builds the text of the hovered logical line together with the byte offset
+/// the pointer sits at and the grid point of every character. Tabs become
+/// single spaces and wide-character spacers are skipped.
+fn collect_hovered_line<T: EventListener>(
     term: &Term<T>,
     line_start: AlacPoint,
     line_end: AlacPoint,
     hovered: AlacPoint,
-    path_hyperlink_regexes: &mut Vec<Regex>,
-    path_hyperlink_timeout: Duration,
-) -> Option<(String, Match)> {
-    if path_hyperlink_regexes.is_empty() || path_hyperlink_timeout.as_millis() == 0 {
-        return None;
-    }
-    debug_assert!(line_start <= hovered);
-    debug_assert!(line_end >= hovered);
-    let search_start_time = Instant::now();
-
-    let timed_out = || {
-        let elapsed_time = Instant::now().saturating_duration_since(search_start_time);
-        (elapsed_time > path_hyperlink_timeout)
-            .then_some((elapsed_time.as_millis(), path_hyperlink_timeout.as_millis()))
-    };
-
-    // This used to be: `let line = term.bounds_to_string(line_start, line_end)`, however, that
-    // api compresses tab characters into a single space, whereas we require a cell accurate
-    // string representation of the line. The below algorithm does this, but seems a bit odd.
-    // Maybe there is a clean api for doing this, but I couldn't find it.
-    let mut line = String::with_capacity(
+) -> Option<HoveredLine> {
+    let mut text = String::with_capacity(
         (line_end.line.0 - line_start.line.0 + 1) as usize * term.grid().columns(),
     );
-    let first_cell = &term.grid()[line_start];
-    let mut prev_len = 0;
-    line.push(first_cell.c);
-    let mut hovered_point_byte_offset = None;
+    let mut chars = Vec::new();
+    let mut hovered_byte = None;
 
-    if line_start == hovered {
-        hovered_point_byte_offset = Some(0);
-    }
-
+    // `iter_from` yields `line_start` itself, so the loop below must be the
+    // only place that appends characters; pre-pushing the first cell would
+    // duplicate it and shift every byte offset by one.
     for cell in term.grid().iter_from(line_start) {
         if cell.point > line_end {
             break;
         }
 
-        if !cell.flags.intersects(WIDE_CHAR_SPACERS) {
-            prev_len = line.len();
-            match cell.c {
-                ' ' | '\t' => line.push(' '),
-                c => line.push(c),
-            }
+        if cell.point == hovered {
+            hovered_byte = Some(text.len());
         }
 
-        if cell.point == hovered {
-            debug_assert!(hovered_point_byte_offset.is_none());
-            hovered_point_byte_offset = Some(prev_len);
+        if !cell.flags.intersects(WIDE_CHAR_SPACERS) {
+            chars.push((text.len(), cell.point));
+            match cell.c {
+                ' ' | '\t' => text.push(' '),
+                c => text.push(c),
+            }
         }
     }
-    let line = line.trim_ascii_end();
-    let hovered_point_byte_offset = hovered_point_byte_offset?;
-    if line.len() <= hovered_point_byte_offset {
+
+    let hovered_byte = hovered_byte?;
+    let trimmed_len = text.trim_ascii_end().len();
+    if hovered_byte >= trimmed_len {
         return None;
     }
-    let found_from_range = |path_range: StdRange<usize>,
-                            link_range: StdRange<usize>,
-                            position: Option<(u32, Option<u32>)>| {
-        let advance_point_by_str = |mut point: AlacPoint, s: &str| {
-            for _ in s.chars() {
-                point = term
-                    .expand_wide(point, AlacDirection::Right)
-                    .add(term, Boundary::Grid, 1);
-            }
+    text.truncate(trimmed_len);
+    chars.retain(|(offset, _)| *offset < trimmed_len);
 
-            // There does not appear to be an alacritty api that is
-            // "move to start of current wide char", so we have to do it ourselves.
-            let flags = term.grid().index(point).flags;
-            if flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
-                AlacPoint::new(point.line + 1, Column(0))
-            } else if flags.contains(Flags::WIDE_CHAR_SPACER) {
-                AlacPoint::new(point.line, point.column - 1)
-            } else {
-                point
-            }
+    Some(HoveredLine {
+        text,
+        hovered_byte,
+        chars,
+    })
+}
+
+/// Drops trailing non-ASCII separators from a regex-detected URL and shortens
+/// the match accordingly. ASCII punctuation is already handled by
+/// `sanitize_url_punctuation`.
+fn trim_url_trailing_separators<T: EventListener>(
+    term: &Term<T>,
+    hovered: &HoveredLine,
+    url: String,
+    url_match: Match,
+) -> (String, Match) {
+    let mut trimmed = url.as_str();
+    while let Some(character) = trimmed.chars().next_back() {
+        if !is_url_link_separator(character) {
+            break;
+        }
+
+        let Some(shorter) = trimmed.strip_suffix(character) else {
+            break;
         };
+        if shorter.is_empty() {
+            break;
+        }
+        trimmed = shorter;
+    }
 
-        let link_start = advance_point_by_str(line_start, &line[..link_range.start]);
-        let link_end = advance_point_by_str(link_start, &line[link_range]);
-        let link_match = link_start
-            ..=term
-                .expand_wide(link_end, AlacDirection::Left)
-                .sub(term, Boundary::Grid, 1);
+    if trimmed.len() == url.len() {
+        return (url, url_match);
+    }
 
-        (
-            {
-                let mut path = line[path_range].to_string();
-                position.inspect(|(line, column)| {
-                    path += &format!(":{line}");
-                    column.inspect(|column| path += &format!(":{column}"));
-                });
-                path
-            },
-            link_match,
-        )
+    let Some(start_byte) = hovered
+        .chars
+        .iter()
+        .find(|(_, point)| *point == *url_match.start())
+        .map(|(offset, _)| *offset)
+    else {
+        return (url, url_match);
     };
 
-    for regex in path_hyperlink_regexes {
-        let mut path_found = false;
+    match byte_range_to_grid_match(term, hovered, start_byte..start_byte + trimmed.len()) {
+        Some(range) => (trimmed.to_string(), range),
+        None => (url, url_match),
+    }
+}
 
-        for (line_start_offset, captures) in regex
-            .captures_iter(&line)
-            .map(|captures| (0usize, captures))
-        {
-            path_found = true;
-            let match_range = captures.get(0).unwrap().range();
-            let (mut path_range, line_column) = if let Some(path) = captures.name("path") {
-                let parse = |name: &str| {
-                    captures
-                        .name(name)
-                        .and_then(|capture| capture.as_str().parse().ok())
-                };
+/// Locates a URL under the pointer by streaming characters through the same
+/// state machine warp-ohos uses. The machine reports the URL length and how
+/// many trailing characters are not part of it, which keeps sentence
+/// punctuation out without any post-processing and works for every script.
+fn url_hyperlink_at_point<T: EventListener>(
+    term: &Term<T>,
+    hovered: &HoveredLine,
+) -> Option<HyperlinkMatch> {
+    let line = hovered.text.as_str();
+    let characters = line.char_indices().collect::<Vec<_>>();
+    let hovered_index = characters
+        .partition_point(|(offset, _)| *offset <= hovered.hovered_byte)
+        .saturating_sub(1);
 
-                (
-                    path.range(),
-                    parse("line").map(|line| (line, parse("column"))),
-                )
-            } else {
-                (match_range.clone(), None)
-            };
-            let mut link_range = captures
-                .name("link")
-                .map_or_else(|| match_range.clone(), |link| link.range());
+    if is_url_link_separator(characters.get(hovered_index)?.1) {
+        return None;
+    }
 
-            path_range.start += line_start_offset;
-            path_range.end += line_start_offset;
-            link_range.start += line_start_offset;
-            link_range.end += line_start_offset;
+    // Walk back to the boundary that starts the token containing the pointer.
+    let mut scan_start = hovered_index;
+    let mut scanned_characters = 0;
+    while scan_start > 0 && scanned_characters < URL_SCAN_CHARACTER_MAX_COUNT {
+        if is_url_link_separator(characters[scan_start - 1].1) {
+            break;
+        }
+        scan_start -= 1;
+        scanned_characters += 1;
+    }
 
-            // Strip prefix up to the first unbalanced `(` in the matched path.
-            // This handles delimiter parens like `Update(.claude/SKILL.md)` while
-            // preserving balanced parens in filenames like `file(copy).txt`.
-            // Analogous to `sanitize_url_punctuation` which strips unbalanced
-            // trailing `)` from URLs.
-            if let Some(trim) = first_unbalanced_open_paren(&line[path_range.clone()]) {
-                path_range.start += trim;
-                link_range.start = link_range.start.max(path_range.start);
-            }
-
-            if !link_range.contains(&hovered_point_byte_offset) {
-                // No match, just skip.
-                continue;
-            }
-            let found = found_from_range(path_range, link_range, line_column);
-
-            if found.1.contains(&hovered) {
-                return Some(found);
-            }
+    let mut locator = UrlLocator::new();
+    let mut url_bounds = None;
+    for index in scan_start..characters.len() {
+        let character = characters[index].1;
+        if is_url_link_separator(character) {
+            break;
         }
 
-        if path_found {
-            return None;
+        if index - scan_start > URL_SCAN_CHARACTER_MAX_COUNT {
+            url_bounds = None;
+            break;
         }
 
-        if let Some((timed_out_ms, timeout_ms)) = timed_out() {
-            warn!("Timed out processing path hyperlink regexes after {timed_out_ms}ms");
-            info!("{timeout_ms}ms time out specified in `terminal.path_hyperlink_timeout_ms`");
-            return None;
+        if let UrlLocation::Url(length, illegal_end_characters) = locator.advance(character) {
+            let consumed = index - scan_start + 1;
+            let start = scan_start + consumed.saturating_sub(usize::from(length));
+            let end = scan_start + consumed.saturating_sub(usize::from(illegal_end_characters));
+            if start < end {
+                url_bounds = Some((start, end));
+            }
         }
     }
 
-    None
+    let (start, end) = url_bounds?;
+    if !(start..end).contains(&hovered_index) {
+        return None;
+    }
+
+    let start_byte = characters[start].0;
+    let end_byte = characters
+        .get(end)
+        .map_or(line.len(), |(offset, _)| *offset);
+    let range = byte_range_to_grid_match(term, hovered, start_byte..end_byte)?;
+
+    Some(HyperlinkMatch {
+        text: line[start_byte..end_byte].to_string(),
+        is_url: true,
+        range: Range::from_alacritty(range),
+        alternatives: Vec::new(),
+    })
+}
+
+fn path_hyperlink_at_point<T: EventListener>(
+    term: &Term<T>,
+    hovered: &HoveredLine,
+) -> Option<HyperlinkMatch> {
+    let mut candidates = path_candidates_around(&hovered.text, hovered.hovered_byte)
+        .into_iter()
+        .take(MAX_RESOLVE_CANDIDATES + 1);
+
+    let (text, byte_range) = candidates.next()?;
+    let range = byte_range_to_grid_match(term, hovered, byte_range)?;
+
+    let alternatives = candidates
+        .filter_map(|(text, byte_range)| {
+            Some(PathCandidate {
+                text,
+                range: Range::from_alacritty(byte_range_to_grid_match(term, hovered, byte_range)?),
+            })
+        })
+        .collect();
+
+    Some(HyperlinkMatch {
+        text,
+        is_url: false,
+        range: Range::from_alacritty(range),
+        alternatives,
+    })
 }
 
 #[cfg(test)]
@@ -2008,5 +2396,133 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+// Pointer-driven path candidate enumeration.
+#[cfg(test)]
+mod path_candidates_tests {
+    use super::*;
+
+    fn candidate_texts(line: &str, hovered_byte: usize) -> Vec<String> {
+        path_candidates_around(line, hovered_byte)
+            .into_iter()
+            .map(|(text, _range)| text)
+            .collect()
+    }
+
+    #[test]
+    fn keeps_path_after_fullwidth_open_paren() {
+        let line =
+            "TerminalView::scroll_to_bottom（crates/terminal_view/src/terminal_view.rs:991）";
+        let hovered = line.find("crates").expect("path present");
+        let candidates = candidate_texts(line, hovered);
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == "crates/terminal_view/src/terminal_view.rs:991"),
+            "{candidates:?}"
+        );
+    }
+
+    #[test]
+    fn keeps_chinese_filename_whole() {
+        let line = "已生成 文档/报告（终稿）.md";
+        let hovered = line.find("文档").expect("path present");
+        let candidates = candidate_texts(line, hovered);
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == "文档/报告（终稿）.md"),
+            "{candidates:?}"
+        );
+    }
+
+    #[test]
+    fn extracts_path_glued_to_chinese_text() {
+        let line = "见crates/terminal_view/src/terminal_view.rs:991";
+        let hovered = line.find("crates").expect("path present");
+        let candidates = candidate_texts(line, hovered);
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == "crates/terminal_view/src/terminal_view.rs:991"),
+            "{candidates:?}"
+        );
+    }
+
+    #[test]
+    fn strips_trailing_fullwidth_period() {
+        let line = "见 notes/README.md。";
+        let hovered = line.find("notes").expect("path present");
+        let candidates = candidate_texts(line, hovered);
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == "notes/README.md"),
+            "{candidates:?}"
+        );
+        assert!(
+            !candidates
+                .iter()
+                .any(|candidate| candidate.ends_with('\u{3002}')),
+            "{candidates:?}"
+        );
+    }
+
+    #[test]
+    fn strips_git_bash_symlink_marker() {
+        let line = "target/debug/hicodeer@";
+        let hovered = line.find("target").expect("path present");
+        let candidates = candidate_texts(line, hovered);
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate == "target/debug/hicodeer"),
+            "{candidates:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_plain_words() {
+        let line = "compiling terminal and terminal_view";
+        let hovered = line.find("terminal").expect("word present");
+        let candidates = candidate_texts(line, hovered);
+
+        assert!(candidates.is_empty(), "{candidates:?}");
+    }
+
+    #[test]
+    fn path_boundaries_cover_every_script() {
+        // Unicode punctuation separates a path in any language.
+        assert!(is_path_separator('\u{FF0C}'));
+        assert!(is_path_separator('\u{3002}'));
+        assert!(is_path_separator('\u{060C}'));
+        assert!(is_path_separator('\u{0964}'));
+        // Letters of any script stay inside the path.
+        assert!(!is_path_separator('中'));
+        assert!(!is_path_separator('ع'));
+        assert!(!is_path_separator('д'));
+        // The path separator itself is not a boundary.
+        assert!(!is_path_separator('/'));
+    }
+
+    #[test]
+    fn url_boundaries_cover_every_script() {
+        assert!(is_url_link_separator('\u{FF0C}'));
+        assert!(is_url_link_separator('\u{3002}'));
+        assert!(is_url_link_separator('\u{060C}'));
+        assert!(is_url_link_separator('\u{0964}'));
+        assert!(!is_url_link_separator('中'));
+        assert!(!is_url_link_separator('ع'));
+        // ASCII punctuation is legal inside a URL.
+        assert!(!is_url_link_separator('/'));
+        assert!(!is_url_link_separator(','));
+        assert!(!is_url_link_separator(':'));
     }
 }

@@ -679,6 +679,18 @@ pub enum Event {
     Open(MaybeNavigationTarget),
 }
 
+// One text fragment that may denote a path. Path detection enumerates these
+// around the pointer because the shape of the text alone cannot tell where a
+// path ends and prose begins.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PathCandidate {
+    /// File system path, absolute or relative, existing or not.
+    /// Might have line and column number(s) attached as `file.rs:1:23`
+    pub text: String,
+    /// Cells covered by this candidate, used for the hover underline.
+    pub range: Range,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PathLikeTarget {
     /// File system path, absolute or relative, existing or not.
@@ -686,6 +698,9 @@ pub struct PathLikeTarget {
     pub maybe_path: String,
     /// Current working directory of the terminal
     pub working_directory: Option<PathBuf>,
+    /// Further candidates to try when `maybe_path` does not resolve, ordered
+    /// longest first.
+    pub alternatives: Vec<PathCandidate>,
 }
 
 /// A string inside terminal, potentially useful as a URI that can be opened.
@@ -1893,10 +1908,14 @@ impl Terminal {
         history_size: usize,
         cx: &mut Context<Self>,
     ) {
+        // Detected paths carry fallback fragments that the view layer resolves
+        // in order; URLs and OSC 8 links carry none.
+        let alternatives = hyperlink.alternatives.clone();
         let HyperlinkMatch {
             text: maybe_url_or_path,
             is_url,
             range,
+            ..
         } = hyperlink;
         let prev_hovered_word = self.last_content.last_hovered_word.take();
         let match_line = range.start().line;
@@ -1911,6 +1930,7 @@ impl Terminal {
                 MaybeNavigationTarget::PathLike(PathLikeTarget {
                     maybe_path: decoded_path,
                     working_directory,
+                    alternatives,
                 })
             } else {
                 MaybeNavigationTarget::Url(maybe_url_or_path.clone())
@@ -1919,6 +1939,7 @@ impl Terminal {
             MaybeNavigationTarget::PathLike(PathLikeTarget {
                 maybe_path: maybe_url_or_path.clone(),
                 working_directory,
+                alternatives,
             })
         };
 
@@ -2477,11 +2498,13 @@ impl Terminal {
 
     pub fn try_modifiers_change(
         &mut self,
-        modifiers: &Modifiers,
+        _modifiers: &Modifiers,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        self.schedule_find_hyperlink(*modifiers, window.mouse_position(), cx);
+        // Modifiers no longer decide whether links are detected, but a change
+        // still re-probes so a pending lookup settles immediately.
+        self.schedule_find_hyperlink(window.mouse_position(), false, cx);
     }
 
     ///Paste text into the terminal
@@ -2596,30 +2619,69 @@ impl Terminal {
                     }
                 }
             }
+            // A mouse-reporting application (for example a full-screen TUI)
+            // makes every move go to the PTY. Probe locally as well so links
+            // keep their pointer cursor, underline and tooltip; the report
+            // above is unaffected. Held buttons are excluded because the
+            // application owns the drag.
+            if e.pressed_button.is_none() {
+                self.schedule_find_hyperlink(e.position, true, cx);
+            }
         } else {
-            self.schedule_find_hyperlink(e.modifiers, e.position, cx);
+            // `true`: pointer movement may skip re-probing inside the same link.
+            self.schedule_find_hyperlink(e.position, true, cx);
         }
         cx.notify();
     }
 
     fn schedule_find_hyperlink(
         &mut self,
-        modifiers: Modifiers,
         position: GpuiPoint<Pixels>,
+        skip_inside_link: bool,
         cx: &mut Context<Self>,
     ) {
-        // [OHOS PORT BEGIN] Probe for links on plain hover so the underline,
-        // pointer cursor and tooltip appear without a modifier; opening still
-        // requires the secondary modifier so a stray click cannot navigate.
-        let wants_link_probe = cfg!(target_env = "ohos") || modifiers.secondary();
-        // [OHOS PORT END]
-
+        // Links are probed on plain hover so the underline, pointer cursor and
+        // tooltip appear without a modifier, matching the other terminals this
+        // one is modelled after.
         if self.selection_phase == SelectionPhase::Selecting
-            || !wants_link_probe
             || !self.last_content.terminal_bounds.bounds.contains(&position)
         {
             self.clear_hyperlink(cx);
             return;
+        }
+
+        // Path detection is meaningless inside a terminal editor: the grid is
+        // document text rather than clickable output. warp-ohos keys this off
+        // SGR mouse reporting, but that would also disable full-screen TUIs, so
+        // the foreground command decides instead.
+        if self
+            .foreground_process_command_name()
+            .as_deref()
+            .is_some_and(is_terminal_editor_command)
+        {
+            self.clear_hyperlink(cx);
+            return;
+        }
+
+        // While the pointer stays inside the link that was already resolved
+        // there is nothing new to detect. Skipping the probe keeps the underline
+        // and tooltip stable and avoids another filesystem lookup, mirroring
+        // warp-ohos' fragment-boundary gate. Content changes must still
+        // re-probe, so only pointer movement passes `true` here.
+        if skip_inside_link {
+            let point = grid_point(
+                position - self.last_content.terminal_bounds.bounds.origin,
+                self.last_content.terminal_bounds,
+                self.last_content.display_offset,
+            );
+            if self
+                .last_content
+                .last_hovered_word
+                .as_ref()
+                .is_some_and(|word| word.word_match.contains(point))
+            {
+                return;
+            }
         }
 
         // Throttle hyperlink searches to avoid excessive processing
@@ -2643,14 +2705,6 @@ impl Terminal {
         } else {
             throttle
         };
-
-        // [OHOS PORT BEGIN] Pointer hovering has no modifier to re-trigger the
-        // probe, so a throttled move would leave a stale link highlight (and
-        // pointer cursor) behind after the pointer leaves the link. Probe on
-        // every move instead; a lookup only scans the hovered line.
-        #[cfg(target_env = "ohos")]
-        let throttle = false;
-        // [OHOS PORT END]
 
         if throttle {
             return;
@@ -2945,7 +2999,9 @@ impl Terminal {
     }
 
     fn refresh_hovered_word(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.schedule_find_hyperlink(window.modifiers(), window.mouse_position(), cx);
+        // Content changed under the pointer, so re-probe even if the pointer
+        // has not moved (`false` disables the inside-link shortcut).
+        self.schedule_find_hyperlink(window.mouse_position(), false, cx);
     }
 
     fn determine_scroll_lines(
@@ -3548,6 +3604,33 @@ fn normalize_path_command_name(command: &str) -> Option<String> {
     }
 
     Some(command)
+}
+
+// Terminal editors draw their own text, so hovering it must not produce path
+// links. Only well-known interactive editors are listed; full-screen TUIs that
+// do render output paths are intentionally absent.
+fn is_terminal_editor_command(command: &str) -> bool {
+    let name = command.split('.').next().unwrap_or(command);
+    matches!(
+        name,
+        "vim"
+            | "nvim"
+            | "vi"
+            | "vimdiff"
+            | "nano"
+            | "pico"
+            | "emacs"
+            | "less"
+            | "more"
+            | "most"
+            | "man"
+            | "helix"
+            | "hx"
+            | "micro"
+            | "kak"
+            | "joe"
+            | "mcedit"
+    )
 }
 
 fn foreground_process_command_from_argv(argv: &[String]) -> Option<String> {
@@ -5697,11 +5780,9 @@ mod tests {
                 );
             }
 
-            fn ctrl_mouse_move_to(&mut self, position: GpuiPoint<Pixels>) {
-                let modifiers = Modifiers::secondary_key();
+            fn mouse_move_to(&mut self, position: GpuiPoint<Pixels>) {
                 let move_event = MouseMoveEvent {
                     position,
-                    modifiers,
                     ..default()
                 };
                 self.window.simulate_mouse_move(position, self.cx);
@@ -5742,14 +5823,6 @@ mod tests {
             fn unthrottle(&mut self) {
                 // Suppress hyperlink throttling for testing
                 self.terminal.suppress_hyperlink_throttle_once = true;
-            }
-
-            fn set_window_secondary_key(&mut self) {
-                self.window.set_modifiers(Modifiers::secondary_key());
-            }
-
-            fn clear_window_secondary_key(&mut self) {
-                self.window.set_modifiers(default());
             }
         }
 
@@ -5857,7 +5930,7 @@ mod tests {
             }
         }
 
-        async fn init_ctrl_hover_hyperlink_test_with_window(
+        async fn init_hover_hyperlink_test_with_window(
             cx: &mut TestAppContext,
         ) -> (TestEntities, HoveredWord, &mut VisualTestContext) {
             let (terminal, cx) = init_terminal_test_with_window(cx, b"");
@@ -5872,8 +5945,7 @@ mod tests {
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
                 cx.assert_display_offset(0);
                 cx.assert_visible_lines_match(vec![OUTPUT_ZED_DEV]);
-                cx.set_window_secondary_key();
-                cx.ctrl_mouse_move_to(ZED_DEV_PT);
+                cx.mouse_move_to(ZED_DEV_PT);
                 Some(Expected(Wakeups(0), Notifies(2)))
             });
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
@@ -5889,9 +5961,9 @@ mod tests {
         const ZED_DEV_PT: GpuiPoint<Pixels> = point(px(30.0), px(2.5));
 
         #[gpui::test]
-        async fn test_ctrl_hover_with_changing_content(cx: &mut TestAppContext) {
+        async fn test_hover_with_changing_content(cx: &mut TestAppContext) {
             let (test_entities, mut expected_hovered_word, cx) =
-                init_ctrl_hover_hyperlink_test_with_window(cx).await;
+                init_hover_hyperlink_test_with_window(cx).await;
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
                 cx.write_output_lines(OUTPUT_ZED_DEV, 1);
                 Some(Expected(Wakeups(2), Notifies(0)))
@@ -5922,11 +5994,9 @@ mod tests {
                 Some(Expected(Wakeups(17), Notifies(1)))
             });
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
-                cx.clear_window_secondary_key();
-                // ...AND new hovered_word is set if secondary was held.
+                // ...AND the new hovered_word is set without any modifier held.
                 expected_hovered_word = expected_hovered_word.with_id(expected_hovered_word.id + 1);
                 cx.assert_hovered_word(Some(&expected_hovered_word));
-                cx.set_window_secondary_key();
                 for _ in 0..5 {
                     cx.write_output_lines(OUTPUT_ZED_DEV, 1);
                     cx.write_output_lines(OUTPUT_NONE, 1);
@@ -5965,7 +6035,7 @@ mod tests {
                 cx.scroll_up_by_and_sync(3);
                 // Existing hovered word IS NOT reused when scrolling
                 cx.assert_hovered_word(None);
-                cx.ctrl_mouse_move_to(ZED_DEV_PT);
+                cx.mouse_move_to(ZED_DEV_PT);
                 Some(Expected(Wakeups(0), Notifies(2)))
             });
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
@@ -6009,9 +6079,9 @@ mod tests {
         }
 
         #[gpui::test]
-        async fn test_ctrl_hover_with_changing_bounds(cx: &mut TestAppContext) {
+        async fn test_hover_with_changing_bounds(cx: &mut TestAppContext) {
             let (test_entities, mut expected_hovered_word, cx) =
-                init_ctrl_hover_hyperlink_test_with_window(cx).await;
+                init_hover_hyperlink_test_with_window(cx).await;
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
                 cx.set_size_and_sync(TerminalBounds::new(
                     px(5.0),
@@ -6031,8 +6101,7 @@ mod tests {
                 Some(Expected(Wakeups(1), Notifies(2)))
             });
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
-                cx.clear_window_secondary_key();
-                // ...AND new hovered_word is set if secondary was held.
+                // ...AND the new hovered_word is set without any modifier held.
                 expected_hovered_word = expected_hovered_word.with_id(expected_hovered_word.id + 1);
                 cx.assert_hovered_word(Some(&expected_hovered_word));
                 Some(Expected(Wakeups(0), Notifies(0)))
@@ -6040,25 +6109,19 @@ mod tests {
         }
 
         #[gpui::test]
-        async fn test_ctrl_hover_with_modifier_change_only(cx: &mut TestAppContext) {
-            let (test_entities, mut expected_hovered_word, cx) =
-                init_ctrl_hover_hyperlink_test_with_window(cx).await;
+        async fn test_hover_ignores_modifier_change(cx: &mut TestAppContext) {
+            let (test_entities, expected_hovered_word, cx) =
+                init_hover_hyperlink_test_with_window(cx).await;
             for _ in 0..10 {
                 update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
+                    // Hovering does not depend on the secondary modifier, so
+                    // clearing it keeps the same hovered word.
                     cx.try_modifiers_change(default());
-                    Some(Expected(Wakeups(0), Notifies(0)))
+                    cx.assert_hovered_word(Some(&expected_hovered_word));
+                    None
                 });
                 update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
-                    // Existing hovered_word cleared when secondary not held
-                    cx.assert_hovered_word(None);
-
                     cx.try_modifiers_change(Modifiers::secondary_key());
-                    Some(Expected(Wakeups(0), Notifies(2)))
-                });
-                update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
-                    expected_hovered_word =
-                        expected_hovered_word.with_id(expected_hovered_word.id + 1);
-                    // hovered_word set when secondary is held
                     cx.assert_hovered_word(Some(&expected_hovered_word));
                     None
                 });

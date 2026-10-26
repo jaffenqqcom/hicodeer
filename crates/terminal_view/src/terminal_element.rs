@@ -2,12 +2,11 @@ use editor::{CursorLayout, EditorSettings, HighlightedRange, HighlightedRangeLin
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Element,
     ElementId, Entity, FocusHandle, Font, FontFeatures, FontId, FontStyle, FontWeight,
-    GlobalElementId,
-    HighlightStyle, Hitbox, Hsla, InputHandler, InteractiveElement, Interactivity, IntoElement,
-    LayoutId, LineLayout, Length, ModifiersChangedEvent, MouseButton, MouseMoveEvent, Pixels,
-    Point as GpuiPoint, StatefulInteractiveElement, StrikethroughStyle, Styled, TextRun, TextStyle,
-    UTF16Selection, UnderlineStyle, WeakEntity, WhiteSpace, Window, div, fill, point, px, relative,
-    size,
+    GlobalElementId, HighlightStyle, Hitbox, Hsla, InputHandler, InteractiveElement, Interactivity,
+    IntoElement, LayoutId, Length, LineLayout, ModifiersChangedEvent, MouseButton, MouseMoveEvent,
+    Pixels, Point as GpuiPoint, StatefulInteractiveElement, StrikethroughStyle, Styled, TextRun,
+    TextStyle, UTF16Selection, UnderlineStyle, WeakEntity, WhiteSpace, Window, div, fill, point,
+    px, relative, size,
 };
 use itertools::Itertools;
 use language::CursorShape as EditorCursorShape;
@@ -23,11 +22,6 @@ use theme::{ActiveTheme, Theme};
 use theme_settings::ThemeSettings;
 use ui::utils::ensure_minimum_contrast;
 use ui::{Label, LabelCommon, LabelSize, ParentElement};
-// [OHOS PORT BEGIN] Only the upstream path builds a tooltip; this platform
-// draws the link hint itself.
-#[cfg(not(target_env = "ohos"))]
-use ui::Tooltip;
-// [OHOS PORT END]
 use util::ResultExt;
 use workspace::Workspace;
 
@@ -236,8 +230,7 @@ fn glyph_width_budgets(
     // Resolve one budget per char up front so glyph lookup does not depend on
     // glyph order (RTL runs may arrive out of order). Zero-width decoration
     // chars inherit the preceding base char's budget.
-    let mut char_budgets: Vec<(usize, Option<Pixels>)> =
-        Vec::with_capacity(char_cell_widths.len());
+    let mut char_budgets: Vec<(usize, Option<Pixels>)> = Vec::with_capacity(char_cell_widths.len());
     let mut last_base_budget: Option<Pixels> = None;
     for ((start, _ch), cells) in text.char_indices().zip(char_cell_widths.iter().copied()) {
         if cells != 0 {
@@ -1312,7 +1305,10 @@ impl Element for TerminalElement {
                 let theme = cx.theme().clone();
 
                 let link_style = HighlightStyle {
-                    color: Some(theme.colors().link_text_hover),
+                    // A hovered link is marked by the underline alone; recoloring
+                    // the text makes long path runs hard to read against the
+                    // terminal palette. Applies to every platform.
+                    color: None,
                     font_weight: Some(font_weight),
                     font_style: None,
                     background_color: None,
@@ -1422,48 +1418,17 @@ impl Element for TerminalElement {
 
                 let background_color = theme.colors().terminal_background;
 
-                // [OHOS PORT BEGIN] `TerminalView::render` reads the scrollback
-                // state before this sync runs, so a single scroll would leave
-                // the floating "jump to bottom" button one frame stale. Repaint
-                // once when it flips; the extra pass is a no-op afterwards.
-                #[cfg(target_env = "ohos")]
+                // `TerminalView::render` reads the scrollback state before this
+                // sync runs, so a single scroll would leave the floating "jump
+                // to bottom" button one frame stale. Repaint once when it flips;
+                // the extra pass is a no-op afterwards.
                 let was_scrolled_to_bottom = self.terminal.read(cx).scrolled_to_bottom();
-                // [OHOS PORT END]
-
-                // [OHOS PORT BEGIN] Link tooltips follow plain hover, matching
-                // the underline and pointer cursor (no modifier on hover).
-                let hover_probe_enabled =
-                    cfg!(target_env = "ohos") || window.modifiers().secondary();
-                // [OHOS PORT END]
 
                 let (hover_tooltip, hover_match) = self.terminal.update(cx, |terminal, cx| {
                     terminal.set_size(dimensions);
                     terminal.sync(window, cx);
 
-                    // [OHOS PORT BEGIN] A resolved hover target already means the
-                    // pointer is over an openable link, so the underline and the
-                    // tooltip follow it directly. Upstream compares link ids to
-                    // avoid stale tooltips, which makes both flicker while the
-                    // pointer moves within one link.
-                    #[cfg(target_env = "ohos")]
-                    {
-                        return if hover_probe_enabled
-                            && bounds.contains(&window.mouse_position())
-                            && let Some(registered_hover) =
-                                self.terminal_view.read(cx).hover.as_ref()
-                        {
-                            (
-                                Some(registered_hover.tooltip.clone()),
-                                Some(registered_hover.hovered_word.word_match),
-                            )
-                        } else {
-                            (None, None)
-                        };
-                    }
-                    // [OHOS PORT END]
-
-                    if hover_probe_enabled
-                        && bounds.contains(&window.mouse_position())
+                    if bounds.contains(&window.mouse_position())
                         && let Some(registered_hover) = self.terminal_view.read(cx).hover.as_ref()
                     {
                         if let Some(last_hovered_word) =
@@ -1482,20 +1447,13 @@ impl Element for TerminalElement {
                     }
                 });
 
-                // [OHOS PORT BEGIN]
-                #[cfg(target_env = "ohos")]
                 if self.terminal.read(cx).scrolled_to_bottom() != was_scrolled_to_bottom {
                     cx.notify(self.terminal_view.entity_id());
                 }
-                // [OHOS PORT END]
 
                 let scroll_top = self.terminal_view.read(cx).scroll_top;
-                // [OHOS PORT BEGIN] Draw the hint ourselves instead of using the
-                // tooltip machinery: its request is rebuilt on every pointer
-                // move, so the hint blinked out as soon as the pointer moved
-                // within the same link. The hint carries no target, only the
-                // localized click instruction.
-                #[cfg(target_env = "ohos")]
+                // The hint is drawn here rather than through `Tooltip` so it can
+                // sit next to the pointer and appear immediately.
                 let hyperlink_tooltip = hover_tooltip.map(|_| {
                     let hint = localization::localized_str!("Ctrl+Click to open");
                     let colors = cx.theme().colors();
@@ -1528,20 +1486,6 @@ impl Element for TerminalElement {
                     element.prepaint_as_root(origin, available, window, cx);
                     element
                 });
-                // [OHOS PORT END]
-                // [OHOS PORT BEGIN] Other platforms keep the upstream tooltip.
-                #[cfg(not(target_env = "ohos"))]
-                let hyperlink_tooltip = hover_tooltip.map(|hover_tooltip| {
-                    let offset = dimensions.bounds.origin - point(px(0.), scroll_top);
-                    let mut element = div()
-                        .size_full()
-                        .id("terminal-element")
-                        .tooltip(Tooltip::text(hover_tooltip))
-                        .into_any_element();
-                    element.prepaint_as_root(offset, bounds.size.into(), window, cx);
-                    element
-                });
-                // [OHOS PORT END]
 
                 let Content {
                     cells,
@@ -1794,12 +1738,9 @@ impl Element for TerminalElement {
                 mouse_input_mode,
                 window,
             );
-            // [OHOS PORT BEGIN] Show the pointing hand on plain hover, matching
-            // the underline; the modifier is only required to open.
-            let cursor_over_link = (cfg!(target_env = "ohos") || window.modifiers().secondary())
-                && bounds.contains(&window.mouse_position())
+            // The pointing hand follows plain hover, matching the underline.
+            let cursor_over_link = bounds.contains(&window.mouse_position())
                 && self.terminal_view.read(cx).hover.is_some();
-            // [OHOS PORT END]
             if cursor_over_link {
                 window.set_cursor_style(gpui::CursorStyle::PointingHand, &layout.hitbox);
             } else {
@@ -1861,7 +1802,10 @@ impl Element for TerminalElement {
                     let text_paint_start = Instant::now();
                     // [OHOS PORT BEGIN] Probe the primary font once per frame so
                     // terminal rows share a stable baseline regardless of the
-                    // fallback metrics participating in each line.
+                    // fallback metrics participating in each line. This belongs
+                    // in `TextSystem::shape_line`, which should report one
+                    // baseline for a shaped line; until it does, the caller has
+                    // to pin it.
                     #[cfg(target_env = "ohos")]
                     let baseline_metrics = {
                         let text_system = window.text_system();

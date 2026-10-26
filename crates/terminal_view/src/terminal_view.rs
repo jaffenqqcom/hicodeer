@@ -304,7 +304,9 @@ impl TerminalView {
                 ..Default::default()
             };
             let terminal = project
-                .update(cx, |project, cx| project.create_terminal_task(spawn_task, cx))?
+                .update(cx, |project, cx| {
+                    project.create_terminal_task(spawn_task, cx)
+                })?
                 .await?;
 
             workspace.update_in(cx, |workspace, window, cx| {
@@ -342,8 +344,13 @@ impl TerminalView {
     ///
     /// Used by the code that owns the Agent terminal to drive the client it
     /// hosts (for example, to ask it to open its own settings screen).
-    pub fn send_input(&mut self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>, cx: &mut Context<Self>) {
-        self.terminal.update(cx, |terminal, _| terminal.input(bytes));
+    pub fn send_input(
+        &mut self,
+        bytes: impl Into<std::borrow::Cow<'static, [u8]>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal
+            .update(cx, |terminal, _| terminal.input(bytes));
     }
 
     /// Drops the pinned title, letting the terminal be closed by the code that
@@ -693,22 +700,31 @@ impl TerminalView {
         let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
             menu.context(self.focus_handle.clone())
                 .when(self.shows_workspace_actions(), |menu| {
-                    menu.action(localization::localized_str!("New Terminal"), Box::new(NewTerminal::default()))
-                        .action(
-                            localization::localized_str!("New Center Terminal"),
-                            Box::new(NewCenterTerminal::default()),
-                        )
-                        .separator()
+                    menu.action(
+                        localization::localized_str!("New Terminal"),
+                        Box::new(NewTerminal::default()),
+                    )
+                    .action(
+                        localization::localized_str!("New Center Terminal"),
+                        Box::new(NewCenterTerminal::default()),
+                    )
+                    .separator()
                 })
                 .action(localization::localized_str!("Copy"), Box::new(Copy))
                 .when(
                     !self.read_only && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| {
                         menu.action(localization::localized_str!("Paste"), Box::new(Paste))
-                            .action(localization::localized_str!("Paste Text"), Box::new(PasteText))
+                            .action(
+                                localization::localized_str!("Paste Text"),
+                                Box::new(PasteText),
+                            )
                     },
                 )
-                .action(localization::localized_str!("Select All"), Box::new(SelectAll))
+                .action(
+                    localization::localized_str!("Select All"),
+                    Box::new(SelectAll),
+                )
                 .when(
                     !self.read_only && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| menu.action(localization::localized_str!("Clear"), Box::new(Clear)),
@@ -718,10 +734,16 @@ impl TerminalView {
                     |menu| {
                         menu.separator()
                             .when(!self.read_only, |menu| {
-                                menu.action(localization::localized_str!("Inline Assist"), Box::new(InlineAssist::default()))
+                                menu.action(
+                                    localization::localized_str!("Inline Assist"),
+                                    Box::new(InlineAssist::default()),
+                                )
                             })
                             .when(has_selection && self.shows_workspace_actions(), |menu| {
-                                menu.action(localization::localized_str!("Add to Agent Thread"), Box::new(AddSelectionToThread))
+                                menu.action(
+                                    localization::localized_str!("Add to Agent Thread"),
+                                    Box::new(AddSelectionToThread),
+                                )
                             })
                     },
                 )
@@ -1280,7 +1302,9 @@ impl TerminalView {
                 .size(ButtonSize::Compact)
                 .icon_color(Color::Default)
                 .shape(ui::IconButtonShape::Square)
-                .tooltip(move |_window, cx| Tooltip::for_action(localization::localized_str!("Rerun task"), &RerunTask, cx))
+                .tooltip(move |_window, cx| {
+                    Tooltip::for_action(localization::localized_str!("Rerun task"), &RerunTask, cx)
+                })
                 .on_click(move |_, window, cx| {
                     window.dispatch_action(Box::new(terminal_rerun_override(&task_id)), cx);
                 }),
@@ -1390,12 +1414,17 @@ fn subscribe_for_terminal_events(
                             }
                         }
                         Some((MaybeNavigationTarget::PathLike(path_like_target), hovered_word)) => {
-                            if Some(hovered_word)
-                                != terminal_view
-                                    .hover
-                                    .as_ref()
-                                    .map(|hover| &hover.hovered_word)
-                            {
+                            // Compare identity rather than the whole word: the
+                            // hovered word carries the widest candidate's range
+                            // while `hover` holds the range of the candidate that
+                            // resolved, so a range comparison would rebuild the
+                            // hover on every pointer move.
+                            let same_hover = terminal_view.hover.as_ref().is_some_and(|hover| {
+                                hover.hovered_word.word == hovered_word.word
+                                    && hover.hovered_word.id == hovered_word.id
+                            });
+
+                            if !same_hover {
                                 terminal_view.hover = None;
                                 terminal_view.hover_tooltip_update = hover_path_like_target(
                                     &workspace,
@@ -1461,11 +1490,10 @@ impl ScrollbarVisibility for TerminalScrollbarSettingsWrapper {
     }
 }
 
-// [OHOS PORT BEGIN] Floating "jump to bottom" button. Touch devices have no
-// `shift-end`, so returning to the live prompt after scrolling back needs a
-// tappable affordance. Hidden while already at the bottom (which includes the
-// alternate screen, as it has no scrollback).
-#[cfg(target_env = "ohos")]
+// Floating "jump to bottom" button. Touch input has no `shift-end`, so
+// returning to the live prompt after scrolling back needs a tappable
+// affordance. Hidden while already at the bottom (which includes the alternate
+// screen, as it has no scrollback).
 impl TerminalView {
     fn render_scroll_to_bottom_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors();
@@ -1502,7 +1530,6 @@ impl TerminalView {
             .into_any_element()
     }
 }
-// [OHOS PORT END]
 
 impl TerminalView {
     /// Attempts to process a keystroke in the terminal. Returns true if handled.
@@ -1599,14 +1626,12 @@ impl Render for TerminalView {
 
         let focused = self.focus_handle.is_focused(window);
 
-        // [OHOS PORT BEGIN] See `render_scroll_to_bottom_button`.
-        #[cfg(target_env = "ohos")]
+        // See `render_scroll_to_bottom_button`.
         let scroll_to_bottom_button: Option<AnyElement> = {
             let show = matches!(self.mode, TerminalMode::Standalone)
                 && !self.terminal.read(cx).scrolled_to_bottom();
             show.then(|| self.render_scroll_to_bottom_button(cx))
         };
-        // [OHOS PORT END]
 
         div()
             .id("terminal-view")
@@ -1698,16 +1723,10 @@ impl Render for TerminalView {
                         )
                     }),
             )
-            // [OHOS PORT BEGIN]
-            .map(|this| {
-                #[cfg(target_env = "ohos")]
-                let this = match scroll_to_bottom_button {
-                    Some(button) => this.child(button),
-                    None => this,
-                };
-                this
+            .map(|this| match scroll_to_bottom_button {
+                Some(button) => this.child(button),
+                None => this,
             })
-            // [OHOS PORT END]
             .children(self.context_menu.as_ref().map(|(menu, position, _)| {
                 deferred(
                     anchored()
@@ -1736,16 +1755,14 @@ impl Item for TerminalView {
                     .child(h_flex().flex_grow_1().child(Divider::horizontal()))
                     .child(
                         Label::new({
-        let __zed_i18n_arg_0 = format!("{}", pid);
-        localization::format_message(
-            "Process ID (PID): {}",
-            &[
-                ("0", __zed_i18n_arg_0)
-            ],
-        )
-    })
-                            .color(Color::Muted)
-                            .size(LabelSize::Small),
+                            let __zed_i18n_arg_0 = format!("{}", pid);
+                            localization::format_message(
+                                "Process ID (PID): {}",
+                                &[("0", __zed_i18n_arg_0)],
+                            )
+                        })
+                        .color(Color::Muted)
+                        .size(LabelSize::Small),
                     )
                     .into_any_element()
             }
@@ -1761,20 +1778,16 @@ impl Item for TerminalView {
             .cloned()
             .unwrap_or_else(|| terminal.title(true));
 
-        // [OHOS PORT BEGIN] The Agent terminal is a long-running client rather
-        // than a task the user started, so it keeps the plain terminal icon
-        // instead of a play button with a rerun affordance.
-        #[cfg(target_env = "ohos")]
+        // The Agent terminal is a long-running client rather than a task the
+        // user started, so it keeps the plain terminal icon instead of a play
+        // button with a rerun affordance.
         let monitored_task = if self.is_agent_terminal() {
             None
         } else {
             terminal.task()
         };
-        #[cfg(not(target_env = "ohos"))]
-        let monitored_task = terminal.task();
 
         let (icon, icon_color, rerun_button) = match monitored_task {
-            // [OHOS PORT END]
             Some(terminal_task) => match &terminal_task.status {
                 TaskStatus::Running => (
                     IconName::PlayFilled,
@@ -2046,7 +2059,10 @@ impl Item for TerminalView {
     ) -> Vec<(SharedString, Box<dyn gpui::Action>)> {
         let terminal = self.terminal.read(cx);
         if terminal.task().is_none() {
-            vec![(localization::localized_str!("Rename").into(), Box::new(RenameTerminal))]
+            vec![(
+                localization::localized_str!("Rename").into(),
+                Box::new(RenameTerminal),
+            )]
         } else {
             Vec::new()
         }
@@ -2213,21 +2229,18 @@ impl SerializableItem for TerminalView {
     }
 
     fn include_in_saved_layout(&self, _cx: &App) -> bool {
-        // [OHOS PORT BEGIN] The Agent terminal is owned by the Agent panel.
+        // The Agent terminal is owned by the Agent panel.
         //
         // The panel adds it when the server answers and closes it when the
         // server goes away, so it must not be part of the saved pane layout: a
         // restored copy comes back as a plain shell tab with no pinned title,
         // and the panel then adds its own on top of it, which is one extra tab
         // on every start.
-        #[cfg(target_env = "ohos")]
         if self.is_agent_terminal() {
             return false;
         }
-        // [OHOS PORT END]
         true
     }
-
 
     fn deserialize(
         project: Entity<Project>,

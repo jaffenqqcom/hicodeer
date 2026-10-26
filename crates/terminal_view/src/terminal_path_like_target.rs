@@ -42,36 +42,77 @@ fn possible_hover_target(
     cx: &mut Context<TerminalView>,
     #[cfg(test)] background_path_checks: BackgroundPathChecks,
 ) -> Task<()> {
-    #[cfg(not(test))]
-    let file_to_open_task = resolve_open_target(
-        workspace,
-        PathMatching::Heuristic,
-        &path_like_target.maybe_path,
-        path_like_target.working_directory.as_deref(),
-        cx,
+    // Resolve the pointer candidate first, then each fallback fragment, so a
+    // path preceded by prose (CJK punctuation, an identifier) still resolves to
+    // the file that actually exists. Lookups run one at a time and stop at the
+    // first hit.
+    let mut candidates = vec![(path_like_target.maybe_path.clone(), hovered_word.word_match)];
+    candidates.extend(
+        path_like_target
+            .alternatives
+            .iter()
+            .map(|candidate| (candidate.text.clone(), candidate.range)),
     );
-    #[cfg(test)]
-    let file_to_open_task = resolve_open_target_with_fs_checks(
-        workspace,
-        PathMatching::Heuristic,
-        &path_like_target.maybe_path,
-        path_like_target.working_directory.as_deref(),
-        cx,
-        background_path_checks,
-    );
+    let workspace = workspace.clone();
+    let working_directory = path_like_target.working_directory.clone();
+    // The same text can come out of different fragment combinations; resolve
+    // it once and keep the first (widest) range.
+    let mut seen_candidates = std::collections::HashSet::new();
+    candidates.retain(|(candidate, _)| seen_candidates.insert(candidate.clone()));
+
     cx.spawn(async move |terminal_view, cx| {
-        let file_to_open = file_to_open_task.await;
+        let mut first_match = None;
+        for (candidate, candidate_range) in candidates {
+            let Ok(resolution_task) = terminal_view.update(cx, |_, cx| {
+                #[cfg(not(test))]
+                {
+                    resolve_open_target(
+                        &workspace,
+                        PathMatching::Heuristic,
+                        &candidate,
+                        working_directory.as_deref(),
+                        cx,
+                    )
+                }
+                #[cfg(test)]
+                {
+                    resolve_open_target_with_fs_checks(
+                        &workspace,
+                        PathMatching::Heuristic,
+                        &candidate,
+                        working_directory.as_deref(),
+                        cx,
+                        background_path_checks,
+                    )
+                }
+            }) else {
+                break;
+            };
+
+            if let Some(open_target) = resolution_task.await {
+                first_match = Some((open_target, candidate_range));
+                break;
+            }
+        }
+
         terminal_view
             .update(cx, |terminal_view, cx| {
-                match file_to_open {
-                    Some(OpenTarget::Path(path, ..) | OpenTarget::Worktree(path, ..)) => {
+                match first_match {
+                    Some((
+                        OpenTarget::Path(path, ..) | OpenTarget::Worktree(path, ..),
+                        candidate_range,
+                    )) => {
+                        let mut hovered_word = hovered_word;
+                        // The underline must cover the candidate that resolved,
+                        // not the whole hovered run.
+                        hovered_word.word_match = candidate_range;
                         terminal_view.hover = Some(HoverTarget {
                             tooltip: path
                                 .to_string(&|path: &PathBuf| path.to_string_lossy().into_owned()),
                             hovered_word,
                         });
                     }
-                    None => {
+                    _ => {
                         terminal_view.hover = None;
                     }
                 };
@@ -115,47 +156,57 @@ fn possibly_open_target(
     cx: &mut Context<TerminalView>,
     #[cfg(test)] background_path_checks: BackgroundPathChecks,
 ) -> Task<Result<Option<OpenTarget>>> {
-    // [OHOS PORT BEGIN] A pointer can land on a path before its hover target
-    // has been resolved, so gating on `hover` would silently drop the open.
-    // `resolve_open_target` still validates that the path exists.
-    if !cfg!(target_env = "ohos") && terminal_view.hover.is_none() {
-        return Task::ready(Ok(None));
-    }
-    // [OHOS PORT END]
+    // A pointer can land on a path before its hover target has been resolved,
+    // so checking `hover` here would silently drop the open. `resolve_open_target`
+    // still validates that the path exists.
     let workspace = workspace.clone();
     let path_like_target = path_like_target.clone();
     cx.spawn_in(window, async move |terminal_view, cx| {
-        let Some(open_target) = terminal_view
-            .update(cx, |_, cx| {
-                #[cfg(not(test))]
-                {
-                    resolve_open_target(
-                        &workspace,
-                        PathMatching::Heuristic,
-                        &path_like_target.maybe_path,
-                        path_like_target.working_directory.as_deref(),
-                        cx,
-                    )
-                }
-                #[cfg(test)]
-                {
-                    resolve_open_target_with_fs_checks(
-                        &workspace,
-                        PathMatching::Heuristic,
-                        &path_like_target.maybe_path,
-                        path_like_target.working_directory.as_deref(),
-                        cx,
-                        background_path_checks,
-                    )
-                }
-            })?
-            .await
-        else {
-            return Ok(None);
-        };
+        // Try the pointer candidate first, then each fallback fragment; the
+        // first one that resolves is the file to open.
+        let mut candidates = vec![path_like_target.maybe_path.clone()];
+        candidates.extend(
+            path_like_target
+                .alternatives
+                .iter()
+                .map(|candidate| candidate.text.clone()),
+        );
 
-        let opened = open_resolved_target(&workspace, &open_target, cx).await?;
-        Ok(opened.then_some(open_target))
+        for candidate in candidates {
+            let Some(open_target) = terminal_view
+                .update(cx, |_, cx| {
+                    #[cfg(not(test))]
+                    {
+                        resolve_open_target(
+                            &workspace,
+                            PathMatching::Heuristic,
+                            &candidate,
+                            path_like_target.working_directory.as_deref(),
+                            cx,
+                        )
+                    }
+                    #[cfg(test)]
+                    {
+                        resolve_open_target_with_fs_checks(
+                            &workspace,
+                            PathMatching::Heuristic,
+                            &candidate,
+                            path_like_target.working_directory.as_deref(),
+                            cx,
+                            background_path_checks,
+                        )
+                    }
+                })?
+                .await
+            else {
+                continue;
+            };
+
+            let opened = open_resolved_target(&workspace, &open_target, cx).await?;
+            return Ok(opened.then_some(open_target));
+        }
+
+        Ok(None)
     })
 }
 
@@ -290,6 +341,7 @@ mod tests {
             PathLikeTarget {
                 maybe_path: maybe_path.to_string(),
                 working_directory,
+                alternatives: Vec::new(),
             },
             background_path_checks,
         )

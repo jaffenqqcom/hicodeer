@@ -824,10 +824,12 @@ unicode-bidi = { version = "0.3.18", default-features = false, features = [
 ] }
 unicode-script = "0.5.7"
 unicode-segmentation = "1.10"
+unicode-general-category = "1.1.0"
 unicode-width = "0.2"
 unindent = "0.2.0"
 url = "2.2"
 urlencoding = "2.1.2"
+urlocator = "0.1.4"
 usvg = { version = "0.46.0", default-features = false }
 uuid = { version = "1.1", features = ["serde"] }
 vte = { version = "0.15.0", features = ["ansi"] }

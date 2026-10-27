@@ -17,6 +17,14 @@
       "value": "#F2F4F7"
     },
     {
+      "name": "setup_field_hover",
+      "value": "#E7ECF3"
+    },
+    {
+      "name": "setup_border_hover",
+      "value": "#4D2F63E8"
+    },
+    {
       "name": "setup_border",
       "value": "#1A10141C"
     },

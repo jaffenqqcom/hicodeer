@@ -554,8 +554,8 @@ if [ "$MODE" != "hap" ]; then
   DAEMON_TARGET_DIR="$SHARED_TARGET_DIR"
   echo "[hicodeer-ohos-build] Building hicodeerd (OHOS $OHOS_TARGET) ..."
   CARGO_TARGET_DIR="$DAEMON_TARGET_DIR" \
-    cargo build --release --manifest-path "$DAEMON_MANIFEST" --target "$OHOS_TARGET" -j "$NPROC"
-  DAEMON_BIN="$DAEMON_TARGET_DIR/$OHOS_TARGET/release/hicodeerd"
+    cargo build $($IS_RELEASE && echo --release) --manifest-path "$DAEMON_MANIFEST" --target "$OHOS_TARGET" -j "$NPROC"
+  DAEMON_BIN="$DAEMON_TARGET_DIR/$OHOS_TARGET/$PROFILE_DIR/hicodeerd"
   if [ ! -x "$DAEMON_BIN" ]; then
     echo "[hicodeer-ohos-build] ERROR: hicodeerd binary missing: $DAEMON_BIN" >&2
     exit 1
@@ -648,8 +648,8 @@ if [ "$MODE" != "hap" ]; then
   HISHELL_TARGET_DIR="$SHARED_TARGET_DIR/hishell"
   echo "[hicodeer-ohos-build] Building hishell (OHOS $OHOS_TARGET) ..."
   CARGO_TARGET_DIR="$HISHELL_TARGET_DIR" \
-    cargo build --release --manifest-path "$HISHELL_MANIFEST" --target "$OHOS_TARGET" --bin hishell -j "$NPROC"
-  HISHELL_BIN="$HISHELL_TARGET_DIR/$OHOS_TARGET/release/hishell"
+    cargo build $($IS_RELEASE && echo --release) --manifest-path "$HISHELL_MANIFEST" --target "$OHOS_TARGET" --bin hishell -j "$NPROC"
+  HISHELL_BIN="$HISHELL_TARGET_DIR/$OHOS_TARGET/$PROFILE_DIR/hishell"
   if [ ! -x "$HISHELL_BIN" ]; then
     echo "[hicodeer-ohos-build] ERROR: hishell binary missing: $HISHELL_BIN" >&2
     exit 1

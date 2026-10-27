@@ -31,12 +31,11 @@ pub fn launch_app(app: openharmony_ability::OpenHarmonyApp) {
     // alacritty's shell discovery would otherwise fail before spawn. See
     // ensure_shell_env.
     // [boot] Home comes from the ets side; when the picker is skipped it
-    // reports none and the sandbox fallback below takes over.
-    // Resolve the data directory before $HOME is published so both agree even
-    // when an older build recorded the non-hidden `<root>/HiCodeer`.
-    let home_directory = app
-        .home_directory()
-        .map(|dir| resolve_data_dir(Path::new(&dir)).to_string_lossy().into_owned());
+    // reports none and the data root falls back to the platform defaults.
+    // The ets side resolves and creates the data directory before this module
+    // loads, so the path is used as-is: the directory name lives there only.
+    // An empty string means "no directory chosen".
+    let home_directory = app.home_directory().filter(|dir| !dir.is_empty());
     ensure_shell_env(app.base_path(), home_directory.clone());
     boot_trace(&format!("HOME={:?} base={:?}", std::env::var("HOME"), app.base_path()));
     // Publish the system languages the ets side read through `@ohos.i18n`; upstream resolves the
@@ -66,19 +65,6 @@ pub fn launch_app(app: openharmony_ability::OpenHarmonyApp) {
 /// without touching `paths` (which must not be initialized before it is set).
 const HOME_DIRECTORY_RECORD_FILE: &str = "custom_data_dir";
 
-/// Name of the data directory created under the selected folder (or the
-/// sandbox root when no folder was picked).
-///
-/// The leading dot keeps the directory out of the way when the user browses the
-/// folder they picked; it is application state, not documents.
-const DATA_DIR_NAME: &str = ".HiCodeer";
-
-/// Names used by builds before the data directory became hidden.
-///
-/// Both spellings exist in the field: the picker flow created `HiCodeer`, the
-/// sandbox fallback created `hicodeer`.
-const LEGACY_DATA_DIR_NAMES: [&str; 2] = ["HiCodeer", "hicodeer"];
-
 /// Resolves the data root, publishes it to `paths`, then enters Zed's own `main`.
 ///
 /// Zed is entered through `zed::main` rather than a bespoke entry point so the
@@ -92,7 +78,7 @@ fn start_zed_main(base_path: Option<String>, home_directory: Option<String>) {
     let base_path = base_path.filter(|path| !path.is_empty());
     let home_directory = home_directory.filter(|path| !path.is_empty());
 
-    match resolve_home_directory(home_directory.as_deref()) {
+    match home_directory {
         Some(home_directory) => {
             let data_dir = paths::set_custom_data_dir(&home_directory);
             if let Some(base_path) = base_path.as_deref() {
@@ -100,15 +86,10 @@ fn start_zed_main(base_path: Option<String>, home_directory: Option<String>) {
             }
         }
         None => {
-            // No usable home directory (none chosen, or it became unreachable):
-            // fall back to the sandbox so the app still starts.
-            log::warn!("start_zed_main: no usable home directory; falling back to the sandbox");
-            if let Some(base_path) = base_path {
-                // Product data subdirectory (not `zed`): the QEMU guest mounts the whole
-                // sandbox, so downloaded programs live under this directory of base_path.
-                let data_dir = resolve_data_dir(Path::new(&base_path));
-                paths::set_custom_data_dir(&data_dir.to_string_lossy());
-            }
+            // No home directory (the ets side skipped the picker): leave the
+            // data root to the platform defaults rather than inventing one in a
+            // directory the user never asked for.
+            log::info!("start_zed_main: no home directory; using the platform data root");
         }
     }
     zed::hicodeer_main();
@@ -128,92 +109,6 @@ fn export_system_locale(locales: Option<String>) {
         return;
     };
     std::env::set_var("LANGUAGE", locales);
-}
-
-/// Resolves the directory to use as the data root. Prefers the user home
-/// directory and makes sure it exists first. Returns `None` when it cannot be
-/// used, so the caller falls back to the sandbox instead of letting
-/// `set_custom_data_dir` panic on an unreachable path.
-fn resolve_home_directory(home_directory: Option<&str>) -> Option<String> {
-    let home_directory = home_directory?;
-    let data_dir = resolve_data_dir(Path::new(home_directory));
-    match std::fs::create_dir_all(&data_dir) {
-        Ok(()) => Some(data_dir.to_string_lossy().into_owned()),
-        Err(err) => {
-            log::error!(
-                "start_zed_main: data directory {} is unusable: {err}",
-                data_dir.display()
-            );
-            None
-        }
-    }
-}
-
-/// Returns the hidden data directory under a picked folder or sandbox root,
-/// migrating a legacy non-hidden directory when it is the only candidate.
-///
-/// `selected` may be the folder the user picked (`<root>`) or a data directory
-/// recorded by an older build (`<root>/HiCodeer`); both resolve to
-/// `<root>/.HiCodeer`.
-fn resolve_data_dir(selected: &Path) -> PathBuf {
-    let root = match selected.file_name().and_then(|name| name.to_str()) {
-        Some(name) if name == DATA_DIR_NAME || LEGACY_DATA_DIR_NAMES.contains(&name) => {
-            selected.parent().unwrap_or(selected)
-        }
-        _ => selected,
-    };
-    migrate_legacy_data_dir(root)
-}
-
-/// Renames a legacy data directory in `root` to [`DATA_DIR_NAME`].
-///
-/// Runs before `paths` is initialized, so it only touches the filesystem.
-/// On failure the legacy directory is returned, keeping the existing data
-/// reachable instead of starting from an empty hidden directory. When both
-/// names exist the hidden one wins and the legacy directory is left untouched
-/// rather than merged, so no data is silently combined.
-fn migrate_legacy_data_dir(root: &Path) -> PathBuf {
-    let target = root.join(DATA_DIR_NAME);
-    if target.exists() {
-        for name in LEGACY_DATA_DIR_NAMES {
-            let legacy = root.join(name);
-            if legacy.exists() {
-                log::warn!(
-                    "start_zed_main: both {} and {} exist; keeping the hidden directory",
-                    legacy.display(),
-                    target.display()
-                );
-            }
-        }
-        return target;
-    }
-
-    for name in LEGACY_DATA_DIR_NAMES {
-        let legacy = root.join(name);
-        if !legacy.exists() {
-            continue;
-        }
-        match std::fs::rename(&legacy, &target) {
-            Ok(()) => {
-                log::info!(
-                    "start_zed_main: migrated {} to {}",
-                    legacy.display(),
-                    target.display()
-                );
-                return target;
-            }
-            Err(err) => {
-                log::error!(
-                    "start_zed_main: cannot migrate {} to {}: {err}",
-                    legacy.display(),
-                    target.display()
-                );
-                return legacy;
-            }
-        }
-    }
-
-    target
 }
 
 /// Writes the resolved data root to `<base_path>/custom_data_dir`. Idempotent:
@@ -258,12 +153,21 @@ fn ensure_shell_env(base_path: Option<String>, home_directory: Option<String>) {
     // state under $HOME - git config, ~/.codebuddy, shell history - need a
     // directory the user owns, can reach outside the host application, and keeps its
     // contents across reinstalls; the sandbox dir satisfies none of those.
-    // base_path stays as the fallback for the launch before a directory is chosen.
-    let home = home_directory
-        .filter(|dir| !dir.is_empty())
-        .or_else(|| base_path.clone());
-    if let Some(home_ref) = home.as_deref() {
-        std::env::set_var("HOME", home_ref);
+    // Without a picked directory the platform's own HOME stands: overriding it
+    // with the sandbox would both move user state and make the derived data
+    // directories point somewhere the app may not be allowed to write.
+    match home_directory.filter(|dir| !dir.is_empty()) {
+        Some(home) => std::env::set_var("HOME", home),
+        None => {
+            // The platform's own HOME is the user's storage directory
+            // (`/storage/Users/<name>`), which the app uid cannot write, so the
+            // sandbox files directory has to stand in. Only HOME is set here:
+            // the data root itself stays whatever the directory defaults derive
+            // from it, so no `HiCodeer` is created.
+            if let Some(base_path_ref) = base_path.as_deref() {
+                std::env::set_var("HOME", base_path_ref);
+            }
+        }
     }
     // Extend PATH with the hap's el1 (resfile resources, reachable via
     // application_resource_dir) and el2 (app sandbox files, i.e. base_path)

@@ -11,16 +11,15 @@ const TAG: string = 'Setup';
 export const RouteName: string = 'Setup';
 /** File in the HAP private files dir holding the chosen home directory path. */
 const RECORD_FILE: string = 'custom_data_dir';
-/**
- * Hidden subdirectory created under the user-picked root; becomes the whole
- * data root. Older builds used the non-hidden name `HiCodeer`, which Rust
- * migrates on startup.
- */
-const HOME_DIR_NAME: string = '.HiCodeer';
 /** Paths under this prefix live outside the sandbox and need a picker grant. */
 const USER_PUBLIC_PATH_PREFIX: string = '/storage/Users/currentUser';
 /** Only one directory is selected; the picker rejects a larger count. */
 const MAX_SELECT_NUMBER: number = 1;
+/**
+ * Directory created under the picked root; the whole data root. Defined here
+ * only: Rust receives the resolved path and never needs to know the name.
+ */
+const DATA_DIR_NAME: string = 'HiCodeer';
 
 // Layout: one column, one left edge, matching the onboarding prototype.
 const CONTENT_MAX_WIDTH: number = 552;
@@ -30,23 +29,24 @@ const PAGE_BOTTOM_PADDING: number = 40;
 const LOGO_SIZE: number = 56;
 const LOGO_RADIUS: number = 14;
 const BRAND_GAP: number = 12;
-const BRAND_TEXT_SIZE: number = 19;
+/** Matches the logo box so the wordmark reads at the same size as the icon. */
+const BRAND_TEXT_SIZE: number = LOGO_SIZE;
 const BRAND_GAP_BOTTOM: number = 40;
 const TITLE_SIZE: number = 28;
 const TITLE_GAP_BOTTOM: number = 12;
 const BODY_SIZE: number = 14;
 const BODY_LINE_HEIGHT: number = 23;
 const LEDE_GAP_BOTTOM: number = 26;
-const LABEL_SIZE: number = 11;
+const LABEL_SIZE: number = 13;
 const LABEL_GAP_BOTTOM: number = 10;
 const CARD_PADDING: number = 16;
 const CARD_RADIUS: number = 10;
 const FIELD_HEIGHT: number = 46;
 const FIELD_PADDING: number = 12;
 const FIELD_RADIUS: number = 8;
-const PATH_SIZE: number = 12;
-const PATH_LINE_HEIGHT: number = 19;
-const ACTION_SIZE: number = 12;
+const PATH_SIZE: number = 14;
+const PATH_LINE_HEIGHT: number = 22;
+const ACTION_SIZE: number = 14;
 const ACTION_GAP_LEFT: number = 8;
 const FINAL_GAP_TOP: number = 11;
 const FINAL_LABEL_GAP_BOTTOM: number = 4;
@@ -56,6 +56,8 @@ const BUTTON_RADIUS: number = 8;
 const BUTTON_GAP_TOP: number = 26;
 const BUTTON_TEXT_SIZE: number = 14;
 const BORDER_WIDTH: number = 1;
+/** Kept short: the field should acknowledge the pointer without feeling slow. */
+const HOVER_DURATION: number = 120;
 
 let pendingResolve: ((homeDirectory: string) => void) | null = null;
 
@@ -100,28 +102,13 @@ export class HomeDirectory {
   }
 
   /**
-   * Returns the recorded `<root>/.HiCodeer` when it is still usable, else ''.
+   * Returns the recorded `<root>/HiCodeer` when it is still usable, else ''.
    * Re-activates the persisted picker grant first, mirroring the Rust side.
    */
   static async resolveExisting(context: common.UIAbilityContext): Promise<string> {
-    const recorded = HomeDirectory.read(context);
-    if (recorded === '') {
+    const home = HomeDirectory.read(context);
+    if (home === '') {
       return '';
-    }
-    // Older builds recorded `<root>/HiCodeer`; Rust migrates it to the hidden
-    // name on startup. Adopt the hidden path once it exists and rewrite the
-    // record so later launches skip the migration lookup.
-    let home = recorded;
-    const hidden = recorded.replace(/\/(HiCodeer|hicodeer)$/, `/${HOME_DIR_NAME}`);
-    if (hidden !== recorded) {
-      try {
-        if (fs.accessSync(hidden)) {
-          home = hidden;
-          HomeDirectory.write(context, hidden);
-        }
-      } catch (error) {
-        hilog.warn(DOMAIN, TAG, 'hidden data directory not accessible: %{public}s', String(error));
-      }
     }
     if (!home.startsWith(USER_PUBLIC_PATH_PREFIX)) {
       hilog.warn(DOMAIN, TAG, 'home directory outside user-public prefix: %{public}s', home);
@@ -151,13 +138,21 @@ export class HomeDirectory {
     }
   }
 
-  /** Creates `<root>/.HiCodeer`, persists the grant, records it, and returns it. */
+  /**
+   * Creates `<root>/HiCodeer`, persists the grant, records it, and returns it.
+   *
+   * Returns '' when the directory cannot be created. The record is only written
+   * once the directory exists: Rust uses the recorded path as the data root
+   * without creating or checking it, so recording a missing directory would turn
+   * into a failed launch instead of a page the user can retry on.
+   *
+   * The data directory name lives here only: Rust receives this resolved path
+   * and treats it as the data root as-is.
+   */
   static accept(root: string, uri: string, context: common.UIAbilityContext): string {
-    const homeDirectory = `${root}/${HOME_DIR_NAME}`;
-    try {
-      fs.mkdirSync(homeDirectory, true);
-    } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'mkdir %{public}s: %{public}s', homeDirectory, String(error));
+    const dataDirectory = `${root}/${DATA_DIR_NAME}`;
+    if (!HomeDirectory.ensureDirectory(dataDirectory)) {
+      return '';
     }
     try {
       fileShare.persistPermission([{
@@ -167,8 +162,35 @@ export class HomeDirectory {
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'persistPermission failed: %{public}s', String(error));
     }
-    HomeDirectory.write(context, homeDirectory);
-    return homeDirectory;
+    HomeDirectory.write(context, dataDirectory);
+    return dataDirectory;
+  }
+
+  /**
+   * Makes sure the data directory exists, reusing one an earlier install left.
+   *
+   * Existence is checked before creating rather than relying on recursive
+   * mkdir to tolerate it: a leftover directory from a previous install is the
+   * normal case here (re-picking the same root, or reinstalling), and it must
+   * never count as a failure.
+   */
+  private static ensureDirectory(path: string): boolean {
+    try {
+      if (fs.statSync(path).isDirectory()) {
+        return true;
+      }
+      hilog.error(DOMAIN, TAG, 'data path exists but is not a directory: %{public}s', path);
+      return false;
+    } catch (error) {
+      // Missing, which is the expected first-run case; create it below.
+    }
+    try {
+      fs.mkdirSync(path, true);
+      return true;
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'mkdir %{public}s: %{public}s', path, String(error));
+      return false;
+    }
   }
 }
 
@@ -178,6 +200,8 @@ struct Setup {
   @State private selectedRoot: string = '';
   @State private finalPath: string = '';
   @State private preparing: boolean = false;
+  /** Pointer is over the folder field, which is the control that opens the picker. */
+  @State private pickHover: boolean = false;
 
   private async pick(): Promise<void> {
     const context = getContext(this) as common.UIAbilityContext;
@@ -264,7 +288,7 @@ struct Setup {
             Row() {
               if (this.selectedRoot === '') {
                 Text($r('app.string.setup_no_folder'))
-                  .fontSize(BODY_SIZE)
+                  .fontSize(PATH_SIZE)
                   .fontColor($r('app.color.setup_text_tertiary'))
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -296,11 +320,20 @@ struct Setup {
             .height(FIELD_HEIGHT)
             .padding({ left: FIELD_PADDING, right: FIELD_PADDING })
             .borderRadius(FIELD_RADIUS)
-            .backgroundColor($r('app.color.setup_field'))
+            .backgroundColor(this.pickHover
+              ? $r('app.color.setup_field_hover')
+              : $r('app.color.setup_field'))
             .border({
               width: BORDER_WIDTH,
-              color: $r('app.color.setup_border'),
+              color: this.pickHover
+                ? $r('app.color.setup_border_hover')
+                : $r('app.color.setup_border'),
               style: this.selectedRoot === '' ? BorderStyle.Dashed : BorderStyle.Solid,
+            })
+            .animation({ duration: HOVER_DURATION, curve: Curve.EaseOut })
+            .hoverEffect(HoverEffect.None)
+            .onHover((isHover: boolean): void => {
+              this.pickHover = isHover;
             })
             .onClick((): void => {
               this.pick();

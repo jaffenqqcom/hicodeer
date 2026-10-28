@@ -1722,36 +1722,47 @@ impl PickerDelegate for RecentProjectsDelegate {
                                 }
                             })
                     })
-                    .child(
-                        ButtonLike::new("open_remote_folder")
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_1()
-                                    .justify_between()
-                                    .child(Label::new(localization::localized_str!("Open Remote Folder")))
-                                    .child(KeyBinding::for_action(
-                                        &OpenRemote {
-                                            from_existing_connection: false,
-                                            create_new_window: Some(self.create_new_window),
-                                        },
-                                        cx,
-                                    )),
-                            )
-                            .on_click({
-                                let create_new_window = self.create_new_window;
-                                move |_, window, cx| {
-                                    window.dispatch_action(
-                                        OpenRemote {
-                                            from_existing_connection: false,
-                                            create_new_window: Some(create_new_window),
-                                        }
-                                        .boxed_clone(),
-                                        cx,
-                                    )
-                                }
-                            }),
-                    )
+                    .child({
+                        // [OHOS PORT BEGIN] OHOS offers no remote folders, so the
+                        // recent-projects popover only shows the local entry.
+                        #[cfg(target_env = "ohos")]
+                        {
+                            gpui::Empty
+                        }
+                        // [OHOS PORT END]
+                        #[cfg(not(target_env = "ohos"))]
+                        {
+                            ButtonLike::new("open_remote_folder")
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .gap_1()
+                                        .justify_between()
+                                        .child(Label::new(localization::localized_str!("Open Remote Folder")))
+                                        .child(KeyBinding::for_action(
+                                            &OpenRemote {
+                                                from_existing_connection: false,
+                                                create_new_window: Some(self.create_new_window),
+                                            },
+                                            cx,
+                                        )),
+                                )
+                                .on_click({
+                                    let create_new_window = self.create_new_window;
+                                    move |_, window, cx| {
+                                        window.dispatch_action(
+                                            OpenRemote {
+                                                from_existing_connection: false,
+                                                create_new_window: Some(create_new_window),
+                                            }
+                                            .boxed_clone(),
+                                            cx,
+                                        )
+                                    }
+                                })
+                                .into_any_element()
+                        }
+                    })
                     .into_any(),
             );
         }

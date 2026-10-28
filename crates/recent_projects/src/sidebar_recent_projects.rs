@@ -18,6 +18,7 @@ use workspace::{
     SerializedWorkspaceLocation, Workspace, WorkspaceDb, notifications::DetachAndPromptErr,
 };
 
+#[cfg(not(target_env = "ohos"))]
 use zed_actions::OpenRemote;
 
 use crate::{highlights_for_path, icon_for_remote_connection, open_remote_project};
@@ -407,34 +408,45 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                             cx.emit(DismissEvent);
                         }))
                 })
-                .child(
-                    ButtonLike::new("open_remote_folder")
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_1()
-                                .justify_between()
-                                .child(Label::new(localization::localized_str!("Open Remote Folder")))
-                                .child(KeyBinding::for_action(
-                                    &OpenRemote {
+                .child({
+                    // [OHOS PORT BEGIN] OHOS offers no remote folders, so the
+                    // sidebar recent-projects popover only shows the local entry.
+                    #[cfg(target_env = "ohos")]
+                    {
+                        gpui::Empty
+                    }
+                    // [OHOS PORT END]
+                    #[cfg(not(target_env = "ohos"))]
+                    {
+                        ButtonLike::new("open_remote_folder")
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_1()
+                                    .justify_between()
+                                    .child(Label::new(localization::localized_str!("Open Remote Folder")))
+                                    .child(KeyBinding::for_action(
+                                        &OpenRemote {
+                                            from_existing_connection: false,
+                                            create_new_window: Some(false),
+                                        },
+                                        cx,
+                                    )),
+                            )
+                            .on_click(cx.listener(|_, _, window, cx| {
+                                window.dispatch_action(
+                                    OpenRemote {
                                         from_existing_connection: false,
                                         create_new_window: Some(false),
-                                    },
+                                    }
+                                    .boxed_clone(),
                                     cx,
-                                )),
-                        )
-                        .on_click(cx.listener(|_, _, window, cx| {
-                            window.dispatch_action(
-                                OpenRemote {
-                                    from_existing_connection: false,
-                                    create_new_window: Some(false),
-                                }
-                                .boxed_clone(),
-                                cx,
-                            );
-                            cx.emit(DismissEvent);
-                        })),
-                )
+                                );
+                                cx.emit(DismissEvent);
+                            }))
+                            .into_any_element()
+                    }
+                })
                 .into_any(),
         )
     }

@@ -1,0 +1,3 @@
+[{"id":"ses_visible","title":"Refactor the scanner","directory":"/repo/demo","time_updated":1793089665165,"parent_id":null},
+{"id":"ses_placeholder","title":"New session - 2026-10-27 03:27:40","directory":"/repo/demo/sub","time_updated":1793086259749,"parent_id":null},
+{"id":"ses_child","title":"child task","directory":"/repo/demo","time_updated":1793085000000,"parent_id":"ses_visible"}]

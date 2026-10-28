@@ -1,0 +1,4 @@
+this line is not json
+{"id":"m1","timestamp":1000,"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}],"cwd":"/repo/demo"}
+{"id":"t1","timestamp":1100,"type":"ai-title","aiTitle":"Demo session","cwd":"/repo/demo"}
+{"id":"s1","timestamp":1300,"type":"summary","summary":"fallback title"}

@@ -323,6 +323,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let bind_host =
         std::env::var(BIND_ADDR_ENV).unwrap_or_else(|_| LOOPBACK_ADDR.to_string());
     let rt = tokio::runtime::Builder::new_multi_thread()
+        // The history scanner reads agent SQLite stores through `fsqlite`,
+        // whose pager builds its connection state on the caller's stack. The
+        // 2 MiB a tokio worker gets by default is not enough for a large page
+        // buffer: the worker dies with SIGSEGV at the guard page instead of
+        // returning an error. Give the workers the same 8 MiB the main thread
+        // gets from `ulimit -s`.
+        .thread_stack_size(8 * 1024 * 1024)
         .enable_all()
         .build()?;
     rt.block_on(async move {

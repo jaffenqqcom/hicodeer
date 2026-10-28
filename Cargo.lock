@@ -21157,6 +21157,10 @@ dependencies = [
 ]
 
 [[patch.unused]]
+name = "fsqlite-vfs"
+version = "0.4.12"
+
+[[patch.unused]]
 name = "livekit"
 version = "0.7.32"
 source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=0a1c519cfce9b365229026b55de9b9dbdb6fed3c#0a1c519cfce9b365229026b55de9b9dbdb6fed3c"

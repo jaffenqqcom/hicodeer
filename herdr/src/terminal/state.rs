@@ -1399,21 +1399,32 @@ impl TerminalState {
         agent_label: &str,
         session_start_source: Option<&str>,
     ) -> bool {
+        // An integration that reports no session-start source can only ever be
+        // matched by `None`; leaving it out keeps its pane pinned to the first
+        // session it reported, so a session switch inside the pane never reaches
+        // `agent.list` and the history view cannot tell it is open.
         matches!(
             (source, agent_label, session_start_source),
             (
                 "herdr:claude",
                 "claude",
-                Some("clear" | "resume" | "compact")
+                Some("startup" | "clear" | "resume" | "compact")
             ) | (
                 "herdr:codex",
                 "codex",
                 Some("startup" | "clear" | "resume" | "compact")
+            ) | (
+                "herdr:codebuddy",
+                "codebuddy",
+                Some("startup" | "clear" | "resume" | "compact")
             ) | ("herdr:mastracode", "mastracode", Some("startup"))
+                | ("herdr:kilo", "kilo", Some("startup"))
+                | ("herdr:kimi", "kimi", Some("startup"))
                 | ("herdr:hermes", "hermes", Some("startup" | "new" | "resume"))
                 | ("herdr:opencode", "opencode", Some("select"))
                 | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
-                | ("herdr:grok", "grok", Some("new"))
+                | ("herdr:grok", "grok", Some("startup" | "new" | "resume"))
+                | ("herdr:grok", "grok", None)
                 | (
                     "herdr:omp",
                     "omp",
@@ -1425,6 +1436,11 @@ impl TerminalState {
                     Some("startup" | "clear" | "resume" | "compact" | "branch")
                 )
                 | ("herdr:antigravity_cli", "agy", None)
+                | ("herdr:cursor", "cursor", None)
+                | ("herdr:copilot", "copilot", None)
+                | ("herdr:devin", "devin", None)
+                | ("herdr:droid", "droid", None)
+                | ("herdr:qodercli", "qodercli", None)
         )
     }
 
@@ -2807,6 +2823,45 @@ mod tests {
             );
             assert_eq!(terminal.state, AgentState::Working);
         }
+    }
+
+    /// CodeBuddy keeps one process per pane and switches sessions inside it:
+    /// `/clear` emits `SessionStart` with `source: "clear"` and a new session
+    /// id. Refusing that replacement left `agent.list` reporting the session
+    /// the pane had left, so the panel treated the running one as history.
+    #[test]
+    fn session_start_replaces_codebuddy_session_inside_the_pane() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::CodeBuddy), AgentState::Idle);
+        let first_ref = crate::agent_resume::AgentSessionRef::id("codebuddy-first").unwrap();
+        let first = terminal.set_agent_session_ref_for_session_start(
+            "herdr:codebuddy".into(),
+            "codebuddy".into(),
+            Some(first_ref),
+            Some(10),
+            Some("startup".into()),
+        );
+        assert!(first.is_some(), "the first session must be accepted");
+
+        let cleared_ref = crate::agent_resume::AgentSessionRef::id("codebuddy-cleared").unwrap();
+        let cleared = terminal.set_agent_session_ref_for_session_start(
+            "herdr:codebuddy".into(),
+            "codebuddy".into(),
+            Some(cleared_ref),
+            Some(11),
+            Some("clear".into()),
+        );
+
+        assert!(
+            cleared.is_some_and(|mutation| mutation.session_ref_changed),
+            "a session switch inside the pane must replace the reported session"
+        );
+        assert_eq!(
+            terminal
+                .current_session_identity_for_persistence()
+                .map(|(_, _, _, value)| value),
+            Some("codebuddy-cleared".to_owned())
+        );
     }
 
     #[test]

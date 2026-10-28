@@ -11,7 +11,7 @@ mod message_policy;
 mod registry;
 mod ssh_metadata;
 mod supervisor;
-mod writer;
+pub(in crate::client) mod writer;
 
 pub(crate) use activation::*;
 pub(crate) use catalog::*;

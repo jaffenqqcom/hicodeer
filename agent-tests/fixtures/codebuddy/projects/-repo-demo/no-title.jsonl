@@ -1,0 +1,1 @@
+{"id":"m1","timestamp":3000,"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}],"cwd":"/repo/demo"}

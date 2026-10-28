@@ -7,10 +7,10 @@
 //!
 //! Three honest limits every implementer must keep in mind (design doc §3):
 //! 1. `OpenSessionRequest::workspace_root` is passed to the host's
-//!    workspace-create as-is; validity is the host's business.
-//! 2. `agent_kind` carries no resume-support guarantee: `agent.start` takes
-//!    free-form argv, and an unsupported combination only shows up as an
-//!    error inside the agent TUI.
+//!    workspace-create as-is when the scanner recovered it; `None` means "let
+//!    the host choose the directory", so the fallback is the host's business.
+//! 2. `agent_kind` carries no resume-support guarantee: the host decides which
+//!    agents have a resume command and rejects the rest.
 //! 3. A successful `agent.start` is not a successful resume. The CLI may
 //!    fail to restore the session internally; the panel observes the agent's
 //!    session id for a while afterwards to compensate (design doc §5).
@@ -51,7 +51,10 @@ pub struct SessionRef {
 }
 
 pub struct OpenSessionRequest {
-    pub workspace_root: PathBuf,
+    /// The directory the session ran in, when the daemon recovered one. `None`
+    /// asks the host to choose the directory itself, which is the only option
+    /// for a session whose store never recorded it.
+    pub workspace_root: Option<PathBuf>,
     pub agent_kind: String,
     pub session_id: String,
 }
@@ -74,6 +77,8 @@ pub struct RawSession {
     pub workspace_root: Option<String>,
     pub updated_at: Option<i64>,
     pub source_path: String,
+    /// Whether the daemon's store for this agent can remove an entry.
+    pub deletable: bool,
 }
 
 #[derive(Debug)]
@@ -132,9 +137,10 @@ pub trait AgentController: Send + Sync {
     /// History sessions the daemon scanned from each agent's own store.
     fn sessions(&self) -> Result<Vec<RawSession>>;
 
-    /// Opens a history session: creates a workspace at the session's root,
-    /// adds a tab there, and starts the agent CLI with its resume argv. See
-    /// the three limits on the trait docs.
+    /// Opens a history session: creates a workspace where the session ran (or
+    /// where the host chooses, when the daemon recovered no root), adds a tab
+    /// there, and starts the agent CLI resuming that session. See the three
+    /// limits on the trait docs.
     fn open_session(&self, request: OpenSessionRequest) -> Result<OpenedSession>;
 
     fn integrations(&self) -> Result<Vec<crate::herdr_settings::Integration>>;

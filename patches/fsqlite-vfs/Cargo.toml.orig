@@ -1,0 +1,66 @@
+[package]
+name = "fsqlite-vfs"
+version = "0.4.12"
+description = "Virtual filesystem abstraction layer"
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[features]
+default = ["linux-asupersync-uring"]
+native = ["fsqlite-types/native", "linux-asupersync-uring"]
+wasm = ["fsqlite-types/wasm"]
+linux-asupersync-uring = ["native", "dep:asupersync"]
+
+[dependencies]
+smallvec = "1.15"
+fsqlite-types = { workspace = true, default-features = false }
+fsqlite-error = { workspace = true }
+fsqlite-observability = { workspace = true }
+asupersync = { workspace = true, optional = true }
+tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nix = { workspace = true }
+libc = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7.12"
+nix = { workspace = true, features = ["event", "poll"] }
+
+[target.'cfg(any(unix, windows))'.dependencies]
+advisory-lock = "0.3.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+
+[dev-dependencies]
+asupersync = { workspace = true, features = ["test-internals"] }
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json"] }
+
+# Cannot inherit workspace lints because workspace forbids unsafe_code
+# and VFS requires unsafe for mmap.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cast_lossless = { level = "allow", priority = 1 }
+cast_possible_truncation = { level = "allow", priority = 1 }
+cast_possible_wrap = { level = "allow", priority = 1 }
+cast_precision_loss = { level = "allow", priority = 1 }
+cast_sign_loss = { level = "allow", priority = 1 }
+doc_markdown = { level = "allow", priority = 1 }
+missing_const_for_fn = { level = "allow", priority = 1 }
+missing_errors_doc = { level = "allow", priority = 1 }
+missing_panics_doc = { level = "allow", priority = 1 }
+module_name_repetitions = { level = "allow", priority = 1 }
+must_use_candidate = { level = "allow", priority = 1 }
+option_if_let_else = { level = "allow", priority = 1 }
+significant_drop_tightening = { level = "allow", priority = 1 }
+similar_names = { level = "allow", priority = 1 }
+too_many_lines = { level = "allow", priority = 1 }
+unreadable_literal = { level = "allow", priority = 1 }
+uninlined_format_args = { level = "allow", priority = 1 }

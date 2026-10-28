@@ -127,7 +127,15 @@ pub(in crate::client) fn write_to_local_server(
     stream: &mut LocalStream,
     msg: &ClientMessage,
 ) -> io::Result<()> {
-    protocol::write_message(stream, msg).map_err(|error| io::Error::other(error.to_string()))
+    // The read side puts this socket into non-blocking mode, and O_NONBLOCK is
+    // shared by both directions, so a write returns EAGAIN whenever the server
+    // drains more slowly than the client produces — a slow history scan is
+    // enough. The frame is encoded once and written with progress, so waiting
+    // for the peer keeps a backlog from looking like a dropped connection
+    // without ever re-emitting bytes that are already on the wire.
+    let frame = protocol::encode_message(msg)
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    endpoint::writer::write_frame_blocking(stream, &frame)
 }
 
 pub(super) trait ClientMessageSink {

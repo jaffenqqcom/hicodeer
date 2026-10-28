@@ -70,10 +70,15 @@ pub enum Agent {
     ZCode,
     MiniMax,
     Trae,
+    DevEco,
+    CodeWhale,
+    AtomCode,
+    OpenClaw,
+    OpenDesk,
 }
 
 impl Agent {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 34] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -103,6 +108,11 @@ impl Agent {
         Self::DeepSeek,
         Self::ZCode,
         Self::Trae,
+        Self::DevEco,
+        Self::CodeWhale,
+        Self::AtomCode,
+        Self::OpenClaw,
+        Self::OpenDesk,
     ];
 
     pub const SCREEN_MANIFEST_AGENTS: [Self; 24] = [
@@ -164,6 +174,11 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::ZCode => "zcode",
         Agent::MiniMax => "minimax",
         Agent::Trae => "trae",
+        Agent::DevEco => "deveco",
+        Agent::CodeWhale => "codewhale",
+        Agent::AtomCode => "atomcode",
+        Agent::OpenClaw => "openclaw",
+        Agent::OpenDesk => "opendesk",
     }
 }
 
@@ -204,6 +219,11 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::ZCode => "zcode",
         Agent::MiniMax => "mcode",
         Agent::Trae => "traecli",
+        Agent::DevEco => "deveco",
+        Agent::CodeWhale => "codewhale",
+        Agent::AtomCode => "atomcode",
+        Agent::OpenClaw => "openclaw",
+        Agent::OpenDesk => "opendesk",
     }
 }
 
@@ -249,6 +269,11 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "zcode" | "z-code" => Some(Agent::ZCode),
         "minimax" | "minimax-code" | "mcode" => Some(Agent::MiniMax),
         "trae" | "trae-cli" | "traecli" => Some(Agent::Trae),
+        "deveco" | "deveco-code" => Some(Agent::DevEco),
+        "codewhale" => Some(Agent::CodeWhale),
+        "atomcode" => Some(Agent::AtomCode),
+        "openclaw" | "open-claw" => Some(Agent::OpenClaw),
+        "opendesk" | "open-desk" => Some(Agent::OpenDesk),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }
@@ -1127,6 +1152,11 @@ mod tests {
             (Agent::ZCode, "zcode"),
             (Agent::MiniMax, "mcode"),
             (Agent::Trae, "traecli"),
+            (Agent::DevEco, "deveco"),
+            (Agent::CodeWhale, "codewhale"),
+            (Agent::AtomCode, "atomcode"),
+            (Agent::OpenClaw, "openclaw"),
+            (Agent::OpenDesk, "opendesk"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {

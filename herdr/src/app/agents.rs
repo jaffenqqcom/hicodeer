@@ -65,9 +65,10 @@ impl App {
             .iter()
             .map(|ws| (ws.id.clone(), ws.identity_cwd.clone()))
             .collect();
-        // Scanned on every request rather than on a timer. Each scanner keeps
+        // Scanned on every request rather than on a timer. Each connector keeps
         // its own index, so unless a session file changed this is just a walk
-        // of `stat` calls over the two stores.
+        // of `stat` calls over the stores; the first request after start is the
+        // one that parses them, and it is answered on this thread.
         let sessions = crate::sessions::collect_sessions(&workspace_roots);
         crate::app::api::responses::encode_success(
             id,
@@ -83,7 +84,7 @@ impl App {
         id: String,
         params: crate::api::schema::AgentSessionDeleteParams,
     ) -> String {
-        match crate::sessions::delete_session(&params.source_path) {
+        match crate::sessions::delete_session(&params.agent, &params.source_path) {
             Ok(()) => crate::app::api::responses::encode_success(
                 id,
                 crate::api::schema::response::ResponseResult::AgentSessionDeleted {},
@@ -230,8 +231,14 @@ impl App {
         {
             return Err(AgentStartError::InvalidArgument);
         }
-        let persisted_agent_session =
-            crate::agent_resume::persisted_session_from_launch_args(kind, &params.args);
+        // A resumed pane reports the session it is showing, so the panel can
+        // tell that session is already open instead of listing it again. The
+        // argv path only recognises Codex's launch form, so `resume_session`
+        // states the identity directly.
+        let persisted_agent_session = match params.resume_session.as_deref() {
+            Some(session) => persisted_session_for_resume(kind, session),
+            None => crate::agent_resume::persisted_session_from_launch_args(kind, &params.args),
+        };
         let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(&params.pane_id) else {
             return Err(AgentStartError::TargetNotFound(params.pane_id));
         };
@@ -286,8 +293,19 @@ impl App {
         let shell_name = available_shell_name(runtime)
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
 
+        // A resume plan replaces the argv tail, not the whole argv: the
+        // executable still comes from `interactive_agent_executable`, so the
+        // command name has one home. Combining the two forms is a caller bug,
+        // and silently preferring one would hide it.
         let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
-        argv.extend(params.args);
+        if let Some(session) = params.resume_session.as_deref() {
+            if !params.args.is_empty() {
+                return Err(AgentStartError::InvalidArgument);
+            }
+            argv.extend(resume_args_for(kind, session)?);
+        } else {
+            argv.extend(params.args);
+        }
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
             .ok_or(AgentStartError::InvalidArgument)?;
         let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
@@ -342,7 +360,11 @@ impl App {
             },
             AgentStartError::InvalidArgument => crate::api::schema::ErrorBody {
                 code: "invalid_agent_argument".into(),
-                message: "agent arguments cannot be encoded safely for the target shell".into(),
+                message: "agent arguments cannot be encoded for the target shell, resume_session is not a usable session id, or both were sent".into(),
+            },
+            AgentStartError::ResumeUnsupported(agent) => crate::api::schema::ErrorBody {
+                code: "resume_unsupported".into(),
+                message: format!("{agent} has no resume command known to this server"),
             },
             AgentStartError::InvalidTimeout => crate::api::schema::ErrorBody {
                 code: "invalid_agent_timeout".into(),
@@ -527,6 +549,39 @@ impl App {
     }
 }
 
+/// The session identity a resumed pane carries, so `agent.list` reports the
+/// session it is showing. The source comes from the same helper the resume argv
+/// uses, which keeps a hook report and this identity on one spelling.
+fn persisted_session_for_resume(
+    kind: crate::detect::Agent,
+    session_id: &str,
+) -> Option<crate::agent_resume::PersistedAgentSession> {
+    let agent = crate::detect::agent_label(kind);
+    let session_ref = crate::agent_resume::AgentSessionRef::id(session_id)?;
+    Some(crate::agent_resume::PersistedAgentSession {
+        source: crate::agent_resume::official_source_for(agent),
+        agent: agent.to_string(),
+        session_ref,
+    })
+}
+
+/// The argv tail that resumes one agent session, taken from the single table in
+/// `agent_resume`. The plan's first element is the command name and is dropped
+/// here: `start_agent` already put that in front, and keeping both would run
+/// `codewhale codewhale --resume …`.
+fn resume_args_for(
+    kind: crate::detect::Agent,
+    session_id: &str,
+) -> Result<Vec<String>, AgentStartError> {
+    let agent = crate::detect::agent_label(kind);
+    let session_ref = crate::agent_resume::AgentSessionRef::id(session_id)
+        .ok_or(AgentStartError::InvalidArgument)?;
+    let source = crate::agent_resume::official_source_for(agent);
+    let plan = crate::agent_resume::plan(&source, agent, &session_ref)
+        .ok_or_else(|| AgentStartError::ResumeUnsupported(agent.to_string()))?;
+    Ok(plan.argv.into_iter().skip(1).collect())
+}
+
 fn available_shell_name(runtime: &crate::terminal::TerminalRuntime) -> Option<String> {
     #[cfg(test)]
     if runtime.child_pid().is_none() {
@@ -575,6 +630,7 @@ pub(super) enum AgentStartError {
     UnsupportedKind(String),
     InvalidArgument,
     InvalidTimeout,
+    ResumeUnsupported(String),
     TargetNotFound(String),
     TargetBusy(String),
     TargetUnavailable(String),

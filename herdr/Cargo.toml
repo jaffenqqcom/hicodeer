@@ -34,6 +34,7 @@ default-members = [".", "crates/ghostty-vt"]
 
 [dependencies]
 ghostty-vt = { path = "crates/ghostty-vt" }
+anyhow = "1"
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
 bytes = "1"
@@ -51,10 +52,15 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_ignored = "0.1.14"
 serde_json = "1"
-# Local coding-agent session history (Claude connector); CodeBuddy is our own
-# scanner in src/sessions. Locked rev; upgrade requires re-verifying the OHOS
-# build (FAD wants nightly, connectors build on 1.97.1).
-franken-agent-detection = { git = "https://github.com/Dicklesworthstone/franken_agent_detection", rev = "7fbfe9b52397f36cbbb2707559c314c3e09e200c", default-features = false, features = ["connectors"] }
+# Local coding-agent session history. CodeBuddy has no connector upstream, so
+# it is our own scanner in src/sessions. Locked rev; upgrade requires
+# re-verifying the OHOS build (FAD wants nightly, connectors build on 1.97.1).
+# The registry in src/sessions/fad.rs constructs its ten connectors by name, so
+# only the backends those ten read are worth compiling. `all-connectors` also
+# pulls ChatGPT's AES-GCM, Shelley's fts5 index and the Cursor/Goose/Crush/
+# Devin/Copilot VS Code database readers, none of which this build can reach.
+# Keep this list in sync with fad_stores().
+franken-agent-detection = { git = "https://github.com/Dicklesworthstone/franken_agent_detection", rev = "7fbfe9b52397f36cbbb2707559c314c3e09e200c", default-features = false, features = ["connectors", "codex-zstd", "hermes", "opencode", "openclaw-sqlite", "pi-durable", "pi-sqlite"] }
 sha2 = "0.10"
 time = { version = "0.3.47", features = ["formatting"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "signal"] }
@@ -63,10 +69,22 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.13.1"
+# DeepSeek Harness stores its transcripts as concatenated zstd frames by
+# default; the header line has to be decompressed before it can be read.
+zstd = "0.13"
 schemars = { version = "1.2.1", features = ["derive"] }
 
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
+# ===== [OHOS PORT BEGIN] =====
+# `fsqlite` (reached through FAD's SQLite-backed history connectors) builds an
+# io_uring ring on Linux. On OpenHarmony `io_uring_register` (syscall 427) is
+# not in the app seccomp allow-list and terminates the process with SIGSYS
+# instead of failing the call, so the patched VFS skips the ring there and every
+# file falls back to the blocking Unix implementation. `herdr` is its own
+# workspace, so this patch lives here rather than in the root manifest.
+fsqlite-vfs = { path = "../patches/fsqlite-vfs" }
+# ===== [OHOS PORT END] =====
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # logind's delay inhibitor lets the server save before host shutdown kills panes.

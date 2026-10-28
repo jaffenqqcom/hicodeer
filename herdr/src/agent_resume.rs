@@ -221,6 +221,17 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:droid", "droid", AgentSessionRefKind::Id) => {
             vec!["droid".into(), "--resume".into(), session_ref.value.clone()]
         }
+        // Gemini resolves a full UUID (`SessionSelector::findSession`), but only
+        // among the chats of its current project: the pane has to start in the
+        // directory the session ran in, which `sessions/gemini_store.rs` is what
+        // recovers.
+        ("herdr:gemini", "gemini", AgentSessionRefKind::Id) => {
+            vec![
+                "gemini".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ]
+        }
         ("herdr:kimi", "kimi", AgentSessionRefKind::Id) => {
             vec!["kimi".into(), "--session".into(), session_ref.value.clone()]
         }
@@ -315,6 +326,66 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 ]
             }
         }
+        ("herdr:deveco", "deveco", AgentSessionRefKind::Id) => {
+            // DevEco Code is OpenCode-shaped: `-s, --session <id>` continues one.
+            vec![
+                "deveco".into(),
+                "--session".into(),
+                session_ref.value.clone(),
+            ]
+        }
+        ("herdr:zcode", "zcode", AgentSessionRefKind::Id) => {
+            vec!["zcode".into(), "--resume".into(), session_ref.value.clone()]
+        }
+        ("herdr:codewhale", "codewhale", AgentSessionRefKind::Id) => {
+            vec![
+                "codewhale".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ]
+        }
+        ("herdr:atomcode", "atomcode", AgentSessionRefKind::Id) => {
+            vec![
+                "atomcode".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ]
+        }
+        ("herdr:openclaw", "openclaw", AgentSessionRefKind::Id) => {
+            // OpenClaw resumes by `resume <query>`, where the query matches a
+            // session key, display name or label — not the UUID the connector
+            // scans. Unverified against a live Gateway; see the panel test notes.
+            vec![
+                "openclaw".into(),
+                "resume".into(),
+                session_ref.value.clone(),
+            ]
+        }
+        ("herdr:minimax", "minimax", AgentSessionRefKind::Id) => {
+            // MiniMax Code calls the flag `--session`; it has no `--resume`.
+            vec![
+                "mcode".into(),
+                "--session".into(),
+                session_ref.value.clone(),
+            ]
+        }
+        ("herdr:opendesk", "opendesk", AgentSessionRefKind::Id) => {
+            vec![
+                "opendesk".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ]
+        }
+        ("herdr:deepseek", "deepseek", AgentSessionRefKind::Id) => {
+            // DeepSeek Harness boots a profile first; `tui` is the interactive
+            // one, and everything after the launcher flags reaches the app.
+            vec![
+                "dsh".into(),
+                "tui".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ]
+        }
         _ => return None,
     };
 
@@ -340,6 +411,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:copilot", "copilot")
             | ("herdr:devin", "devin")
             | ("herdr:droid", "droid")
+            | ("herdr:gemini", "gemini")
             | ("herdr:kimi", "kimi")
             | ("herdr:omp", "omp")
             | ("herdr:mastracode", "mastracode")
@@ -354,7 +426,27 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
             | ("herdr:letta", "letta")
+            | ("herdr:deveco", "deveco")
+            | ("herdr:zcode", "zcode")
+            | ("herdr:codewhale", "codewhale")
+            | ("herdr:atomcode", "atomcode")
+            | ("herdr:minimax", "minimax")
+            | ("herdr:opendesk", "opendesk")
+            | ("herdr:openclaw", "openclaw")
+            | ("herdr:deepseek", "deepseek")
     )
+}
+
+/// The `herdr:` integration source that owns an agent's resume plan.
+///
+/// Only Antigravity differs: its CLI label is `agy`, while the integration is
+/// published as `antigravity_cli`. Every other agent's source is `herdr:<label>`.
+pub fn official_source_for(agent: &str) -> String {
+    if agent == "agy" {
+        "herdr:antigravity_cli".to_string()
+    } else {
+        format!("herdr:{agent}")
+    }
 }
 
 fn valid_session_id(value: &str) -> bool {
@@ -670,6 +762,75 @@ mod tests {
             &AgentSessionRef::id("default:").unwrap()
         )
         .is_none());
+    }
+
+    #[test]
+    fn planner_covers_the_history_panel_agents() {
+        for (agent, executable, flag) in [
+            ("deveco", "deveco", "--session"),
+            ("zcode", "zcode", "--resume"),
+            ("codewhale", "codewhale", "--resume"),
+            ("atomcode", "atomcode", "--resume"),
+            ("minimax", "mcode", "--session"),
+            ("opendesk", "opendesk", "--resume"),
+            ("openclaw", "openclaw", "resume"),
+        ] {
+            let ref_value = AgentSessionRef::id("session-1").unwrap();
+            let planned = plan(&official_source_for(agent), agent, &ref_value)
+                .unwrap_or_else(|| panic!("{agent} should have a resume plan"));
+            assert_eq!(
+                planned.argv,
+                vec![executable, flag, "session-1"],
+                "{agent} argv"
+            );
+        }
+    }
+
+    #[test]
+    fn deepseek_resume_boots_the_tui_profile_first() {
+        let session_ref = AgentSessionRef::id("session-1").unwrap();
+        let planned = plan("herdr:deepseek", "deepseek", &session_ref)
+            .expect("deepseek should have a resume plan");
+        assert_eq!(
+            planned.argv,
+            vec!["dsh", "tui", "--resume", "session-1"],
+            "the launcher takes the profile name before the app's own flags"
+        );
+    }
+
+    #[test]
+    fn gemini_resume_uses_the_uuid_form() {
+        let session_ref =
+            AgentSessionRef::id("35b7d0d3-9d4c-4148-9c7c-97170e404ecc").unwrap();
+        let planned = plan("herdr:gemini", "gemini", &session_ref)
+            .expect("gemini should have a resume plan");
+        assert_eq!(
+            planned.argv,
+            vec![
+                "gemini",
+                "--resume",
+                "35b7d0d3-9d4c-4148-9c7c-97170e404ecc"
+            ],
+            "the CLI resolves a full UUID among the chats of its current project"
+        );
+    }
+
+    #[test]
+    fn resume_plans_start_with_the_executable_the_panel_launches() {
+        use crate::detect::{Agent, agent_label, interactive_agent_executable};
+
+        for agent in Agent::ALL {
+            let label = agent_label(agent);
+            let ref_value = AgentSessionRef::id("session-1").unwrap();
+            let Some(planned) = plan(&official_source_for(label), label, &ref_value) else {
+                continue;
+            };
+            assert_eq!(
+                planned.argv.first().map(String::as_str),
+                Some(interactive_agent_executable(agent)),
+                "{label} resume argv must start with the executable the panel launches"
+            );
+        }
     }
 
     #[test]

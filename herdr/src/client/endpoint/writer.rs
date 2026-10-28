@@ -214,6 +214,19 @@ fn write_batch(
     Ok(())
 }
 
+/// Writes one frame on a socket the reader left in non-blocking mode.
+///
+/// The O_NONBLOCK flag lives on the descriptor, so the read side's setting
+/// applies to writes too. Waiting for the peer to drain is the correct response
+/// there; failing the connection on EAGAIN turns a momentary backlog into a
+/// dropped client.
+pub(in crate::client) fn write_frame_blocking(
+    writer: &mut impl io::Write,
+    frame: &[u8],
+) -> io::Result<()> {
+    write_frame(writer, frame, &AtomicBool::new(false))
+}
+
 fn write_frame(
     writer: &mut impl io::Write,
     mut frame: &[u8],

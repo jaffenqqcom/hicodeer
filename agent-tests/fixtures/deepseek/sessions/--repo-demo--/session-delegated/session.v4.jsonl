@@ -1,0 +1,2 @@
+{"type":"session","version":4,"id":"session-delegated","createdAt":1793081522419,"cwd":"/repo/demo","isSeeded":false,"delegationDepth":1}
+{"type":"agent/inbox/spliced","seq":3,"time":1793081522442,"data":{"target":"next-turn","start":0,"inserted":[{"content":[{"type":"text","text":"sub-agent prompt"}],"source":{"kind":"user"},"role":"user","id":"7b0f2c11"}]}}

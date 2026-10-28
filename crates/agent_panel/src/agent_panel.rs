@@ -491,7 +491,12 @@ impl AgentPanel {
                     self.status_recorded = false;
                 }
                 self.unavailable = Some(Unavailable::ServerUnavailable);
-                self.note_disconnect();
+                // A failed request is not a disconnection: the daemon can be
+                // busy (a history scan holds its main loop) or one read can
+                // time out. Counting it here would close the agent terminal —
+                // and kill the TUI running in it — because a request was slow,
+                // so only `NotReady` counts toward that.
+                self.consecutive_failures += 1;
                 self.clear_history();
             }
         }
@@ -680,8 +685,12 @@ impl AgentPanel {
         }
     }
 
-    /// Counts one failed refresh, closing the terminal once failures form a
-    /// run long enough to call it a disconnection.
+    /// Counts one refresh that found no endpoint at all, closing the terminal
+    /// once those form a run long enough to call it a disconnection.
+    ///
+    /// Only `NotReady` calls this: a request that merely failed or timed out is
+    /// a busy server, not a gone one, and closing the tab over it would take a
+    /// running TUI down with it.
     fn note_disconnect(&mut self) {
         self.consecutive_failures += 1;
         // Exactly at the threshold, not beyond it: the terminal is gone after
@@ -1299,7 +1308,8 @@ impl AgentPanel {
     }
 
     /// Opens one history session in a fresh space (creating it at the
-    /// session's root first when needed).
+    /// session's root first when needed). A session whose store never recorded a
+    /// root is sent without one, and the server picks the directory itself.
     ///
     /// `agent.start` succeeding does not mean the CLI actually restored the
     /// session (a corrupt store only shows inside the TUI), so the spawn is
@@ -1317,33 +1327,15 @@ impl AgentPanel {
         let Some(entry) = view.find(&key).cloned() else {
             return;
         };
-        let Some(root) = entry.workspace_root.clone() else {
-            self.show_history_toast(
-                localization::localized_str!("Session has no working directory"),
-                None,
-                cx,
-            );
-            return;
-        };
-        let kind = match key.agent.as_str() {
-            "claude" => Some("claude".to_owned()),
-            "codebuddy" => Some("codebuddy".to_owned()),
-            _ => None,
-        };
-        let Some(kind) = kind else {
-            self.show_history_toast(
-                localization::localized_str!("This agent cannot open history sessions"),
-                None,
-                cx,
-            );
-            return;
-        };
+        // Which agents can resume is the server's call: it owns the per-agent
+        // resume command and answers `resume_unsupported` for the rest.
+        let kind = key.agent.clone();
         self.opening = Some(key.clone());
         let opened_key = (key.agent.clone(), key.session_id.clone());
         cx.notify();
 
         let request = controller::OpenSessionRequest {
-            workspace_root: PathBuf::from(&root),
+            workspace_root: entry.workspace_root.as_ref().map(PathBuf::from),
             agent_kind: kind,
             session_id: key.session_id.clone(),
         };
@@ -1605,9 +1597,10 @@ impl AgentPanel {
         source_path: String,
         cx: &mut Context<Self>,
     ) {
+        let agent = key.agent.clone();
         cx.spawn(async move |this, cx| {
             let deleted = cx
-                .background_spawn(async move { client::delete_session(&source_path) })
+                .background_spawn(async move { client::delete_session(&agent, &source_path) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 match deleted {
@@ -2145,34 +2138,36 @@ impl AgentPanel {
                                 }
                             })
                         })
-                        .child({
-                            IconButton::new(
-                                ElementId::Name(SharedString::from(format!(
-                                    "history-delete-{}:{}",
-                                    key.agent, key.session_id
-                                ))),
-                                IconName::Trash,
-                            )
-                            .icon_size(IconSize::Small)
-                            .icon_color(Color::Muted)
-                            .tooltip(move |_, cx| {
-                                Tooltip::simple(localization::localized_str!("Delete"), cx)
+                        .when(entry.deletable, |row| {
+                            row.child({
+                                IconButton::new(
+                                    ElementId::Name(SharedString::from(format!(
+                                        "history-delete-{}:{}",
+                                        key.agent, key.session_id
+                                    ))),
+                                    IconName::Trash,
+                                )
+                                .icon_size(IconSize::Small)
+                                .icon_color(Color::Muted)
+                                .tooltip(move |_, cx| {
+                                    Tooltip::simple(localization::localized_str!("Delete"), cx)
+                                })
+                                .on_click({
+                                    let panel = panel.clone();
+                                    let delete_key = delete_key.clone();
+                                    let delete_path = delete_path.clone();
+                                    move |_, _, cx| {
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            panel.delete_history_session(
+                                                delete_key.clone(),
+                                                delete_path.clone(),
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                })
                             })
-                            .on_click({
-                                let panel = panel.clone();
-                                let delete_key = delete_key.clone();
-                                let delete_path = delete_path.clone();
-                                move |_, _, cx| {
-                                    let _ = panel.update(cx, |panel, cx| {
-                                        panel.delete_history_session(
-                                            delete_key.clone(),
-                                            delete_path.clone(),
-                                            cx,
-                                        );
-                                    });
-                                }
-                            })
-                        }),
+                        })
                 ),
         );
 
@@ -2486,14 +2481,11 @@ fn relative_history_time(updated_at: Option<i64>) -> SharedString {
     label.into()
 }
 
-/// The agent icon for a history row; agents without a known glyph fall back to
-/// the generic terminal icon.
+/// The agent icon for a history row. `agent_display::agent_icon` already has a
+/// fallback for agents without a glyph, so every connector the daemon collects
+/// can wear its own mark instead of the generic terminal.
 fn history_agent_icon(agent: &str) -> Icon {
-    if agent == "codebuddy" || agent == "claude" {
-        Icon::new(agent_display::agent_icon(agent)).size(IconSize::Small)
-    } else {
-        Icon::new(IconName::Terminal).size(IconSize::Small)
-    }
+    Icon::new(agent_display::agent_icon(agent)).size(IconSize::Small)
 }
 
 impl Panel for AgentPanel {

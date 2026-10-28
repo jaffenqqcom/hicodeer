@@ -575,6 +575,22 @@ if [ "$MODE" != "hap" ]; then
   # lands on a fresh inode without the verity tag.
   rm -f "$STAGE_DIR/hicodeerd/bin/hicodeerd"
   cp "$DAEMON_BIN" "$STAGE_DIR/hicodeerd/bin/hicodeerd"
+  # Keep an unstripped copy for symbolizing device crashes, the same way
+  # libcore.so is handled. The payload is stripped below: a debug build carries
+  # its full .symtab plus DWARF (1.1G) while the code is ~109M, and that whole
+  # difference is re-packed into the HNP and installed on every device.
+  DAEMON_SYMBOL_DIR="$SHARED_TARGET_DIR/hicodeerd-symbols"
+  mkdir -p "$DAEMON_SYMBOL_DIR"
+  cp "$DAEMON_BIN" "$DAEMON_SYMBOL_DIR/hicodeerd"
+  if command -v strip >/dev/null 2>&1; then
+    if strip "$STAGE_DIR/hicodeerd/bin/hicodeerd"; then
+      echo "[hicodeer-ohos-build] hicodeerd stripped ($(du -h "$STAGE_DIR/hicodeerd/bin/hicodeerd" | cut -f1)); unstripped kept at $DAEMON_SYMBOL_DIR"
+    else
+      echo "[hicodeer-ohos-build] WARNING: strip failed; HNP keeps unstripped hicodeerd" >&2
+    fi
+  else
+    echo "[hicodeer-ohos-build] WARNING: no strip tool; HNP keeps unstripped hicodeerd" >&2
+  fi
   chmod 755 "$STAGE_DIR/hicodeerd/bin/hicodeerd"
   # The host private key is packed mode 0600. hnpcli records the staged file's
   # mode, so the chmod has to happen before the pack below.

@@ -1,0 +1,2823 @@
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
+
+use fsqlite_error::{FrankenError, Result};
+use fsqlite_types::LockLevel;
+use fsqlite_types::cx::Cx;
+use fsqlite_types::flags::{AccessFlags, SyncFlags, VfsOpenFlags};
+
+use crate::shm::ShmRegion;
+
+/// Durability boundary reached by abandoned private-database cleanup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateDatabaseCleanupDurability {
+    /// The parent directory was synchronized after all removals.
+    DirectorySynced,
+    /// The platform has no portable parent-directory synchronization primitive.
+    PlatformNoDirectorySync,
+    /// The cleanup did not prove its required durability boundary.
+    Unknown,
+}
+
+/// Observed final state of one fixed abandoned-database cleanup entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateDatabaseCleanupEntryState {
+    /// The entry did not exist during preflight and still does not exist.
+    AbsentAtPreflight,
+    /// The preflight identity was revalidated and pathname removal succeeded.
+    ///
+    /// This is evidence within the cooperative namespace contract; it does not
+    /// claim an identity-bound unlink primitive on platforms that lack one. On
+    /// a partial receipt it also does not claim the pathname remained absent
+    /// after that successful removal.
+    RemovedOwned,
+    /// The preflight identity remains installed and was not removed.
+    RetainedOwned,
+    /// A preflight-present entry now names a different or unsafe object.
+    ReplacementDetected,
+    /// A path that was absent during preflight became present before completion.
+    NewlyPresentUnowned,
+    /// The operation or a later observation could not determine the final state.
+    OperationUnknown,
+}
+
+/// Per-entry receipt for the fixed abandoned-database cleanup allowlist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateDatabaseCleanupEntryReceipt {
+    /// Exact path for this fixed cleanup ordinal.
+    pub path: PathBuf,
+    /// Best final state the cleanup could establish for this path.
+    pub state: PrivateDatabaseCleanupEntryState,
+}
+
+/// Stage at which an abandoned-database cleanup stopped making progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateDatabaseCleanupFailureStage {
+    /// A pathname no longer carried the ownership evidence captured at preflight.
+    OwnershipRecheck,
+    /// Testable interruption immediately before a removal ordinal.
+    BeforeRemoval,
+    /// The pathname-removal operation returned an error.
+    Remove,
+    /// Testable interruption immediately after a successful removal ordinal.
+    AfterRemoval,
+    /// The VFS helper could not establish its parent-directory durability boundary.
+    DirectorySync,
+    /// The owning caller's additional parent-directory sync failed after cleanup.
+    CallerDirectorySync,
+}
+
+/// Typed cause attached to a partial abandoned-database cleanup receipt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateDatabaseCleanupFailure {
+    /// Cleanup stage that failed or detected changed ownership.
+    pub stage: PrivateDatabaseCleanupFailureStage,
+    /// Exact path involved, when the failure is path-specific.
+    pub path: Option<PathBuf>,
+    /// Portable I/O category when an I/O operation returned the failure.
+    pub error_kind: Option<std::io::ErrorKind>,
+    /// Human-readable diagnostic detail; callers should branch on typed fields.
+    pub detail: String,
+}
+
+/// Truthful outcome of cleaning an exact caller-owned private database namespace.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrivateDatabaseCleanupOutcome {
+    /// Ownership could not be proven before destructive entry; this call
+    /// preserved every planned entry.
+    NotOwned,
+    /// Every preflight-owned entry was removed, no unowned entry appeared, and
+    /// the reported durability boundary completed.
+    Complete {
+        /// Final full-set receipt in destructive-ordinal order.
+        entries: Vec<PrivateDatabaseCleanupEntryReceipt>,
+        /// Durability boundary reached after the final full-set observation.
+        durability: PrivateDatabaseCleanupDurability,
+    },
+    /// Cleanup crossed the destructive boundary but did not complete. The
+    /// receipt classifies every fixed ordinal; callers must not interpret this
+    /// as "no mutation" and must not retry by pathname without a fresh proof.
+    Partial {
+        /// Typed reason cleanup stopped or refused to claim completion.
+        cause: PrivateDatabaseCleanupFailure,
+        /// Best final observation for every fixed destructive ordinal.
+        entries: Vec<PrivateDatabaseCleanupEntryReceipt>,
+        /// Durability reached by the incomplete operation.
+        durability: PrivateDatabaseCleanupDurability,
+    },
+}
+
+impl PrivateDatabaseCleanupOutcome {
+    /// Whether every owned entry was removed and the durability boundary completed.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        matches!(self, Self::Complete { .. })
+    }
+
+    /// Whether cleanup preserved the namespace because ownership was unproven.
+    #[must_use]
+    pub const fn is_not_owned(&self) -> bool {
+        matches!(self, Self::NotOwned)
+    }
+}
+
+/// Opaque identity of an already-open filesystem object.
+///
+/// Identities are intended only as opaque comparison keys while the relevant
+/// file handles remain open. Their ordering carries no filesystem meaning;
+/// it exists only for ordered collections. They are not persistent database
+/// identifiers and must not be serialized or compared across machines or
+/// boots.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FileIdentity {
+    kind: FileIdentityKind,
+    namespace: u64,
+    object: [u8; 16],
+}
+
+/// Representation domain for an opaque [`FileIdentity`].
+///
+/// The discriminator is part of equality and ordering so a legacy Windows
+/// 64-bit file index can never compare equal to a 128-bit `FILE_ID_INFO`
+/// value that happens to contain the same bytes.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum FileIdentityKind {
+    /// Stable identity for one file generation inside an in-process VFS.
+    Memory,
+    #[cfg(unix)]
+    Unix,
+    #[cfg(windows)]
+    WindowsFileId128,
+    #[cfg(windows)]
+    WindowsFileIndex64,
+}
+
+impl FileIdentity {
+    /// Construct an identity for a file owned by an in-process VFS.
+    ///
+    /// Both components are opaque process-local tokens. They only need to be
+    /// stable while the corresponding VFS/file storage objects are alive; the
+    /// identity is used to coalesce pager coordination gates, never persisted.
+    #[must_use]
+    pub(crate) fn from_memory_parts(namespace: u64, object: u64) -> Self {
+        let mut object_bytes = [0_u8; 16];
+        object_bytes[..8].copy_from_slice(&object.to_ne_bytes());
+        Self {
+            kind: FileIdentityKind::Memory,
+            namespace,
+            object: object_bytes,
+        }
+    }
+
+    /// Read the identity of an independently opened filesystem descriptor.
+    ///
+    /// On Unix this uses descriptor metadata (`st_dev`, `st_ino`). On Windows
+    /// it uses the volume serial number and full 128-bit file identifier
+    /// associated with the open handle. A later rename or pathname replacement
+    /// therefore does not change the result. Platforms without a stable
+    /// descriptor identity exposed by this crate return `Ok(None)`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_file(file: &std::fs::File) -> std::io::Result<Option<Self>> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let metadata = file.metadata()?;
+            Ok(Some(Self::from_unix_parts(metadata.dev(), metadata.ino())))
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle as _;
+
+            let handle = file.as_raw_handle();
+            let file_id_result = query_windows_file_id(handle);
+            Self::from_windows_query_result(file_id_result, || {
+                query_windows_legacy_file_index(handle)
+            })
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = file;
+            Ok(None)
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn from_unix_parts(device: u64, inode: u64) -> Self {
+        let mut object = [0_u8; 16];
+        object[..8].copy_from_slice(&inode.to_be_bytes());
+        Self {
+            kind: FileIdentityKind::Unix,
+            namespace: device,
+            object,
+        }
+    }
+
+    #[cfg(windows)]
+    fn from_windows_parts(volume_serial_number: u64, file_id: [u8; 16]) -> Option<Self> {
+        // MS-FSCC 2.1.10 reserves all-zero for filesystems without a
+        // 128-bit file ID and all-ones for files whose unique ID cannot be
+        // established. Both values MUST be ignored, so neither can safely
+        // participate in an expected-identity comparison.
+        if file_id.iter().all(|byte| *byte == 0) || file_id.iter().all(|byte| *byte == u8::MAX) {
+            return None;
+        }
+        Some(Self {
+            kind: FileIdentityKind::WindowsFileId128,
+            namespace: volume_serial_number,
+            object: file_id,
+        })
+    }
+
+    #[cfg(windows)]
+    fn from_windows_legacy_parts(
+        volume_serial_number: u32,
+        file_index_high: u32,
+        file_index_low: u32,
+    ) -> Self {
+        let file_index = (u64::from(file_index_high) << 32) | u64::from(file_index_low);
+        let mut object = [0_u8; 16];
+        object[..8].copy_from_slice(&file_index.to_be_bytes());
+        Self {
+            kind: FileIdentityKind::WindowsFileIndex64,
+            namespace: u64::from(volume_serial_number),
+            object,
+        }
+    }
+
+    #[cfg(windows)]
+    fn from_windows_query_result<F>(
+        file_id_result: std::io::Result<(u64, [u8; 16])>,
+        legacy_query: F,
+    ) -> std::io::Result<Option<Self>>
+    where
+        F: FnOnce() -> std::io::Result<(u32, u32, u32)>,
+    {
+        match file_id_result {
+            Ok((volume_serial_number, file_id)) => {
+                Ok(Self::from_windows_parts(volume_serial_number, file_id))
+            }
+            Err(err) if is_windows_file_id_unsupported(&err) => {
+                let (volume_serial_number, file_index_high, file_index_low) = legacy_query()?;
+                Ok(Some(Self::from_windows_legacy_parts(
+                    volume_serial_number,
+                    file_index_high,
+                    file_index_low,
+                )))
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Encode this identity for a namespace record.
+    ///
+    /// Byte 0 is the representation tag, bytes 1..9 are the big-endian
+    /// namespace, and bytes 9..25 are the exact object identifier.
+    #[cfg(any(unix, windows))]
+    pub(crate) fn to_namespace_bytes(self) -> [u8; 25] {
+        let tag = match self.kind {
+            // Memory identities are process-local. The tag round-trips for
+            // in-process coordination/tests only; callers must never persist
+            // it as a reusable cross-process namespace identity.
+            FileIdentityKind::Memory => 4,
+            #[cfg(unix)]
+            FileIdentityKind::Unix => 1,
+            #[cfg(windows)]
+            FileIdentityKind::WindowsFileId128 => 2,
+            #[cfg(windows)]
+            FileIdentityKind::WindowsFileIndex64 => 3,
+        };
+        let mut encoded = [0_u8; 25];
+        encoded[0] = tag;
+        encoded[1..9].copy_from_slice(&self.namespace.to_be_bytes());
+        encoded[9..].copy_from_slice(&self.object);
+        encoded
+    }
+
+    /// Decode and validate a namespace-record identity.
+    #[cfg(any(unix, windows))]
+    pub(crate) fn from_namespace_bytes(encoded: [u8; 25]) -> Option<Self> {
+        let mut namespace_bytes = [0_u8; 8];
+        namespace_bytes.copy_from_slice(&encoded[1..9]);
+        let namespace = u64::from_be_bytes(namespace_bytes);
+        let mut object = [0_u8; 16];
+        object.copy_from_slice(&encoded[9..]);
+
+        match encoded[0] {
+            4 if object[8..].iter().all(|byte| *byte == 0) => Some(Self {
+                kind: FileIdentityKind::Memory,
+                namespace,
+                object,
+            }),
+            #[cfg(unix)]
+            1 if object[8..].iter().all(|byte| *byte == 0) => Some(Self {
+                kind: FileIdentityKind::Unix,
+                namespace,
+                object,
+            }),
+            #[cfg(windows)]
+            2 => Self::from_windows_parts(namespace, object),
+            #[cfg(windows)]
+            3 if u32::try_from(namespace).is_ok() && object[8..].iter().all(|byte| *byte == 0) => {
+                Some(Self {
+                    kind: FileIdentityKind::WindowsFileIndex64,
+                    namespace,
+                    object,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+#[cfg(all(test, any(unix, windows)))]
+mod memory_file_identity_codec_tests {
+    use super::FileIdentity;
+
+    #[test]
+    fn memory_namespace_bytes_round_trip_with_distinct_tag() {
+        let identity = FileIdentity::from_memory_parts(17, 29);
+        let encoded = identity.to_namespace_bytes();
+
+        assert_eq!(encoded[0], 4);
+        assert_eq!(FileIdentity::from_namespace_bytes(encoded), Some(identity));
+        assert_ne!(
+            identity,
+            FileIdentity::from_memory_parts(18, 29),
+            "independent MemoryVfs instances must remain isolated"
+        );
+        assert_ne!(
+            identity,
+            FileIdentity::from_memory_parts(17, 30),
+            "distinct named files in one MemoryVfs must remain isolated"
+        );
+    }
+}
+
+#[cfg(windows)]
+fn query_windows_file_id(
+    handle: std::os::windows::io::RawHandle,
+) -> std::io::Result<(u64, [u8; 16])> {
+    use std::mem::size_of;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+
+    let mut identity = FILE_ID_INFO::default();
+    let identity_size = u32::try_from(size_of::<FILE_ID_INFO>())
+        .map_err(|_| std::io::Error::other("FILE_ID_INFO size does not fit in a Windows DWORD"))?;
+    // SAFETY: the caller supplies a live Windows file handle, `identity` is a
+    // correctly sized writable `FILE_ID_INFO` buffer, and both remain valid
+    // for the duration of this synchronous system call.
+    let succeeded = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileIdInfo,
+            std::ptr::from_mut(&mut identity).cast(),
+            identity_size,
+        )
+    };
+    if succeeded == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((identity.VolumeSerialNumber, identity.FileId.Identifier))
+}
+
+#[cfg(windows)]
+fn query_windows_legacy_file_index(
+    handle: std::os::windows::io::RawHandle,
+) -> std::io::Result<(u32, u32, u32)> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut identity = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the caller supplies a live Windows file handle and `identity`
+    // is a correctly sized writable buffer that remains valid for the
+    // duration of this synchronous system call.
+    let succeeded = unsafe { GetFileInformationByHandle(handle, &raw mut identity) };
+    if succeeded == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        identity.dwVolumeSerialNumber,
+        identity.nFileIndexHigh,
+        identity.nFileIndexLow,
+    ))
+}
+
+#[cfg(windows)]
+fn is_windows_file_id_unsupported(err: &std::io::Error) -> bool {
+    use windows_sys::Win32::Foundation::{
+        ERROR_CALL_NOT_IMPLEMENTED, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER,
+        ERROR_NOT_SUPPORTED,
+    };
+
+    err.raw_os_error().is_some_and(|raw_error| {
+        raw_error == ERROR_INVALID_FUNCTION as i32
+            || raw_error == ERROR_NOT_SUPPORTED as i32
+            || raw_error == ERROR_INVALID_PARAMETER as i32
+            || raw_error == ERROR_CALL_NOT_IMPLEMENTED as i32
+    })
+}
+
+impl std::fmt::Debug for FileIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FileIdentity(..)")
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_file_identity_codec_tests {
+    use super::FileIdentity;
+
+    #[test]
+    fn unix_namespace_bytes_round_trip_exactly() {
+        let identity = FileIdentity::from_unix_parts(0x0102_0304_0506_0708, 0x1122_3344_5566_7788);
+        let encoded = identity.to_namespace_bytes();
+
+        assert_eq!(encoded[0], 1);
+        assert_eq!(&encoded[1..9], &0x0102_0304_0506_0708_u64.to_be_bytes());
+        assert_eq!(&encoded[9..17], &0x1122_3344_5566_7788_u64.to_be_bytes());
+        assert_eq!(&encoded[17..], &[0_u8; 8]);
+        assert_eq!(FileIdentity::from_namespace_bytes(encoded), Some(identity));
+    }
+
+    #[test]
+    fn unix_namespace_bytes_reject_unknown_and_noncanonical_records() {
+        let identity = FileIdentity::from_unix_parts(7, 11);
+        let mut unknown_tag = identity.to_namespace_bytes();
+        unknown_tag[0] = u8::MAX;
+        assert_eq!(FileIdentity::from_namespace_bytes(unknown_tag), None);
+
+        let mut nonzero_tail = identity.to_namespace_bytes();
+        nonzero_tail[24] = 1;
+        assert_eq!(FileIdentity::from_namespace_bytes(nonzero_tail), None);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod file_identity_tests {
+    use super::FileIdentity;
+    use std::cell::Cell;
+    use std::io;
+    use windows_sys::Win32::Foundation::{
+        ERROR_CALL_NOT_IMPLEMENTED, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER,
+        ERROR_NOT_SUPPORTED,
+    };
+
+    #[test]
+    fn windows_identity_compares_all_file_id_bits() {
+        let file_id = [0x5a_u8; 16];
+        let mut different_high_byte = file_id;
+        different_high_byte[15] ^= 0xff;
+
+        assert_ne!(
+            FileIdentity::from_windows_parts(7, file_id),
+            FileIdentity::from_windows_parts(7, different_high_byte),
+        );
+    }
+
+    #[test]
+    fn windows_identity_rejects_reserved_sentinels() {
+        assert_eq!(FileIdentity::from_windows_parts(7, [0_u8; 16]), None);
+        assert_eq!(FileIdentity::from_windows_parts(7, [u8::MAX; 16]), None);
+    }
+
+    #[test]
+    fn windows_identity_prefers_full_file_id_without_legacy_query() {
+        let expected = [0x3c_u8; 16];
+        let legacy_queried = Cell::new(false);
+
+        let actual = FileIdentity::from_windows_query_result(Ok((19, expected)), || {
+            legacy_queried.set(true);
+            Ok((19, 0, 7))
+        })
+        .expect("full FileIdInfo result should succeed");
+
+        assert_eq!(actual, FileIdentity::from_windows_parts(19, expected));
+        assert!(!legacy_queried.get());
+    }
+
+    #[test]
+    fn windows_identity_falls_back_for_unsupported_file_id_queries() {
+        for code in [
+            ERROR_INVALID_FUNCTION,
+            ERROR_NOT_SUPPORTED,
+            ERROR_INVALID_PARAMETER,
+            ERROR_CALL_NOT_IMPLEMENTED,
+        ] {
+            let actual = FileIdentity::from_windows_query_result(
+                Err(io::Error::from_raw_os_error(code as i32)),
+                || Ok((23, 0x1122_3344, 0x5566_7788)),
+            )
+            .expect("unsupported FileIdInfo should use the legacy query")
+            .expect("legacy file index should produce an identity");
+
+            assert_eq!(
+                actual,
+                FileIdentity::from_windows_legacy_parts(23, 0x1122_3344, 0x5566_7788)
+            );
+        }
+    }
+
+    #[test]
+    fn windows_identity_does_not_fallback_for_real_io_errors() {
+        let legacy_queried = Cell::new(false);
+        let err =
+            FileIdentity::from_windows_query_result(Err(io::Error::from_raw_os_error(6)), || {
+                legacy_queried.set(true);
+                Ok((1, 2, 3))
+            })
+            .expect_err("invalid handles must remain hard errors");
+
+        assert_eq!(err.raw_os_error(), Some(6));
+        assert!(!legacy_queried.get());
+    }
+
+    #[test]
+    fn windows_identity_separates_full_and_legacy_representation_domains() {
+        let file_index = 0x1122_3344_5566_7788_u64;
+        let mut full_file_id = [0_u8; 16];
+        full_file_id[..8].copy_from_slice(&file_index.to_be_bytes());
+
+        assert_ne!(
+            FileIdentity::from_windows_parts(23, full_file_id).expect("non-sentinel full file ID"),
+            FileIdentity::from_windows_legacy_parts(23, 0x1122_3344, 0x5566_7788),
+        );
+    }
+
+    #[test]
+    fn windows_namespace_bytes_round_trip_both_identity_domains() {
+        let full_object = [0x5a_u8; 16];
+        let full = FileIdentity::from_windows_parts(0x0102_0304_0506_0708, full_object)
+            .expect("non-sentinel full file ID");
+        let full_encoded = full.to_namespace_bytes();
+        assert_eq!(full_encoded[0], 2);
+        assert_eq!(
+            &full_encoded[1..9],
+            &0x0102_0304_0506_0708_u64.to_be_bytes()
+        );
+        assert_eq!(&full_encoded[9..], &full_object);
+        assert_eq!(FileIdentity::from_namespace_bytes(full_encoded), Some(full));
+
+        let legacy = FileIdentity::from_windows_legacy_parts(0x0102_0304, 0x1122_3344, 0x5566_7788);
+        let legacy_encoded = legacy.to_namespace_bytes();
+        assert_eq!(legacy_encoded[0], 3);
+        assert_eq!(&legacy_encoded[1..9], &0x0102_0304_u64.to_be_bytes());
+        assert_eq!(
+            &legacy_encoded[9..17],
+            &0x1122_3344_5566_7788_u64.to_be_bytes()
+        );
+        assert_eq!(&legacy_encoded[17..], &[0_u8; 8]);
+        assert_eq!(
+            FileIdentity::from_namespace_bytes(legacy_encoded),
+            Some(legacy)
+        );
+    }
+
+    #[test]
+    fn windows_namespace_bytes_reject_noncanonical_records() {
+        let mut unknown_tag = [0_u8; 25];
+        unknown_tag[0] = u8::MAX;
+        assert_eq!(FileIdentity::from_namespace_bytes(unknown_tag), None);
+
+        let mut full_zero_sentinel = [0_u8; 25];
+        full_zero_sentinel[0] = 2;
+        assert_eq!(FileIdentity::from_namespace_bytes(full_zero_sentinel), None);
+
+        let mut full_ones_sentinel = [u8::MAX; 25];
+        full_ones_sentinel[0] = 2;
+        assert_eq!(FileIdentity::from_namespace_bytes(full_ones_sentinel), None);
+
+        let legacy = FileIdentity::from_windows_legacy_parts(7, 11, 13);
+        let mut legacy_nonzero_tail = legacy.to_namespace_bytes();
+        legacy_nonzero_tail[24] = 1;
+        assert_eq!(
+            FileIdentity::from_namespace_bytes(legacy_nonzero_tail),
+            None
+        );
+
+        let mut legacy_wide_namespace = legacy.to_namespace_bytes();
+        legacy_wide_namespace[1..9].copy_from_slice(&(u64::from(u32::MAX) + 1).to_be_bytes());
+        assert_eq!(
+            FileIdentity::from_namespace_bytes(legacy_wide_namespace),
+            None
+        );
+    }
+}
+
+/// bd-sz9j5: what a lock-neutral probe can prove about other processes'
+/// participation in a WAL-mode database
+/// (see [`Vfs::probe_foreign_wal_participation`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ForeignWalParticipation {
+    /// Another process holds the main-file WAL read lock or the `-shm` DMS
+    /// byte, as every 0.4.x WAL connection does for its whole lifetime.
+    Participant,
+    /// The file is in WAL mode and no other process holds either lock.
+    NoParticipant,
+    /// Not provable: not WAL mode, this process already has the file or its
+    /// `-shm` open (its own locks are invisible to the probe), the filesystem
+    /// cannot report byte-range locks, or the VFS cannot probe.
+    Unknown,
+}
+
+/// Durability level for `VfsFile::durable_sync`.
+///
+/// Centralizes per-filesystem sync policy so callers express intent
+/// ("make WAL frames durable") and the VFS maps it to the correct
+/// syscall: fdatasync on ext4/XFS, fsync on btrfs/ZFS, F_FULLFSYNC
+/// on APFS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SyncKind {
+    /// Data-only sync (fdatasync on Linux). Sufficient when file size
+    /// and metadata are unchanged (e.g. overwriting existing WAL frames).
+    DataOnly,
+    /// Data + metadata sync (fsync on Linux). Required when new allocation
+    /// blocks must be persisted (file growth, btrfs CoW).
+    DataAndMetadata,
+    /// Full durable barrier: the strongest sync the platform offers.
+    /// On APFS this maps to F_FULLFSYNC; elsewhere identical to
+    /// `DataAndMetadata`. Required for WAL commit frames.
+    FullDurable,
+}
+
+static DEFAULT_RANDOMNESS_CALL_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// A virtual filesystem implementation.
+///
+/// This trait abstracts all file system operations, allowing different
+/// backends: real files (Unix), in-memory (testing), or custom implementations.
+///
+/// Modeled after C SQLite's `sqlite3_vfs` struct from `os.h`.
+pub trait Vfs: Send + Sync {
+    /// The file handle type produced by this VFS.
+    type File: VfsFile;
+
+    /// The name of this VFS (e.g., "unix", "memory").
+    fn name(&self) -> &'static str;
+
+    /// Open a file.
+    ///
+    /// `path` is `None` for temporary files that should be auto-named.
+    /// `flags` describes what kind of file (main DB, journal, WAL, etc.)
+    /// and how to open it (create, read-write, exclusive, etc.).
+    ///
+    /// Returns the opened file and the flags that were actually used (the VFS
+    /// may add flags like `READWRITE` when `CREATE` is specified).
+    fn open(
+        &self,
+        cx: &Cx,
+        path: Option<&Path>,
+        flags: VfsOpenFlags,
+    ) -> Result<(Self::File, VfsOpenFlags)>;
+
+    /// Open an existing file only if its handle has `expected_identity`.
+    ///
+    /// The default implementation verifies the identity immediately after
+    /// opening. Filesystem backends whose normal open path can mutate related
+    /// artifacts should override this method and perform an earlier,
+    /// side-effect-free identity preflight as well. Because an expected
+    /// identity can only belong to an existing object, `CREATE` and
+    /// `EXCLUSIVE` are stripped before the open.
+    fn open_with_expected_identity(
+        &self,
+        cx: &Cx,
+        path: &Path,
+        flags: VfsOpenFlags,
+        expected_identity: FileIdentity,
+    ) -> Result<(Self::File, VfsOpenFlags)> {
+        let mut existing_flags = flags;
+        existing_flags.remove(VfsOpenFlags::CREATE | VfsOpenFlags::EXCLUSIVE);
+        let (file, actual_flags) = self.open(cx, Some(path), existing_flags)?;
+        if file.file_identity()? != Some(expected_identity) {
+            return Err(fsqlite_error::FrankenError::CannotOpen {
+                path: path.to_owned(),
+            });
+        }
+        Ok((file, actual_flags))
+    }
+
+    /// Open a caller-reserved empty file without creating it or recovering
+    /// any pre-existing database artifacts.
+    ///
+    /// Backends whose ordinary open path creates auxiliary files must
+    /// override this method so the identity, zero-length, and recovery-
+    /// artifact checks all occur before those side effects.
+    fn open_reserved_with_expected_identity(
+        &self,
+        cx: &Cx,
+        path: &Path,
+        flags: VfsOpenFlags,
+        expected_identity: FileIdentity,
+    ) -> Result<(Self::File, VfsOpenFlags)> {
+        let (file, actual_flags) =
+            self.open_with_expected_identity(cx, path, flags, expected_identity)?;
+        if file.file_size(cx)? != 0 {
+            return Err(fsqlite_error::FrankenError::CannotOpen {
+                path: path.to_owned(),
+            });
+        }
+
+        for suffix in ["-journal", "-wal", "-wal-fec", "-shm"] {
+            let mut artifact_path = path.as_os_str().to_owned();
+            artifact_path.push(suffix);
+            if self.path_entry_exists(cx, Path::new(&artifact_path))? {
+                return Err(fsqlite_error::FrankenError::CannotOpen {
+                    path: path.to_owned(),
+                });
+            }
+        }
+        Ok((file, actual_flags))
+    }
+
+    /// Delete a file.
+    ///
+    /// If `sync_dir` is true, the directory entry removal should be synced
+    /// to ensure durability.
+    fn delete(&self, cx: &Cx, path: &Path, sync_dir: bool) -> Result<()>;
+
+    /// Synchronize the parent directory containing `path`.
+    ///
+    /// Durable create-before-mutate protocols (notably rollback journals)
+    /// must make the newly-created directory entry stable before they modify
+    /// the protected file.  Filesystems that do not require or support an
+    /// explicit directory sync may keep the default no-op implementation.
+    fn sync_parent_directory(&self, _cx: &Cx, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    /// Check file access.
+    ///
+    /// Returns true if the file at `path` satisfies the access check
+    /// described by `flags`.
+    fn access(&self, cx: &Cx, path: &Path, flags: AccessFlags) -> Result<bool>;
+
+    /// Return whether a directory entry exists without following its final
+    /// symlink component.
+    ///
+    /// This is stricter than [`Path::exists`] and is required for gates that
+    /// must refuse dangling recovery-artifact symlinks. Virtual filesystems
+    /// without symlink semantics may delegate to [`Self::access`].
+    fn path_entry_exists(&self, cx: &Cx, path: &Path) -> Result<bool> {
+        self.access(cx, path, AccessFlags::EXISTS)
+    }
+
+    /// Identity of the file `path` names now, without opening it, in the
+    /// domain of [`VfsFile::file_identity`]: equal identities mean the path
+    /// and an open handle name the same file.
+    ///
+    /// `Ok(None)` means "not known cheaply" (no such entry, or a VFS without
+    /// stable identities); callers must then take their open-and-inspect path.
+    fn path_file_identity(&self, _cx: &Cx, _path: &Path) -> Result<Option<FileIdentity>> {
+        Ok(None)
+    }
+
+    /// bd-sz9j5: report whether another process visibly participates in the
+    /// WAL-mode database at `path` the way every 0.4.x engine does, without
+    /// taking, waiting for, or disturbing any lock.
+    ///
+    /// Only meaningful while the caller has joined a live fsqlite namespace:
+    /// a live peer that shows no participation is a pre-0.4 engine (or a
+    /// 0.4.x peer caught between admission and WAL attach, which a retry
+    /// resolves). VFSes that cannot answer return
+    /// [`ForeignWalParticipation::Unknown`], which callers treat as "proceed".
+    fn probe_foreign_wal_participation(
+        &self,
+        _cx: &Cx,
+        _path: &Path,
+    ) -> Result<ForeignWalParticipation> {
+        Ok(ForeignWalParticipation::Unknown)
+    }
+
+    /// Resolve a potentially relative path into an absolute path.
+    fn full_pathname(&self, cx: &Cx, path: &Path) -> Result<PathBuf>;
+
+    /// Generate a random byte sequence for temporary file naming.
+    ///
+    /// Fills `buf` with bytes suitable for temporary file naming.
+    ///
+    /// The default implementation is deterministic (xorshift seeded from a
+    /// process-local counter) for reproducible tests; real VFS implementations
+    /// should override this and use OS-provided randomness to avoid collisions.
+    fn randomness(&self, cx: &Cx, buf: &mut [u8]) {
+        // Default: fill with pseudo-random bytes using a simple xorshift.
+        // Real VFS implementations should use OS-provided randomness.
+        let _ = cx; // Usage to silence unused variable warning
+        let seq = DEFAULT_RANDOMNESS_CALL_SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut state: u64 = 0x5DEE_CE66_D1A4_F681 ^ seq.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        for chunk in buf.chunks_mut(8) {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let bytes = state.to_le_bytes();
+            for (dst, &src) in chunk.iter_mut().zip(bytes.iter()) {
+                *dst = src;
+            }
+        }
+    }
+
+    /// Return the current time as a Julian day number (days since noon
+    /// on November 24, 4714 B.C.).
+    fn current_time(&self, cx: &Cx) -> f64 {
+        // Default: derive from `Cx` time capability (no ambient authority).
+        cx.current_time_julian_day()
+    }
+
+    /// Returns true if this VFS operates entirely in-process memory.
+    /// In-memory VFS backends can skip file locking, journal recovery,
+    /// and other I/O-oriented work in the pager hot path.
+    fn is_memory(&self) -> bool {
+        false
+    }
+}
+
+/// Observable terminal state of one tracked VFS write.
+///
+/// `Pending` is deliberately fail-closed: it means only that the write's
+/// actual completion source has not reported a terminal result. It must never
+/// be interpreted as proof that no bytes reached the file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VfsWriteCompletionState {
+    /// The write has not yet reached a terminal completion source.
+    Pending,
+    /// The complete requested byte range was written.
+    Success,
+    /// The write terminated with an error or cancellation.
+    ///
+    /// This does not prove that zero bytes were written; a caller reconciling
+    /// an append must still validate the on-disk interval before aborting it.
+    Error,
+}
+
+#[derive(Debug)]
+struct VfsWriteCompletionInner {
+    state: VfsWriteCompletionState,
+    next_waiter_id: u64,
+    waiters: Vec<(u64, Waker)>,
+    terminal_relay: Option<(VfsWriteCompletion, VfsWriteCompletionState)>,
+}
+
+/// Cloneable observation handle for one VFS write operation.
+///
+/// Production VFS backends complete this token at the source that owns the
+/// side effect: the blocking I/O closure on Unix and Windows, the io_uring CQE
+/// driver on Linux, or the immediate in-memory mutation path. Consequently a
+/// clone remains useful even when the future returned by
+/// [`VfsFile::write_tracked`] is dropped before it can observe completion.
+///
+/// A token is single-use. The first terminal transition wins.
+#[derive(Clone, Debug)]
+pub struct VfsWriteCompletion {
+    inner: Arc<Mutex<VfsWriteCompletionInner>>,
+}
+
+impl VfsWriteCompletion {
+    /// Create a pending completion token for one logical write.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(VfsWriteCompletionInner {
+                state: VfsWriteCompletionState::Pending,
+                next_waiter_id: 0,
+                waiters: Vec::new(),
+                terminal_relay: None,
+            })),
+        }
+    }
+
+    /// Return the currently observable state.
+    #[must_use]
+    pub fn state(&self) -> VfsWriteCompletionState {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .state
+    }
+
+    /// Wait until the write reaches `Success` or `Error`.
+    ///
+    /// Dropping the returned future only unregisters that waiter. It neither
+    /// cancels the write nor consumes the terminal result.
+    #[must_use]
+    pub fn wait(&self) -> VfsWriteCompletionWait {
+        VfsWriteCompletionWait {
+            completion: self.clone(),
+            waiter_id: None,
+        }
+    }
+
+    /// Record successful completion at the source that owns the write.
+    ///
+    /// Returns `true` when this call performed the terminal transition.
+    #[doc(hidden)]
+    pub fn complete_success(&self) -> bool {
+        self.complete(VfsWriteCompletionState::Success)
+    }
+
+    /// Record failed or cancelled completion at the source that owns the write.
+    ///
+    /// Returns `true` when this call performed the terminal transition.
+    #[doc(hidden)]
+    pub fn complete_error(&self) -> bool {
+        self.complete(VfsWriteCompletionState::Error)
+    }
+
+    /// Create a child whose source completion terminates this token as Error.
+    ///
+    /// Fault wrappers use this for intentional partial writes: the lower
+    /// backend still owns the completion instant, while the outer operation
+    /// can never truthfully report full-write success.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn error_mapped_child(&self) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(VfsWriteCompletionInner {
+                state: VfsWriteCompletionState::Pending,
+                next_waiter_id: 0,
+                waiters: Vec::new(),
+                terminal_relay: Some((self.clone(), VfsWriteCompletionState::Error)),
+            })),
+        }
+    }
+
+    fn complete(&self, terminal: VfsWriteCompletionState) -> bool {
+        debug_assert_ne!(terminal, VfsWriteCompletionState::Pending);
+        // Walk the relay chain iteratively and publish every mapped terminal
+        // state before invoking any waker. Wakers are arbitrary user code: one
+        // that re-enters an outer token must already observe its terminal
+        // state, and one that panics must not strand an outer partial-write
+        // token in `Pending`. Iteration also keeps deep relay chains off the
+        // native stack.
+        let mut completion = self.clone();
+        let mut next_terminal = terminal;
+        let mut completed_source = false;
+        let mut wake_queue = Vec::new();
+
+        loop {
+            let (waiters, terminal_relay) = {
+                let mut inner = completion
+                    .inner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if inner.state != VfsWriteCompletionState::Pending {
+                    break;
+                }
+                inner.state = next_terminal;
+                (
+                    std::mem::take(&mut inner.waiters),
+                    inner.terminal_relay.take(),
+                )
+            };
+            completed_source = true;
+            // Reuse the first token's waiter list so the common unrelayed
+            // completion allocates nothing beyond what it already owned.
+            if wake_queue.is_empty() {
+                wake_queue = waiters;
+            } else {
+                wake_queue.extend(waiters);
+            }
+            let Some((relay, mapped_terminal)) = terminal_relay else {
+                break;
+            };
+            completion = relay;
+            next_terminal = mapped_terminal;
+        }
+
+        for (_, waiter) in wake_queue {
+            waiter.wake();
+        }
+        completed_source
+    }
+}
+
+impl Default for VfsWriteCompletion {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Source-owned guard that fails closed if an accepted write is abandoned.
+///
+/// Blocking-pool cancellation can discard a queued closure before executing
+/// it, and driver teardown can discard an uncompleted request. Keeping this
+/// guard with that source ensures those paths terminate as `Error` instead of
+/// leaving a caller-retained token pending forever.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub(crate) struct VfsWriteCompletionSource {
+    completion: VfsWriteCompletion,
+    armed: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl VfsWriteCompletionSource {
+    pub(crate) fn new(completion: VfsWriteCompletion) -> Self {
+        Self {
+            completion,
+            armed: true,
+        }
+    }
+
+    pub(crate) fn complete_success(&mut self) {
+        self.completion.complete_success();
+        self.armed = false;
+    }
+
+    pub(crate) fn complete_error(&mut self) {
+        self.completion.complete_error();
+        self.armed = false;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for VfsWriteCompletionSource {
+    fn drop(&mut self) {
+        if self.armed {
+            self.completion.complete_error();
+        }
+    }
+}
+
+/// Cancel-safe future returned by [`VfsWriteCompletion::wait`].
+#[derive(Debug)]
+pub struct VfsWriteCompletionWait {
+    completion: VfsWriteCompletion,
+    waiter_id: Option<u64>,
+}
+
+impl std::future::Future for VfsWriteCompletionWait {
+    type Output = VfsWriteCompletionState;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().get_mut();
+        let completion_inner = Arc::clone(&this.completion.inner);
+        // Cloning and dropping a user-provided RawWaker can execute arbitrary
+        // code. Clone before taking the mutex, then carry every replaced or
+        // removed waker out of the critical section before destroying it.
+        let mut incoming_waker = Some(cx.waker().clone());
+        let (poll, retired_waker) = {
+            let mut inner = completion_inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if inner.state != VfsWriteCompletionState::Pending {
+                let retired_waker = this.waiter_id.take().and_then(|waiter_id| {
+                    inner
+                        .waiters
+                        .iter()
+                        .position(|(registered_id, _)| *registered_id == waiter_id)
+                        .map(|index| inner.waiters.swap_remove(index).1)
+                });
+                (Poll::Ready(inner.state), retired_waker)
+            } else if let Some(waiter_id) = this.waiter_id {
+                let (_, registered_waker) = inner
+                    .waiters
+                    .iter_mut()
+                    .find(|(registered_id, _)| *registered_id == waiter_id)
+                    .expect("pending completion waiter must remain registered");
+                let retired_waker = if registered_waker.will_wake(cx.waker()) {
+                    None
+                } else {
+                    Some(std::mem::replace(
+                        registered_waker,
+                        incoming_waker
+                            .take()
+                            .expect("incoming completion waker must be available"),
+                    ))
+                };
+                (Poll::Pending, retired_waker)
+            } else {
+                let waiter_id = loop {
+                    let candidate = inner.next_waiter_id;
+                    inner.next_waiter_id = inner.next_waiter_id.wrapping_add(1);
+                    if inner
+                        .waiters
+                        .iter()
+                        .all(|(registered_id, _)| *registered_id != candidate)
+                    {
+                        break candidate;
+                    }
+                };
+                inner.waiters.push((
+                    waiter_id,
+                    incoming_waker
+                        .take()
+                        .expect("incoming completion waker must be available"),
+                ));
+                this.waiter_id = Some(waiter_id);
+                (Poll::Pending, None)
+            }
+        };
+        drop(retired_waker);
+        drop(incoming_waker);
+        poll
+    }
+}
+
+impl Drop for VfsWriteCompletionWait {
+    fn drop(&mut self) {
+        let Some(waiter_id) = self.waiter_id.take() else {
+            return;
+        };
+        let retired_waker = {
+            let mut inner = self
+                .completion
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            inner
+                .waiters
+                .iter()
+                .position(|(registered_id, _)| *registered_id == waiter_id)
+                .map(|index| inner.waiters.swap_remove(index).1)
+        };
+        drop(retired_waker);
+    }
+}
+
+/// A file handle opened by a VFS.
+///
+/// Corresponds to C SQLite's `sqlite3_file` + `sqlite3_io_methods`.
+pub trait VfsFile: Send + Sync {
+    /// Close the file.
+    ///
+    /// After this call, the file handle should not be used.
+    fn close(&mut self, cx: &Cx) -> Result<()>;
+
+    /// Return the identity of the filesystem object held by this open handle.
+    ///
+    /// Implementations must derive this from the open descriptor (or from
+    /// descriptor metadata captured at open time), never by resolving the
+    /// current pathname. The default is `None` for custom backends that cannot
+    /// provide a stable comparable identity.
+    fn file_identity(&self) -> Result<Option<FileIdentity>> {
+        Ok(None)
+    }
+
+    /// Re-derive this handle's identity from the live descriptor.
+    ///
+    /// GH#416: some filesystems number a file by its first data cluster
+    /// (macOS `msdosfs`), so a zero-length file carries a placeholder
+    /// `st_ino` that changes on its first write. A backend whose
+    /// [`Self::file_identity`] is a snapshot taken at open time must re-read
+    /// the descriptor here and, when the identity moved, re-key any
+    /// process-wide state it coalesces by identity so later opens of the same
+    /// file converge on the same lock domain. The default returns the cached
+    /// identity unchanged, which is correct for every backend whose identity
+    /// is stable for the life of an open descriptor.
+    fn refresh_file_identity(&self) -> Result<Option<FileIdentity>> {
+        self.file_identity()
+    }
+
+    /// Read `buf.len()` bytes starting at byte offset `offset`.
+    ///
+    /// Returns the number of bytes actually read. If fewer bytes are read
+    /// than requested (short read), the remaining bytes in `buf` are zeroed.
+    fn read<'a>(
+        &'a self,
+        cx: &'a Cx,
+        buf: &'a mut [u8],
+        offset: u64,
+    ) -> impl std::future::Future<Output = Result<usize>> + Send + 'a;
+
+    /// Write `buf` starting at byte offset `offset`.
+    fn write<'a>(
+        &'a self,
+        cx: &'a Cx,
+        buf: &'a [u8],
+        offset: u64,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a;
+
+    /// Write `buf` and report terminal side-effect completion through `completion`.
+    ///
+    /// The ordinary [`Self::write`] contract is unchanged. This additive path
+    /// lets durability coordinators retain an observation handle when their
+    /// caller future is externally dropped. Backends whose hidden side effect
+    /// outlives their returned future must override this method and complete
+    /// the token at that hidden source. The conservative default can remain
+    /// `Pending` after such a drop; callers must treat that as in-doubt.
+    fn write_tracked<'a>(
+        &'a self,
+        cx: &'a Cx,
+        buf: &'a [u8],
+        offset: u64,
+        completion: VfsWriteCompletion,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        async move {
+            let result = self.write(cx, buf, offset).await;
+            if result.is_ok() {
+                completion.complete_success();
+            } else {
+                completion.complete_error();
+            }
+            result
+        }
+    }
+
+    /// Write multiple page-sized buffers in one logical operation.
+    ///
+    /// The default implementation preserves existing semantics by issuing the
+    /// writes sequentially through [`Self::write`]. VFS backends may override
+    /// this to amortize locking or syscall overhead for hot pager commit paths.
+    fn write_page_batch<'a>(
+        &'a self,
+        cx: &'a Cx,
+        writes: &'a [(u64, &'a [u8])],
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        async move {
+            for (offset, data) in writes {
+                self.write(cx, data, *offset).await?;
+            }
+            Ok(())
+        }
+    }
+
+    /// Truncate the file to `size` bytes.
+    fn truncate(&mut self, cx: &Cx, size: u64) -> Result<()>;
+
+    /// Sync the file contents to stable storage.
+    ///
+    /// `flags` indicates the type of sync (normal, full, data-only).
+    fn sync(&mut self, cx: &Cx, flags: SyncFlags) -> Result<()>;
+
+    /// Durability-intent sync with per-filesystem policy.
+    ///
+    /// Callers express *what* must be durable (`SyncKind`); the VFS maps
+    /// it to the correct platform syscall. Default delegates to `sync()`
+    /// with `DATAONLY` / `FULL` flags; platform VFS backends override for
+    /// filesystem-specific behaviour (F_FULLFSYNC on APFS, etc.).
+    fn durable_sync(&mut self, cx: &Cx, kind: SyncKind) -> Result<()> {
+        let flags = match kind {
+            SyncKind::DataOnly => SyncFlags::DATAONLY,
+            SyncKind::DataAndMetadata | SyncKind::FullDurable => SyncFlags::FULL,
+        };
+        self.sync(cx, flags)
+    }
+
+    /// Return the current file size in bytes.
+    fn file_size(&self, cx: &Cx) -> Result<u64>;
+
+    /// Acquire a file lock at the given level.
+    ///
+    /// SQLite's five-level locking: None < Shared < Reserved < Pending < Exclusive.
+    fn lock(&mut self, cx: &Cx, level: LockLevel) -> Result<()>;
+
+    /// Release the file lock to the given level.
+    fn unlock(&mut self, cx: &Cx, level: LockLevel) -> Result<()>;
+
+    /// Acquire the external writer fence for one physical WAL append.
+    ///
+    /// This belongs inside the ordered flush interval, never transaction
+    /// preparation. Native backends exclude stock WAL writers through WRITE
+    /// and retain their existing native appender fence. Memory backends must
+    /// preserve their non-serializing lock-state semantics.
+    ///
+    /// Arm the exact prior main-file level and newly acquired WRITE ownership
+    /// before the first side effect. An existing shared-snapshot attempt may
+    /// enclose this attempt; another append or maintenance attempt may not.
+    /// Every outcome, including partial acquisition failure, must be restored
+    /// through [`Self::restore_external_wal_append_attempt`].
+    fn lock_external_wal_append(&mut self, cx: &Cx) -> Result<()>;
+
+    /// Whether this handle owns a complete, fresh physical append WRITE claim.
+    ///
+    /// This query never acquires a lock, maps SHM, or creates a file. True
+    /// requires the exact append attempt to have newly acquired native WRITE
+    /// and completed its main-file fence, with the live ownership ledger still
+    /// naming this handle. Preowned WRITE, partial acquisition, restoration in
+    /// progress, and cleanup-only descriptor transfer are not append authority.
+    /// Unsupported backends must explicitly refuse this native capability.
+    fn owns_external_wal_append_write(&self, cx: &Cx) -> Result<bool>;
+
+    /// Restore an append attempt without releasing its enclosing snapshot.
+    ///
+    /// This must be idempotent before acquisition and after success or failure.
+    /// Retain the exact owner of every failed raw unlock for retry, and release
+    /// only WRITE ownership newly acquired by this attempt. Close must restore
+    /// this inner attempt before its enclosing shared-snapshot attempt.
+    fn restore_external_wal_append_attempt(&mut self, cx: &Cx) -> Result<()>;
+
+    /// Acquire the cross-process SHARED fence used while capturing a coherent
+    /// main-database snapshot.
+    ///
+    /// The backend must publish an exact attempt marker before its first raw
+    /// lock side effect. A clean or partial acquisition error retains that
+    /// marker until [`Self::restore_external_shared_snapshot_attempt`]
+    /// succeeds.
+    fn lock_external_shared_snapshot(&mut self, cx: &Cx) -> Result<()>;
+
+    /// Restore the exact baseline of an external shared-snapshot attempt.
+    ///
+    /// This is an attempt obligation, not an ordinary unlock. It must be safe
+    /// before any raw lock was acquired, after clean or partial acquisition
+    /// failure, after success, and on repeated calls. An error must retain
+    /// enough exact backend state for a later retry.
+    fn restore_external_shared_snapshot_attempt(&mut self, cx: &Cx) -> Result<()>;
+
+    /// Acquire the cross-process fence for an operation that replaces the
+    /// complete main-database image in place.
+    ///
+    /// The backend must record the requested journal mode, exact prior main
+    /// lock level, and only the WAL slots newly acquired by this attempt before
+    /// returning control to the caller.
+    fn lock_external_maintenance(&mut self, cx: &Cx, wal_mode: bool) -> Result<()>;
+
+    /// Acquire an appender-excluding fence for a WAL checkpoint.
+    ///
+    /// Unlike whole-image replacement, a checkpoint also observes the WAL
+    /// reader horizon and acquires the backfill/reset gates before mutating
+    /// protected pages. A backend may therefore admit idle WAL attachments
+    /// while excluding both native and stock appenders. The conservative
+    /// default retains the whole-image fence. Restore every attempt through
+    /// [`Self::restore_external_maintenance_attempt`], including failures.
+    fn lock_external_wal_checkpoint(&mut self, cx: &Cx) -> Result<()> {
+        self.lock_external_maintenance(cx, true)
+    }
+
+    /// Acquire the exclusive surfaces needed to rebuild a WAL index.
+    ///
+    /// Establish the checkpoint WRITE/CKPT and main-file appender fence,
+    /// then RECOVER and every reader slot, including the database-only slot.
+    /// Record an exact maintenance attempt before the first lock side effect.
+    /// Preserve pre-existing main and SHM claims; only newly acquired claims
+    /// belong to this attempt. Refuse overlapping maintenance, append, or
+    /// shared-snapshot attempts instead of nesting another owner.
+    ///
+    /// Restore every outcome through
+    /// [`Self::restore_external_maintenance_attempt`]. A backend unable to
+    /// establish these surfaces must return an error without claiming success.
+    /// This operation grants lock ownership only; it neither rebuilds nor
+    /// publishes a WAL index. Callers must settle protected WAL-index mutations
+    /// before restoring; this owner tracks locks, not publication completion.
+    /// SHM must not be unmapped while the attempt is armed.
+    fn lock_external_wal_recovery(&mut self, cx: &Cx) -> Result<()>;
+
+    /// Restore the exact baseline of an external maintenance acquisition
+    /// attempt.
+    ///
+    /// This is deliberately distinct from strict ordinary SHM unlocks. The
+    /// backend-owned attempt marker is authoritative about whether WAL
+    /// surfaces participated; callers cannot supply a second, possibly stale
+    /// mode. Restoration must be idempotent before acquisition, after clean or
+    /// partial failure, after success, and across retries. Every retained
+    /// independent surface is attempted even if another restoration fails.
+    /// WAL maintenance has an inner phase: record and restore newly acquired
+    /// RECOVER, backfill, reset, and temporary reader-horizon claims before
+    /// the outer checkpoint and main-file fences. Failure in
+    /// that inner phase retains every outer fence for retry; once it drains,
+    /// the outer surfaces again restore independently. Each successfully
+    /// restored claim is forgotten only after its raw unlock or downgrade
+    /// succeeds, preserving any pre-existing ownership.
+    fn restore_external_maintenance_attempt(&mut self, cx: &Cx) -> Result<()>;
+
+    /// Check if another process holds a reserved lock.
+    ///
+    /// Returns true if a RESERVED or higher lock is held by another connection.
+    fn check_reserved_lock(&self, cx: &Cx) -> Result<bool>;
+
+    /// Whether this handle's byte-range / OFD advisory locking silently
+    /// degraded to a coarse whole-file `flock(2)` fallback.
+    ///
+    /// Some filesystems — network mounts (AFP/SMB/NFS on Darwin) and pre-10.12
+    /// kernels — reject byte-range / OFD `fcntl` locks with `EINVAL`/`ENOTSUP`.
+    /// The Unix backend then falls back to whole-file `flock(2)`, which is
+    /// correct where `flock` is actually enforced but forfeits byte-range
+    /// writer concurrency — and, on the network mounts where the fallback is
+    /// *selected*, may not exclude across hosts at all. The downgrade is
+    /// otherwise invisible: acquisition returns success identically in both
+    /// modes.
+    ///
+    /// This accessor lets a caller that requires real cross-host exclusion
+    /// detect the degraded handle and refuse it (or warn the user). The
+    /// observation is only meaningful after at least one lock has been acquired
+    /// on the handle; before that it conservatively reports `false`.
+    ///
+    /// Returns `false` for backends that never fall back: Linux keeps
+    /// byte-range locks, and in-memory / other custom backends do not use
+    /// `flock`. Only the Unix backend overrides this (GH #343 / bd-qll76).
+    fn locking_downgraded_to_whole_file_flock(&self) -> bool {
+        false
+    }
+
+    /// Whether this handle holds the main-file SHARED read lock it keeps for
+    /// the whole life of its WAL shared-memory attachment. While held, no other
+    /// process can take EXCLUSIVE: it cannot leave WAL mode, write in rollback
+    /// mode, leave a hot journal, or unlink the WAL beneath this process —
+    /// which is what lets a WAL reader trust an unchanged WAL-index header.
+    /// Conservatively `false` for backends that do not track it.
+    fn holds_main_wal_lifetime_read_lock(&self) -> bool {
+        false
+    }
+
+    /// bd-sz9j5: take the main-file read claim that this handle's WAL
+    /// shared-memory attachment holds for its lifetime (see
+    /// [`Self::holds_main_wal_lifetime_read_lock`]) now, before the WAL is
+    /// attached, when the file header says WAL mode. Returns whether the claim
+    /// is held. A non-WAL file is left unclaimed.
+    ///
+    /// A joiner calls this before namespace admission releases its gate. In
+    /// between, it would otherwise show other processes only its namespace
+    /// `use` lock, the lock signature of a pre-0.4 engine, and a third opener
+    /// could refuse with `IncompatiblePeerEngine` if the last established
+    /// peer exited during that window. The later attachment reuses this claim;
+    /// close and `shm_unmap` release it. Backends without the claim do nothing.
+    fn claim_wal_lifetime_before_join(&mut self, _cx: &Cx) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Return the sector size for this file.
+    ///
+    /// The sector size is the minimum write granularity for the underlying
+    /// storage. Defaults to 4096 bytes.
+    fn sector_size(&self) -> u32 {
+        4096
+    }
+
+    /// Return device characteristics flags.
+    ///
+    /// These flags describe capabilities of the underlying storage device,
+    /// such as whether it supports atomic writes. Returns 0 for no special
+    /// characteristics.
+    fn device_characteristics(&self) -> u32 {
+        0
+    }
+
+    // --- Shared-memory methods (required for WAL mode) ---
+
+    /// Map a region of shared memory. `region` is a 0-based index of 32KB
+    /// regions. If `extend` is true and the region does not exist, create it.
+    /// Returns a safe [`ShmRegion`] handle with bounds-checked accessors.
+    /// (Equivalent to sqlite3_io_methods.xShmMap)
+    fn shm_map(&mut self, cx: &Cx, region: u32, size: u32, extend: bool) -> Result<ShmRegion>;
+
+    /// Map a dedicated MVCC payload bound to this admitted main-file identity.
+    ///
+    /// This is separate from SQLite's WAL-index `-shm` regions. The native
+    /// transport preserves a fixed payload length and never resets, grows, or
+    /// unlinks an existing backing. `create` permits creation only for a
+    /// writable main file; a non-creating request never changes backing bytes.
+    /// The returned aliases retain their own native and namespace lifetimes
+    /// after this handle closes. All payload synchronization belongs to the
+    /// caller's atomic protocol, not to a whole-transaction writer lock.
+    ///
+    /// Unix requires a materialized, single-link main file with completed
+    /// namespace admission. Symlink spellings use its canonical namespace.
+    /// Like that namespace, this is a cooperative trusted-parent protocol:
+    /// callers must not unlink, rename, or mutate its companion externally
+    /// while a mapping lives. Initial companion creation is serialized only
+    /// by the short namespace admission gate, and allows existing main-file
+    /// SHARED readers. Payload access retains no exclusive admission gate.
+    /// The identity fence describes live open files, not a durable authority
+    /// epoch or cross-boot transaction generation. Unsupported backends must
+    /// refuse rather than return process-local heap storage as shared memory.
+    fn mvcc_shm_map(&mut self, _cx: &Cx, _payload_bytes: u64, _create: bool) -> Result<ShmRegion> {
+        Err(FrankenError::Unsupported)
+    }
+
+    /// Acquire or release a shared-memory lock.
+    /// `offset` and `n` define a range of lock slots.
+    /// `flags`: SHM_LOCK | (SHM_SHARED | SHM_EXCLUSIVE).
+    /// (Equivalent to sqlite3_io_methods.xShmLock)
+    fn shm_lock(&mut self, cx: &Cx, offset: u32, n: u32, flags: u32) -> Result<()>;
+
+    /// Memory barrier for shared memory -- ensures all prior SHM writes are
+    /// visible to other processes before subsequent reads.
+    /// (Equivalent to sqlite3_io_methods.xShmBarrier)
+    fn shm_barrier(&self);
+
+    /// Unmap all shared-memory regions. If `delete` is true, also delete
+    /// the underlying SHM file.
+    /// (Equivalent to sqlite3_io_methods.xShmUnmap)
+    fn shm_unmap(&mut self, cx: &Cx, delete: bool) -> Result<()>;
+
+    // --- Cross-process WAL reader registration (GH#399) ---
+    //
+    // These mirror C SQLite's `aReadMark` / `WAL_READ_LOCK(i)` protocol so a
+    // checkpointer in another process can see which WAL frames a live read
+    // snapshot still depends on. The defaults are the single-process
+    // behaviour: no registration, every frame is safe to backfill, and a
+    // reset is never blocked. Only backends with a real shared `*-shm`
+    // table (Unix) override them; the memory VFS has no peer processes and
+    // the Windows `-shm` protocol is tracked separately (#395).
+
+    /// Claim a reader-mark slot exclusively only when it has no existing owner.
+    ///
+    /// `reader_slot` is a logical reader index in `1..WAL_NREADER`, not a raw
+    /// SHM lock byte. The caller must already retain the SHM attachment. Every
+    /// shared holder, including this handle, and every exclusive owner makes
+    /// the claim fail with `Busy`; this operation must never upgrade or reuse
+    /// an existing claim. An error acquires no new claim and changes no mark.
+    /// After success, the caller owns exactly one EXCLUSIVE reader claim and
+    /// must retain its cleanup owner until the matching raw EXCLUSIVE unlock
+    /// at `WAL_READ_LOCK_BASE + reader_slot` succeeds.
+    fn wal_reader_mark_exclusive_acquire(&mut self, _cx: &Cx, _reader_slot: u32) -> Result<()> {
+        Err(FrankenError::Unsupported)
+    }
+
+    /// Register this handle as a WAL reader whose pinned snapshot ends at
+    /// `mx_frame` (the number of WAL frames visible to it — SQLite
+    /// `mxFrame`), holding the chosen `WAL_READ_LOCK(i)` slot SHARED until
+    /// [`Self::wal_reader_slot_release`].
+    ///
+    /// Returns the held reader slot index (`0..WAL_NREADER`) or `None` when
+    /// the backend has no cross-process reader table. Slot 0 protects a
+    /// database-only snapshot that reads no WAL frames. Returns `Busy` when
+    /// every slot is pinned by other readers at incompatible marks for the
+    /// whole busy budget.
+    fn wal_reader_slot_acquire(&mut self, _cx: &Cx, _mx_frame: u32) -> Result<Option<u32>> {
+        Ok(None)
+    }
+
+    /// Release a reader slot returned by [`Self::wal_reader_slot_acquire`].
+    fn wal_reader_slot_release(&mut self, _cx: &Cx, _slot: u32) -> Result<()> {
+        Ok(())
+    }
+
+    /// Checkpointer: take the exclusive `WAL_READ_LOCK(0)` that excludes
+    /// readers serving pages straight from the database file while frames are
+    /// copied into it. `Ok(false)` means such a reader is active and nothing
+    /// may be backfilled right now.
+    fn wal_checkpoint_backfill_gate_acquire(&mut self, _cx: &Cx) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Release the gate taken by [`Self::wal_checkpoint_backfill_gate_acquire`].
+    fn wal_checkpoint_backfill_gate_release(&mut self, _cx: &Cx) -> Result<()> {
+        Ok(())
+    }
+
+    /// Checkpointer: compute the highest WAL frame count that can be copied
+    /// into the database without overtaking a live reader (SQLite
+    /// `walCheckpoint`'s `mxSafeFrame`). `mx_frame` is the current WAL frame
+    /// count; the result is `<= mx_frame`, and equals it when no reader pins
+    /// an older horizon. Slots that are not held are parked at
+    /// `READMARK_NOT_USED` as a side effect.
+    fn wal_checkpoint_reader_horizon(&mut self, _cx: &Cx, mx_frame: u32) -> Result<u32> {
+        Ok(mx_frame)
+    }
+
+    /// Checkpointer: take every reader slot exclusively so the WAL generation
+    /// can be replaced (RESTART/TRUNCATE). `Ok(false)` means a reader still
+    /// pins the current generation and the reset must be deferred.
+    fn wal_checkpoint_reset_gate_acquire(&mut self, _cx: &Cx) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Release the gate taken by [`Self::wal_checkpoint_reset_gate_acquire`].
+    fn wal_checkpoint_reset_gate_release(&mut self, _cx: &Cx) -> Result<()> {
+        Ok(())
+    }
+
+    /// Set the busy-timeout for cross-process file-lock contention.
+    ///
+    /// When `ms > 0`, the VFS should retry `F_SETLK` with exponential
+    /// backoff instead of returning `SQLITE_BUSY` immediately on
+    /// `EAGAIN`/`EACCES`. A value of `0` disables retries (fail-fast).
+    ///
+    /// Default implementation is a no-op (memory and stub VFS backends
+    /// have no OS-level lock contention).
+    fn set_busy_timeout_ms(&mut self, _ms: u64) {}
+}
+
+#[cfg(test)]
+mod tests {
+    // Test doubles implement the async `VfsFile` surface with synchronous
+    // bodies; the futures must stay lazy to honor the trait contract, so the
+    // `async` is deliberate even though no body awaits.
+    #![allow(clippy::unused_async_trait_impl)]
+
+    use super::*;
+
+    fn poll_ready<F: std::future::Future>(future: F) -> F::Output {
+        use std::task::{Context, Poll, Waker};
+
+        let mut future = std::pin::pin!(future);
+        let mut task_cx = Context::from_waker(Waker::noop());
+        match future.as_mut().poll(&mut task_cx) {
+            Poll::Ready(output) => output,
+            Poll::Pending => panic!("test future unexpectedly yielded"),
+        }
+    }
+
+    /// The async data path uses static dispatch so each backend can expose a
+    /// concrete future without boxing page I/O.
+    #[test]
+    fn vfs_file_supports_static_dispatch_without_boxing() {
+        fn accepts_static<T: VfsFile>(_file: &T) {}
+
+        let cx = Cx::new();
+        let vfs = crate::memory::MemoryVfs::new();
+        let (file, _) = vfs
+            .open(&cx, None, VfsOpenFlags::CREATE | VfsOpenFlags::READWRITE)
+            .expect("open memory file");
+        accepts_static(&file);
+    }
+
+    /// Verify default implementations exist and don't panic.
+    #[test]
+    fn vfs_file_defaults() {
+        struct DummyFile;
+        impl VfsFile for DummyFile {
+            fn wal_reader_mark_exclusive_acquire(&mut self, _: &Cx, _: u32) -> Result<()> {
+                Err(FrankenError::Unsupported)
+            }
+
+            fn close(&mut self, _cx: &Cx) -> Result<()> {
+                Ok(())
+            }
+            async fn read(&self, _cx: &Cx, _buf: &mut [u8], _offset: u64) -> Result<usize> {
+                Ok(0)
+            }
+            async fn write(&self, _cx: &Cx, _buf: &[u8], _offset: u64) -> Result<()> {
+                Ok(())
+            }
+            fn truncate(&mut self, _cx: &Cx, _size: u64) -> Result<()> {
+                Ok(())
+            }
+            fn sync(&mut self, _cx: &Cx, _flags: SyncFlags) -> Result<()> {
+                Ok(())
+            }
+            fn file_size(&self, _cx: &Cx) -> Result<u64> {
+                Ok(0)
+            }
+            fn lock(&mut self, _cx: &Cx, _level: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn unlock(&mut self, _cx: &Cx, _level: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_shared_snapshot(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_shared_snapshot_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_wal_append(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn owns_external_wal_append_write(&self, _: &Cx) -> Result<bool> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn lock_external_wal_recovery(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_wal_append_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_maintenance(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_maintenance_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn check_reserved_lock(&self, _cx: &Cx) -> Result<bool> {
+                Ok(false)
+            }
+            fn shm_map(
+                &mut self,
+                _cx: &Cx,
+                _region: u32,
+                _size: u32,
+                _extend: bool,
+            ) -> Result<ShmRegion> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_lock(&mut self, _cx: &Cx, _offset: u32, _n: u32, _flags: u32) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_barrier(&self) {}
+            fn shm_unmap(&mut self, _cx: &Cx, _delete: bool) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let cx = Cx::new();
+        let mut file = DummyFile;
+        assert_eq!(file.sector_size(), 4096);
+        assert_eq!(file.device_characteristics(), 0);
+        assert!(matches!(
+            file.lock_external_shared_snapshot(&cx),
+            Err(fsqlite_error::FrankenError::Unsupported)
+        ));
+        file.restore_external_shared_snapshot_attempt(&cx)
+            .expect("restoring an unsupported snapshot attempt is idempotent");
+        assert!(matches!(
+            file.lock_external_maintenance(&cx, true),
+            Err(fsqlite_error::FrankenError::Unsupported)
+        ));
+        file.restore_external_maintenance_attempt(&cx)
+            .expect("restoring an unsupported maintenance attempt is idempotent");
+        assert!(matches!(
+            file.lock_external_wal_recovery(&cx),
+            Err(fsqlite_error::FrankenError::Unsupported)
+        ));
+        file.restore_external_maintenance_attempt(&cx)
+            .expect("restoring unsupported recovery is idempotent");
+    }
+
+    /// Verify that VfsFile trait defaults are what we expect.
+    #[test]
+    fn vfs_file_sector_size_default_is_4096() {
+        struct Stub;
+        impl VfsFile for Stub {
+            fn wal_reader_mark_exclusive_acquire(&mut self, _: &Cx, _: u32) -> Result<()> {
+                Err(FrankenError::Unsupported)
+            }
+
+            fn close(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            async fn read(&self, _: &Cx, _: &mut [u8], _: u64) -> Result<usize> {
+                Ok(0)
+            }
+            async fn write(&self, _: &Cx, _: &[u8], _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn truncate(&mut self, _: &Cx, _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn sync(&mut self, _: &Cx, _: SyncFlags) -> Result<()> {
+                Ok(())
+            }
+            fn file_size(&self, _: &Cx) -> Result<u64> {
+                Ok(0)
+            }
+            fn lock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn unlock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_shared_snapshot(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_shared_snapshot_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_wal_append(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn owns_external_wal_append_write(&self, _: &Cx) -> Result<bool> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn lock_external_wal_recovery(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_wal_append_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_maintenance(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_maintenance_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn check_reserved_lock(&self, _: &Cx) -> Result<bool> {
+                Ok(false)
+            }
+            fn shm_map(&mut self, _: &Cx, _: u32, _: u32, _: bool) -> Result<ShmRegion> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_lock(&mut self, _: &Cx, _: u32, _: u32, _: u32) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_barrier(&self) {}
+            fn shm_unmap(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let file = Stub;
+        assert_eq!(file.sector_size(), 4096);
+        assert_eq!(file.device_characteristics(), 0);
+    }
+
+    /// Verify that default Vfs::randomness produces different sequences.
+    #[test]
+    fn vfs_default_randomness_varies() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let cx = Cx::new();
+        let vfs = MemoryVfs::new();
+        let mut buf1 = [0u8; 32];
+        let mut buf2 = [0u8; 32];
+        vfs.randomness(&cx, &mut buf1);
+        vfs.randomness(&cx, &mut buf2);
+        assert_ne!(buf1, buf2);
+    }
+
+    /// Verify that default Vfs::current_time reads from Cx.
+    #[test]
+    fn vfs_default_current_time_from_cx() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let cx = Cx::new();
+        cx.set_unix_millis_for_testing(0);
+        let vfs = MemoryVfs::new();
+        let t1 = vfs.current_time(&cx);
+        // Unix epoch in Julian days is 2440587.5
+        #[allow(clippy::approx_constant)]
+        let expected = 2_440_587.5;
+        assert!(
+            (t1 - expected).abs() < 1e-6,
+            "at unix epoch, julian day should be ~2440587.5, got {t1}"
+        );
+    }
+
+    /// Verify randomness with a zero-length buffer doesn't panic.
+    #[test]
+    fn vfs_randomness_zero_length_buffer() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let cx = Cx::new();
+        let vfs = MemoryVfs::new();
+        let mut buf = [];
+        vfs.randomness(&cx, &mut buf);
+    }
+
+    /// Verify randomness with a 1-byte buffer.
+    #[test]
+    fn vfs_randomness_single_byte() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let cx = Cx::new();
+        let vfs = MemoryVfs::new();
+        let mut buf = [0u8; 1];
+        vfs.randomness(&cx, &mut buf);
+        // Can't assert much about the value, just that it doesn't panic.
+    }
+
+    #[test]
+    fn vfs_is_memory_default_is_false() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let vfs = MemoryVfs::new();
+        assert!(vfs.is_memory(), "MemoryVfs::is_memory must return true");
+    }
+
+    #[test]
+    fn vfs_trait_is_object_safe() {
+        use crate::memory::MemoryVfs;
+        fn _accepts_dyn(_v: &dyn Vfs<File = crate::memory::MemoryFile>) {}
+        let _vfs = MemoryVfs::new();
+    }
+
+    #[test]
+    fn vfs_file_set_busy_timeout_is_noop() {
+        struct Stub;
+        impl VfsFile for Stub {
+            fn wal_reader_mark_exclusive_acquire(&mut self, _: &Cx, _: u32) -> Result<()> {
+                Err(FrankenError::Unsupported)
+            }
+
+            fn close(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            async fn read(&self, _: &Cx, _: &mut [u8], _: u64) -> Result<usize> {
+                Ok(0)
+            }
+            async fn write(&self, _: &Cx, _: &[u8], _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn truncate(&mut self, _: &Cx, _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn sync(&mut self, _: &Cx, _: SyncFlags) -> Result<()> {
+                Ok(())
+            }
+            fn file_size(&self, _: &Cx) -> Result<u64> {
+                Ok(0)
+            }
+            fn lock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn unlock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_shared_snapshot(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_shared_snapshot_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_wal_append(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn owns_external_wal_append_write(&self, _: &Cx) -> Result<bool> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn lock_external_wal_recovery(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_wal_append_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_maintenance(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_maintenance_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn check_reserved_lock(&self, _: &Cx) -> Result<bool> {
+                Ok(false)
+            }
+            fn shm_map(&mut self, _: &Cx, _: u32, _: u32, _: bool) -> Result<ShmRegion> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_lock(&mut self, _: &Cx, _: u32, _: u32, _: u32) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_barrier(&self) {}
+            fn shm_unmap(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut file = Stub;
+        file.set_busy_timeout_ms(5000);
+        file.set_busy_timeout_ms(0);
+    }
+
+    #[test]
+    fn vfs_file_write_page_batch_default_delegates_to_write() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static WRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct CountingFile;
+        impl VfsFile for CountingFile {
+            fn wal_reader_mark_exclusive_acquire(&mut self, _: &Cx, _: u32) -> Result<()> {
+                Err(FrankenError::Unsupported)
+            }
+
+            fn close(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            async fn read(&self, _: &Cx, _: &mut [u8], _: u64) -> Result<usize> {
+                Ok(0)
+            }
+            async fn write(&self, _: &Cx, _: &[u8], _: u64) -> Result<()> {
+                WRITE_COUNT.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            fn truncate(&mut self, _: &Cx, _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn sync(&mut self, _: &Cx, _: SyncFlags) -> Result<()> {
+                Ok(())
+            }
+            fn file_size(&self, _: &Cx) -> Result<u64> {
+                Ok(0)
+            }
+            fn lock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn unlock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_shared_snapshot(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_shared_snapshot_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_wal_append(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn owns_external_wal_append_write(&self, _: &Cx) -> Result<bool> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn lock_external_wal_recovery(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_wal_append_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_maintenance(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_maintenance_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn check_reserved_lock(&self, _: &Cx) -> Result<bool> {
+                Ok(false)
+            }
+            fn shm_map(&mut self, _: &Cx, _: u32, _: u32, _: bool) -> Result<ShmRegion> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_lock(&mut self, _: &Cx, _: u32, _: u32, _: u32) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_barrier(&self) {}
+            fn shm_unmap(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        WRITE_COUNT.store(0, Ordering::Relaxed);
+        let cx = Cx::new();
+        let file = CountingFile;
+        let data = [0u8; 4096];
+        let writes: Vec<(u64, &[u8])> = vec![(0, &data), (4096, &data), (8192, &data)];
+        poll_ready(file.write_page_batch(&cx, &writes)).unwrap();
+        assert_eq!(WRITE_COUNT.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn vfs_randomness_fills_large_buffer() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let cx = Cx::new();
+        let vfs = MemoryVfs::new();
+        let mut buf = [0u8; 256];
+        vfs.randomness(&cx, &mut buf);
+        let all_zero = buf.iter().all(|&b| b == 0);
+        assert!(
+            !all_zero,
+            "256-byte randomness buffer should not be all zeros"
+        );
+    }
+
+    #[test]
+    fn vfs_randomness_non_aligned_buffer() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let cx = Cx::new();
+        let vfs = MemoryVfs::new();
+        let mut buf = [0u8; 13];
+        vfs.randomness(&cx, &mut buf);
+        let all_zero = buf.iter().all(|&b| b == 0);
+        assert!(!all_zero, "13-byte non-aligned buffer should be filled");
+    }
+
+    #[test]
+    fn vfs_write_page_batch_empty_is_noop() {
+        struct Stub;
+        impl VfsFile for Stub {
+            fn wal_reader_mark_exclusive_acquire(&mut self, _: &Cx, _: u32) -> Result<()> {
+                Err(FrankenError::Unsupported)
+            }
+
+            fn close(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            async fn read(&self, _: &Cx, _: &mut [u8], _: u64) -> Result<usize> {
+                Ok(0)
+            }
+            async fn write(&self, _: &Cx, _: &[u8], _: u64) -> Result<()> {
+                panic!("write should not be called for empty batch");
+            }
+            fn truncate(&mut self, _: &Cx, _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn sync(&mut self, _: &Cx, _: SyncFlags) -> Result<()> {
+                Ok(())
+            }
+            fn file_size(&self, _: &Cx) -> Result<u64> {
+                Ok(0)
+            }
+            fn lock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn unlock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_shared_snapshot(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_shared_snapshot_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_wal_append(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn owns_external_wal_append_write(&self, _: &Cx) -> Result<bool> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn lock_external_wal_recovery(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_wal_append_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_maintenance(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_maintenance_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn check_reserved_lock(&self, _: &Cx) -> Result<bool> {
+                Ok(false)
+            }
+            fn shm_map(&mut self, _: &Cx, _: u32, _: u32, _: bool) -> Result<ShmRegion> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_lock(&mut self, _: &Cx, _: u32, _: u32, _: u32) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_barrier(&self) {}
+            fn shm_unmap(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let cx = Cx::new();
+        let file = Stub;
+        let writes: Vec<(u64, &[u8])> = vec![];
+        poll_ready(file.write_page_batch(&cx, &writes)).unwrap();
+    }
+
+    #[test]
+    fn memory_vfs_name_is_memory() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let vfs = MemoryVfs::new();
+        assert_eq!(vfs.name(), "memory");
+    }
+
+    #[test]
+    fn vfs_current_time_advances_with_unix_millis() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let cx = Cx::new();
+        let vfs = MemoryVfs::new();
+        cx.set_unix_millis_for_testing(0);
+        let t0 = vfs.current_time(&cx);
+        cx.set_unix_millis_for_testing(86_400_000);
+        let t1 = vfs.current_time(&cx);
+        let delta = t1 - t0;
+        assert!(
+            (delta - 1.0).abs() < 1e-6,
+            "86400000ms = 1 Julian day, got delta {delta}"
+        );
+    }
+
+    #[test]
+    fn write_page_batch_short_circuits_on_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct FailOnSecond;
+        impl VfsFile for FailOnSecond {
+            fn wal_reader_mark_exclusive_acquire(&mut self, _: &Cx, _: u32) -> Result<()> {
+                Err(FrankenError::Unsupported)
+            }
+
+            fn close(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            async fn read(&self, _: &Cx, _: &mut [u8], _: u64) -> Result<usize> {
+                Ok(0)
+            }
+            async fn write(&self, _: &Cx, _: &[u8], _: u64) -> Result<()> {
+                let n = CALL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if n >= 1 {
+                    return Err(fsqlite_error::FrankenError::Io(std::io::Error::other(
+                        "injected",
+                    )));
+                }
+                Ok(())
+            }
+            fn truncate(&mut self, _: &Cx, _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn sync(&mut self, _: &Cx, _: SyncFlags) -> Result<()> {
+                Ok(())
+            }
+            fn file_size(&self, _: &Cx) -> Result<u64> {
+                Ok(0)
+            }
+            fn lock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn unlock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_shared_snapshot(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_shared_snapshot_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_wal_append(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn owns_external_wal_append_write(&self, _: &Cx) -> Result<bool> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn lock_external_wal_recovery(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_wal_append_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_maintenance(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_maintenance_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn check_reserved_lock(&self, _: &Cx) -> Result<bool> {
+                Ok(false)
+            }
+            fn shm_map(&mut self, _: &Cx, _: u32, _: u32, _: bool) -> Result<ShmRegion> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_lock(&mut self, _: &Cx, _: u32, _: u32, _: u32) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_barrier(&self) {}
+            fn shm_unmap(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        CALL_COUNT.store(0, Ordering::Relaxed);
+        let cx = Cx::new();
+        let file = FailOnSecond;
+        let data = [0u8; 64];
+        let writes: Vec<(u64, &[u8])> = vec![(0, &data), (64, &data), (128, &data)];
+        let result = poll_ready(file.write_page_batch(&cx, &writes));
+        assert!(result.is_err());
+        assert_eq!(
+            CALL_COUNT.load(Ordering::Relaxed),
+            2,
+            "should stop after second write fails, not call third"
+        );
+    }
+
+    #[test]
+    fn vfs_file_defaults_can_be_overridden() {
+        struct CustomFile;
+        impl VfsFile for CustomFile {
+            fn wal_reader_mark_exclusive_acquire(&mut self, _: &Cx, _: u32) -> Result<()> {
+                Err(FrankenError::Unsupported)
+            }
+
+            fn close(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            async fn read(&self, _: &Cx, _: &mut [u8], _: u64) -> Result<usize> {
+                Ok(0)
+            }
+            async fn write(&self, _: &Cx, _: &[u8], _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn truncate(&mut self, _: &Cx, _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn sync(&mut self, _: &Cx, _: SyncFlags) -> Result<()> {
+                Ok(())
+            }
+            fn file_size(&self, _: &Cx) -> Result<u64> {
+                Ok(0)
+            }
+            fn lock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn unlock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_shared_snapshot(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_shared_snapshot_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_wal_append(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn owns_external_wal_append_write(&self, _: &Cx) -> Result<bool> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn lock_external_wal_recovery(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_wal_append_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_maintenance(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_maintenance_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn check_reserved_lock(&self, _: &Cx) -> Result<bool> {
+                Ok(false)
+            }
+            fn sector_size(&self) -> u32 {
+                512
+            }
+            fn device_characteristics(&self) -> u32 {
+                0x0010
+            }
+            fn shm_map(&mut self, _: &Cx, _: u32, _: u32, _: bool) -> Result<ShmRegion> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_lock(&mut self, _: &Cx, _: u32, _: u32, _: u32) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_barrier(&self) {}
+            fn shm_unmap(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let file = CustomFile;
+        assert_eq!(file.sector_size(), 512);
+        assert_eq!(file.device_characteristics(), 0x0010);
+    }
+
+    #[test]
+    fn vfs_randomness_has_byte_level_entropy() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let cx = Cx::new();
+        let vfs = MemoryVfs::new();
+        let mut buf = [0u8; 64];
+        vfs.randomness(&cx, &mut buf);
+        let distinct: std::collections::HashSet<u8> = buf.iter().copied().collect();
+        assert!(
+            distinct.len() > 4,
+            "64-byte buffer should have more than 4 distinct byte values, got {}",
+            distinct.len()
+        );
+    }
+
+    #[test]
+    fn vfs_current_time_default_returns_reasonable_julian_day() {
+        use crate::memory::MemoryVfs;
+        use crate::traits::Vfs;
+
+        let cx = Cx::new();
+        let vfs = MemoryVfs::new();
+        let jd = vfs.current_time(&cx);
+        assert!(jd.is_finite(), "Julian day must be finite");
+        assert!(
+            jd > 2_440_000.0,
+            "Julian day should be after ~1968, got {jd}"
+        );
+    }
+
+    #[test]
+    fn durable_sync_default_delegates_to_sync() {
+        use std::sync::atomic::{AtomicU8, Ordering};
+        static LAST_FLAGS: AtomicU8 = AtomicU8::new(0);
+
+        struct RecordingFile;
+        impl VfsFile for RecordingFile {
+            fn wal_reader_mark_exclusive_acquire(&mut self, _: &Cx, _: u32) -> Result<()> {
+                Err(FrankenError::Unsupported)
+            }
+
+            fn close(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            async fn read(&self, _: &Cx, _: &mut [u8], _: u64) -> Result<usize> {
+                Ok(0)
+            }
+            async fn write(&self, _: &Cx, _: &[u8], _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn truncate(&mut self, _: &Cx, _: u64) -> Result<()> {
+                Ok(())
+            }
+            fn sync(&mut self, _: &Cx, flags: SyncFlags) -> Result<()> {
+                LAST_FLAGS.store(flags.bits(), Ordering::Relaxed);
+                Ok(())
+            }
+            fn file_size(&self, _: &Cx) -> Result<u64> {
+                Ok(0)
+            }
+            fn lock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn unlock(&mut self, _: &Cx, _: LockLevel) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_shared_snapshot(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_shared_snapshot_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_wal_append(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn owns_external_wal_append_write(&self, _: &Cx) -> Result<bool> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn lock_external_wal_recovery(&mut self, _: &Cx) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_wal_append_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn lock_external_maintenance(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn restore_external_maintenance_attempt(&mut self, _: &Cx) -> Result<()> {
+                Ok(())
+            }
+            fn check_reserved_lock(&self, _: &Cx) -> Result<bool> {
+                Ok(false)
+            }
+            fn shm_map(&mut self, _: &Cx, _: u32, _: u32, _: bool) -> Result<ShmRegion> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_lock(&mut self, _: &Cx, _: u32, _: u32, _: u32) -> Result<()> {
+                Err(fsqlite_error::FrankenError::Unsupported)
+            }
+            fn shm_barrier(&self) {}
+            fn shm_unmap(&mut self, _: &Cx, _: bool) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let cx = Cx::new();
+        let mut f = RecordingFile;
+
+        f.durable_sync(&cx, SyncKind::DataOnly).unwrap();
+        assert_eq!(
+            LAST_FLAGS.load(Ordering::Relaxed),
+            SyncFlags::DATAONLY.bits()
+        );
+
+        f.durable_sync(&cx, SyncKind::FullDurable).unwrap();
+        assert_eq!(LAST_FLAGS.load(Ordering::Relaxed), SyncFlags::FULL.bits());
+
+        f.durable_sync(&cx, SyncKind::DataAndMetadata).unwrap();
+        assert_eq!(LAST_FLAGS.load(Ordering::Relaxed), SyncFlags::FULL.bits());
+    }
+
+    #[test]
+    fn sync_kind_variants_are_distinct() {
+        assert_ne!(SyncKind::DataOnly, SyncKind::DataAndMetadata);
+        assert_ne!(SyncKind::DataAndMetadata, SyncKind::FullDurable);
+        assert_ne!(SyncKind::DataOnly, SyncKind::FullDurable);
+    }
+
+    #[test]
+    fn vfs_file_async_data_path_is_implementable() {
+        use crate::memory::MemoryFile;
+
+        fn assert_impl<T: VfsFile>() {}
+        assert_impl::<MemoryFile>();
+    }
+
+    #[test]
+    fn write_completion_wait_is_cancel_safe_and_terminal_state_is_sticky() {
+        use std::future::Future as _;
+
+        let completion = VfsWriteCompletion::new();
+        let mut first_waiter = Box::pin(completion.wait());
+        let mut task_cx = Context::from_waker(Waker::noop());
+        assert!(matches!(
+            first_waiter.as_mut().poll(&mut task_cx),
+            Poll::Pending
+        ));
+        assert_eq!(
+            completion
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .waiters
+                .len(),
+            1
+        );
+        drop(first_waiter);
+        assert!(
+            completion
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .waiters
+                .is_empty(),
+            "dropping a wait future must unregister it"
+        );
+
+        assert!(completion.complete_success());
+        assert!(!completion.complete_error());
+        assert_eq!(completion.state(), VfsWriteCompletionState::Success);
+        assert_eq!(
+            poll_ready(completion.wait()),
+            VfsWriteCompletionState::Success
+        );
+
+        let faulted_write = VfsWriteCompletion::new();
+        let partial_source = faulted_write.error_mapped_child();
+        assert!(partial_source.complete_success());
+        assert_eq!(
+            faulted_write.state(),
+            VfsWriteCompletionState::Error,
+            "a completed partial-write source must map to outer Error"
+        );
+    }
+
+    #[test]
+    fn mapped_relay_terminalizes_before_panicking_reentrant_wake() {
+        use std::future::Future as _;
+        use std::task::Wake;
+
+        struct ReenterOuterThenPanic {
+            outer: VfsWriteCompletion,
+            observation: Arc<Mutex<Option<(VfsWriteCompletionState, bool)>>>,
+        }
+
+        impl ReenterOuterThenPanic {
+            fn reenter_then_panic(&self) -> ! {
+                let observed_state = self.outer.state();
+                let reentrant_transition_won = self.outer.complete_success();
+                *self
+                    .observation
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some((observed_state, reentrant_transition_won));
+                panic!("mapped relay wake panic");
+            }
+        }
+
+        impl Wake for ReenterOuterThenPanic {
+            fn wake(self: Arc<Self>) {
+                self.reenter_then_panic();
+            }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.reenter_then_panic();
+            }
+        }
+
+        std::thread::Builder::new()
+            .name("vfs-write-completion-panicking-relay".to_owned())
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let outer = VfsWriteCompletion::new();
+                let mut source = outer.clone();
+                for _ in 0..10_000 {
+                    source = source.error_mapped_child();
+                }
+
+                let observation = Arc::new(Mutex::new(None));
+                let waker = Waker::from(Arc::new(ReenterOuterThenPanic {
+                    outer: outer.clone(),
+                    observation: Arc::clone(&observation),
+                }));
+                let mut waiter = Box::pin(source.wait());
+                assert!(matches!(
+                    waiter.as_mut().poll(&mut Context::from_waker(&waker)),
+                    Poll::Pending
+                ));
+                drop(waker);
+
+                let completion_result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        source.complete_success();
+                    }));
+                assert!(completion_result.is_err());
+                assert_eq!(source.state(), VfsWriteCompletionState::Success);
+                assert_eq!(outer.state(), VfsWriteCompletionState::Error);
+                assert_eq!(
+                    *observation
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    Some((VfsWriteCompletionState::Error, false)),
+                    "mapped outer state must be terminal before a source waiter can re-enter it"
+                );
+                drop(waiter);
+            })
+            .expect("spawn panicking mapped-relay stack canary")
+            .join()
+            .expect("panicking mapped-relay stack canary panicked");
+    }
+
+    #[test]
+    fn write_completion_error_mapping_is_iterative_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("vfs-write-completion-relay-depth".to_owned())
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let outer = VfsWriteCompletion::new();
+                let mut source = outer.clone();
+                for _ in 0..10_000 {
+                    source = source.error_mapped_child();
+                }
+                assert!(source.complete_success());
+                assert_eq!(source.state(), VfsWriteCompletionState::Success);
+                assert_eq!(outer.state(), VfsWriteCompletionState::Error);
+            })
+            .expect("spawn write-completion relay stack canary")
+            .join()
+            .expect("write-completion relay stack canary panicked");
+    }
+
+    struct CompletionLockProbeWake {
+        completion: VfsWriteCompletion,
+        dropped_while_completion_locked: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl CompletionLockProbeWake {
+        fn record_if_completion_locked(&self) {
+            let completion_was_locked = matches!(
+                self.completion.inner.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            );
+            self.dropped_while_completion_locked
+                .fetch_or(completion_was_locked, Ordering::AcqRel);
+        }
+    }
+
+    impl std::task::Wake for CompletionLockProbeWake {
+        fn wake(self: Arc<Self>) {
+            self.record_if_completion_locked();
+        }
+    }
+
+    impl Drop for CompletionLockProbeWake {
+        fn drop(&mut self) {
+            self.record_if_completion_locked();
+        }
+    }
+
+    fn completion_lock_probe_waker(
+        completion: &VfsWriteCompletion,
+    ) -> (Waker, Arc<std::sync::atomic::AtomicBool>) {
+        let dropped_while_completion_locked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let waker = Waker::from(Arc::new(CompletionLockProbeWake {
+            completion: completion.clone(),
+            dropped_while_completion_locked: Arc::clone(&dropped_while_completion_locked),
+        }));
+        (waker, dropped_while_completion_locked)
+    }
+
+    #[test]
+    fn write_completion_wait_never_drops_replaced_or_cancelled_wakers_under_lock() {
+        use std::future::Future as _;
+
+        // Re-polling with a different task waker replaces the registered one.
+        let replacement_completion = VfsWriteCompletion::new();
+        let mut replacement_waiter = Box::pin(replacement_completion.wait());
+        let (first_waker, replacement_lock_probe) =
+            completion_lock_probe_waker(&replacement_completion);
+        {
+            let mut first_cx = Context::from_waker(&first_waker);
+            assert!(matches!(
+                replacement_waiter.as_mut().poll(&mut first_cx),
+                Poll::Pending
+            ));
+        }
+        drop(first_waker);
+        {
+            let mut replacement_cx = Context::from_waker(Waker::noop());
+            assert!(matches!(
+                replacement_waiter.as_mut().poll(&mut replacement_cx),
+                Poll::Pending
+            ));
+        }
+        assert!(
+            !replacement_lock_probe.load(Ordering::Acquire),
+            "a replaced waker may re-enter the completion and must be dropped after unlock"
+        );
+        drop(replacement_waiter);
+
+        // Cancelling the wait future removes and destroys its registered waker.
+        let cancellation_completion = VfsWriteCompletion::new();
+        let mut cancellation_waiter = Box::pin(cancellation_completion.wait());
+        let (cancellation_waker, cancellation_lock_probe) =
+            completion_lock_probe_waker(&cancellation_completion);
+        {
+            let mut cancellation_cx = Context::from_waker(&cancellation_waker);
+            assert!(matches!(
+                cancellation_waiter.as_mut().poll(&mut cancellation_cx),
+                Poll::Pending
+            ));
+        }
+        drop(cancellation_waker);
+        drop(cancellation_waiter);
+        assert!(
+            !cancellation_lock_probe.load(Ordering::Acquire),
+            "a cancelled waiter's waker must be dropped after unlock"
+        );
+    }
+
+    #[test]
+    fn write_completion_terminal_poll_drops_stale_registered_waker_after_unlock() {
+        use std::future::Future as _;
+
+        let completion = VfsWriteCompletion::new();
+        let mut waiter = Box::pin(completion.wait());
+        let (registered_waker, lock_probe) = completion_lock_probe_waker(&completion);
+        {
+            let mut registered_cx = Context::from_waker(&registered_waker);
+            assert!(matches!(
+                waiter.as_mut().poll(&mut registered_cx),
+                Poll::Pending
+            ));
+        }
+        drop(registered_waker);
+
+        // Model a terminal publisher that won the state transition immediately
+        // before extracting this waiter. The normal completion path performs
+        // both under one lock, but terminal polling remains defensive against a
+        // stale registration and must preserve the same waker-drop rule.
+        completion
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .state = VfsWriteCompletionState::Success;
+        let mut terminal_cx = Context::from_waker(Waker::noop());
+        assert!(matches!(
+            waiter.as_mut().poll(&mut terminal_cx),
+            Poll::Ready(VfsWriteCompletionState::Success)
+        ));
+        assert!(
+            !lock_probe.load(Ordering::Acquire),
+            "terminal waiter removal must drop its waker after unlock"
+        );
+    }
+
+    #[test]
+    fn async_memory_write_completion_is_immediate_and_bytes_are_real() {
+        use std::future::Future as _;
+        use std::task::{Context, Poll, Waker};
+
+        use crate::memory::{MemoryFile, MemoryVfs};
+
+        let cx = Cx::new();
+        let vfs = MemoryVfs::new();
+        let flags = fsqlite_types::flags::VfsOpenFlags::MAIN_DB
+            | fsqlite_types::flags::VfsOpenFlags::CREATE
+            | fsqlite_types::flags::VfsOpenFlags::READWRITE;
+        let (file, _) = vfs.open(&cx, None, flags).unwrap();
+
+        let payload = b"hello async vfs";
+        let waker = Waker::noop();
+        let mut task_cx = Context::from_waker(waker);
+        {
+            let completion = VfsWriteCompletion::new();
+            let mut write = std::pin::pin!(<MemoryFile as VfsFile>::write_tracked(
+                &file,
+                &cx,
+                payload,
+                0,
+                completion.clone(),
+            ));
+            assert!(matches!(
+                write.as_mut().poll(&mut task_cx),
+                Poll::Ready(Ok(()))
+            ));
+            assert_eq!(
+                completion.state(),
+                VfsWriteCompletionState::Success,
+                "the immediate memory mutation source must complete the token before Ready"
+            );
+        }
+
+        let mut buf = [0u8; 15];
+        {
+            let mut read = std::pin::pin!(<MemoryFile as VfsFile>::read(&file, &cx, &mut buf, 0));
+            assert!(matches!(
+                read.as_mut().poll(&mut task_cx),
+                Poll::Ready(Ok(15))
+            ));
+        }
+        assert_eq!(&buf, payload);
+
+        let writes: &[(u64, &[u8])] = &[(0, b"real"), (8, b"batch")];
+        {
+            let mut batch = std::pin::pin!(<MemoryFile as VfsFile>::write_page_batch(
+                &file, &cx, writes,
+            ));
+            assert!(matches!(
+                batch.as_mut().poll(&mut task_cx),
+                Poll::Ready(Ok(()))
+            ));
+        }
+
+        let mut batch_buf = [0_u8; 13];
+        {
+            let mut verify =
+                std::pin::pin!(<MemoryFile as VfsFile>::read(&file, &cx, &mut batch_buf, 0,));
+            assert!(matches!(
+                verify.as_mut().poll(&mut task_cx),
+                Poll::Ready(Ok(13))
+            ));
+        }
+        assert_eq!(&batch_buf, b"realo asbatch");
+    }
+}

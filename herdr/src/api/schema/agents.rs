@@ -173,6 +173,11 @@ pub struct AgentStartParams {
     pub pane_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// Session id to resume. When present the server replaces `args` with the
+    /// agent's own resume argv, so a client does not need to know that agent's
+    /// flags.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_session: Option<String>,
     /// Startup timeout in milliseconds. Values must be greater than 3000 and at most 300000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,

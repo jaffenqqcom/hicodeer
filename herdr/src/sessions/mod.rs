@@ -1,14 +1,27 @@
 //! Historical agent-session collection for the panel's history view.
 //!
 //! The daemon only collects: dedup, ordering, pin/archive state and
-//! open-session filtering all live in the panel (see the design doc in
-//! `../移植记录/design/2026-10-24-agent-history-panel-design.md`). Two sources
-//! feed [`collect_sessions`]: the FAD Claude connector and our own CodeBuddy
-//! scanner (same store layout, different directory encoding and title lines).
+//! open-session filtering all live in the panel (see `移植记录/design/`
+//! `2026-10-24-agent-history-panel-design.md` at the repository root).
+//! Collection runs through FAD's connectors and the stores this repository
+//! implements (CodeBuddy, DeepSeek Harness, DevEco Code, ZCode, Codewhale,
+//! AtomCode, MiniMax Code, OpenDesk); both kinds implement the same interface
+//! and are registered side by side in `fad.rs`.
 
+mod atomcode;
+mod claude_store;
 mod codebuddy;
-mod claude;
+mod codewhale;
+mod codex_store;
+mod deepseek;
+mod deveco;
+mod fad;
+mod gemini_store;
+mod kimi_store;
+mod minimax;
+mod opendesk;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::api::schema::response::RawSessionDto;
@@ -22,23 +35,36 @@ pub(crate) struct CollectedSession {
     pub workspace_root: Option<PathBuf>,
     pub updated_at: Option<i64>,
     pub source_path: PathBuf,
+    /// Whether the store this session came from can remove one entry. The
+    /// capability belongs to the store, so it is decided where the store is
+    /// registered rather than by a path rule here. A store that builds these
+    /// rows itself fills `true`; `fad::collect` then replaces the value with
+    /// the registry's answer, so that field is not the place to decide this.
+    pub deletable: bool,
 }
 
-/// Collects Claude + CodeBuddy history and matches each session's working
+/// Collects history from every store the daemon knows — FAD's connectors plus
+/// the ones this repository implements — and matches each session's working
 /// directory against the open workspaces' identity cwds. `workspace_roots`
 /// carries `(workspace_id, identity_cwd)` pairs from the live herdr state; a
 /// match means "a space is open at exactly this directory", which the panel
 /// uses only to decide where a resumed session goes — never to name a group.
 ///
-/// Called on every `agent.sessions` request rather than on a timer. Both
-/// scanners keep their own index of what they already parsed, so a call costs
-/// one `stat` per session file (microseconds for the whole store) plus a read
-/// of whatever appeared or changed since the last call — a full re-read only
-/// happens when the store itself changed.
+/// Called on every `agent.sessions` request rather than on a timer. Each
+/// connector keeps its own index of what it already parsed (`fad.rs` caches on
+/// a store signature, `codebuddy.rs` on each file's mtime and size), so a call
+/// costs one `stat` per session file plus a read of whatever appeared or
+/// changed since the last call — a full re-read only happens when the store
+/// itself changed.
 pub(crate) fn collect_sessions(workspace_roots: &[(String, PathBuf)]) -> Vec<RawSessionDto> {
-    let mut collected = Vec::new();
-    collected.extend(claude::collect());
-    collected.extend(codebuddy::collect());
+    let mut collected = fad::collect();
+
+    // A session can be described by two stores (FAD registers Pi twice, once
+    // per store kind). Keep the freshest row per (agent, session id) so the
+    // list never shows the same conversation twice.
+    collected.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let mut seen: HashSet<(&'static str, String)> = HashSet::new();
+    collected.retain(|session| seen.insert((session.agent, session.session_id.clone())));
 
     let mut sessions: Vec<RawSessionDto> = collected
         .into_iter()
@@ -73,6 +99,7 @@ pub(crate) fn collect_sessions(workspace_roots: &[(String, PathBuf)]) -> Vec<Raw
                         String::new()
                     }),
                 workspace_id,
+                deletable: session.deletable,
             }
         })
         .collect();
@@ -82,38 +109,15 @@ pub(crate) fn collect_sessions(workspace_roots: &[(String, PathBuf)]) -> Vec<Raw
     sessions
 }
 
-/// Deletes one session file.
+/// Removes one session through the store that produced it.
 ///
-/// The path arrives over the API, so it is checked against the two stores the
-/// scanner reads before anything is removed: the file has to be a `.jsonl`
-/// inside one of those `projects/` trees. The panel cannot do this itself — an
-/// app process gets `EPERM` when unlinking from these trees — so the daemon,
-/// which runs as the user, is the one performing it.
-pub(crate) fn delete_session(source_path: &str) -> Result<(), String> {
-    let path = PathBuf::from(source_path);
-    if path.extension().is_none_or(|extension| extension != "jsonl") {
-        return Err(format!("refusing to delete {source_path}: not a session file"));
-    }
-
-    let stores: Vec<PathBuf> = [claude::store_root(), codebuddy::projects_root()]
-        .into_iter()
-        .flatten()
-        .filter_map(|root| root.canonicalize().ok())
-        .collect();
-    let resolved = path
-        .canonicalize()
-        .map_err(|error| format!("resolve {source_path}: {error}"))?;
-    if !stores.iter().any(|store| resolved.starts_with(store)) {
-        return Err(format!(
-            "refusing to delete {source_path}: outside the session stores"
-        ));
-    }
-
-    std::fs::remove_file(&resolved).map_err(|error| format!("delete {source_path}: {error}"))?;
-    // The next scan must not answer from a row that points at a gone file. The
-    // Claude side keys off the store signature, which changes on its own.
-    codebuddy::forget_path(&resolved);
-    Ok(())
+/// The knowledge of what a session file is made of — how to find it, what else
+/// belongs to it, which cache to drop — lives in that agent's store, so this
+/// only routes the request. The panel addresses a session by its agent and its
+/// source path; an agent whose store cannot remove entries says so here instead
+/// of pretending the deletion worked.
+pub(crate) fn delete_session(agent: &str, source_path: &str) -> Result<(), String> {
+    fad::delete_session(agent, Path::new(source_path))
 }
 
 /// Matches a session's working directory to an open workspace. The session has

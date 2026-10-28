@@ -6,6 +6,7 @@
 //! computed. One request is served per connection, so each call opens its own
 //! short connection over the token-guarded loopback bridge.
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::Duration;
@@ -21,6 +22,11 @@ use crate::snapshot::Snapshot;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Bound on one request/response. The server answers these from memory.
 const READ_TIMEOUT: Duration = Duration::from_secs(3);
+/// Bound on the history list. It is the one request that walks every agent
+/// store on disk, so the in-memory bound above would time it out on a cold
+/// daemon and the panel would look disconnected from a server that is merely
+/// reading session files.
+const SESSIONS_READ_TIMEOUT: Duration = Duration::from_secs(20);
 /// Bound on an integration install. Installing writes files under the agent's
 /// own directory, so it is not an in-memory answer like the rest.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -139,10 +145,15 @@ fn parse_workspace_created(result: &Value) -> Result<(String, String), ClientErr
     Ok((id, label))
 }
 
-/// Reads the daemon-scanned history sessions (Claude + CodeBuddy today).
+/// Reads the daemon-scanned history sessions (every store the daemon covers).
 pub(crate) fn fetch_sessions() -> Result<Vec<crate::controller::RawSession>, ClientError> {
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
-    let result = call(&control, "agent.sessions", json!({}))?;
+    let result = call_with_timeout(
+        &control,
+        "agent.sessions",
+        json!({}),
+        SESSIONS_READ_TIMEOUT,
+    )?;
     let entries = result
         .get("sessions")
         .and_then(Value::as_array)
@@ -170,6 +181,10 @@ pub(crate) fn fetch_sessions() -> Result<Vec<crate::controller::RawSession>, Cli
                 .map(str::to_owned),
             updated_at: entry.get("updated_at").and_then(Value::as_i64),
             source_path: source_path.to_owned(),
+            deletable: entry
+                .get("deletable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         });
     }
     Ok(sessions)
@@ -177,33 +192,72 @@ pub(crate) fn fetch_sessions() -> Result<Vec<crate::controller::RawSession>, Cli
 
 /// Opens one history session: a tab in the space already open at the session's
 /// root — creating the space only when none is open — and then the agent CLI
-/// with its resume argv.
+/// resuming that session.
 ///
-/// The resume argv is `--resume <session_id>` for the first-batch agents
-/// (claude, codebuddy). The host accepts free-form argv, so an agent whose
-/// CLI lacks that flag only shows the failure inside its own TUI.
+/// The panel sends the session id, not a resume command: each agent spells
+/// "continue this session" differently (`--resume`, `--session`, or a `resume`
+/// subcommand), and that table lives on the server in `agent_resume`. An agent
+/// the server has no command for answers `resume_unsupported`.
 pub(crate) fn open_session(
     request: crate::controller::OpenSessionRequest,
 ) -> Result<crate::controller::OpenedSession, ClientError> {
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
-    let cwd = request.workspace_root.to_string_lossy().into_owned();
+    // Recorded before the space is created so a failure can tell a space this
+    // call made from one it reused.
+    let existing = existing_workspace_ids(&control);
 
     // The server resolves the space: an existing one for this directory gets a
     // new tab, otherwise a new space is created. The panel cannot do this
     // itself — its session list is a snapshot, and resolving from it is what
     // used to leave a second space for a project that already had one.
-    let created = call(
-        &control,
-        "workspace.create",
-        json!({ "cwd": cwd, "focus": true, "reuse_root": true }),
-    )?;
+    //
+    // A session whose directory the daemon could not recover sends no `cwd`:
+    // the server then derives one from the space that currently has focus, so
+    // the panel does not have to invent a fallback of its own.
+    let mut params = json!({ "focus": true, "reuse_root": true });
+    if let Some(root) = request.workspace_root.as_deref() {
+        params["cwd"] = json!(root.to_string_lossy());
+    }
+    let created = call(&control, "workspace.create", params)?;
     let (workspace_id, _) = parse_workspace_created(&created)?;
     let pane_id = root_pane_id(&created, "workspace.create")?;
-    start_agent_resuming(&control, &request, &pane_id)?;
+    if let Err(error) = start_agent_resuming(&control, &request, &pane_id) {
+        // The server has no resume command for this agent, or its CLI refused
+        // to start. Either way the space was opened for this one session, so it
+        // must not stay behind empty. A space that already existed is left as
+        // it was, and so is everything when the earlier listing failed.
+        if existing.is_some_and(|ids| !ids.contains(&workspace_id)) {
+            if let Err(close_error) = call(
+                &control,
+                "workspace.close",
+                json!({ "workspace_id": &workspace_id }),
+            ) {
+                log::warn!(
+                    "agent panel: closing the space a failed resume created failed: {close_error}"
+                );
+            }
+        }
+        return Err(error);
+    }
     Ok(crate::controller::OpenedSession {
         workspace_id,
         pane_id,
     })
+}
+
+/// The workspace ids that exist right now, or `None` when the list could not be
+/// read. `None` means a failed resume leaves its space alone: closing a space
+/// this call did not create would be worse than leaving an empty one.
+fn existing_workspace_ids(control: &AgentControl) -> Option<HashSet<String>> {
+    let listed = call(control, "workspace.list", json!({})).ok()?;
+    let workspaces = listed.get("workspaces")?.as_array()?;
+    Some(
+        workspaces
+            .iter()
+            .filter_map(|workspace| workspace.get("workspace_id").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 fn root_pane_id(response: &Value, method: &str) -> Result<String, ClientError> {
@@ -215,7 +269,7 @@ fn root_pane_id(response: &Value, method: &str) -> Result<String, ClientError> {
         .ok_or_else(|| ClientError::Failed(format!("{method} carried no root pane")))
 }
 
-/// Starts the agent with its resume argv.
+/// Starts the agent on one session.
 ///
 /// A tab's shell is not interactive the instant the tab exists, so the first
 /// attempt can find the target busy or unavailable; those are retried briefly.
@@ -235,12 +289,12 @@ fn start_agent_resuming(
         if attempt > 0 {
             std::thread::sleep(RETRY_DELAY);
         }
-        // The server names the agent; the panel only says which pane and which
-        // session, so the name rule has a single home.
+        // The server names the agent and builds the resume argv; the panel only
+        // says which pane and which session, so both rules have a single home.
         let params = json!({
             "kind": request.agent_kind,
             "pane_id": pane_id,
-            "args": ["--resume", request.session_id],
+            "resume_session": request.session_id,
             "timeout_ms": 30_000,
         });
         match call_with_timeout(control, "agent.start", params, Duration::from_secs(35)) {
@@ -274,17 +328,18 @@ fn error_message(error: &ClientError) -> String {
     }
 }
 
-/// Deletes one session file through the daemon.
+/// Deletes one history session through the daemon.
 ///
 /// The app process gets `EPERM` unlinking from the agent's store, so this has
-/// to run on the daemon side, which runs as the user; the daemon also checks
-/// the path against its own store roots before removing anything.
-pub(crate) fn delete_session(source_path: &str) -> Result<(), ClientError> {
+/// to run on the daemon side, which runs as the user. The daemon routes the
+/// request to the store that produced the row, and that store checks the path
+/// against its own layout before removing anything.
+pub(crate) fn delete_session(agent: &str, source_path: &str) -> Result<(), ClientError> {
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
     call(
         &control,
         "agent.session.delete",
-        json!({ "source_path": source_path }),
+        json!({ "agent": agent, "source_path": source_path }),
     )?;
     Ok(())
 }

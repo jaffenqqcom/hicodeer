@@ -25,10 +25,14 @@ pub(super) fn metadata_token_values_schema(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct EmptyParams {}
 
-/// A session file to remove. The daemon checks the path against its own store
-/// roots before unlinking, so the panel cannot delete arbitrary files with it.
+/// A session to remove.
+///
+/// The agent travels with the path because the store that owns the path is also
+/// the one that knows how to remove an entry from it; the daemon routes the
+/// request to that store instead of deciding anything from the path itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentSessionDeleteParams {
+    pub agent: String,
     pub source_path: String,
 }
 

@@ -918,6 +918,12 @@ webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev 
 # same source and revision, otherwise cargo resolves two copies and their FFI
 # types stop being interchangeable.
 cap-primitives = { path = "patches/cap-primitives" }
+# `fsqlite` (reached through the agent-history SQLite connectors) builds an
+# io_uring ring on Linux. On OpenHarmony `io_uring_register` (syscall 427) is
+# not in the app seccomp allow-list and terminates the process with SIGSYS
+# rather than failing the call, so this patch makes the ring unavailable there
+# and every file falls back to the blocking Unix VFS.
+fsqlite-vfs = { path = "patches/fsqlite-vfs" }
 rustix-openpty = { path = "patches/rustix-openpty" }
 # The `which` fork installs a resolver hook at startup that answers a name the
 # local PATH scan cannot find using the environment the commands actually run

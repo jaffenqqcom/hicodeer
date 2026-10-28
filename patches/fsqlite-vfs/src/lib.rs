@@ -1,0 +1,435 @@
+#![cfg_attr(windows, feature(windows_by_handle))]
+
+pub mod memory;
+pub mod metrics;
+#[cfg(all(feature = "native", any(unix, windows)))]
+pub mod namespace;
+pub mod process;
+pub mod shm;
+pub mod traits;
+#[cfg(all(feature = "native", unix))]
+pub mod unix;
+#[cfg(all(feature = "native", unix))]
+mod unix_shm;
+#[cfg(all(feature = "native", target_os = "linux"))]
+pub mod uring;
+#[cfg(all(feature = "native", target_os = "windows"))]
+pub mod windows;
+
+/// Host filesystem helpers that are allowed to use `std::fs`.
+///
+/// The ambient-authority audit gate (`fsqlite-types::cx::tests::test_ambient_authority_audit_gate`)
+/// forbids `std::fs::` usage outside the VFS boundary. Test harness crates should depend on these
+/// helpers rather than calling `std::fs` directly.
+#[cfg(feature = "native")]
+pub mod host_fs {
+    use std::fs::{File, OpenOptions};
+    use std::io::Write as _;
+    use std::path::{Path, PathBuf};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+    #[cfg(windows)]
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    #[cfg(windows)]
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    use fsqlite_error::Result;
+
+    pub fn create_dir_all(path: &Path) -> Result<()> {
+        std::fs::create_dir_all(path)?;
+        Ok(())
+    }
+
+    pub fn read(path: &Path) -> Result<Vec<u8>> {
+        Ok(std::fs::read(path)?)
+    }
+
+    pub fn read_to_string(path: &Path) -> Result<String> {
+        Ok(std::fs::read_to_string(path)?)
+    }
+
+    pub fn metadata(path: &Path) -> Result<std::fs::Metadata> {
+        Ok(std::fs::metadata(path)?)
+    }
+
+    /// Atomically reserve a new, empty, read-write file at `path`.
+    ///
+    /// This never creates parent directories and never follows or replaces an
+    /// existing final path component: regular files, directories, and both
+    /// live and dangling symlinks all make `create_new` fail. On Unix the
+    /// initial mode is owner-only; the process umask may narrow it further.
+    ///
+    /// On Windows this handle is retained open for the lifetime of a caller's
+    /// reservation (see `fsqlite-core`'s `DatabaseBuilderReservation`) while a
+    /// second, independent open against the same path is made through the
+    /// `windows` VFS module. Rust's default Windows share mode is
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE` (no `FILE_SHARE_DELETE`); this
+    /// explicitly matches stock SQLite's `FILE_SHARE_READ | FILE_SHARE_WRITE
+    /// | FILE_SHARE_DELETE` instead, for the same bd-h5oaj / GH#355 reason
+    /// documented next to `windows_open_options` in `windows.rs`.
+    pub fn reserve_new_file(path: &Path) -> Result<File> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        #[cfg(windows)]
+        {
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+            const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+            options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+        }
+        Ok(options.open(path)?)
+    }
+
+    /// Revalidate a reserved file's pathname against its retained descriptor identity.
+    ///
+    /// On Unix this deliberately uses metadata only. Opening and closing an
+    /// independent descriptor for a replacement could release another local
+    /// connection's POSIX locks on that file. Final symlinks, non-regular files
+    /// and hard-link aliases are refused. Windows compares the full native
+    /// handle identity through the existing no-follow ingress.
+    ///
+    /// The caller must keep the descriptor that supplied `expected_identity`
+    /// alive. This is an observation, not a namespace lock: the same trusted,
+    /// cooperative parent-directory contract as native database admission
+    /// applies. Nothing is created, rewritten, truncated or removed.
+    #[cfg(any(unix, windows))]
+    pub fn validate_reserved_file_identity(
+        path: &Path,
+        expected_identity: super::FileIdentity,
+    ) -> Result<()> {
+        #[cfg(unix)]
+        {
+            let metadata = std::fs::symlink_metadata(path)?;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || super::FileIdentity::from_unix_parts(metadata.dev(), metadata.ino())
+                    != expected_identity
+            {
+                return Err(fsqlite_error::FrankenError::BusyRecovery);
+            }
+        }
+        #[cfg(windows)]
+        {
+            let file = open_existing_regular_file_no_follow(path)?;
+            if super::FileIdentity::from_file(&file)? != Some(expected_identity) {
+                return Err(fsqlite_error::FrankenError::BusyRecovery);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn open_file(path: &Path) -> Result<File> {
+        Ok(File::open(path)?)
+    }
+
+    /// Open an existing regular file without following its final path entry.
+    ///
+    /// This is the identity-guard ingress for callers that will subsequently
+    /// ask the pager to open the same cooperative database pathname. It rejects
+    /// final symlinks/reparse points and non-regular objects before they can
+    /// block or alias the identity probe. Unix additionally rejects files with
+    /// multiple hard links, because such a pathname is not an isolated
+    /// authority namespace.
+    pub fn open_existing_regular_file_no_follow(path: &Path) -> Result<File> {
+        open_existing_regular_file_with_access(path, false)
+    }
+
+    /// Open an existing, identity-checked WAL for synchronous guarded repair.
+    ///
+    /// Never creates, truncates, or replaces a file. The caller must retain the
+    /// native main-file recovery fence and a stable cooperative namespace for
+    /// the descriptor's entire lifetime. This is NOT a locking primitive.
+    /// Do not use this to open a locked main database: closing an independent
+    /// descriptor can release that process's POSIX main-file locks. Recovery
+    /// must first prove through VFS that WAL and main have different identities.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_wal_for_guarded_repair(
+        path: &Path,
+        expected_identity: super::FileIdentity,
+    ) -> Result<File> {
+        let file = open_existing_regular_file_with_access(path, true)?;
+        if super::FileIdentity::from_file(&file)? != Some(expected_identity) {
+            return Err(fsqlite_error::FrankenError::BusyRecovery);
+        }
+        Ok(file)
+    }
+
+    fn open_existing_regular_file_with_access(path: &Path, writable: bool) -> Result<File> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(writable);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        #[cfg(windows)]
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+
+        let file = options.open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.file_type().is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "identity-bound database path is not a regular file",
+            )
+            .into());
+        }
+        #[cfg(unix)]
+        if metadata.nlink() != 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "identity-bound database path has multiple hard links",
+            )
+            .into());
+        }
+        Ok(file)
+    }
+
+    pub fn rename(from: &Path, to: &Path) -> Result<()> {
+        std::fs::rename(from, to)?;
+        Ok(())
+    }
+
+    pub fn read_link(path: &Path) -> Result<PathBuf> {
+        Ok(std::fs::read_link(path)?)
+    }
+
+    pub fn read_dir_paths(dir: &Path) -> Result<Vec<PathBuf>> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            out.push(entry?.path());
+        }
+        Ok(out)
+    }
+
+    pub fn write(path: &Path, bytes: impl AsRef<[u8]>) -> Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    pub fn copy_file(from: &Path, to: &Path) -> Result<u64> {
+        if let Some(parent) = to.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        Ok(std::fs::copy(from, to)?)
+    }
+
+    pub fn remove_file(path: &Path) -> Result<()> {
+        std::fs::remove_file(path).map_err(|e| {
+            std::io::Error::new(e.kind(), format!("remove {}: {e}", path.display()))
+        })?;
+        Ok(())
+    }
+
+    pub fn create_empty_file(path: &Path) -> Result<()> {
+        write(path, [])?;
+        Ok(())
+    }
+
+    pub fn append_line(path: &Path, line: &str) -> Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        writeln!(file, "{line}")?;
+        file.flush()?;
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "native", unix))]
+mod host_fs_security_tests {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::os::unix::fs::symlink;
+
+    use super::FileIdentity;
+    use super::host_fs::{
+        open_existing_regular_file_no_follow, open_wal_for_guarded_repair, reserve_new_file,
+    };
+
+    #[test]
+    fn reserved_identity_revalidation_refuses_missing_and_replaced_paths() {
+        use super::host_fs::validate_reserved_file_identity;
+
+        let directory = tempfile::tempdir().unwrap().keep();
+        let path = directory.join("reserved.db");
+        let retained = directory.join("retained.db");
+        let mut original = reserve_new_file(&path).unwrap();
+        original
+            .write_all(b"same bytes, different identity")
+            .unwrap();
+        let identity = FileIdentity::from_file(&original).unwrap().unwrap();
+        validate_reserved_file_identity(&path, identity).unwrap();
+        std::fs::rename(&path, &retained).unwrap();
+        assert!(validate_reserved_file_identity(&path, identity).is_err());
+        assert!(
+            !path.exists(),
+            "validation must not recreate a missing reservation"
+        );
+        std::fs::write(&path, b"same bytes, different identity").unwrap();
+        assert!(matches!(
+            validate_reserved_file_identity(&path, identity),
+            Err(fsqlite_error::FrankenError::BusyRecovery)
+        ));
+        assert_eq!(FileIdentity::from_file(&original).unwrap(), Some(identity));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            std::fs::read(&retained).unwrap()
+        );
+    }
+
+    #[test]
+    fn reserved_identity_revalidation_refuses_symlinks_and_hard_link_aliases() {
+        use super::host_fs::validate_reserved_file_identity;
+
+        let directory = tempfile::tempdir().unwrap().keep();
+        let path = directory.join("reserved.db");
+        let original = reserve_new_file(&path).unwrap();
+        let identity = FileIdentity::from_file(&original).unwrap().unwrap();
+        let link = directory.join("symlink.db");
+        symlink(&path, &link).unwrap();
+        assert!(validate_reserved_file_identity(&link, identity).is_err());
+        validate_reserved_file_identity(&path, identity).unwrap();
+        let alias = directory.join("alias.db");
+        std::fs::hard_link(&path, &alias).unwrap();
+        assert!(validate_reserved_file_identity(&path, identity).is_err());
+        assert!(validate_reserved_file_identity(&alias, identity).is_err());
+    }
+
+    #[test]
+    fn guarded_wal_open_is_existing_only_and_preserves_bytes_and_identity() {
+        let directory = tempfile::tempdir().unwrap().keep();
+        let path = directory.join("source-wal");
+        let mut original = reserve_new_file(&path).unwrap();
+        original.write_all(b"original WAL bytes").unwrap();
+        let identity = FileIdentity::from_file(&original).unwrap().unwrap();
+        let mut writable = open_wal_for_guarded_repair(&path, identity).unwrap();
+        let mut bytes = Vec::new();
+        writable.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"original WAL bytes");
+        writable.seek(SeekFrom::Start(0)).unwrap();
+        writable.write_all(b"repaired").unwrap();
+        assert_eq!(writable.metadata().unwrap().len(), 18);
+        assert_eq!(FileIdentity::from_file(&writable).unwrap(), Some(identity));
+        let missing = directory.join("missing-wal");
+        assert!(open_wal_for_guarded_repair(&missing, identity).is_err());
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn guarded_wal_open_refuses_wrong_identity_without_truncation() {
+        let directory = tempfile::tempdir().unwrap().keep();
+        let first = directory.join("first-wal");
+        let second = directory.join("second-wal");
+        let original = reserve_new_file(&first).unwrap();
+        let identity = FileIdentity::from_file(&original).unwrap().unwrap();
+        let mut unrelated = reserve_new_file(&second).unwrap();
+        unrelated.write_all(b"other generation").unwrap();
+        assert!(matches!(
+            open_wal_for_guarded_repair(&second, identity),
+            Err(fsqlite_error::FrankenError::BusyRecovery)
+        ));
+        assert_eq!(std::fs::read(&second).unwrap(), b"other generation");
+    }
+
+    #[test]
+    fn guarded_wal_open_refuses_symlinks_and_hard_links() {
+        let directory = tempfile::tempdir().unwrap().keep();
+        let path = directory.join("source-wal");
+        let original = reserve_new_file(&path).unwrap();
+        let identity = FileIdentity::from_file(&original).unwrap().unwrap();
+        let link = directory.join("symlink-wal");
+        symlink(&path, &link).unwrap();
+        assert!(open_wal_for_guarded_repair(&link, identity).is_err());
+        let hard_link = directory.join("hardlink-wal");
+        std::fs::hard_link(&path, &hard_link).unwrap();
+        assert!(open_wal_for_guarded_repair(&path, identity).is_err());
+        assert!(open_wal_for_guarded_repair(&hard_link, identity).is_err());
+    }
+
+    #[test]
+    fn identity_guard_rejects_final_symlinks_and_hard_link_aliases() {
+        let directory = tempfile::tempdir().expect("create isolated directory");
+        let database = directory.path().join("authority.db");
+        drop(reserve_new_file(&database).expect("reserve regular database"));
+        open_existing_regular_file_no_follow(&database).expect("regular single-link file opens");
+
+        let symlink_path = directory.path().join("authority-symlink.db");
+        symlink(&database, &symlink_path).expect("create final symlink");
+        assert!(
+            open_existing_regular_file_no_follow(&symlink_path).is_err(),
+            "identity guard must not follow a final symlink"
+        );
+
+        let hard_link_path = directory.path().join("authority-hardlink.db");
+        std::fs::hard_link(&database, &hard_link_path).expect("create hard-link alias");
+        assert!(
+            open_existing_regular_file_no_follow(&database).is_err(),
+            "identity guard must reject a multiply linked database"
+        );
+        assert!(
+            open_existing_regular_file_no_follow(&hard_link_path).is_err(),
+            "identity guard must reject the hard-link alias"
+        );
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn block_on_test_io<F: std::future::Future>(
+    cx: &fsqlite_types::cx::Cx,
+    future: F,
+) -> F::Output {
+    std::thread_local! {
+        static TEST_IO_RUNTIME: asupersync::runtime::Runtime =
+            asupersync::runtime::RuntimeBuilder::current_thread()
+                .blocking_threads(1, 2)
+                .build()
+                .expect("VFS test runtime should build");
+    }
+
+    TEST_IO_RUNTIME.with(|runtime| {
+        runtime.block_on(async {
+            let native_cx = asupersync::Cx::current()
+                .expect("VFS test runtime should install a capability context");
+            cx.set_native_cx(native_cx);
+            future.await
+        })
+    })
+}
+
+pub use memory::{MemoryFile, MemoryVfs, MemoryVfsConfig, MemoryVfsUsageSnapshot};
+pub use metrics::{GLOBAL_VFS_METRICS, TracingFile, VfsMetrics};
+#[cfg(all(feature = "native", any(unix, windows)))]
+pub use namespace::{
+    DatabaseNamespaceBinding, DatabaseNamespaceGenerationTransition,
+    NamespaceGenerationTransitionOutcome, NamespaceOpenIntent, PendingNamespaceOpen,
+    PreOpenLockSidecars, WindowsLockSidecarPolicy, begin_database_namespace_generation_transition,
+    cleanup_abandoned_private_database, validate_reserved_database_artifacts,
+};
+pub use shm::ShmRegion;
+pub use traits::{
+    FileIdentity, ForeignWalParticipation, PrivateDatabaseCleanupDurability,
+    PrivateDatabaseCleanupEntryReceipt, PrivateDatabaseCleanupEntryState,
+    PrivateDatabaseCleanupFailure, PrivateDatabaseCleanupFailureStage,
+    PrivateDatabaseCleanupOutcome, SyncKind, Vfs, VfsFile, VfsWriteCompletion,
+    VfsWriteCompletionState, VfsWriteCompletionWait,
+};
+#[cfg(all(feature = "native", unix))]
+pub use unix::{UnixFile, UnixVfs};
+#[cfg(all(feature = "native", target_os = "linux"))]
+pub use uring::{IoUringFile, IoUringVfs};
+#[cfg(all(feature = "native", target_os = "windows"))]
+pub use windows::{WindowsFile, WindowsVfs};

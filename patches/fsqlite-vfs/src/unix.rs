@@ -1,0 +1,11002 @@
+//! Unix VFS implementation with POSIX fcntl-based five-level locking.
+//!
+//! This module implements the `Vfs` and `VfsFile` traits using standard POSIX
+//! file I/O and advisory locking. The locking protocol matches C SQLite's
+//! `os_unix.c` implementation:
+//!
+//! **Lock hierarchy:** `None < Shared < Reserved < Pending < Exclusive`
+//!
+//! **Lock byte ranges (at the 1 GB boundary):**
+//! - `PENDING_BYTE`  = `0x4000_0000` (1 byte)
+//! - `RESERVED_BYTE` = `0x4000_0001` (1 byte)
+//! - `SHARED_FIRST`  = `0x4000_0002` (510 bytes)
+//!
+//! **Key design:** POSIX fcntl locks are per-process, not per-fd. If one fd in
+//! a process holds a lock, closing *any* fd to the same file releases it. We
+//! handle this with a global inode table (`InodeTable`) that coalesces locks
+//! across all file handles in the same process.
+
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read};
+use std::os::fd::{AsFd, AsRawFd};
+use std::os::unix::fs::FileExt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant};
+
+use advisory_lock::{AdvisoryFileLock, FileLockError, FileLockMode};
+use asupersync::runtime::spawn_blocking_io;
+use fsqlite_error::{FrankenError, Result};
+use fsqlite_types::cx::Cx;
+use fsqlite_types::flags::{AccessFlags, SyncFlags, VfsOpenFlags};
+use fsqlite_types::{LockLevel, PageSize};
+use nix::unistd::{AccessFlags as UnixAccessFlags, access as unix_access};
+#[cfg(test)]
+use tracing::debug;
+use tracing::{error, warn};
+
+use crate::namespace::{DatabaseNamespaceBinding, NamespaceOpenIntent, PendingNamespaceOpen};
+use crate::shm::{
+    SHM_READ_MARK_OFFSET, SHM_SEGMENT_SIZE, SQLITE_SHM_EXCLUSIVE, SQLITE_SHM_LOCK,
+    SQLITE_SHM_SHARED, SQLITE_SHM_UNLOCK, ShmRegion, WAL_CKPT_LOCK, WAL_NREADER, WAL_NREADER_USIZE,
+    WAL_READ_MARK_NOT_USED, WAL_RECOVER_LOCK, WAL_TOTAL_LOCKS, WAL_WRITE_LOCK, wal_lock_byte,
+    wal_read_lock_slot,
+};
+use crate::traits::{
+    FileIdentity, ForeignWalParticipation, SyncKind, Vfs, VfsFile, VfsWriteCompletion,
+    VfsWriteCompletionSource,
+};
+
+fn checkpoint_or_abort(cx: &Cx) -> Result<()> {
+    cx.checkpoint().map_err(|_| FrankenError::Abort)
+}
+
+// Keep the payload mmap offset valid on both 4-KiB and 16-KiB hosts. Hosts
+// with an incompatible page size refuse instead of mapping a different ABI.
+const MVCC_SHM_PAYLOAD_OFFSET: u64 = 64 * 1024;
+const MVCC_SHM_TRANSPORT_HEADER_BYTES: usize = 96;
+
+fn mvcc_shm_path(database_path: &Path) -> PathBuf {
+    let mut name = database_path.as_os_str().to_os_string();
+    name.push(".fsqlite-shm");
+    PathBuf::from(name)
+}
+
+fn mvcc_shm_transport_header(
+    identity: FileIdentity,
+    backing_identity: FileIdentity,
+    payload_bytes: u64,
+) -> [u8; MVCC_SHM_TRANSPORT_HEADER_BYTES] {
+    let mut header = [0_u8; MVCC_SHM_TRANSPORT_HEADER_BYTES];
+    header[..8].copy_from_slice(b"FSMVCC01");
+    header[8..16].copy_from_slice(&payload_bytes.to_le_bytes());
+    header[16..41].copy_from_slice(&identity.to_namespace_bytes());
+    header[41..66].copy_from_slice(&backing_identity.to_namespace_bytes());
+    header[72..80].copy_from_slice(&MVCC_SHM_PAYLOAD_OFFSET.to_le_bytes());
+    header
+}
+
+fn mvcc_shm_lock(file: &File, mode: FileLockMode) -> Result<()> {
+    AdvisoryFileLock::try_lock(file, mode).map_err(|error| match error {
+        FileLockError::AlreadyLocked => FrankenError::Busy,
+        FileLockError::Io(error) => FrankenError::Io(error),
+    })
+}
+
+fn validate_mvcc_shm_backing(file: &File, path: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let descriptor = file.metadata()?;
+    let named = fs::symlink_metadata(path)?;
+    // SAFETY: geteuid has no arguments or memory preconditions.
+    let effective_user = unsafe { libc::geteuid() };
+    if !descriptor.is_file()
+        || descriptor.nlink() != 1
+        || descriptor.uid() != effective_user
+        || descriptor.mode() & 0o077 != 0
+        || !named.is_file()
+        || named.nlink() != 1
+        || descriptor.dev() != named.dev()
+        || descriptor.ino() != named.ino()
+    {
+        return Err(FrankenError::CannotOpen {
+            path: path.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_mvcc_shm_header(file: &File, identity: FileIdentity, payload_bytes: u64) -> Result<()> {
+    if file.metadata()?.len() != MVCC_SHM_PAYLOAD_OFFSET + payload_bytes {
+        return Err(FrankenError::BusyRecovery);
+    }
+    let mut actual = [0_u8; MVCC_SHM_TRANSPORT_HEADER_BYTES];
+    let read = read_full_at(
+        |buffer, offset| file.read_at(buffer, offset),
+        &mut actual,
+        0,
+        "MVCC transport header",
+    )?;
+    if read != actual.len()
+        || actual != mvcc_shm_transport_header(identity, inode_key_from_file(file)?, payload_bytes)
+    {
+        return Err(FrankenError::BusyRecovery);
+    }
+    Ok(())
+}
+
+fn invalid_io_input(message: String) -> FrankenError {
+    FrankenError::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        message,
+    ))
+}
+
+fn checked_io_range(offset: u64, len: usize, op: &'static str) -> Result<()> {
+    let len = u64::try_from(len)
+        .map_err(|_| invalid_io_input(format!("unix vfs {op} length too large")))?;
+    offset
+        .checked_add(len)
+        .ok_or_else(|| invalid_io_input(format!("offset overflow during unix vfs {op}")))?;
+    Ok(())
+}
+
+fn checked_io_offset(offset: u64, total: usize, op: &'static str) -> Result<u64> {
+    let total = u64::try_from(total)
+        .map_err(|_| invalid_io_input(format!("unix vfs {op} offset advance too large")))?;
+    offset
+        .checked_add(total)
+        .ok_or_else(|| invalid_io_input(format!("offset overflow during unix vfs {op}")))
+}
+
+fn blocking_io_offset(offset: u64, total: usize, op: &'static str) -> io::Result<u64> {
+    let total = u64::try_from(total)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "I/O offset is too large"))?;
+    offset.checked_add(total).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("offset overflow during async unix vfs {op}"),
+        )
+    })
+}
+
+/// Upper bound for inline positional I/O.
+///
+/// Page-sized reads and writes (up to 64 KiB, the maximum page size, matching
+/// `IO_URING_MAX_RW_CHUNK_BYTES`) run inline on the calling thread, exactly as
+/// `sync` always has: a pread/pwrite of one page costs about as much as the
+/// handoff to a blocking-pool thread (~14 us round trip, several per
+/// statement), and with no asupersync runtime polling, `spawn_blocking_io`
+/// starts a fresh OS thread per call. Larger transfers — WAL group-commit
+/// consolidated writes can be arbitrarily large — still take the pool.
+const INLINE_IO_MAX_BYTES: usize = 64 * 1024;
+
+#[allow(clippy::needless_pass_by_value)] // owns closure inputs for spawn_blocking_io
+fn read_owned_at(file: Arc<File>, len: usize, offset: u64) -> io::Result<(Vec<u8>, usize)> {
+    let mut data = vec![0_u8; len];
+    let mut total = 0_usize;
+    while total < data.len() {
+        let current = blocking_io_offset(offset, total, "read")?;
+        match file.read_at(&mut data[total..], current) {
+            Ok(0) => break,
+            Ok(read) => total += read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok((data, total))
+}
+
+#[allow(clippy::needless_pass_by_value)] // owns closure inputs for spawn_blocking_io
+fn write_owned_at(file: Arc<File>, data: Vec<u8>, offset: u64) -> io::Result<()> {
+    let mut total = 0_usize;
+    while total < data.len() {
+        let current = blocking_io_offset(offset, total, "write")?;
+        match file.write_at(&data[total..], current) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "async unix vfs write_at returned 0",
+                ));
+            }
+            Ok(written) => total += written,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::needless_pass_by_value)] // owns closure inputs for spawn_blocking_io
+fn write_owned_at_tracked(
+    file: Arc<File>,
+    data: Vec<u8>,
+    offset: u64,
+    mut completion: VfsWriteCompletionSource,
+) -> io::Result<()> {
+    let result = write_owned_at(file, data, offset);
+    if result.is_ok() {
+        completion.complete_success();
+    } else {
+        completion.complete_error();
+    }
+    result
+}
+
+/// Write the whole buffer at `offset`, retrying short writes and `EINTR`.
+///
+/// GH #200: `pwrite(2)` can be interrupted by a signal at any iteration,
+/// including after earlier iterations already wrote a prefix of the buffer.
+/// Returning `Interrupted` at that point reports a retryable error while
+/// leaving a torn write behind, so interruption is retried in place with
+/// partial progress preserved.
+fn write_full_at<W>(mut write_at: W, buf: &[u8], offset: u64, what: &'static str) -> Result<()>
+where
+    W: FnMut(&[u8], u64) -> std::io::Result<usize>,
+{
+    let mut total = 0_usize;
+    while total < buf.len() {
+        let off = checked_io_offset(offset, total, what)?;
+        match write_at(&buf[total..], off) {
+            Ok(0) => {
+                return Err(FrankenError::Io(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    format!("unix vfs {what} write_at returned 0"),
+                )));
+            }
+            Ok(n) => {
+                total += n;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(FrankenError::Io(e)),
+        }
+    }
+    Ok(())
+}
+
+/// Read into the whole buffer at `offset`, retrying short reads and `EINTR`.
+///
+/// Returns the number of bytes read before EOF (GH #200: interruption is
+/// retried in place instead of surfacing `Interrupted` mid-buffer).
+fn read_full_at<R>(mut read_at: R, buf: &mut [u8], offset: u64, what: &'static str) -> Result<usize>
+where
+    R: FnMut(&mut [u8], u64) -> std::io::Result<usize>,
+{
+    let mut total = 0_usize;
+    while total < buf.len() {
+        let off = checked_io_offset(offset, total, what)?;
+        match read_at(&mut buf[total..], off) {
+            Ok(0) => break, // EOF
+            Ok(n) => {
+                total += n;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(FrankenError::Io(e)),
+        }
+    }
+    Ok(total)
+}
+
+#[cfg(test)]
+macro_rules! lock_debug {
+    ($($arg:tt)*) => {
+        debug!($($arg)*);
+    };
+}
+
+#[cfg(not(test))]
+macro_rules! lock_debug {
+    ($($arg:tt)*) => {{};};
+}
+
+// ---------------------------------------------------------------------------
+// Lock byte constants (must match C SQLite for file-level compatibility)
+// ---------------------------------------------------------------------------
+
+/// Byte offset of the pending lock byte.
+const PENDING_BYTE: u64 = 0x4000_0000;
+/// Byte offset of the reserved lock byte.
+const RESERVED_BYTE: u64 = PENDING_BYTE + 1;
+/// Byte offset of the first shared lock byte.
+const SHARED_FIRST: u64 = PENDING_BYTE + 2;
+/// Number of bytes in the shared lock range.
+const SHARED_SIZE: u64 = 510;
+
+// ---------------------------------------------------------------------------
+// WAL SHM header initialization (legacy SQLite interop)
+// ---------------------------------------------------------------------------
+
+/// SQLite WAL-index SHM segment size (`WALINDEX_PGSZ` in upstream SQLite).
+///
+/// This is always 32 KiB and is required so that legacy SQLite can map
+/// the first wal-index page without needing to take `WAL_WRITE_LOCK` just to
+/// grow the `*-shm` file. If we hold `WAL_WRITE_LOCK` on a freshly created
+/// zero-byte `*-shm`, legacy SQLite will spin in `walTryBeginRead()` and
+/// eventually surface `SQLITE_PROTOCOL` ("locking protocol").
+const SQLITE_WALINDEX_PGSZ: u64 = 32 * 1024;
+
+/// Bytes in the `*-shm` header region: 2x `WalIndexHdr` (48 bytes each) + `WalCkptInfo` (40 bytes).
+const SQLITE_WAL_SHM_HEADER_BYTES: usize = 136;
+
+/// `WalIndexHdr.iVersion` constant (must be 3007000).
+const SQLITE_WAL_INDEX_VERSION: u32 = 3_007_000;
+
+/// `WalCkptInfo.aReadMark[i]` value indicating the slot is unused.
+const SQLITE_WAL_READMARK_NOT_USED: u32 = 0xffff_ffff;
+
+/// Slot index for the `*-shm` deadman-switch (DMS) byte.
+///
+/// In C SQLite's unix VFS, this is `UNIX_SHM_DMS = UNIX_SHM_BASE + SQLITE_SHM_NLOCK`
+/// and lives at byte offset 128. Holding a SHARED lock on this byte prevents
+/// new openers from truncating the `*-shm` file on startup.
+const SQLITE_SHM_DMS_SLOT: u32 = WAL_TOTAL_LOCKS;
+
+fn sqlite_wal_path(path: &Path) -> PathBuf {
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    PathBuf::from(wal)
+}
+
+fn sqlite_shm_dms_lock_byte() -> u64 {
+    let base = wal_lock_byte(WAL_WRITE_LOCK).expect("WAL write lock byte must exist");
+    base + u64::from(WAL_TOTAL_LOCKS)
+}
+
+fn sqlite_page_size_from_db_header(db_header: &[u8]) -> Result<u32> {
+    const DB_HEADER_BYTES: usize = 100;
+    if db_header.len() < DB_HEADER_BYTES {
+        return Err(FrankenError::WalCorrupt {
+            detail: format!(
+                "sqlite db header too small: expected >= {DB_HEADER_BYTES}, got {}",
+                db_header.len()
+            ),
+        });
+    }
+
+    let raw = u16::from_be_bytes([db_header[16], db_header[17]]);
+    let page_size = if raw == 1 { 65_536 } else { u32::from(raw) };
+    if !(page_size.is_power_of_two() && (512..=65_536).contains(&page_size)) {
+        return Err(FrankenError::WalCorrupt {
+            detail: format!("invalid sqlite page size in db header: {page_size}"),
+        });
+    }
+    Ok(page_size)
+}
+
+fn sqlite_wal_checksum_native_8byte_chunks(data: &[u8]) -> Result<(u32, u32)> {
+    if !data.len().is_multiple_of(8) {
+        return Err(FrankenError::WalCorrupt {
+            detail: format!(
+                "sqlite wal checksum input must be 8-byte aligned, got {} bytes",
+                data.len()
+            ),
+        });
+    }
+
+    let mut s1 = 0_u32;
+    let mut s2 = 0_u32;
+    for chunk in data.as_chunks::<8>().0 {
+        let w1 = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let w2 = u32::from_ne_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+        s1 = s1.wrapping_add(w1).wrapping_add(s2);
+        s2 = s2.wrapping_add(w2).wrapping_add(s1);
+    }
+    Ok((s1, s2))
+}
+
+fn sqlite_wal_index_page_size(raw: u16) -> Option<u32> {
+    let page_size = if raw == 1 { 65_536 } else { u32::from(raw) };
+    PageSize::new(page_size).map(PageSize::get)
+}
+
+fn write_ne_u32(buf: &mut [u8], offset: usize, value: u32) {
+    buf[offset..offset + 4].copy_from_slice(&value.to_ne_bytes());
+}
+
+fn build_empty_sqlite_wal_shm_header(
+    page_size: u32,
+    n_page: u32,
+) -> Result<[u8; SQLITE_WAL_SHM_HEADER_BYTES]> {
+    let sz_page_u16 = if page_size == 65_536 {
+        1_u16
+    } else {
+        u16::try_from(page_size).map_err(|_| FrankenError::WalCorrupt {
+            detail: format!("page size too large for wal-index header: {page_size}"),
+        })?
+    };
+
+    // Build a single WalIndexHdr copy (48 bytes) in native order.
+    let mut hdr = [0_u8; 48];
+    write_ne_u32(&mut hdr, 0, SQLITE_WAL_INDEX_VERSION);
+    write_ne_u32(&mut hdr, 4, 0); // unused
+    write_ne_u32(&mut hdr, 8, 0); // iChange
+    hdr[12] = 1; // isInit
+    hdr[13] = u8::from(cfg!(target_endian = "big")); // bigEndCksum
+    hdr[14..16].copy_from_slice(&sz_page_u16.to_ne_bytes());
+    write_ne_u32(&mut hdr, 16, 0); // mxFrame (empty WAL)
+    write_ne_u32(&mut hdr, 20, n_page);
+    write_ne_u32(&mut hdr, 24, 0); // aFrameCksum[0]
+    write_ne_u32(&mut hdr, 28, 0); // aFrameCksum[1]
+    write_ne_u32(&mut hdr, 32, 0); // aSalt[0]
+    write_ne_u32(&mut hdr, 36, 0); // aSalt[1]
+
+    let (ck1, ck2) = sqlite_wal_checksum_native_8byte_chunks(&hdr[..40])?;
+    write_ne_u32(&mut hdr, 40, ck1);
+    write_ne_u32(&mut hdr, 44, ck2);
+
+    // Build WalCkptInfo (40 bytes) in native order.
+    let mut ckpt = [0_u8; 40];
+    write_ne_u32(&mut ckpt, 0, 0); // nBackfill
+    // aReadMark[0] is always 0; remaining marks unused for empty WAL.
+    write_ne_u32(&mut ckpt, 4, 0);
+    for i in 1..5 {
+        write_ne_u32(&mut ckpt, 4 + i * 4, SQLITE_WAL_READMARK_NOT_USED);
+    }
+    // aLock[8] left as zeros (reserved bytes for OS-level locks).
+    write_ne_u32(&mut ckpt, 32, 0); // nBackfillAttempted
+    write_ne_u32(&mut ckpt, 36, 0); // notUsed0
+
+    let mut out = [0_u8; SQLITE_WAL_SHM_HEADER_BYTES];
+    out[..48].copy_from_slice(&hdr);
+    out[48..96].copy_from_slice(&hdr);
+    out[96..136].copy_from_slice(&ckpt);
+    Ok(out)
+}
+
+fn sqlite_wal_shm_header_is_valid(buf: &[u8]) -> Result<bool> {
+    if buf.len() < SQLITE_WAL_SHM_HEADER_BYTES {
+        return Ok(false);
+    }
+
+    let h1 = &buf[..48];
+    let h2 = &buf[48..96];
+    if h1 != h2 {
+        return Ok(false);
+    }
+
+    if h1[12] == 0 {
+        return Ok(false);
+    }
+
+    let version = u32::from_ne_bytes([h1[0], h1[1], h1[2], h1[3]]);
+    if version != SQLITE_WAL_INDEX_VERSION {
+        return Ok(false);
+    }
+
+    if h1[13] > 1 {
+        return Ok(false);
+    }
+
+    let raw_page_size = u16::from_ne_bytes([h1[14], h1[15]]);
+    if sqlite_wal_index_page_size(raw_page_size).is_none() {
+        return Ok(false);
+    }
+
+    let (expected1, expected2) = sqlite_wal_checksum_native_8byte_chunks(&h1[..40])?;
+    let actual1 = u32::from_ne_bytes([h1[40], h1[41], h1[42], h1[43]]);
+    let actual2 = u32::from_ne_bytes([h1[44], h1[45], h1[46], h1[47]]);
+    Ok(expected1 == actual1 && expected2 == actual2)
+}
+
+// ---------------------------------------------------------------------------
+// POSIX fcntl helpers
+// ---------------------------------------------------------------------------
+
+// Darwin exposes open-file-description (OFD) lock commands since macOS 10.12,
+// but older `libc` releases do not name them. They are a stable part of the
+// Darwin kernel ABI (`<sys/fcntl.h>`): F_OFD_SETLK = 90, F_OFD_GETLK = 92.
+#[cfg(target_os = "macos")]
+const DARWIN_F_OFD_SETLK: libc::c_int = 90;
+#[cfg(target_os = "macos")]
+const DARWIN_F_OFD_GETLK: libc::c_int = 92;
+
+/// Which advisory-lock primitive [`fcntl_setlk`] actually used to satisfy a
+/// request.
+///
+/// Byte-range / OFD `fcntl` locking is the norm. On some filesystems — network
+/// mounts (AFP/SMB/NFS on Darwin) and pre-10.12 kernels — it is rejected with
+/// `EINVAL`/`ENOTSUP` and the Unix backend drops to coarse whole-file
+/// `flock(2)`. That downgrade is otherwise invisible above the VFS: acquisition
+/// returns success identically in both modes. Surfacing it (GH #343 / bd-qll76)
+/// lets a caller that requires real cross-host exclusion detect a degraded
+/// handle and refuse it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FileLockStyle {
+    /// Byte-range advisory lock: Linux `F_SETLK` or Darwin `F_OFD_SETLK`.
+    ByteRange,
+    /// Coarse whole-file `flock(2)` fallback (C SQLite's flock locking style).
+    WholeFileFlock,
+}
+
+/// Issue an `F_SETLK`-family request for `flock` on `file`.
+///
+/// Linux keeps its proven classic per-process `F_SETLK` path (via `nix`), so
+/// its concurrency behavior is byte-for-byte unchanged. Darwin (>= 10.12) uses
+/// `F_OFD_SETLK` (open-file-description locks, fcntl cmd 90) so the lock is
+/// owned by the open file description rather than the whole process: it is not
+/// silently dropped when an unrelated descriptor for the same inode is closed —
+/// the per-process footgun the classic path must otherwise work around. All
+/// locking here funnels through the single shared canonical descriptor per
+/// inode, so one OFD is authoritative. Other Unix keep classic byte-range
+/// `F_SETLK`. Only when the filesystem itself rejects byte-range / OFD fcntl
+/// locks (EINVAL/ENOTSUP — e.g. AFP/SMB network mounts, pre-10.12 kernels) do
+/// we drop to coarse whole-file `flock(2)` (C SQLite's flock locking style):
+/// correct, but it collapses the per-byte SHARED/RESERVED/PENDING/EXCLUSIVE
+/// regions to one whole-file lock, forfeiting byte-range writer concurrency.
+fn fcntl_setlk(file: &impl AsFd, flock: &libc::flock) -> nix::Result<FileLockStyle> {
+    #[cfg(target_os = "linux")]
+    {
+        nix::fcntl::fcntl(file.as_fd(), nix::fcntl::FcntlArg::F_SETLK(flock))
+            .map(|_| FileLockStyle::ByteRange)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        #[cfg(target_os = "macos")]
+        let cmd = DARWIN_F_OFD_SETLK;
+        #[cfg(not(target_os = "macos"))]
+        let cmd = libc::F_SETLK;
+        // SAFETY: `cmd` is a valid fcntl lock command that takes a
+        // `struct flock *`, and `flock` is a fully-initialized `libc::flock`
+        // that outlives the call.
+        let ret = unsafe { libc::fcntl(file.as_fd().as_raw_fd(), cmd, std::ptr::from_ref(flock)) };
+        if ret != -1 {
+            return Ok(FileLockStyle::ByteRange);
+        }
+        let err = nix::errno::Errno::last();
+        // Some Darwin filesystems (AFP/SMB and other network mounts) and
+        // pre-10.12 kernels reject OFD / byte-range fcntl locks with
+        // EINVAL/ENOTSUP. Fall back to coarse whole-file flock(2) there — the
+        // degraded locking style C SQLite uses (SQLITE_ENABLE_LOCKING_STYLE).
+        // Contention still surfaces as EAGAIN, so posix_lock reports Ok(false).
+        if matches!(err, nix::errno::Errno::EINVAL | nix::errno::Errno::ENOTSUP) {
+            return flock_whole_file_fallback(file, flock.l_type)
+                .map(|()| FileLockStyle::WholeFileFlock);
+        }
+        Err(err)
+    }
+}
+
+/// `F_GETLK`-family probe, mirroring [`fcntl_setlk`]'s platform split so a
+/// query observes the same OFD lock space it will later contend for.
+fn fcntl_getlk(file: &impl AsFd, flock: &mut libc::flock) -> nix::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        nix::fcntl::fcntl(file.as_fd(), nix::fcntl::FcntlArg::F_GETLK(flock)).map(|_| ())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        #[cfg(target_os = "macos")]
+        let cmd = DARWIN_F_OFD_GETLK;
+        #[cfg(not(target_os = "macos"))]
+        let cmd = libc::F_GETLK;
+        // SAFETY: as in `fcntl_setlk`; the kernel fills `flock` in place.
+        let ret = unsafe { libc::fcntl(file.as_fd().as_raw_fd(), cmd, std::ptr::from_mut(flock)) };
+        if ret == -1 {
+            Err(nix::errno::Errno::last())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Coarse whole-file lock via `flock(2)`, the last-resort fallback used only
+/// when the filesystem cannot honor byte-range / OFD fcntl locks
+/// (EINVAL/ENOTSUP — AFP, SMB, and other network mounts on Darwin; pre-10.12
+/// kernels). Mirrors C SQLite's flock locking style: every SQLite lock byte
+/// collapses to a single whole-file `LOCK_SH`/`LOCK_EX`, so it stays correct
+/// but forfeits byte-range writer concurrency. Contention returns `EAGAIN`,
+/// matching the fcntl path so `posix_lock` still reports "would block".
+///
+/// LIMITATION: `flock(2)` has no non-destructive query, so lock-conflict probes
+/// (`posix_getlk` / `check_reserved_lock`) keep issuing fcntl `GETLK`, which is
+/// best-effort on a flock-only mount. Tracked for follow-up (bd-3u63s).
+#[cfg(not(target_os = "linux"))]
+fn flock_whole_file_fallback(file: &impl AsFd, l_type: libc::c_short) -> nix::Result<()> {
+    let l_type = i32::from(l_type);
+    let operation = if l_type == libc::F_UNLCK as i32 {
+        libc::LOCK_UN
+    } else if l_type == libc::F_WRLCK as i32 {
+        libc::LOCK_EX | libc::LOCK_NB
+    } else {
+        libc::LOCK_SH | libc::LOCK_NB
+    };
+    // SAFETY: `flock` receives a live descriptor and a valid operation flag.
+    let ret = unsafe { libc::flock(file.as_fd().as_raw_fd(), operation) };
+    if ret == -1 {
+        Err(nix::errno::Errno::last())
+    } else {
+        Ok(())
+    }
+}
+
+/// Attempt a non-blocking POSIX advisory lock via [`fcntl_setlk`].
+///
+/// On Linux this is a safe `nix` `F_SETLK` wrapper; on Darwin/other Unix it
+/// dispatches through [`fcntl_setlk`] (OFD locks, with a `flock(2)` fallback).
+///
+/// Returns `Ok(true)` if the lock was acquired, `Ok(false)` if it would
+/// block (another process holds a conflicting lock), and `Err` for real
+/// I/O errors.
+///
+/// The `lock_type` parameter accepts the platform-native lock constant type
+/// (`i32` on Linux, `i16` on macOS) via `Into<i32>`.
+#[allow(clippy::cast_possible_wrap)]
+fn posix_lock(file: &impl AsFd, lock_type: impl Into<i32>, start: u64, len: u64) -> Result<bool> {
+    posix_lock_styled(file, lock_type, start, len).map(|(acquired, _style)| acquired)
+}
+
+/// Like [`posix_lock`], but also reports which advisory-lock primitive actually
+/// satisfied the request (byte-range/OFD vs the coarse whole-file `flock(2)`
+/// fallback). The style is only meaningful when the lock was acquired; on a
+/// would-block (`Ok((false, _))`) it defaults to `ByteRange`. Used at the
+/// lock-acquisition choke points that record the degradation on the inode
+/// (GH #343 / bd-qll76).
+#[allow(clippy::cast_possible_wrap)]
+fn posix_lock_styled(
+    file: &impl AsFd,
+    lock_type: impl Into<i32>,
+    start: u64,
+    len: u64,
+) -> Result<(bool, FileLockStyle)> {
+    let lock_type_i32: i32 = lock_type.into();
+    #[allow(clippy::cast_possible_truncation)]
+    let lock_type_short = lock_type_i32 as libc::c_short;
+    let whence: libc::c_short = libc::SEEK_SET as libc::c_short;
+    let flock = libc::flock {
+        l_type: lock_type_short,
+        l_whence: whence,
+        l_start: start as libc::off_t,
+        l_len: len as libc::off_t,
+        l_pid: 0,
+        // FreeBSD's struct flock has an additional l_sysid field for
+        // clustered/network file systems. l_sysid: 0 means "no specific
+        // system" — the documented default for non-clustered local locks.
+        // Linux/macOS flock structs do not have this field.
+        #[cfg(target_os = "freebsd")]
+        l_sysid: 0,
+    };
+
+    loop {
+        match fcntl_setlk(file, &flock) {
+            Ok(style) => return Ok((true, style)),
+            Err(nix::errno::Errno::EINTR) => {}
+            Err(nix::errno::Errno::EACCES | nix::errno::Errno::EAGAIN) => {
+                return Ok((false, FileLockStyle::ByteRange));
+            }
+            Err(e) => return Err(FrankenError::Io(e.into())),
+        }
+    }
+}
+
+/// Like [`posix_lock`], but retries with exponential backoff when the lock
+/// would block (`EAGAIN`/`EACCES`) and a non-zero `timeout` is provided.
+///
+/// The backoff starts at 1 ms and doubles each iteration, capped at 100 ms,
+/// matching the strategy used by C SQLite's busy handler. If the cumulative
+/// elapsed time exceeds `timeout`, the function gives up and returns
+/// `Ok(false)`.
+///
+/// When `timeout` is zero the function delegates directly to [`posix_lock`]
+/// with no retry, preserving the original fail-fast behavior.
+fn posix_lock_with_timeout(
+    file: &impl AsFd,
+    lock_type: impl Into<i32> + Copy,
+    start: u64,
+    len: u64,
+    timeout: Duration,
+) -> Result<bool> {
+    posix_lock_with_timeout_styled(file, lock_type, start, len, timeout)
+        .map(|(acquired, _style)| acquired)
+}
+
+/// Like [`posix_lock_with_timeout`], but also reports which advisory-lock
+/// primitive satisfied the request (see [`posix_lock_styled`]). The reported
+/// style is that of the acquiring attempt; on timeout (`Ok((false, _))`) it is
+/// `ByteRange`. Used by the SHARED-acquisition choke point to record a
+/// whole-file `flock(2)` downgrade on the inode (GH #343 / bd-qll76).
+fn posix_lock_with_timeout_styled(
+    file: &impl AsFd,
+    lock_type: impl Into<i32> + Copy,
+    start: u64,
+    len: u64,
+    timeout: Duration,
+) -> Result<(bool, FileLockStyle)> {
+    // Fast path: no timeout configured -- fail immediately on contention.
+    if timeout.is_zero() {
+        return posix_lock_styled(file, lock_type, start, len);
+    }
+
+    // First attempt -- no sleeping.
+    let first = posix_lock_styled(file, lock_type, start, len)?;
+    if first.0 {
+        return Ok(first);
+    }
+
+    let started = Instant::now();
+    let mut backoff = Duration::from_millis(1);
+    let max_backoff = Duration::from_millis(100);
+
+    loop {
+        let elapsed = started.elapsed();
+        let Some(remaining) = timeout.checked_sub(elapsed) else {
+            return Ok((false, FileLockStyle::ByteRange));
+        };
+
+        // Sleep for the lesser of `backoff` and the remaining budget.
+        std::thread::sleep(backoff.min(remaining));
+
+        let attempt = posix_lock_styled(file, lock_type, start, len)?;
+        if attempt.0 {
+            return Ok(attempt);
+        }
+
+        // Exponential backoff, capped at 100 ms.
+        backoff = (backoff * 2).min(max_backoff);
+    }
+}
+
+/// Release a POSIX advisory lock.
+fn posix_unlock(file: &impl AsFd, start: u64, len: u64) -> Result<()> {
+    let ok = posix_lock(file, libc::F_UNLCK, start, len)?;
+    debug_assert!(ok, "F_UNLCK should never fail with EAGAIN");
+    Ok(())
+}
+
+/// Query whether a lock would succeed without acquiring it.
+///
+/// Uses `fcntl(F_GETLK)` and returns the kernel-filled `flock`.
+#[allow(clippy::cast_possible_wrap)]
+fn posix_getlk(
+    file: &impl AsFd,
+    lock_type: impl Into<i32>,
+    start: u64,
+    len: u64,
+) -> Result<libc::flock> {
+    let lock_type_i32: i32 = lock_type.into();
+    #[allow(clippy::cast_possible_truncation)]
+    let lock_type_short = lock_type_i32 as libc::c_short;
+    let whence: libc::c_short = libc::SEEK_SET as libc::c_short;
+    let mut flock = libc::flock {
+        l_type: lock_type_short,
+        l_whence: whence,
+        l_start: start as libc::off_t,
+        l_len: len as libc::off_t,
+        l_pid: 0,
+        // FreeBSD's struct flock has an additional l_sysid field. See the
+        // matching comment at the F_SETLK callsite above.
+        #[cfg(target_os = "freebsd")]
+        l_sysid: 0,
+    };
+
+    fcntl_getlk(file, &mut flock).map_err(|e| FrankenError::Io(e.into()))?;
+
+    Ok(flock)
+}
+
+// ---------------------------------------------------------------------------
+// Inode table — per-process lock coalescing
+// ---------------------------------------------------------------------------
+
+/// Internal name for the public opaque descriptor identity used by the inode table.
+type InodeKey = FileIdentity;
+
+/// Per-inode lock state shared across all file handles in this process.
+///
+/// Because POSIX fcntl locks are per-process (not per-fd), we must coalesce
+/// lock operations through a single canonical fd and track how many handles
+/// want each lock level. The OS-level lock is only released when the last
+/// handle drops its claim.
+#[derive(Debug)]
+struct InodeInfo {
+    /// Canonical file descriptor for this inode.
+    ///
+    /// POSIX fcntl locks are per-process, and closing *any* fd for the file can
+    /// release the process' locks. To avoid that, we keep exactly one canonical
+    /// fd per inode for I/O/locking and share it across handles via `Arc`.
+    /// Racing redundant opens remain inert in `deferred_close_files` until no
+    /// process lock claim survives.
+    file: Arc<File>,
+    /// Total number of open file handles referencing this inode.
+    n_ref: u32,
+    /// Number of handles holding a SHARED or higher lock.
+    n_shared: u32,
+    /// SHM owners retaining the main-file read lock between transactions.
+    /// These prevent a foreign SQLite last-close checkpoint/unlink, but do
+    /// not represent snapshots or block this process' maintenance upgrades.
+    n_wal_lifetime: u32,
+    /// Number of handles holding a RESERVED lock (at most 1 from the OS
+    /// perspective, but tracked for reference-counting).
+    n_reserved: u32,
+    /// Number of handles holding a PENDING lock.
+    n_pending: u32,
+    /// Number of interrupted SHARED acquisitions that still retain their
+    /// transient read lock on SQLite's PENDING byte.
+    ///
+    /// This is distinct from `n_pending`: those claims are write locks in the
+    /// ordinary five-level ladder. Keeping the transient claim visible
+    /// prevents another handle from treating an unresolved acquisition as an
+    /// unlocked inode and closing a descriptor that would erase the process'
+    /// record locks.
+    n_transient_shared_pending: u32,
+    /// Number of handles holding an EXCLUSIVE lock.
+    n_exclusive: u32,
+    /// Extra descriptors opened by racing/repeated opens while this process
+    /// already held a POSIX record lock on the inode.
+    ///
+    /// Closing *any* descriptor for an inode drops all classic `fcntl` locks
+    /// held by the process. These descriptors therefore remain open until the
+    /// last coalesced lock claim has been released.
+    deferred_close_files: Vec<Arc<File>>,
+    /// Set once byte-range/OFD `fcntl` locking on this inode was rejected and
+    /// the backend dropped to the coarse whole-file `flock(2)` fallback. This
+    /// is a permanent property of the underlying filesystem (network mounts,
+    /// pre-10.12 Darwin), so it is recorded on the shared inode state and
+    /// surfaced via [`UnixFile::locking_downgraded_to_whole_file_flock`] so a
+    /// caller can detect the silent downgrade (GH #343 / bd-qll76). Always
+    /// `false` on Linux, which never falls back.
+    flock_fallback_engaged: bool,
+    /// The `(dev, ino)` this generation is currently registered under in the
+    /// process-wide inode table — the identity every handle sharing this
+    /// state reports from `file_identity`.
+    ///
+    /// GH#416: on filesystems that number a file by its first data cluster
+    /// (macOS `msdosfs`) a zero-length file has a placeholder inode that
+    /// changes on its first write. [`InodeTable::migrate`] moves the entry to
+    /// the live key and updates this field, so every handle opened during the
+    /// placeholder phase — not only the one that observed the change — keeps
+    /// reporting one identity and finalizes against the entry it lives in.
+    key: InodeKey,
+}
+
+impl InodeInfo {
+    fn new(key: InodeKey, file: Arc<File>) -> Self {
+        Self {
+            key,
+            file,
+            n_ref: 0,
+            n_shared: 0,
+            n_wal_lifetime: 0,
+            n_reserved: 0,
+            n_pending: 0,
+            n_transient_shared_pending: 0,
+            n_exclusive: 0,
+            deferred_close_files: Vec::new(),
+            flock_fallback_engaged: false,
+        }
+    }
+
+    fn has_lock_claims(&self) -> bool {
+        self.n_shared != 0
+            || self.n_wal_lifetime != 0
+            || self.n_reserved != 0
+            || self.n_pending != 0
+            || self.n_transient_shared_pending != 0
+            || self.n_exclusive != 0
+    }
+
+    /// Close redundant descriptors only while the inode mutex proves that no
+    /// thread can establish a new process-wide record lock concurrently.
+    fn close_deferred_files_if_unlocked(&mut self) {
+        if !self.has_lock_claims() {
+            self.deferred_close_files.clear();
+        }
+    }
+}
+
+const INODE_TABLE_SHARDS: usize = 16;
+
+/// Global per-process table mapping (dev, ino) to shared lock state.
+///
+/// This prevents the \"POSIX close drops all locks\" problem: we only issue
+/// OS-level lock/unlock calls through one canonical fd per inode, and track
+/// how many handles want each lock level.
+struct InodeTable {
+    shards: [Mutex<HashMap<InodeKey, Arc<Mutex<InodeInfo>>>>; INODE_TABLE_SHARDS],
+}
+
+impl InodeTable {
+    fn new() -> Self {
+        Self {
+            shards: std::array::from_fn(|_| Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[allow(clippy::unused_self, clippy::items_after_statements)]
+    fn shard_idx(&self, key: InodeKey) -> usize {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&key, &mut h);
+        use std::hash::Hasher;
+        (h.finish() as usize) & (INODE_TABLE_SHARDS - 1)
+    }
+
+    /// Get the inode info for the given key if present.
+    #[cfg(test)]
+    fn get(&self, key: InodeKey) -> Option<Arc<Mutex<InodeInfo>>> {
+        let map = self.shards[self.shard_idx(key)]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.get(&key).cloned()
+    }
+
+    /// Reuse an already retained lock domain without opening another ordinary
+    /// descriptor. Linux O_PATH closes do not run locks_remove_posix; the
+    /// descriptor pins the resolved inode across rename/replacement races.
+    #[cfg(target_os = "linux")]
+    fn reuse_retained_file(
+        &self,
+        path: &Path,
+        requested_rw: bool,
+    ) -> Option<(Arc<Mutex<InodeInfo>>, Arc<File>)> {
+        use nix::fcntl::{AtFlags, FcntlArg, OFlag, fcntl, open};
+        use nix::sys::stat::Mode;
+
+        let witness = File::from(open(path, OFlag::O_PATH | OFlag::O_CLOEXEC, Mode::empty()).ok()?);
+        if !witness.metadata().ok()?.is_file() {
+            return None;
+        }
+        let access = if requested_rw {
+            UnixAccessFlags::R_OK | UnixAccessFlags::W_OK
+        } else {
+            UnixAccessFlags::R_OK
+        };
+        nix::unistd::faccessat(
+            &witness,
+            "",
+            access,
+            AtFlags::AT_EMPTY_PATH | AtFlags::AT_EACCESS,
+        )
+        .ok()?;
+        let key = inode_key_from_file(&witness).ok()?;
+        let map = self.shards[self.shard_idx(key)]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inode_info = Arc::clone(map.get(&key)?);
+        let mut info = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Only optimize an existing deferred-close domain. The initial open
+        // and first redundant open retain their normal registration semantics.
+        if info.deferred_close_files.is_empty() || inode_key_from_file(&info.file).ok()? != key {
+            return None;
+        }
+        let mode = OFlag::from_bits_truncate(fcntl(&*info.file, FcntlArg::F_GETFL).ok()?);
+        if requested_rw && mode & OFlag::O_ACCMODE != OFlag::O_RDWR {
+            return None;
+        }
+        info.n_ref = info.n_ref.checked_add(1)?;
+        let file = Arc::clone(&info.file);
+        drop(info);
+        drop(map);
+        Some((inode_info, file))
+    }
+
+    /// Non-Linux counterpart of the `O_PATH` reuse above (bd-l0rbc).
+    ///
+    /// Without `O_PATH`, the inode is identified by a path `stat`. The domain's
+    /// retained canonical descriptor keeps that inode allocated, so a
+    /// `(dev, ino)` match against it cannot name a recycled file. A second
+    /// `stat` after the access and mode checks requires that the path still
+    /// names that inode; otherwise the caller falls back to an ordinary open,
+    /// which registers or defers exactly as before. Opening a redundant
+    /// descriptor here only to defer it leaks it for as long as any lock claim
+    /// survives, which in WAL mode is the lifetime of every live connection.
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    fn reuse_retained_file(
+        &self,
+        path: &Path,
+        requested_rw: bool,
+    ) -> Option<(Arc<Mutex<InodeInfo>>, Arc<File>)> {
+        use nix::fcntl::{AT_FDCWD, AtFlags, FcntlArg, OFlag, fcntl};
+        use std::os::unix::fs::MetadataExt;
+
+        // Follows symlinks exactly as the ordinary open does.
+        let path_key = || {
+            let meta = std::fs::metadata(path).ok()?;
+            meta.is_file()
+                .then(|| FileIdentity::from_unix_parts(meta.dev(), meta.ino()))
+        };
+        let key = path_key()?;
+        let access = if requested_rw {
+            UnixAccessFlags::R_OK | UnixAccessFlags::W_OK
+        } else {
+            UnixAccessFlags::R_OK
+        };
+        nix::unistd::faccessat(AT_FDCWD, path, access, AtFlags::AT_EACCESS).ok()?;
+        let map = self.shards[self.shard_idx(key)]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inode_info = Arc::clone(map.get(&key)?);
+        let mut info = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Only optimize an existing deferred-close domain. The initial open
+        // and first redundant open retain their normal registration semantics.
+        if info.deferred_close_files.is_empty() || inode_key_from_file(&info.file).ok()? != key {
+            return None;
+        }
+        let mode = OFlag::from_bits_truncate(fcntl(&*info.file, FcntlArg::F_GETFL).ok()?);
+        if requested_rw && mode & OFlag::O_ACCMODE != OFlag::O_RDWR {
+            return None;
+        }
+        if path_key()? != key {
+            return None;
+        }
+        info.n_ref = info.n_ref.checked_add(1)?;
+        let file = Arc::clone(&info.file);
+        drop(info);
+        drop(map);
+        Some((inode_info, file))
+    }
+
+    /// Android keeps the behavior from before bd-l0rbc: nix does not expose
+    /// `AT_EACCESS` there, so no retained descriptor is reused and every open
+    /// takes the ordinary path.
+    #[cfg(target_os = "android")]
+    #[allow(clippy::unused_self)]
+    fn reuse_retained_file(
+        &self,
+        _path: &Path,
+        _requested_rw: bool,
+    ) -> Option<(Arc<Mutex<InodeInfo>>, Arc<File>)> {
+        None
+    }
+
+    /// Register an opened descriptor in the inode's one process-wide lock
+    /// domain and return its canonical descriptor.
+    ///
+    /// Lookup, `n_ref` publication, and final-generation removal all take the
+    /// shard mutex before the inode mutex. This prevents a last close from
+    /// evicting an entry between a reopen's lookup and registration. When a
+    /// racing open produced a redundant descriptor while locks are held, that
+    /// descriptor is retained until the final lock claim is released; closing
+    /// it earlier would silently erase every classic POSIX lock for the inode.
+    fn register_opened_file(
+        &self,
+        key: InodeKey,
+        opened: File,
+    ) -> Result<(Arc<Mutex<InodeInfo>>, Arc<File>)> {
+        self.register_opened_file_with(key, opened, || {})
+    }
+
+    fn register_opened_file_with(
+        &self,
+        key: InodeKey,
+        opened: File,
+        before_register: impl FnOnce(),
+    ) -> Result<(Arc<Mutex<InodeInfo>>, Arc<File>)> {
+        let opened = Arc::new(opened);
+        let mut map = self.shards[self.shard_idx(key)]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = map.get(&key) {
+            let inode_info = Arc::clone(existing);
+            before_register();
+            let canonical = {
+                let mut info = inode_info
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let Some(next_ref) = info.n_ref.checked_add(1) else {
+                    if info.has_lock_claims() {
+                        info.deferred_close_files.push(opened);
+                    } else {
+                        drop(opened);
+                    }
+                    return Err(FrankenError::internal(
+                        "Unix inode-table open-reference count overflow",
+                    ));
+                };
+                info.n_ref = next_ref;
+                let canonical = Arc::clone(&info.file);
+                if info.has_lock_claims() {
+                    info.deferred_close_files.push(opened);
+                } else {
+                    // Keep the inode mutex held while the redundant descriptor
+                    // closes, so no thread can establish a record lock in the
+                    // close-vs-lock window.
+                    drop(opened);
+                }
+                canonical
+            };
+            return Ok((inode_info, canonical));
+        }
+
+        before_register();
+        let canonical = opened;
+        let mut info = InodeInfo::new(key, Arc::clone(&canonical));
+        info.n_ref = 1;
+        let inode_info = Arc::new(Mutex::new(info));
+        map.insert(key, Arc::clone(&inode_info));
+        Ok((inode_info, canonical))
+    }
+
+    /// GH#416: move a live inode generation from the key it was registered
+    /// under to the key the descriptor reports now.
+    ///
+    /// Only the placeholder-inode transition reaches here: a file that was
+    /// zero-length at open is renumbered by the filesystem on its first
+    /// write, so the `(dev, ino)` captured at open no longer names it. The
+    /// entry keeps its canonical descriptor, lock claims, and deferred
+    /// descriptors — nothing about the POSIX lock domain changes, only the
+    /// key later opens will look it up by. Both shard mutexes are taken in
+    /// index order (one when the keys share a shard) before the inode mutex,
+    /// matching every other table path.
+    ///
+    /// Fails closed when `new` already names a different live generation
+    /// (a stale entry for a file that previously owned the cluster); the
+    /// caller then keeps the old identity and the mismatch surfaces as
+    /// `CannotOpen` exactly as before.
+    fn migrate(
+        &self,
+        old: InodeKey,
+        new: InodeKey,
+        inode_info: &Arc<Mutex<InodeInfo>>,
+    ) -> Result<()> {
+        if old == new {
+            return Ok(());
+        }
+        let old_idx = self.shard_idx(old);
+        let new_idx = self.shard_idx(new);
+        let lock_shard = |idx: usize| {
+            self.shards[idx]
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
+        // `old_map` always guards the old key's shard; `new_map` is `None`
+        // when the new key lives in the same shard.
+        let (mut old_map, mut new_map) = match old_idx.cmp(&new_idx) {
+            std::cmp::Ordering::Equal => (lock_shard(old_idx), None),
+            std::cmp::Ordering::Less => {
+                let old_map = lock_shard(old_idx);
+                (old_map, Some(lock_shard(new_idx)))
+            }
+            std::cmp::Ordering::Greater => {
+                let new_map = lock_shard(new_idx);
+                (lock_shard(old_idx), Some(new_map))
+            }
+        };
+        let mut info = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if info.key == new {
+            // Another handle of the same generation already migrated it.
+            return Ok(());
+        }
+        if info.key != old {
+            return Err(FrankenError::internal(
+                "Unix inode generation is registered under an unexpected key",
+            ));
+        }
+        let collides = |map: &HashMap<InodeKey, Arc<Mutex<InodeInfo>>>| {
+            map.get(&new)
+                .is_some_and(|existing| !Arc::ptr_eq(existing, inode_info))
+        };
+        if new_map
+            .as_deref()
+            .map_or_else(|| collides(&old_map), collides)
+        {
+            return Err(FrankenError::internal(
+                "Unix inode table already maps the refreshed identity to another generation",
+            ));
+        }
+        if old_map
+            .get(&old)
+            .is_some_and(|existing| Arc::ptr_eq(existing, inode_info))
+        {
+            old_map.remove(&old);
+        }
+        match new_map.as_deref_mut() {
+            Some(new_map) => new_map.insert(new, Arc::clone(inode_info)),
+            None => old_map.insert(new, Arc::clone(inode_info)),
+        };
+        info.key = new;
+        Ok(())
+    }
+
+    /// Remove the exact inode generation once it is truly quiescent.
+    ///
+    /// `n_ref == 0` alone is not sufficient: closed `UnixFile`s and any other
+    /// surviving `Arc<File>` clones can still keep the canonical fd alive. If we
+    /// evict the table entry too early, a concurrent reopen can install a second
+    /// canonical fd generation for the same inode.
+    ///
+    /// The generation is looked up under the key it is registered under NOW
+    /// (`InodeInfo::key`), not the key the dropping handle captured at open:
+    /// after a GH#416 migration the two differ for every handle opened during
+    /// the placeholder phase, and finalizing under the stale key would leave
+    /// the live entry (and its canonical descriptor) in the table forever —
+    /// where a later file that reuses the cluster number would find it.
+    fn finish_handle_drop(&self, inode_info: Arc<Mutex<InodeInfo>>, file: Arc<File>) {
+        let (key, mut map) = loop {
+            let current_key = inode_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .key;
+            let map = self.shards[self.shard_idx(current_key)]
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Shard before inode is the table's lock order; re-check the key
+            // under the shard mutex so a migration that raced the unlocked
+            // read above cannot leave us holding the wrong shard.
+            let settled_key = inode_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .key;
+            if settled_key == current_key {
+                break (current_key, map);
+            }
+            drop(map);
+        };
+
+        if let Some(current) = map.get(&key) {
+            if !Arc::ptr_eq(current, &inode_info) {
+                // A stale descriptor for the same inode can erase locks held by
+                // the current generation when it closes. Defer it into the
+                // current lock domain if any claim is live; otherwise close it
+                // under the shard+inode critical section.
+                let mut current_guard = current
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if current_guard.has_lock_claims() {
+                    current_guard.deferred_close_files.push(file);
+                } else {
+                    drop(file);
+                }
+                drop(current_guard);
+                drop(inode_info);
+                return;
+            }
+
+            let mut guard = current
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if guard.n_ref == 0 {
+                guard.close_deferred_files_if_unlocked();
+            }
+            let remove = guard.n_ref == 0
+                && !guard.has_lock_claims()
+                && guard.deferred_close_files.is_empty()
+                && Arc::ptr_eq(&guard.file, &file)
+                && Arc::strong_count(&file) == 2
+                && Arc::strong_count(&inode_info) == 2;
+            drop(guard);
+
+            // The closing handle's descriptor must disappear before the table
+            // entry becomes reusable. Otherwise a new generation could lock a
+            // second descriptor and then lose that lock when this Drop closes.
+            drop(file);
+            if remove {
+                let removed = map.remove(&key);
+                drop(removed);
+                drop(inode_info);
+            }
+        } else {
+            drop(file);
+            drop(inode_info);
+        }
+    }
+}
+
+/// The singleton global inode table for the process.
+fn global_inode_table() -> &'static InodeTable {
+    static TABLE: OnceLock<InodeTable> = OnceLock::new();
+    TABLE.get_or_init(InodeTable::new)
+}
+
+// ---------------------------------------------------------------------------
+// SHM table — per-process SHM region/lock coalescing
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default)]
+struct ShmSlotState {
+    shared_holders: HashMap<u64, u32>,
+    exclusive_owner: Option<u64>,
+}
+
+#[derive(Debug)]
+struct ShmInfo {
+    file: Arc<File>,
+    regions: HashMap<u32, ShmRegion>,
+    slots: Vec<ShmSlotState>,
+    owner_refs: HashMap<u64, u32>,
+    /// Mapping owners keep the descriptor/locks alive after normal unmap.
+    mapping_owners: HashSet<u64>,
+    /// Terminal receipt: this canonical pathname was unlinked under authority.
+    namespace_unlinked: bool,
+}
+
+impl ShmInfo {
+    fn new(file: Arc<File>) -> Self {
+        // Slots 0..WAL_TOTAL_LOCKS are the 8 legacy WAL lock bytes (120-127).
+        // Slot WAL_TOTAL_LOCKS is the DMS ("deadman switch") byte (128) used by
+        // SQLite to coordinate first-opener truncation of `*-shm`.
+        let slot_count =
+            usize::try_from(WAL_TOTAL_LOCKS.saturating_add(1)).expect("WAL lock count fits usize");
+        Self {
+            file,
+            regions: HashMap::new(),
+            slots: std::iter::repeat_with(ShmSlotState::default)
+                .take(slot_count)
+                .collect(),
+            owner_refs: HashMap::new(),
+            mapping_owners: HashSet::new(),
+            namespace_unlinked: false,
+        }
+    }
+
+    /// Read `aReadMark[0..5]` from SHM segment 0 (native byte order).
+    ///
+    /// Returns zeros if segment 0 has not been mapped yet (pre-initialization
+    /// state). Once mapped, reads directly from the mmap'd `*-shm` file,
+    /// making values visible across all processes sharing the SHM.
+    fn read_marks(&self) -> [u32; WAL_NREADER_USIZE] {
+        let Some(region_0) = self.regions.get(&0) else {
+            return [0; WAL_NREADER_USIZE];
+        };
+        if region_0.len() < SHM_READ_MARK_OFFSET + WAL_NREADER_USIZE * 4 {
+            return [0; WAL_NREADER_USIZE];
+        }
+        let mut marks = [0u32; WAL_NREADER_USIZE];
+        for (i, mark) in marks.iter_mut().enumerate() {
+            let Ok(value) =
+                region_0.atomic_load_u32_ne(SHM_READ_MARK_OFFSET + i * 4, Ordering::Acquire)
+            else {
+                return [0; WAL_NREADER_USIZE];
+            };
+            *mark = value;
+        }
+        marks
+    }
+}
+
+struct ShmTable {
+    map: Mutex<HashMap<PathBuf, Arc<Mutex<ShmInfo>>>>,
+}
+
+impl ShmTable {
+    fn new() -> Self {
+        Self {
+            map: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn get_or_open_and_register(
+        &self,
+        path: PathBuf,
+        owner_id: u64,
+        create: bool,
+    ) -> Result<Arc<Mutex<ShmInfo>>> {
+        self.get_or_open_and_register_with(path, owner_id, create, || {})
+    }
+
+    fn get_or_open_and_register_with(
+        &self,
+        path: PathBuf,
+        owner_id: u64,
+        create: bool,
+        before_register: impl FnOnce(),
+    ) -> Result<Arc<Mutex<ShmInfo>>> {
+        // IMPORTANT: POSIX fcntl locks are per-process. If we open and then close a new
+        // fd to an already-locked `*-shm` file, we can drop all locks held by this
+        // process on that file. To avoid that, only ever open `*-shm` while holding
+        // this mutex and only when we're definitely creating the canonical entry.
+        // Owner registration is covered by the same table lock. Otherwise the
+        // last old owner could remove the entry after a new opener cloned it but
+        // before that opener made its ownership visible, splitting the in-process
+        // SHM lock domain.
+        let mut map = self
+            .map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let info = if let Some(existing) = map.get(&path) {
+            if existing
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .namespace_unlinked
+            {
+                // A failed post-unlink cleanup still owns this old inode.
+                // Never attach a new caller to its now-orphaned descriptor.
+                return Err(FrankenError::Busy);
+            }
+            Arc::clone(existing)
+        } else {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(create)
+                .truncate(false)
+                .open(&path)
+                .map_err(|error| {
+                    if !create && error.kind() == std::io::ErrorKind::NotFound {
+                        FrankenError::CannotOpen { path: path.clone() }
+                    } else {
+                        FrankenError::Io(error)
+                    }
+                })?;
+
+            let info = Arc::new(Mutex::new(ShmInfo::new(Arc::new(file))));
+            map.insert(path, Arc::clone(&info));
+            info
+        };
+
+        before_register();
+        {
+            let mut guard = info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard.owner_refs.entry(owner_id).or_insert(0) += 1;
+        }
+        drop(map);
+        Ok(info)
+    }
+
+    fn finish_owner_release(&self, path: &Path, expected: Arc<Mutex<ShmInfo>>) {
+        let mut map = self
+            .map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = map.get(path) {
+            if !Arc::ptr_eq(entry, &expected) {
+                drop(expected);
+                return;
+            }
+            let info = entry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // No old canonical fd may close after a new generation opens.
+            // A surviving local observer keeps this canonical entry reusable;
+            // it holds no fence after the last registered owner has drained.
+            let retire = info.owner_refs.is_empty()
+                && info.mapping_owners.is_empty()
+                && (info.namespace_unlinked
+                    || (Arc::strong_count(&expected) == 2 && Arc::strong_count(&info.file) == 1));
+            drop(info);
+            if retire {
+                let removed = map.remove(path);
+                drop(removed);
+                drop(expected);
+                return;
+            }
+        }
+        drop(expected);
+    }
+}
+
+fn global_shm_table() -> &'static ShmTable {
+    static TABLE: OnceLock<ShmTable> = OnceLock::new();
+    TABLE.get_or_init(ShmTable::new)
+}
+
+static SHM_OWNER_SEQ: AtomicU64 = AtomicU64::new(1);
+
+fn next_shm_owner_id() -> u64 {
+    SHM_OWNER_SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+fn sqlite_shm_path(path: &Path) -> PathBuf {
+    let mut shm = path.as_os_str().to_owned();
+    shm.push("-shm");
+    PathBuf::from(shm)
+}
+
+// ---------------------------------------------------------------------------
+// bd-sz9j5: foreign WAL-participation probe
+// ---------------------------------------------------------------------------
+
+/// Outcome of one lock-neutral `F_GETLK` probe through a temporary descriptor.
+enum TempDescriptorProbe {
+    /// Another process holds a lock conflicting with a write lock on the range.
+    Locked,
+    /// No other process holds a lock on the range.
+    Unlocked,
+    /// Not provable (this process owns the file, the file changed or is
+    /// missing, or the filesystem cannot report byte-range locks).
+    Unknown,
+}
+
+/// Whether some other process holds any lock on `[start, start + len)` of
+/// `file`. Probe failures (including flock-only filesystems that reject
+/// byte-range queries) are `None`, never a verdict.
+fn foreign_lock_on_range(file: &File, start: u64, len: u64) -> Option<bool> {
+    let flock = posix_getlk(file, libc::F_WRLCK, start, len).ok()?;
+    #[allow(clippy::cast_possible_truncation)]
+    let unlocked: libc::c_short = libc::F_UNLCK as libc::c_short;
+    Some(flock.l_type != unlocked)
+}
+
+/// Whether `F_GETLK` on this file's filesystem reports other processes'
+/// locks. On Linux it does on every filesystem fsqlite locks with fcntl. On
+/// other Unixes a non-local mount (AFP, SMB, ...) may have downgraded peers to
+/// whole-file `flock(2)` (see [`flock_whole_file_fallback`]), which `F_GETLK`
+/// cannot see, so only local filesystems can produce a verdict.
+#[cfg(target_os = "linux")]
+fn byte_range_locks_are_reportable(_file: &File) -> bool {
+    true
+}
+
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
+fn byte_range_locks_are_reportable(file: &File) -> bool {
+    let mut stat = std::mem::MaybeUninit::<libc::statfs>::zeroed();
+    // SAFETY: `file` is an open descriptor and `stat` points to writable
+    // memory of the exact `struct statfs` size the call fills.
+    let ret = unsafe { libc::fstatfs(std::os::fd::AsRawFd::as_raw_fd(file), stat.as_mut_ptr()) };
+    if ret != 0 {
+        return false;
+    }
+    // SAFETY: `fstatfs` returned 0, so it initialized the whole struct.
+    let stat = unsafe { stat.assume_init() };
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let local = u64::from(stat.f_flags) & (libc::MNT_LOCAL as u64) != 0;
+    local
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd")))]
+fn byte_range_locks_are_reportable(_file: &File) -> bool {
+    false
+}
+
+impl InodeTable {
+    /// Probe the main file at `path` through a temporary read-only descriptor
+    /// only while no descriptor for its inode is registered in this process.
+    ///
+    /// Closing any descriptor of an inode drops every classic POSIX lock this
+    /// process holds on it, so the shard mutex is held from the registration
+    /// check through the close: no thread of this process can register (and
+    /// lock) the inode in between. A registered inode means this process
+    /// already participates, and its own locks are invisible to `F_GETLK`.
+    fn probe_unregistered_main_file(&self, path: &Path) -> TempDescriptorProbe {
+        use std::os::unix::fs::MetadataExt;
+        let Ok(meta) = fs::metadata(path) else {
+            return TempDescriptorProbe::Unknown;
+        };
+        let key = FileIdentity::from_unix_parts(meta.dev(), meta.ino());
+        let map = self.shards[self.shard_idx(key)]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if map.contains_key(&key) {
+            return TempDescriptorProbe::Unknown;
+        }
+        let Ok(file) = OpenOptions::new().read(true).open(path) else {
+            return TempDescriptorProbe::Unknown;
+        };
+        if inode_key_from_file(&file).ok() != Some(key) {
+            // The path was replaced after the stat. This descriptor names an
+            // inode whose registration was never checked; closing it could
+            // drop another connection's locks, so retain it for the process
+            // lifetime instead (a vanishingly rare race).
+            std::mem::forget(file);
+            return TempDescriptorProbe::Unknown;
+        }
+        // Only a WAL-mode database (header bytes 18/19 == 2) has WAL peers.
+        let mut header = [0_u8; 20];
+        let is_wal = std::os::unix::fs::FileExt::read_exact_at(&file, &mut header, 0).is_ok()
+            && header[18] == 2
+            && header[19] == 2;
+        let verdict = if is_wal && byte_range_locks_are_reportable(&file) {
+            match foreign_lock_on_range(&file, SHARED_FIRST, SHARED_SIZE) {
+                Some(true) => TempDescriptorProbe::Locked,
+                Some(false) => TempDescriptorProbe::Unlocked,
+                None => TempDescriptorProbe::Unknown,
+            }
+        } else {
+            TempDescriptorProbe::Unknown
+        };
+        drop(file);
+        drop(map);
+        verdict
+    }
+}
+
+impl ShmTable {
+    /// Probe the stock `-shm` DMS byte through a temporary descriptor only
+    /// while this process has no canonical `-shm` entry (see
+    /// [`InodeTable::probe_unregistered_main_file`] for why the table lock
+    /// spans the close). A missing `-shm` has no DMS holder.
+    fn probe_unregistered_dms(&self, shm_path: &Path) -> TempDescriptorProbe {
+        let map = self
+            .map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if map.contains_key(shm_path) {
+            return TempDescriptorProbe::Unknown;
+        }
+        let file = match OpenOptions::new().read(true).open(shm_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return TempDescriptorProbe::Unlocked;
+            }
+            Err(_) => return TempDescriptorProbe::Unknown,
+        };
+        let verdict = match foreign_lock_on_range(&file, sqlite_shm_dms_lock_byte(), 1) {
+            Some(true) => TempDescriptorProbe::Locked,
+            Some(false) => TempDescriptorProbe::Unlocked,
+            None => TempDescriptorProbe::Unknown,
+        };
+        drop(file);
+        drop(map);
+        verdict
+    }
+}
+
+/// bd-sz9j5: lock-neutral probe for another process's 0.4.x-style WAL
+/// participation in the database at `path`.
+///
+/// Every 0.4.x WAL connection holds, for its whole attachment, a SHARED claim
+/// on the main file's SQLite shared-lock range (0.4.4+) and the stock `-shm`
+/// DMS byte (0.4.0+). A pre-0.4 engine holds neither: it never maps `-shm`
+/// outside its tests and takes main-file locks only inside transactions.
+/// Takes no lock and never waits.
+pub(crate) fn probe_foreign_wal_participation(path: &Path) -> ForeignWalParticipation {
+    match global_inode_table().probe_unregistered_main_file(path) {
+        TempDescriptorProbe::Locked => return ForeignWalParticipation::Participant,
+        TempDescriptorProbe::Unknown => return ForeignWalParticipation::Unknown,
+        TempDescriptorProbe::Unlocked => {}
+    }
+    match global_shm_table().probe_unregistered_dms(&sqlite_shm_path(path)) {
+        TempDescriptorProbe::Locked => ForeignWalParticipation::Participant,
+        TempDescriptorProbe::Unlocked => ForeignWalParticipation::NoParticipant,
+        TempDescriptorProbe::Unknown => ForeignWalParticipation::Unknown,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UnixVfs
+// ---------------------------------------------------------------------------
+
+/// A VFS backed by the real Unix filesystem with POSIX advisory locking.
+#[derive(Debug)]
+pub struct UnixVfs;
+
+impl UnixVfs {
+    /// Create a new Unix VFS instance.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for UnixVfs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn unix_access_mode(flags: AccessFlags) -> UnixAccessFlags {
+    if flags == AccessFlags::EXISTS {
+        UnixAccessFlags::F_OK
+    } else if flags == AccessFlags::READ {
+        UnixAccessFlags::R_OK
+    } else {
+        UnixAccessFlags::R_OK | UnixAccessFlags::W_OK
+    }
+}
+
+fn open_with_optional_readonly_fallback<T>(
+    requested_readwrite: bool,
+    promote_readonly_to_readwrite: bool,
+    mut open: impl FnMut(bool) -> io::Result<T>,
+) -> io::Result<T> {
+    let write = requested_readwrite || promote_readonly_to_readwrite;
+    match open(write) {
+        Ok(file) => Ok(file),
+        Err(_) if promote_readonly_to_readwrite => open(false),
+        Err(error) => Err(error),
+    }
+}
+
+impl Vfs for UnixVfs {
+    type File = UnixFile;
+
+    fn name(&self) -> &'static str {
+        "unix"
+    }
+
+    fn open(
+        &self,
+        cx: &Cx,
+        path: Option<&Path>,
+        flags: VfsOpenFlags,
+    ) -> Result<(Self::File, VfsOpenFlags)> {
+        retry_deferred_unix_cleanups();
+
+        let is_temp = path.is_none();
+        let delete_on_close = flags.contains(VfsOpenFlags::DELETEONCLOSE) || is_temp;
+        let resolved = if let Some(p) = path {
+            p.to_path_buf()
+        } else {
+            let mut rng_buf = [0u8; 16];
+            self.randomness(cx, &mut rng_buf);
+            let mut hex = String::with_capacity(32);
+            for b in rng_buf {
+                write!(hex, "{b:02x}").expect("writing to a String should not fail");
+            }
+            std::env::temp_dir().join(format!("fsqlite_{hex}.db"))
+        };
+
+        let create_new = is_temp
+            || (flags.contains(VfsOpenFlags::CREATE) && flags.contains(VfsOpenFlags::EXCLUSIVE));
+
+        let is_create = is_temp || flags.contains(VfsOpenFlags::CREATE);
+        let requested_rw = is_temp || flags.contains(VfsOpenFlags::READWRITE) || is_create;
+        let promote_readonly_to_rw = !requested_rw
+            && path.is_some()
+            && self
+                .access(cx, &resolved, AccessFlags::READWRITE)
+                .unwrap_or(false);
+
+        let open_file = |write| {
+            OpenOptions::new()
+                .read(true)
+                // Prefer a canonical read-write fd whenever the underlying file is
+                // writable, even for read-only callers. Otherwise a later writable
+                // open in the same process would clone a read-only canonical fd and
+                // fail on writes or lock-related syscalls.
+                .write(write)
+                .create(is_create)
+                .create_new(create_new)
+                .open(&resolved)
+        };
+        let reused = if !create_new && !delete_on_close && flags.contains(VfsOpenFlags::MAIN_DB) {
+            global_inode_table().reuse_retained_file(&resolved, requested_rw)
+        } else {
+            None
+        };
+        let (inode_info, file) = if let Some(reused) = reused {
+            reused
+        } else {
+            let file = open_with_optional_readonly_fallback(
+                requested_rw,
+                promote_readonly_to_rw,
+                open_file,
+            )
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    FrankenError::CannotOpen {
+                        path: resolved.clone(),
+                    }
+                } else {
+                    FrankenError::Io(e)
+                }
+            })?;
+
+            // Derive identity from the descriptor actually opened, never from
+            // a path stat that could race a rename to a different inode.
+            let inode_key = match inode_key_from_file(&file) {
+                Ok(key) => key,
+                Err(error) => {
+                    // Closing an ordinary fd with unknown identity could erase
+                    // a live inode's POSIX locks. Fail closed in this exceptional
+                    // case rather than silently unlocking a database generation.
+                    std::mem::forget(file);
+                    return Err(error);
+                }
+            };
+            global_inode_table().register_opened_file(inode_key, file)?
+        };
+        let inode_key = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .key;
+
+        let mut out_flags = flags;
+        if is_create {
+            out_flags |= VfsOpenFlags::READWRITE;
+        }
+        if is_temp {
+            // Temp files are always created read-write.
+            out_flags |= VfsOpenFlags::READWRITE;
+        }
+        let shm_path = sqlite_shm_path(&resolved);
+
+        let unix_file = UnixFile {
+            file: Some(file),
+            path: resolved,
+            open_flags: out_flags,
+            lock_level: LockLevel::None,
+            wal_lifetime_claim: WalLifetimeClaim::Unclaimed,
+            transient_shared_pending_gate: false,
+            external_shared_snapshot_attempt: None,
+            external_maintenance_attempt: None,
+            external_append_attempt: None,
+            delete_on_close,
+            closed: false,
+            inode_key,
+            inode_info: Some(inode_info),
+            shm_owner_id: next_shm_owner_id(),
+            shm_path,
+            shm_info: None,
+            shm_dms_lifetime_claim: false,
+            busy_timeout_ms: 0,
+        };
+
+        Ok((unix_file, out_flags))
+    }
+
+    fn delete(&self, _cx: &Cx, path: &Path, sync_dir: bool) -> Result<()> {
+        fs::remove_file(path).map_err(FrankenError::Io)?;
+
+        if sync_dir {
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            // A caller requesting a durable namespace deletion must learn if
+            // the directory barrier failed. Silently swallowing this error
+            // can leave a supposedly-removed rollback journal present after
+            // a crash and turn a committed image into a rollback candidate.
+            File::open(parent)?.sync_all()?;
+        }
+
+        Ok(())
+    }
+
+    fn sync_parent_directory(&self, _cx: &Cx, path: &Path) -> Result<()> {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    }
+
+    fn access(&self, _cx: &Cx, path: &Path, flags: AccessFlags) -> Result<bool> {
+        // Match SQLite's Unix VFS without opening an extra descriptor: closing
+        // any descriptor for an inode can release this process's fcntl locks.
+        Ok(unix_access(path, unix_access_mode(flags)).is_ok())
+    }
+
+    fn path_entry_exists(&self, _cx: &Cx, path: &Path) -> Result<bool> {
+        match fs::symlink_metadata(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(FrankenError::Io(error)),
+        }
+    }
+
+    fn path_file_identity(&self, _cx: &Cx, path: &Path) -> Result<Option<FileIdentity>> {
+        use std::os::unix::fs::MetadataExt;
+        // `stat` follows symlinks exactly as `open` does, and opens no
+        // descriptor, so it cannot disturb this process's fcntl locks.
+        Ok(fs::metadata(path)
+            .ok()
+            .map(|meta| FileIdentity::from_unix_parts(meta.dev(), meta.ino())))
+    }
+
+    fn probe_foreign_wal_participation(
+        &self,
+        _cx: &Cx,
+        path: &Path,
+    ) -> Result<ForeignWalParticipation> {
+        Ok(probe_foreign_wal_participation(path))
+    }
+
+    fn full_pathname(&self, _cx: &Cx, path: &Path) -> Result<PathBuf> {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(FrankenError::Io)?
+                .join(path)
+        };
+
+        match absolute.canonicalize() {
+            Ok(canonical) => Ok(canonical),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let parent = absolute.parent().ok_or_else(|| FrankenError::CannotOpen {
+                    path: absolute.clone(),
+                })?;
+                let file_name = absolute
+                    .file_name()
+                    .ok_or_else(|| FrankenError::CannotOpen {
+                        path: absolute.clone(),
+                    })?;
+                let canonical_parent = parent.canonicalize().map_err(FrankenError::Io)?;
+                Ok(canonical_parent.join(file_name))
+            }
+            Err(error) => Err(FrankenError::Io(error)),
+        }
+    }
+
+    fn randomness(&self, _cx: &Cx, buf: &mut [u8]) {
+        static FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
+
+        // Use /dev/urandom for real randomness; fall back to deterministic
+        // xorshift if unavailable (for hermetic test environments).
+        if let Ok(mut f) = File::open("/dev/urandom")
+            && f.read_exact(buf).is_ok()
+        {
+            return;
+        }
+
+        let seq = FALLBACK_SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut state: u64 = 0x5DEE_CE66_D1A4_F681 ^ seq.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        for chunk in buf.chunks_mut(8) {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let bytes = state.to_le_bytes();
+            for (dst, &src) in chunk.iter_mut().zip(bytes.iter()) {
+                *dst = src;
+            }
+        }
+    }
+}
+
+/// Extract the (device, inode) pair from an open file for lock coalescing.
+fn inode_key_from_file(file: &File) -> Result<InodeKey> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = file.metadata().map_err(FrankenError::Io)?;
+    Ok(FileIdentity::from_unix_parts(meta.dev(), meta.ino()))
+}
+
+// ---------------------------------------------------------------------------
+// UnixFile
+// ---------------------------------------------------------------------------
+
+/// Armed baseline for one external shared-snapshot acquisition attempt.
+#[derive(Debug, Clone, Copy)]
+struct UnixExternalSharedSnapshotAttempt {
+    prior_main_level: LockLevel,
+}
+
+/// Exact ownership of the physical append's WRITE and main-file fences.
+#[derive(Debug, Clone, Copy)]
+struct UnixExternalAppendAttempt {
+    prior_main_level: LockLevel,
+    main_restore_pending: bool,
+    write_acquired: bool,
+    acquisition_complete: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UnixExternalMaintenanceAttempt {
+    prior_main_level: LockLevel,
+    main_restore_pending: bool,
+    wal_mode: bool,
+    /// Distinguishes recovery from ordinary maintenance in retained-owner diagnostics.
+    recovery_mode: bool,
+    /// Bit `slot` is set only when this attempt newly acquired that WAL slot.
+    newly_acquired_wal_slots: u8,
+}
+
+impl UnixExternalMaintenanceAttempt {
+    const fn acquired_slot(self, slot: u32) -> bool {
+        self.newly_acquired_wal_slots & (1_u8 << slot) != 0
+    }
+
+    const fn record_acquired_slot(&mut self, slot: u32) {
+        self.newly_acquired_wal_slots |= 1_u8 << slot;
+    }
+
+    const fn record_released_slot(&mut self, slot: u32) {
+        self.newly_acquired_wal_slots &= !(1_u8 << slot);
+    }
+}
+
+/// This handle's ownership of an inode's WAL attachment claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WalLifetimeClaim {
+    Unclaimed,
+    Held,
+}
+
+/// A file handle opened by [`UnixVfs`].
+#[derive(Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent file lifecycle, PENDING-byte, and DMS ownership flags"
+)]
+pub struct UnixFile {
+    file: Option<Arc<File>>,
+    path: PathBuf,
+    /// The caller's access mode, independent of the shared canonical fd's
+    /// writable capability. Read-only readers may share WAL marks, not publish them.
+    open_flags: VfsOpenFlags,
+    lock_level: LockLevel,
+    /// Independent of the transaction prefix; retained until SHM unmap/close.
+    wal_lifetime_claim: WalLifetimeClaim,
+    /// A transient SHARED-acquisition read lock on SQLite's PENDING byte.
+    ///
+    /// This remains armed until the raw unlock succeeds. It is deliberately
+    /// separate from `lock_level`, because an interrupted attempt can retain
+    /// this one byte while holding either no complete main-lock prefix or a
+    /// complete SHARED prefix.
+    transient_shared_pending_gate: bool,
+    external_shared_snapshot_attempt: Option<UnixExternalSharedSnapshotAttempt>,
+    external_maintenance_attempt: Option<UnixExternalMaintenanceAttempt>,
+    external_append_attempt: Option<UnixExternalAppendAttempt>,
+    delete_on_close: bool,
+    closed: bool,
+    inode_key: InodeKey,
+    inode_info: Option<Arc<Mutex<InodeInfo>>>,
+    shm_owner_id: u64,
+    shm_path: PathBuf,
+    shm_info: Option<Arc<Mutex<ShmInfo>>>,
+    /// One DMS SHARED claim for this attachment, independent of compatibility
+    /// helper nesting. Retained through failed unmap/close and deferred cleanup.
+    shm_dms_lifetime_claim: bool,
+    /// Busy timeout for cross-process lock contention (milliseconds).
+    /// When > 0, `posix_lock` retries with exponential backoff instead of
+    /// returning `Ok(false)` immediately on `EAGAIN`/`EACCES`.
+    busy_timeout_ms: u64,
+}
+
+impl UnixFile {
+    fn file_ref(&self) -> &File {
+        self.file
+            .as_deref()
+            .expect("open UnixFile must retain its canonical descriptor")
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn canonical_file(&self) -> Result<Arc<File>> {
+        self.file
+            .as_ref()
+            .map(Arc::clone)
+            .ok_or_else(|| FrankenError::internal("unix file is closed"))
+    }
+
+    fn inode_info_ref(&self) -> &Arc<Mutex<InodeInfo>> {
+        self.inode_info
+            .as_ref()
+            .expect("open UnixFile must retain its inode state")
+    }
+
+    fn release_transient_shared_pending_gate_state(
+        info: &mut InodeInfo,
+        transient_shared_pending_gate: &mut bool,
+    ) -> Result<()> {
+        if !*transient_shared_pending_gate {
+            return Ok(());
+        }
+        if info.n_transient_shared_pending == 0 {
+            return Err(FrankenError::internal(
+                "Unix SHARED acquisition owns a transient PENDING gate without an inode claim",
+            ));
+        }
+
+        // Raw first, state second. If another coalesced transient claim or a
+        // real PENDING writer remains, its process-wide record lock still
+        // covers this byte and no syscall is needed for this one release.
+        if info.n_transient_shared_pending == 1 && info.n_pending == 0 {
+            posix_unlock(&*info.file, PENDING_BYTE, 1)?;
+        }
+        info.n_transient_shared_pending -= 1;
+        *transient_shared_pending_gate = false;
+        info.close_deferred_files_if_unlocked();
+        Ok(())
+    }
+
+    /// Restore the highest valid main-lock prefix no lower than `target`.
+    ///
+    /// Every raw transition precedes its in-memory publication. A failed raw
+    /// unlock therefore leaves both the handle and the inode counters at the
+    /// last complete prefix, which makes a later retry exact.
+    fn rollback_main_lock_state(
+        info: &mut InodeInfo,
+        lock_level: &mut LockLevel,
+        transient_shared_pending_gate: &mut bool,
+        target: LockLevel,
+    ) -> Result<()> {
+        Self::release_transient_shared_pending_gate_state(info, transient_shared_pending_gate)?;
+
+        if target > *lock_level {
+            return Err(FrankenError::internal(format!(
+                "Unix main-lock restore target {target:?} exceeds retained prefix {lock_level:?}"
+            )));
+        }
+
+        if *lock_level >= LockLevel::Exclusive && target < LockLevel::Exclusive {
+            if info.n_exclusive == 0 {
+                return Err(FrankenError::internal(
+                    "Unix EXCLUSIVE handle has no inode EXCLUSIVE claim",
+                ));
+            }
+            if info.n_exclusive == 1 {
+                if info.n_shared == 0 && info.n_wal_lifetime == 0 {
+                    posix_unlock(&*info.file, SHARED_FIRST, SHARED_SIZE)?;
+                } else if !posix_lock(&*info.file, libc::F_RDLCK, SHARED_FIRST, SHARED_SIZE)? {
+                    return Err(FrankenError::Busy);
+                }
+            }
+            info.n_exclusive -= 1;
+            *lock_level = LockLevel::Pending;
+        }
+
+        if *lock_level >= LockLevel::Pending && target < LockLevel::Pending {
+            if info.n_pending == 0 {
+                return Err(FrankenError::internal(
+                    "Unix PENDING handle has no inode PENDING claim",
+                ));
+            }
+            if info.n_pending == 1 {
+                if info.n_transient_shared_pending == 0 {
+                    posix_unlock(&*info.file, PENDING_BYTE, 1)?;
+                } else if !posix_lock(&*info.file, libc::F_RDLCK, PENDING_BYTE, 1)? {
+                    return Err(FrankenError::Busy);
+                }
+            }
+            info.n_pending -= 1;
+            *lock_level = LockLevel::Reserved;
+        }
+
+        if *lock_level >= LockLevel::Reserved && target < LockLevel::Reserved {
+            if info.n_reserved == 0 {
+                return Err(FrankenError::internal(
+                    "Unix RESERVED handle has no inode RESERVED claim",
+                ));
+            }
+            if info.n_reserved == 1 {
+                posix_unlock(&*info.file, RESERVED_BYTE, 1)?;
+            }
+            info.n_reserved -= 1;
+            *lock_level = LockLevel::Shared;
+        }
+
+        if *lock_level >= LockLevel::Shared && target < LockLevel::Shared {
+            if info.n_shared == 0 {
+                return Err(FrankenError::internal(
+                    "Unix SHARED handle has no inode SHARED claim",
+                ));
+            }
+            if info.n_shared == 1 && info.n_wal_lifetime == 0 && info.n_exclusive == 0 {
+                posix_unlock(&*info.file, SHARED_FIRST, SHARED_SIZE)?;
+            }
+            info.n_shared -= 1;
+            *lock_level = LockLevel::None;
+        }
+
+        info.close_deferred_files_if_unlocked();
+        Ok(())
+    }
+
+    fn return_after_main_lock_failure<T>(
+        info: &mut InodeInfo,
+        lock_level: &mut LockLevel,
+        transient_shared_pending_gate: &mut bool,
+        prior_level: LockLevel,
+        lock_error: FrankenError,
+    ) -> Result<T> {
+        match Self::rollback_main_lock_state(
+            info,
+            lock_level,
+            transient_shared_pending_gate,
+            prior_level,
+        ) {
+            Ok(()) => Err(lock_error),
+            Err(rollback_error) => Err(FrankenError::internal(format!(
+                "Unix main-lock acquisition failed and retained a retryable partial prefix: lock={lock_error}; rollback={rollback_error}"
+            ))),
+        }
+    }
+
+    fn acquire_external_wal_slot(&mut self, cx: &Cx, slot: u32) -> Result<bool> {
+        let shm_info = self.ensure_shm_info(cx)?;
+        let mut info = shm_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.acquire_shm_exclusive_slot(&mut info, slot)
+    }
+
+    fn release_external_wal_slot(&self, slot: u32) -> Result<()> {
+        let shm_info = self.shm_info.as_ref().ok_or_else(|| {
+            FrankenError::internal(format!(
+                "Unix external maintenance retained WAL slot {slot} without SHM state"
+            ))
+        })?;
+        let mut info = shm_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.release_shm_exclusive_slot(&mut info, slot)
+    }
+
+    fn acquire_checkpoint_reader_slot(&mut self, cx: &Cx, reader: u32) -> Result<()> {
+        // A checkpoint may neither replace its own live read mark nor borrow
+        // an exclusive claim that belongs to an earlier operation.
+        checkpoint_or_abort(cx)?;
+        if self
+            .external_maintenance_attempt
+            .is_some_and(|attempt| !attempt.wal_mode)
+        {
+            return Err(FrankenError::BusyRecovery);
+        }
+        let slot = wal_reader_lock_slot(reader)?;
+        let shm_info = self.ensure_shm_info(cx)?;
+        let mut info = shm_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = &info.slots[usize::try_from(slot).expect("reader slot fits usize")];
+        if state.exclusive_owner.is_some() || !state.shared_holders.is_empty() {
+            return Err(FrankenError::Busy);
+        }
+        self.acquire_shm_exclusive_slot(&mut info, slot)?;
+        if let Some(attempt) = self.external_maintenance_attempt.as_mut() {
+            attempt.record_acquired_slot(slot);
+        }
+        Ok(())
+    }
+
+    fn release_checkpoint_reader_slot(&mut self, reader: u32) -> Result<()> {
+        let slot = wal_reader_lock_slot(reader)?;
+        if self
+            .external_maintenance_attempt
+            .is_some_and(|attempt| !attempt.acquired_slot(slot))
+        {
+            return Ok(());
+        }
+        self.release_external_wal_slot(slot)?;
+        if let Some(attempt) = self.external_maintenance_attempt.as_mut() {
+            attempt.record_released_slot(slot);
+        }
+        Ok(())
+    }
+
+    fn ensure_shm_info(&mut self, cx: &Cx) -> Result<Arc<Mutex<ShmInfo>>> {
+        self.ensure_shm_info_with_create(cx, true)
+    }
+
+    /// Establish physical backing before either publishing a larger WAL-index
+    /// extent or exposing a writable mapping (GH #506). Length alone is not an
+    /// allocation receipt: an interrupted older initializer may leave holes.
+    ///
+    /// Linux and Android allocate natively, which preserves concurrently
+    /// updated bytes and never borrows a writer lock from a peer. Where the
+    /// filesystem or the platform cannot preallocate, the file is extended
+    /// sparsely, exactly as releases up to 0.4.10 did: an unsupported
+    /// preallocation must never fail an open, and a reader never takes the
+    /// WAL WRITE lock or rewrites the live index to get it. Only a storage
+    /// failure (ENOSPC, EDQUOT, EIO, EFBIG) is returned.
+    fn ensure_wal_shm_backing(info: &ShmInfo, target_len: u64) -> Result<()> {
+        crate::unix_shm::ensure_shm_backing_or_sparse(&info.file, target_len)?;
+        Ok(())
+    }
+
+    fn ensure_shm_info_with_create(
+        &mut self,
+        cx: &Cx,
+        create: bool,
+    ) -> Result<Arc<Mutex<ShmInfo>>> {
+        if let Some(info) = &self.shm_info {
+            let info = Arc::clone(info);
+            self.retain_shm_dms_lifetime(&info)?;
+            return Ok(info);
+        }
+
+        self.acquire_wal_lifetime_claim(cx)?;
+
+        // If SHM open fails, the independent claim remains owned by this
+        // handle and is released by unmap/close (including deferred Drop).
+        // Non-extending map requests must not create a missing backing file.
+        // Existing canonical descriptors still share the same registration
+        // critical section, retaining the process-wide POSIX lock domain.
+        let info = global_shm_table().get_or_open_and_register(
+            self.shm_path.clone(),
+            self.shm_owner_id,
+            create,
+        )?;
+        self.shm_info = Some(Arc::clone(&info));
+        // Register the exact cleanup owner before this fallible raw claim.
+        // No mapping may escape while a stock first opener can take DMS
+        // EXCLUSIVE and truncate the backing file beneath our aliases.
+        self.retain_shm_dms_lifetime(&info)?;
+        Ok(info)
+    }
+
+    /// SQLite takes EXCLUSIVE on the main file to decide whether its WAL
+    /// connection is the last one. Keep a read claim for our entire SHM
+    /// attachment, even after a transaction restores its prior prefix.
+    /// Reuse the ordinary acquisition protocol so PENDING-byte exclusion
+    /// and partial-acquisition cleanup retain their existing guarantees.
+    /// Idempotent: an already-held claim is not counted twice.
+    fn acquire_wal_lifetime_claim(&mut self, cx: &Cx) -> Result<()> {
+        if self.wal_lifetime_claim == WalLifetimeClaim::Held {
+            return Ok(());
+        }
+        let prior_level = self.lock_level;
+        self.lock(cx, LockLevel::Shared)?;
+        let inode_info = Arc::clone(self.inode_info_ref());
+        let mut info = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(next_lifetime) = info.n_wal_lifetime.checked_add(1) else {
+            return Self::return_after_main_lock_failure(
+                &mut info,
+                &mut self.lock_level,
+                &mut self.transient_shared_pending_gate,
+                prior_level,
+                FrankenError::internal("Unix inode WAL lifetime count overflow"),
+            );
+        };
+        info.n_wal_lifetime = next_lifetime;
+        self.wal_lifetime_claim = WalLifetimeClaim::Held;
+        Self::rollback_main_lock_state(
+            &mut info,
+            &mut self.lock_level,
+            &mut self.transient_shared_pending_gate,
+            prior_level,
+        )
+    }
+
+    /// Whether the main file's header (bytes 18/19 == 2) says WAL mode.
+    fn main_header_is_wal(&self) -> bool {
+        let info = self
+            .inode_info_ref()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut header = [0_u8; 20];
+        std::os::unix::fs::FileExt::read_exact_at(&*info.file, &mut header, 0).is_ok()
+            && header[18] == 2
+            && header[19] == 2
+    }
+
+    fn retain_shm_dms_lifetime(&mut self, info: &Arc<Mutex<ShmInfo>>) -> Result<()> {
+        if !self.shm_dms_lifetime_claim {
+            let mut info = info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.acquire_shm_dms_shared(&mut info)?;
+            self.shm_dms_lifetime_claim = true;
+        }
+        Ok(())
+    }
+
+    fn release_wal_lifetime_claim(&mut self) -> Result<()> {
+        if self.wal_lifetime_claim == WalLifetimeClaim::Unclaimed {
+            return Ok(());
+        }
+        let inode_info = Arc::clone(self.inode_info_ref());
+        let mut info = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if info.n_wal_lifetime == 0 {
+            return Err(FrankenError::internal(
+                "Unix WAL lifetime owner has no inode claim",
+            ));
+        }
+        if info.n_wal_lifetime == 1 && info.n_shared == 0 && info.n_exclusive == 0 {
+            // Raw first: a failed unlock must keep the sole retry owner alive.
+            posix_unlock(&*info.file, SHARED_FIRST, SHARED_SIZE)?;
+        }
+        info.n_wal_lifetime -= 1;
+        self.wal_lifetime_claim = WalLifetimeClaim::Unclaimed;
+        info.close_deferred_files_if_unlocked();
+        Ok(())
+    }
+
+    fn acquire_external_maintenance_fence(
+        &mut self,
+        cx: &Cx,
+        wal_mode: bool,
+        main_level: LockLevel,
+        recovery_mode: bool,
+    ) -> Result<()> {
+        if self.external_append_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "cannot acquire Unix maintenance during a WAL append attempt",
+            ));
+        }
+        if self.external_shared_snapshot_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "cannot acquire Unix external maintenance during a shared-snapshot attempt",
+            ));
+        }
+        if self.external_maintenance_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "Unix external maintenance attempt is already armed",
+            ));
+        }
+
+        // The marker must exist before opening SHM or touching any raw lock.
+        self.external_maintenance_attempt = Some(UnixExternalMaintenanceAttempt {
+            prior_main_level: self.lock_level,
+            main_restore_pending: true,
+            wal_mode,
+            recovery_mode,
+            newly_acquired_wal_slots: 0,
+        });
+        if wal_mode {
+            for slot in [WAL_WRITE_LOCK, WAL_CKPT_LOCK] {
+                if self.acquire_external_wal_slot(cx, slot)?
+                    && let Some(attempt) = self.external_maintenance_attempt.as_mut()
+                {
+                    attempt.record_acquired_slot(slot);
+                }
+            }
+        }
+        self.lock(cx, main_level)
+    }
+
+    fn release_shm_owner_state(&mut self, delete: bool) -> Result<()> {
+        let Some(info_arc) = self.shm_info.as_ref().map(Arc::clone) else {
+            if delete {
+                return Err(FrankenError::Busy);
+            }
+            return Ok(());
+        };
+        if delete {
+            if self.lock_level != LockLevel::Exclusive {
+                return Err(FrankenError::Busy);
+            }
+            let cached = {
+                let mut info = info_arc
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if info.owner_refs.keys().any(|owner| {
+                    *owner != self.shm_owner_id && !info.mapping_owners.contains(owner)
+                }) {
+                    return Err(FrankenError::Busy);
+                }
+                std::mem::take(&mut info.regions)
+            };
+            // A cache-only mapping can retire here; external aliases retain
+            // independent DMS/main claims and make this request refuse below.
+            drop(cached);
+        }
+
+        let retired_regions = {
+            let mut info = info_arc
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if delete && !info.mapping_owners.is_empty() {
+                return Err(FrankenError::Busy);
+            }
+            let mut first_error: Option<FrankenError> = None;
+            let shm_file = Arc::clone(&info.file);
+
+            for slot in 0..WAL_TOTAL_LOCKS {
+                #[allow(clippy::cast_possible_truncation)]
+                let slot_idx = slot as usize;
+                let slot_state = &mut info.slots[slot_idx];
+
+                if slot_state.exclusive_owner == Some(self.shm_owner_id) {
+                    let Some(lock_byte) = wal_lock_byte(slot) else {
+                        continue;
+                    };
+                    let os_ok = if slot_state.shared_holders.is_empty() {
+                        match posix_unlock(&*shm_file, lock_byte, 1) {
+                            Ok(()) => true,
+                            Err(err) => {
+                                if first_error.is_none() {
+                                    first_error = Some(err);
+                                }
+                                false
+                            }
+                        }
+                    } else {
+                        match posix_lock(&*shm_file, libc::F_RDLCK, lock_byte, 1) {
+                            Ok(true) => true,
+                            Ok(false) => {
+                                if first_error.is_none() {
+                                    first_error = Some(FrankenError::Busy);
+                                }
+                                false
+                            }
+                            Err(err) => {
+                                if first_error.is_none() {
+                                    first_error = Some(err);
+                                }
+                                false
+                            }
+                        }
+                    };
+                    if os_ok {
+                        slot_state.exclusive_owner = None;
+                    }
+                }
+
+                if slot_state.shared_holders.contains_key(&self.shm_owner_id) {
+                    let Some(lock_byte) = wal_lock_byte(slot) else {
+                        continue;
+                    };
+                    let releasing_last_shared_holder = slot_state.exclusive_owner.is_none()
+                        && slot_state.shared_holders.len() == 1;
+                    let os_ok = if releasing_last_shared_holder {
+                        match posix_unlock(&*shm_file, lock_byte, 1) {
+                            Ok(()) => true,
+                            Err(err) => {
+                                if first_error.is_none() {
+                                    first_error = Some(err);
+                                }
+                                false
+                            }
+                        }
+                    } else {
+                        true
+                    };
+                    if os_ok {
+                        slot_state.shared_holders.remove(&self.shm_owner_id);
+                    }
+                }
+            }
+
+            // DMS protects every live mapping and reader/write claim. Keep it
+            // until all inner slots are terminal, including failed-close retry.
+            if let Some(error) = first_error.take() {
+                return Err(error);
+            }
+
+            // Release DMS ("deadman switch") lock at byte 128 if held.
+            if delete {
+                self.delete_owned_shm_backing(&mut info)?;
+            }
+            {
+                let slot_idx = usize::try_from(SQLITE_SHM_DMS_SLOT).expect("DMS slot fits usize");
+                let slot_state = &mut info.slots[slot_idx];
+                let lock_byte = sqlite_shm_dms_lock_byte();
+
+                if slot_state.exclusive_owner == Some(self.shm_owner_id) {
+                    // Perform OS-level lock operation first; only clear
+                    // exclusive_owner if it succeeds.
+                    let os_ok = if slot_state.shared_holders.is_empty() {
+                        match posix_unlock(&*shm_file, lock_byte, 1) {
+                            Ok(()) => true,
+                            Err(err) => {
+                                if first_error.is_none() {
+                                    first_error = Some(err);
+                                }
+                                false
+                            }
+                        }
+                    } else {
+                        match posix_lock(&*shm_file, libc::F_RDLCK, lock_byte, 1) {
+                            Ok(true) => true,
+                            Ok(false) => {
+                                if first_error.is_none() {
+                                    first_error = Some(FrankenError::Busy);
+                                }
+                                false
+                            }
+                            Err(err) => {
+                                if first_error.is_none() {
+                                    first_error = Some(err);
+                                }
+                                false
+                            }
+                        }
+                    };
+                    if os_ok {
+                        slot_state.exclusive_owner = None;
+                    }
+                }
+
+                if slot_state.shared_holders.contains_key(&self.shm_owner_id) {
+                    let raw_released = if slot_state.exclusive_owner.is_none()
+                        && slot_state.shared_holders.len() == 1
+                    {
+                        match posix_unlock(&*shm_file, lock_byte, 1) {
+                            Ok(()) => true,
+                            Err(err) => {
+                                if first_error.is_none() {
+                                    first_error = Some(err);
+                                }
+                                false
+                            }
+                        }
+                    } else {
+                        true
+                    };
+                    if raw_released {
+                        slot_state.shared_holders.remove(&self.shm_owner_id);
+                    }
+                }
+            }
+
+            let error_to_return = first_error;
+            if let Some(err) = error_to_return {
+                // Keep both the handle's SHM pointer and its owner reference
+                // until every raw lock release is terminal. Slots released
+                // earlier in this pass were cleared raw-first/state-second;
+                // failed slots remain represented and are retried exactly.
+                return Err(err);
+            }
+
+            if let Some(count) = info.owner_refs.get_mut(&self.shm_owner_id) {
+                if *count > 1 {
+                    *count -= 1;
+                } else {
+                    info.owner_refs.remove(&self.shm_owner_id);
+                    info.mapping_owners.remove(&self.shm_owner_id);
+                }
+            }
+            self.shm_dms_lifetime_claim = false;
+            // The cache must not keep mapping owners alive after the final
+            // normal attachment drains. Their weak SHM pointers avoid an Arc
+            // cycle; dispose of the strong cached regions outside this mutex.
+            if info
+                .owner_refs
+                .keys()
+                .all(|owner| info.mapping_owners.contains(owner))
+            {
+                std::mem::take(&mut info.regions)
+            } else {
+                HashMap::new()
+            }
+        };
+
+        self.shm_info = None;
+        drop(retired_regions);
+        global_shm_table().finish_owner_release(&self.shm_path, info_arc);
+        Ok(())
+    }
+
+    fn observed_mode(slot_state: &ShmSlotState) -> &'static str {
+        if slot_state.exclusive_owner.is_some() {
+            "exclusive"
+        } else if slot_state.shared_holders.is_empty() {
+            "unlocked"
+        } else {
+            "shared"
+        }
+    }
+
+    fn log_lock_conflict(
+        slot: u32,
+        requested_mode: &'static str,
+        observed_mode: &'static str,
+        read_marks: [u32; WAL_NREADER_USIZE],
+    ) {
+        warn!(
+            slot,
+            lock_byte = wal_lock_byte(slot),
+            requested_mode,
+            observed_mode,
+            ?read_marks,
+            "legacy shm lock protocol conflict"
+        );
+    }
+
+    fn acquire_shm_dms_shared(&self, info: &mut ShmInfo) -> Result<()> {
+        let lock_byte = sqlite_shm_dms_lock_byte();
+        let slot_idx = usize::try_from(SQLITE_SHM_DMS_SLOT).expect("DMS slot fits usize");
+        let read_marks = info.read_marks();
+        let slot_state = &mut info.slots[slot_idx];
+
+        if let Some(owner) = slot_state.exclusive_owner {
+            if owner != self.shm_owner_id {
+                Self::log_lock_conflict(
+                    SQLITE_SHM_DMS_SLOT,
+                    "shared",
+                    Self::observed_mode(slot_state),
+                    read_marks,
+                );
+                return Err(FrankenError::Busy);
+            }
+            return Ok(());
+        }
+
+        let next_owner_count = slot_state
+            .shared_holders
+            .get(&self.shm_owner_id)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| FrankenError::internal("Unix SHM DMS owner count overflow"))?;
+        if slot_state.shared_holders.is_empty()
+            && !posix_lock(&*info.file, libc::F_RDLCK, lock_byte, 1)?
+        {
+            Self::log_lock_conflict(
+                SQLITE_SHM_DMS_SLOT,
+                "shared",
+                Self::observed_mode(slot_state),
+                read_marks,
+            );
+            return Err(FrankenError::Busy);
+        }
+
+        slot_state
+            .shared_holders
+            .insert(self.shm_owner_id, next_owner_count);
+        lock_debug!(
+            slot = SQLITE_SHM_DMS_SLOT,
+            lock_byte,
+            requested_mode = "shared",
+            observed_mode = Self::observed_mode(slot_state),
+            ?read_marks,
+            "acquired shm DMS shared lock"
+        );
+        Ok(())
+    }
+
+    fn release_shm_dms_shared(&self, info: &mut ShmInfo) -> Result<()> {
+        let lock_byte = sqlite_shm_dms_lock_byte();
+        let slot_idx = usize::try_from(SQLITE_SHM_DMS_SLOT).expect("DMS slot fits usize");
+        let read_marks = info.read_marks();
+        let slot_state = &mut info.slots[slot_idx];
+        let Some(holder_count) = slot_state.shared_holders.get(&self.shm_owner_id).copied() else {
+            Self::log_lock_conflict(
+                SQLITE_SHM_DMS_SLOT,
+                "unlock-shared",
+                Self::observed_mode(slot_state),
+                read_marks,
+            );
+            return Err(FrankenError::LockFailed {
+                detail: format!("owner {} does not hold shared DMS slot", self.shm_owner_id),
+            });
+        };
+
+        // Raw first, state second. A failed unlock retains the exact owner
+        // count for a later retry.
+        if holder_count == 1
+            && slot_state.exclusive_owner.is_none()
+            && slot_state.shared_holders.len() == 1
+        {
+            posix_unlock(&*info.file, lock_byte, 1)?;
+        }
+        if holder_count > 1 {
+            slot_state
+                .shared_holders
+                .insert(self.shm_owner_id, holder_count - 1);
+        } else {
+            slot_state.shared_holders.remove(&self.shm_owner_id);
+        }
+
+        lock_debug!(
+            slot = SQLITE_SHM_DMS_SLOT,
+            lock_byte,
+            requested_mode = "unlock-shared",
+            observed_mode = Self::observed_mode(slot_state),
+            ?read_marks,
+            "released shm DMS shared lock"
+        );
+        Ok(())
+    }
+
+    /// Acquire one SHM shared claim and report whether this call changed
+    /// ownership. Holding EXCLUSIVE as the same owner is a true no-op.
+    fn acquire_shm_shared_slot(&self, info: &mut ShmInfo, slot: u32) -> Result<bool> {
+        let Some(lock_byte) = wal_lock_byte(slot) else {
+            error!(slot, "invalid SHM slot for shared lock");
+            return Err(FrankenError::LockFailed {
+                detail: format!("invalid SHM slot {slot}"),
+            });
+        };
+        let slot_idx = usize::try_from(slot).expect("slot index must fit usize");
+        let read_marks = info.read_marks();
+        let slot_state = &mut info.slots[slot_idx];
+
+        if let Some(owner) = slot_state.exclusive_owner {
+            if owner != self.shm_owner_id {
+                Self::log_lock_conflict(
+                    slot,
+                    "shared",
+                    Self::observed_mode(slot_state),
+                    read_marks,
+                );
+                return Err(FrankenError::Busy);
+            }
+            // Same owner already holds exclusive; no extra transition required.
+            return Ok(false);
+        }
+
+        let next_owner_count = slot_state
+            .shared_holders
+            .get(&self.shm_owner_id)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| FrankenError::internal("Unix SHM shared-owner count overflow"))?;
+        let total_shared = slot_state.shared_holders.values().copied().sum::<u32>();
+        if total_shared == 0 && !posix_lock(&*info.file, libc::F_RDLCK, lock_byte, 1)? {
+            Self::log_lock_conflict(slot, "shared", Self::observed_mode(slot_state), read_marks);
+            return Err(FrankenError::Busy);
+        }
+
+        slot_state
+            .shared_holders
+            .insert(self.shm_owner_id, next_owner_count);
+        lock_debug!(
+            slot,
+            lock_byte,
+            requested_mode = "shared",
+            observed_mode = Self::observed_mode(slot_state),
+            ?read_marks,
+            "acquired shm shared lock"
+        );
+        Ok(true)
+    }
+
+    /// Acquire one SHM exclusive slot and report whether ownership changed.
+    fn acquire_shm_exclusive_slot(&self, info: &mut ShmInfo, slot: u32) -> Result<bool> {
+        let Some(lock_byte) = wal_lock_byte(slot) else {
+            error!(slot, "invalid SHM slot for exclusive lock");
+            return Err(FrankenError::LockFailed {
+                detail: format!("invalid SHM slot {slot}"),
+            });
+        };
+        let slot_idx = usize::try_from(slot).expect("slot index must fit usize");
+        let read_marks = info.read_marks();
+        let slot_state = &mut info.slots[slot_idx];
+
+        if slot_state.exclusive_owner == Some(self.shm_owner_id) {
+            // Do not reissue fcntl: external-attempt bookkeeping must be able
+            // to distinguish a pre-existing owner claim from a newly acquired
+            // slot that this attempt is obligated to unwind.
+            return Ok(false);
+        }
+        if slot_state.exclusive_owner.is_some() {
+            Self::log_lock_conflict(
+                slot,
+                "exclusive",
+                Self::observed_mode(slot_state),
+                read_marks,
+            );
+            return Err(FrankenError::Busy);
+        }
+
+        let shared_from_others = slot_state
+            .shared_holders
+            .iter()
+            .any(|(owner, count)| *owner != self.shm_owner_id && *count > 0);
+        if shared_from_others {
+            Self::log_lock_conflict(
+                slot,
+                "exclusive",
+                Self::observed_mode(slot_state),
+                read_marks,
+            );
+            return Err(FrankenError::Busy);
+        }
+
+        if !posix_lock(&*info.file, libc::F_WRLCK, lock_byte, 1)? {
+            Self::log_lock_conflict(
+                slot,
+                "exclusive",
+                Self::observed_mode(slot_state),
+                read_marks,
+            );
+            return Err(FrankenError::Busy);
+        }
+
+        // Only update in-memory state after the OS-level lock succeeds.
+        // Do NOT remove the shared holder. This allows downgrading back to SHARED
+        // when UNLOCK | EXCLUSIVE is called, matching SQLite's unixShmLock semantics.
+        slot_state.exclusive_owner = Some(self.shm_owner_id);
+        lock_debug!(
+            slot,
+            lock_byte,
+            requested_mode = "exclusive",
+            observed_mode = Self::observed_mode(slot_state),
+            ?read_marks,
+            "acquired shm exclusive lock"
+        );
+        Ok(true)
+    }
+
+    fn release_shm_shared_slot(&self, info: &mut ShmInfo, slot: u32) -> Result<()> {
+        let Some(lock_byte) = wal_lock_byte(slot) else {
+            error!(slot, "invalid SHM slot for shared unlock");
+            return Err(FrankenError::LockFailed {
+                detail: format!("invalid SHM slot {slot}"),
+            });
+        };
+        let slot_idx = usize::try_from(slot).expect("slot index must fit usize");
+        let read_marks = info.read_marks();
+        let slot_state = &mut info.slots[slot_idx];
+        let Some(holder_count) = slot_state.shared_holders.get(&self.shm_owner_id).copied() else {
+            Self::log_lock_conflict(
+                slot,
+                "unlock-shared",
+                Self::observed_mode(slot_state),
+                read_marks,
+            );
+            return Err(FrankenError::LockFailed {
+                detail: format!(
+                    "owner {} does not hold shared slot {slot}",
+                    self.shm_owner_id
+                ),
+            });
+        };
+
+        // Raw first, state second, so an unlock failure preserves the exact
+        // owner claim for the next attempt.
+        if holder_count == 1
+            && slot_state.exclusive_owner.is_none()
+            && slot_state.shared_holders.len() == 1
+        {
+            posix_unlock(&*info.file, lock_byte, 1)?;
+        }
+        if holder_count > 1 {
+            slot_state
+                .shared_holders
+                .insert(self.shm_owner_id, holder_count - 1);
+        } else {
+            slot_state.shared_holders.remove(&self.shm_owner_id);
+        }
+
+        lock_debug!(
+            slot,
+            lock_byte,
+            requested_mode = "unlock-shared",
+            observed_mode = Self::observed_mode(slot_state),
+            ?read_marks,
+            "released shm shared lock"
+        );
+        Ok(())
+    }
+
+    fn release_shm_exclusive_slot(&self, info: &mut ShmInfo, slot: u32) -> Result<()> {
+        let Some(lock_byte) = wal_lock_byte(slot) else {
+            error!(slot, "invalid SHM slot for exclusive unlock");
+            return Err(FrankenError::LockFailed {
+                detail: format!("invalid SHM slot {slot}"),
+            });
+        };
+        let slot_idx = usize::try_from(slot).expect("slot index must fit usize");
+        let read_marks = info.read_marks();
+        let slot_state = &mut info.slots[slot_idx];
+        if slot_state.exclusive_owner != Some(self.shm_owner_id) {
+            Self::log_lock_conflict(
+                slot,
+                "unlock-exclusive",
+                Self::observed_mode(slot_state),
+                read_marks,
+            );
+            return Err(FrankenError::LockFailed {
+                detail: format!(
+                    "owner {} does not hold exclusive slot {slot}",
+                    self.shm_owner_id
+                ),
+            });
+        }
+
+        // Perform OS-level lock operation BEFORE updating in-memory state,
+        // so a failure doesn't leave state inconsistent.
+        if slot_state.shared_holders.is_empty() {
+            posix_unlock(&*info.file, lock_byte, 1)?;
+        } else if !posix_lock(&*info.file, libc::F_RDLCK, lock_byte, 1)? {
+            Self::log_lock_conflict(
+                slot,
+                "unlock-exclusive",
+                Self::observed_mode(slot_state),
+                read_marks,
+            );
+            return Err(FrankenError::Busy);
+        }
+        slot_state.exclusive_owner = None;
+
+        lock_debug!(
+            slot,
+            lock_byte,
+            requested_mode = "unlock-exclusive",
+            observed_mode = Self::observed_mode(slot_state),
+            ?read_marks,
+            "released shm exclusive lock"
+        );
+        Ok(())
+    }
+
+    fn validate_shm_request(offset: u32, n: u32) -> Result<()> {
+        if n == 0 {
+            return Err(FrankenError::LockFailed {
+                detail: "shm_lock called with n=0".to_string(),
+            });
+        }
+        let Some(end) = offset.checked_add(n) else {
+            return Err(FrankenError::LockFailed {
+                detail: "shm_lock range overflow".to_string(),
+            });
+        };
+        if end > WAL_TOTAL_LOCKS {
+            return Err(FrankenError::LockFailed {
+                detail: format!("shm_lock range {offset}..{end} exceeds WAL lock table"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Pin an explicit compatibility mark, reporting whether it was written.
+    ///
+    /// This low-level fixture helper does not validate a WAL header or page
+    /// boundary. A changed mark refuses admission after releasing the new
+    /// claim; a failed release retains ownership for explicit unlock or close.
+    pub fn compat_reader_acquire_wal_read_lock(
+        &mut self,
+        cx: &Cx,
+        reader_slot: u32,
+        snapshot_mark: u32,
+    ) -> Result<bool> {
+        self.compat_reader_acquire_wal_read_lock_with(cx, reader_slot, snapshot_mark, || {})
+    }
+
+    fn compat_reader_acquire_wal_read_lock_with(
+        &mut self,
+        cx: &Cx,
+        reader_slot: u32,
+        snapshot_mark: u32,
+        before_shared: impl FnOnce(),
+    ) -> Result<bool> {
+        let Some(slot) = wal_read_lock_slot(reader_slot) else {
+            return Err(FrankenError::LockFailed {
+                detail: format!("invalid WAL reader slot {reader_slot}"),
+            });
+        };
+
+        // Ensure SHM segment 0 is mapped so we can read/write aReadMark
+        // directly through the mmap'd `*-shm` file, making changes visible
+        // to all processes (including legacy C SQLite readers/writers).
+        let region_0 = self.shm_map(cx, 0, SHM_SEGMENT_SIZE, true)?;
+
+        let slot_idx = usize::try_from(reader_slot).expect("reader slot fits usize");
+        let shm_offset = SHM_READ_MARK_OFFSET + slot_idx * 4;
+        let current_mark = region_0.atomic_load_u32_ne(shm_offset, Ordering::Acquire)?;
+
+        let shm_info = Arc::clone(self.shm_info.as_ref().ok_or(FrankenError::BusyRecovery)?);
+        let updated = current_mark != snapshot_mark;
+        if updated {
+            checkpoint_or_abort(cx)?;
+            let mut info = shm_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = &info.slots[usize::try_from(slot).expect("reader lock slot fits usize")];
+            // Unlike a generic SHM upgrade, mark mutation must not repurpose
+            // any existing reader, including this handle's own claims. Keep
+            // explicit older marks and compatibility slot zero available when
+            // the slot is unowned; production reader admission is separate.
+            if state.exclusive_owner.is_some() || !state.shared_holders.is_empty() {
+                return Err(FrankenError::Busy);
+            }
+            self.acquire_shm_exclusive_slot(&mut info, slot)?;
+            let publish =
+                region_0.atomic_store_u32_ne(shm_offset, snapshot_mark, Ordering::Release);
+            self.shm_barrier();
+            // Cleanup does not consult cancellation. The raw-first release
+            // helper retains failed ownership for explicit retry or close.
+            let release = self.release_shm_exclusive_slot(&mut info, slot);
+            drop(info);
+            match (publish, release) {
+                (Ok(()), Ok(())) => {}
+                (Err(error), Ok(())) | (Ok(()), Err(error)) => return Err(error),
+                (Err(publish), Err(release)) => {
+                    return Err(FrankenError::internal(format!(
+                        "compatibility reader mark publication and release failed: publish={publish}; release={release}"
+                    )));
+                }
+            }
+        }
+
+        before_shared();
+        checkpoint_or_abort(cx)?;
+        let mut info = shm_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let acquired = self.acquire_shm_shared_slot(&mut info, slot)?;
+        self.shm_barrier();
+        let validation = match region_0.atomic_load_u32_ne(shm_offset, Ordering::Acquire) {
+            Ok(mark) if mark == snapshot_mark => return Ok(updated),
+            Ok(_) => FrankenError::BusyRecovery,
+            Err(error) => error,
+        };
+        // Acquiring SHARED is a no-op under our preowned EXCLUSIVE claim.
+        // Otherwise exactly one new shared count belongs to this attempt.
+        if !acquired {
+            return Err(validation);
+        }
+        let release = self.release_shm_shared_slot(&mut info, slot);
+        drop(info);
+        match release {
+            Ok(()) => Err(validation),
+            Err(release) => Err(FrankenError::internal(format!(
+                "compatibility reader validation and shared release failed: validation={validation}; release={release}"
+            ))),
+        }
+    }
+
+    pub fn compat_writer_hold_wal_write_lock(&mut self, cx: &Cx) -> Result<()> {
+        // Hold a SHARED lock on the main db file so legacy SQLite cannot take an
+        // EXCLUSIVE lock on close and delete `*-wal`/`*-shm` while our coordinator
+        // is alive.
+        self.lock(cx, LockLevel::Shared)?;
+
+        // Hold the DMS ("deadman switch") byte in SHARED mode so legacy SQLite
+        // openers do not truncate `*-shm` while we hold WAL_WRITE_LOCK.
+        if let Err(err) = self.compat_shm_hold_dms_shared(cx) {
+            let _ = self.unlock(cx, LockLevel::None);
+            return Err(err);
+        }
+
+        if let Err(err) = self.shm_lock(
+            cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+        ) {
+            let _ = self.shm_lock(
+                cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+            );
+            let _ = self.compat_shm_release_dms_shared(cx);
+            let _ = self.unlock(cx, LockLevel::None);
+            return Err(err);
+        }
+
+        if let Err(err) = self.compat_writer_init_wal_shm_header_if_needed(cx) {
+            let _ = self.shm_lock(
+                cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+            );
+            let _ = self.compat_shm_release_dms_shared(cx);
+            let _ = self.unlock(cx, LockLevel::None);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    pub fn compat_writer_release_wal_write_lock(&mut self, cx: &Cx) -> Result<()> {
+        let mut first_error = self
+            .shm_lock(
+                cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+            )
+            .err();
+
+        if let Err(err) = self.compat_shm_release_dms_shared(cx)
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
+
+        if let Err(err) = self.unlock(cx, LockLevel::None)
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
+
+        match first_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
+
+    fn compat_shm_hold_dms_shared(&mut self, cx: &Cx) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        let shm_info = self.ensure_shm_info(cx)?;
+        let mut info = shm_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.acquire_shm_dms_shared(&mut info)
+    }
+
+    fn compat_shm_release_dms_shared(&mut self, cx: &Cx) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        let shm_info = self.ensure_shm_info(cx)?;
+        let mut info = shm_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dms_slot = usize::try_from(SQLITE_SHM_DMS_SLOT).expect("DMS slot fits usize");
+        let held = info.slots[dms_slot]
+            .shared_holders
+            .get(&self.shm_owner_id)
+            .copied()
+            .unwrap_or(0);
+        if self.shm_dms_lifetime_claim && held <= 1 {
+            return Err(FrankenError::LockFailed {
+                detail: "compatibility DMS release has no claim beyond the attachment lifetime"
+                    .to_owned(),
+            });
+        }
+        self.release_shm_dms_shared(&mut info)
+    }
+
+    fn compat_writer_init_wal_shm_header_if_needed(&mut self, cx: &Cx) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+
+        // This routine is called while holding WAL_WRITE_LOCK. Its job is to
+        // ensure legacy SQLite can start a read transaction without needing to
+        // grab WAL_WRITE_LOCK just to initialize `*-shm`.
+        let shm_info = self.ensure_shm_info(cx)?;
+        let shm_file = {
+            let info = shm_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Self::ensure_wal_shm_backing(&info, SQLITE_WALINDEX_PGSZ)?;
+            Arc::clone(&info.file)
+        };
+
+        let mut header_buf = [0_u8; SQLITE_WAL_SHM_HEADER_BYTES];
+        let read = shm_file
+            .read_at(&mut header_buf, 0)
+            .map_err(FrankenError::Io)?;
+        if read == SQLITE_WAL_SHM_HEADER_BYTES && sqlite_wal_shm_header_is_valid(&header_buf)? {
+            return Ok(());
+        }
+
+        let wal_path = sqlite_wal_path(&self.path);
+        let wal_has_frames = fs::metadata(&wal_path).is_ok_and(|m| m.len() > 0);
+        if wal_has_frames {
+            return Err(FrankenError::WalCorrupt {
+                detail: format!(
+                    "cannot initialize shm header while wal file has content: {}",
+                    wal_path.display()
+                ),
+            });
+        }
+
+        let mut db_hdr = [0_u8; 100];
+        let hdr_read = self
+            .file_ref()
+            .read_at(&mut db_hdr, 0)
+            .map_err(FrankenError::Io)?;
+        if hdr_read != db_hdr.len() {
+            return Err(FrankenError::WalCorrupt {
+                detail: format!(
+                    "cannot initialize shm header: db header short read (read {hdr_read} bytes)"
+                ),
+            });
+        }
+        let page_size = sqlite_page_size_from_db_header(&db_hdr)?;
+        let db_len = self.file_ref().metadata().map_err(FrankenError::Io)?.len();
+        let n_page_u64 = db_len / u64::from(page_size);
+        let n_page = u32::try_from(n_page_u64).unwrap_or(u32::MAX);
+
+        let header = build_empty_sqlite_wal_shm_header(page_size, n_page)?;
+        write_full_at(
+            |src, off| shm_file.write_at(src, off),
+            &header,
+            0,
+            "shm header",
+        )?;
+
+        let mut verify = [0_u8; SQLITE_WAL_SHM_HEADER_BYTES];
+        let verify_read = shm_file.read_at(&mut verify, 0).map_err(FrankenError::Io)?;
+        if verify_read != SQLITE_WAL_SHM_HEADER_BYTES || !sqlite_wal_shm_header_is_valid(&verify)? {
+            return Err(FrankenError::WalCorrupt {
+                detail: "shm header initialization failed local validation".to_owned(),
+            });
+        }
+
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn compat_read_marks(&self) -> Option<[u32; WAL_NREADER_USIZE]> {
+        self.shm_info.as_ref().map(|info| {
+            info.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .read_marks()
+        })
+    }
+
+    /// Delete only while this live handle still excludes new main-file
+    /// attachments and owns the sole current DMS claim. No request survives
+    /// this call as an authority to unlink a later SHM generation.
+    fn delete_owned_shm_backing(&self, info: &mut ShmInfo) -> Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if info.namespace_unlinked {
+            return Ok(());
+        }
+        let slot = usize::try_from(SQLITE_SHM_DMS_SLOT).expect("DMS slot fits usize");
+        let dms = &mut info.slots[slot];
+        if self.lock_level != LockLevel::Exclusive
+            || !info.mapping_owners.is_empty()
+            || info
+                .owner_refs
+                .keys()
+                .any(|owner| *owner != self.shm_owner_id)
+            || dms
+                .exclusive_owner
+                .is_some_and(|owner| owner != self.shm_owner_id)
+            || dms
+                .shared_holders
+                .keys()
+                .any(|owner| *owner != self.shm_owner_id)
+            || !self.shm_dms_lifetime_claim
+        {
+            return Err(FrankenError::Busy);
+        }
+        if dms.exclusive_owner.is_none() {
+            if !posix_lock(&*info.file, libc::F_WRLCK, sqlite_shm_dms_lock_byte(), 1)? {
+                return Err(FrankenError::Busy);
+            }
+            // Raw first/state second: any later error is owned by normal
+            // SHM release/close, including a failed downgrade after unlink.
+            dms.exclusive_owner = Some(self.shm_owner_id);
+        }
+        match fs::metadata(&self.shm_path) {
+            Ok(metadata) => {
+                let named = FileIdentity::from_unix_parts(metadata.dev(), metadata.ino());
+                if named != inode_key_from_file(&info.file)? {
+                    return Err(FrankenError::CannotOpen {
+                        path: self.shm_path.clone(),
+                    });
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                info.namespace_unlinked = true;
+                return Ok(());
+            }
+            Err(error) => return Err(FrankenError::Io(error)),
+        }
+        match fs::remove_file(&self.shm_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(FrankenError::Io(error)),
+        }
+        info.namespace_unlinked = true;
+        Ok(())
+    }
+
+    /// Register independent mmap ownership before exposing its first alias.
+    /// No SHM mutex is held while entering the inode's accounting domain.
+    fn new_mapping_lifetime(&self, shm_info: &Arc<Mutex<ShmInfo>>) -> Result<UnixMappingLifetime> {
+        let inode_info = Arc::clone(self.inode_info_ref());
+        {
+            let mut inode = inode_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let references = inode
+                .n_ref
+                .checked_add(1)
+                .ok_or_else(|| FrankenError::internal("Unix mmap inode reference overflow"))?;
+            let lifetimes = inode
+                .n_wal_lifetime
+                .checked_add(1)
+                .ok_or_else(|| FrankenError::internal("Unix mmap WAL lifetime overflow"))?;
+            debug_assert_eq!(self.wal_lifetime_claim, WalLifetimeClaim::Held);
+            inode.n_ref = references;
+            inode.n_wal_lifetime = lifetimes;
+        }
+        // This private handle did not open a new descriptor. It owns exactly
+        // the counters above and its own DMS registration. Its ordinary Drop
+        // already retains failed raw releases in the process cleanup queue.
+        let mut owner = Self {
+            file: self.file.as_ref().map(Arc::clone),
+            path: self.path.clone(),
+            open_flags: self.open_flags,
+            lock_level: LockLevel::None,
+            wal_lifetime_claim: WalLifetimeClaim::Held,
+            transient_shared_pending_gate: false,
+            external_shared_snapshot_attempt: None,
+            external_maintenance_attempt: None,
+            external_append_attempt: None,
+            delete_on_close: false,
+            closed: false,
+            inode_key: self.inode_key,
+            inode_info: Some(inode_info),
+            shm_owner_id: next_shm_owner_id(),
+            shm_path: self.shm_path.clone(),
+            shm_info: Some(Arc::clone(shm_info)),
+            shm_dms_lifetime_claim: false,
+            busy_timeout_ms: self.busy_timeout_ms,
+        };
+        let acquire = {
+            let mut info = shm_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            info.owner_refs.insert(owner.shm_owner_id, 1);
+            info.mapping_owners.insert(owner.shm_owner_id);
+            owner.acquire_shm_dms_shared(&mut info)
+        };
+        acquire?;
+        owner.shm_dms_lifetime_claim = true;
+        owner.shm_info = None;
+        Ok(UnixMappingLifetime {
+            owner: Some(owner),
+            shm_info: Arc::downgrade(shm_info),
+        })
+    }
+
+    /// Move every live close obligation into a process-root-owned handle.
+    ///
+    /// This is used only after `close` failed from `Drop`. The returned handle
+    /// retains the canonical descriptor, inode claim, exact main/SHM lock
+    /// state, external-attempt markers, and delete-on-close obligation. The
+    /// dropped shell is made inert so it cannot consume the sole retry state.
+    fn take_for_deferred_cleanup(&mut self) -> Self {
+        if let Some(attempt) = self.external_append_attempt.as_mut() {
+            attempt.acquisition_complete = false;
+        }
+        let deferred = Self {
+            file: self.file.take(),
+            path: std::mem::take(&mut self.path),
+            open_flags: self.open_flags,
+            lock_level: self.lock_level,
+            wal_lifetime_claim: self.wal_lifetime_claim,
+            transient_shared_pending_gate: self.transient_shared_pending_gate,
+            external_shared_snapshot_attempt: self.external_shared_snapshot_attempt.take(),
+            external_maintenance_attempt: self.external_maintenance_attempt.take(),
+            external_append_attempt: self.external_append_attempt.take(),
+            delete_on_close: self.delete_on_close,
+            closed: false,
+            inode_key: self.inode_key,
+            inode_info: self.inode_info.take(),
+            shm_owner_id: self.shm_owner_id,
+            shm_path: std::mem::take(&mut self.shm_path),
+            shm_info: self.shm_info.take(),
+            shm_dms_lifetime_claim: self.shm_dms_lifetime_claim,
+            busy_timeout_ms: self.busy_timeout_ms,
+        };
+
+        self.lock_level = LockLevel::None;
+        self.wal_lifetime_claim = WalLifetimeClaim::Unclaimed;
+        self.shm_dms_lifetime_claim = false;
+        self.transient_shared_pending_gate = false;
+        self.delete_on_close = false;
+        self.closed = true;
+        deferred
+    }
+
+    /// A separately accounted main-file owner without opening another fd.
+    /// Its eventual SHARED claim is independent of the requesting handle.
+    fn new_mvcc_mapping_owner(&self) -> Result<Self> {
+        let inode_info = Arc::clone(self.inode_info_ref());
+        {
+            let mut inode = inode_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            inode.n_ref = inode
+                .n_ref
+                .checked_add(1)
+                .ok_or_else(|| FrankenError::internal("MVCC mmap inode reference overflow"))?;
+        }
+        Ok(Self {
+            file: self.file.as_ref().map(Arc::clone),
+            path: self.path.clone(),
+            open_flags: self.open_flags,
+            lock_level: LockLevel::None,
+            wal_lifetime_claim: WalLifetimeClaim::Unclaimed,
+            transient_shared_pending_gate: false,
+            external_shared_snapshot_attempt: None,
+            external_maintenance_attempt: None,
+            external_append_attempt: None,
+            delete_on_close: false,
+            closed: false,
+            inode_key: self.inode_key,
+            inode_info: Some(inode_info),
+            shm_owner_id: next_shm_owner_id(),
+            shm_path: self.shm_path.clone(),
+            shm_info: None,
+            shm_dms_lifetime_claim: false,
+            busy_timeout_ms: 0,
+        })
+    }
+}
+
+/// These three owners survive the requesting file and namespace binding.
+/// A failed main unlock must not release the independent namespace lease.
+struct UnixMvccMappingCleanup {
+    main: Option<UnixFile>,
+    backing: Option<File>,
+    admission: Option<PendingNamespaceOpen>,
+    namespace: Option<Arc<DatabaseNamespaceBinding>>,
+}
+
+impl UnixMvccMappingCleanup {
+    fn try_close(&mut self) -> Result<()> {
+        self.try_close_with(|main| main.close(&Cx::new()))
+    }
+
+    fn try_close_with(
+        &mut self,
+        close_main: impl FnOnce(&mut UnixFile) -> Result<()>,
+    ) -> Result<()> {
+        if let Some(main) = self.main.as_mut() {
+            close_main(main)?;
+        }
+        drop(self.main.take());
+        // Closing this independently opened flock descriptor releases only
+        // this mapping's claim, even when peer mappings use the same file.
+        drop(self.backing.take());
+        drop(self.admission.take());
+        drop(self.namespace.take());
+        Ok(())
+    }
+}
+
+struct UnixMvccMappingLifetime {
+    cleanup: Option<UnixMvccMappingCleanup>,
+}
+
+impl Drop for UnixMvccMappingLifetime {
+    fn drop(&mut self) {
+        if let Some(mut cleanup) = self.cleanup.take()
+            && let Err(error) = cleanup.try_close()
+        {
+            warn!(%error, "MVCC mapping retained exact native cleanup for retry");
+            deferred_mvcc_mapping_cleanup_queue()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(cleanup);
+        }
+    }
+}
+
+fn deferred_mvcc_mapping_cleanup_queue() -> &'static Mutex<Vec<UnixMvccMappingCleanup>> {
+    static QUEUE: OnceLock<Mutex<Vec<UnixMvccMappingCleanup>>> = OnceLock::new();
+    QUEUE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn retry_deferred_mvcc_mapping_cleanups() {
+    let pending = {
+        let mut queue = deferred_mvcc_mapping_cleanup_queue()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *queue)
+    };
+    for mut cleanup in pending {
+        if cleanup.try_close().is_err() {
+            deferred_mvcc_mapping_cleanup_queue()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(cleanup);
+        }
+    }
+}
+
+/// The mapping backing owns this guard, which owns no strong SHM-state Arc.
+/// Its registered mapping id keeps the canonical table entry alive. The last
+/// alias is unmapped before this destructor restores the exact private handle.
+struct UnixMappingLifetime {
+    owner: Option<UnixFile>,
+    shm_info: Weak<Mutex<ShmInfo>>,
+}
+
+impl Drop for UnixMappingLifetime {
+    fn drop(&mut self) {
+        if let Some(mut owner) = self.owner.take() {
+            owner.shm_info = Some(
+                self.shm_info
+                    .upgrade()
+                    .expect("registered mmap owner retains canonical SHM state"),
+            );
+            drop(owner);
+        }
+    }
+}
+
+/// Process-root ownership for Unix handles whose implicit close encountered a
+/// retryable raw-lock failure.
+///
+/// A static queue is intentional: dropping the only canonical descriptor or
+/// owner record after a failed unlock would make the process' published lock
+/// state unrecoverable. No detached task is needed; later opens retry the
+/// queue synchronously, and process exit remains the final OS-level cleanup
+/// boundary if a raw failure is permanent.
+fn deferred_unix_cleanup_queue() -> &'static Mutex<Vec<UnixFile>> {
+    static QUEUE: OnceLock<Mutex<Vec<UnixFile>>> = OnceLock::new();
+    QUEUE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn retry_deferred_unix_cleanups() {
+    let cx = Cx::new();
+    let pending = {
+        let mut queue = deferred_unix_cleanup_queue()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *queue)
+    };
+    // Closing the final attachment can drop cached mappings. Their own exact
+    // cleanup may need this queue, so never retain its mutex across close.
+    for mut owner in pending {
+        if owner.close(&cx).is_ok() {
+            // The removed handle is fully closed, so its Drop may now finish
+            // the canonical inode generation without re-enqueuing itself.
+            drop(owner);
+        } else {
+            deferred_unix_cleanup_queue()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(owner);
+        }
+    }
+    retry_deferred_mvcc_mapping_cleanups();
+}
+
+impl VfsFile for UnixFile {
+    fn close(&mut self, cx: &Cx) -> Result<()> {
+        if self.closed {
+            return Ok(());
+        }
+
+        // The append baseline can be the enclosing snapshot's SHARED claim.
+        // Releasing that outer claim first would invalidate retry ownership.
+        if self.external_append_attempt.is_some() {
+            self.restore_external_wal_append_attempt(cx)?;
+        }
+        if self.external_shared_snapshot_attempt.is_some() {
+            self.restore_external_shared_snapshot_attempt(cx)?;
+        }
+        if self.external_maintenance_attempt.is_some() {
+            self.restore_external_maintenance_attempt(cx)?;
+        }
+        if self.external_shared_snapshot_attempt.is_some()
+            || self.external_maintenance_attempt.is_some()
+            || self.external_append_attempt.is_some()
+        {
+            return Err(FrankenError::internal(
+                "Unix close retained an external lock-attempt obligation",
+            ));
+        }
+
+        // Downgrade to no lock before closing. The transient gate is an
+        // independent obligation even when no complete prefix remains.
+        if self.lock_level != LockLevel::None || self.transient_shared_pending_gate {
+            self.unlock(cx, LockLevel::None)?;
+        }
+        // Close has already restored the main lock, so it has no current
+        // namespace authority to unlink SHM. Explicit deletion uses shm_unmap
+        // while the caller still owns main EXCLUSIVE and all aliases drained.
+        self.release_shm_owner_state(false)?;
+        self.release_wal_lifetime_claim()?;
+
+        // Decrement refcount.
+        {
+            let inode_info = Arc::clone(self.inode_info_ref());
+            let mut info = inode_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            info.n_ref = info.n_ref.saturating_sub(1);
+        }
+
+        if self.delete_on_close {
+            drop(fs::remove_file(&self.path));
+        }
+
+        self.closed = true;
+        Ok(())
+    }
+
+    fn file_identity(&self) -> Result<Option<FileIdentity>> {
+        // Report the key the shared generation is registered under now, so a
+        // GH#416 migration performed through any handle of this file is
+        // visible from every handle (see `InodeInfo::key`). A closed handle
+        // falls back to the key it captured at open.
+        Ok(Some(self.inode_info.as_ref().map_or(
+            self.inode_key,
+            |info| {
+                info.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .key
+            },
+        )))
+    }
+
+    /// GH#416: re-`fstat` the canonical descriptor and, when the filesystem
+    /// renumbered the file since open (a zero-length msdosfs file gains its
+    /// real inode on the first write), migrate the shared inode generation to
+    /// the live key so this handle, every sibling handle, and every later open
+    /// of the file share one lock domain.
+    fn refresh_file_identity(&self) -> Result<Option<FileIdentity>> {
+        let (Some(file), Some(inode_info)) = (self.file.as_deref(), self.inode_info.as_ref())
+        else {
+            return self.file_identity();
+        };
+        let live = inode_key_from_file(file)?;
+        let registered = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .key;
+        if live != registered {
+            global_inode_table().migrate(registered, live, inode_info)?;
+        }
+        Ok(Some(live))
+    }
+
+    async fn read(&self, cx: &Cx, buf: &mut [u8], offset: u64) -> Result<usize> {
+        checkpoint_or_abort(cx)?;
+        checked_io_range(offset, buf.len(), "read")?;
+        let file = Arc::clone(
+            self.file
+                .as_ref()
+                .ok_or_else(|| FrankenError::internal("unix file is closed"))?,
+        );
+        // A bounded pread directly into the caller's buffer costs ~1.5us
+        // where the blocking-pool round-trip costs ~14us. Semantics preserved
+        // exactly: EINTR retried in place, zero-filled tail on short read,
+        // actual total returned.
+        if buf.len() <= INLINE_IO_MAX_BYTES {
+            let total = read_full_at(|chunk, off| file.read_at(chunk, off), buf, offset, "read")?;
+            buf[total..].fill(0);
+            checkpoint_or_abort(cx)?;
+            return Ok(total);
+        }
+        let requested = buf.len();
+        let (data, total) = spawn_blocking_io(move || read_owned_at(file, requested, offset))
+            .await
+            .map_err(FrankenError::Io)?;
+        checkpoint_or_abort(cx)?;
+        buf.copy_from_slice(&data);
+        Ok(total)
+    }
+
+    async fn write(&self, cx: &Cx, buf: &[u8], offset: u64) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        checked_io_range(offset, buf.len(), "write")?;
+        let file = Arc::clone(
+            self.file
+                .as_ref()
+                .ok_or_else(|| FrankenError::internal("unix file is closed"))?,
+        );
+        if buf.len() <= INLINE_IO_MAX_BYTES {
+            write_full_at(|chunk, off| file.write_at(chunk, off), buf, offset, "write")?;
+            return checkpoint_or_abort(cx);
+        }
+        let data = buf.to_vec();
+        spawn_blocking_io(move || write_owned_at(file, data, offset))
+            .await
+            .map_err(FrankenError::Io)?;
+        checkpoint_or_abort(cx)
+    }
+
+    async fn write_tracked(
+        &self,
+        cx: &Cx,
+        buf: &[u8],
+        offset: u64,
+        completion: VfsWriteCompletion,
+    ) -> Result<()> {
+        let file = match (|| {
+            checkpoint_or_abort(cx)?;
+            checked_io_range(offset, buf.len(), "write")?;
+            self.file
+                .as_ref()
+                .map(Arc::clone)
+                .ok_or_else(|| FrankenError::internal("unix file is closed"))
+        })() {
+            Ok(file) => file,
+            Err(error) => {
+                completion.complete_error();
+                return Err(error);
+            }
+        };
+        // bd-bjm5d: inline the bounded write on a dedicated engine thread.
+        // The completion token resolves at the syscall site, which the
+        // inline arm satisfies trivially (same thread, same frame); the
+        // pre-flight error path above already completed the token.
+        if buf.len() <= INLINE_IO_MAX_BYTES {
+            match write_full_at(|chunk, off| file.write_at(chunk, off), buf, offset, "write") {
+                Ok(()) => {
+                    completion.complete_success();
+                    return checkpoint_or_abort(cx);
+                }
+                Err(error) => {
+                    completion.complete_error();
+                    return Err(error);
+                }
+            }
+        }
+        let data = buf.to_vec();
+        let source_completion = VfsWriteCompletionSource::new(completion.clone());
+        spawn_blocking_io(move || write_owned_at_tracked(file, data, offset, source_completion))
+            .await
+            .map_err(FrankenError::Io)?;
+        checkpoint_or_abort(cx)
+    }
+
+    async fn write_page_batch(&self, cx: &Cx, writes: &[(u64, &[u8])]) -> Result<()> {
+        // Pager commit batches are page-sized writes to one descriptor. The
+        // default trait loop pays a blocking-pool round-trip per page, which
+        // is ~90% of an 11-13x per-page write tax (bd-trfah decomposition,
+        // 2026-07-27). Stage the batch and issue ONE pool hop that pwrites
+        // every page, amortizing the hop without blocking a scheduler
+        // worker — inline syscalls on shared runtime workers are outside
+        // the async contract (bd-trfah thread). The staging copies are
+        // ~1% of the former per-page cost.
+        checkpoint_or_abort(cx)?;
+        if writes.is_empty() {
+            return Ok(());
+        }
+        let file = Arc::clone(
+            self.file
+                .as_ref()
+                .ok_or_else(|| FrankenError::internal("unix file is closed"))?,
+        );
+        // A batch of bounded writes is pwritten inline — no hop AND no
+        // staging copies at all.
+        if writes
+            .iter()
+            .all(|(_, data)| data.len() <= INLINE_IO_MAX_BYTES)
+        {
+            for (offset, data) in writes {
+                checked_io_range(*offset, data.len(), "write")?;
+            }
+            for (offset, data) in writes {
+                write_full_at(
+                    |chunk, off| file.write_at(chunk, off),
+                    data,
+                    *offset,
+                    "write",
+                )?;
+            }
+            return checkpoint_or_abort(cx);
+        }
+        let mut staged: Vec<(u64, Vec<u8>)> = Vec::with_capacity(writes.len());
+        for (offset, data) in writes {
+            checked_io_range(*offset, data.len(), "write")?;
+            staged.push((*offset, data.to_vec()));
+        }
+        spawn_blocking_io(move || {
+            for (offset, data) in staged {
+                write_owned_at(Arc::clone(&file), data, offset)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(FrankenError::Io)?;
+        checkpoint_or_abort(cx)
+    }
+
+    fn truncate(&mut self, _cx: &Cx, size: u64) -> Result<()> {
+        self.file_ref().set_len(size).map_err(FrankenError::Io)?;
+        Ok(())
+    }
+
+    fn sync(&mut self, _cx: &Cx, flags: SyncFlags) -> Result<()> {
+        if flags.contains(SyncFlags::DATAONLY) {
+            self.file_ref().sync_data().map_err(FrankenError::Io)
+        } else {
+            self.file_ref().sync_all().map_err(FrankenError::Io)
+        }
+    }
+
+    fn durable_sync(&mut self, cx: &Cx, kind: SyncKind) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        #[cfg(target_os = "macos")]
+        if kind == SyncKind::FullDurable {
+            // fsync(2) does not guarantee that drive write caches are flushed
+            // on macOS. F_FULLFSYNC is the durability barrier SQLite uses for
+            // transactions that request full-fsync semantics.
+            // SAFETY: fcntl receives this live file descriptor and the
+            // argument-less F_FULLFSYNC command documented by Darwin.
+            let result = unsafe { libc::fcntl(self.file_ref().as_raw_fd(), libc::F_FULLFSYNC) };
+            if result == 0 {
+                return Ok(());
+            }
+            return Err(FrankenError::Io(std::io::Error::last_os_error()));
+        }
+
+        match kind {
+            SyncKind::DataOnly => self.file_ref().sync_data().map_err(FrankenError::Io),
+            SyncKind::DataAndMetadata | SyncKind::FullDurable => {
+                self.file_ref().sync_all().map_err(FrankenError::Io)
+            }
+        }
+    }
+
+    fn file_size(&self, _cx: &Cx) -> Result<u64> {
+        let meta = self.file_ref().metadata().map_err(FrankenError::Io)?;
+        Ok(meta.len())
+    }
+
+    fn lock(&mut self, _cx: &Cx, level: LockLevel) -> Result<()> {
+        let timeout = Duration::from_millis(self.busy_timeout_ms);
+        let prior_level = self.lock_level;
+        let inode_info = Arc::clone(self.inode_info_ref());
+        let mut info = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // A prior SHARED attempt may have completed its main prefix but failed
+        // to release the transient PENDING gate. Retire that obligation before
+        // treating an already-reached level as a no-op.
+        if self.transient_shared_pending_gate && self.lock_level >= LockLevel::Shared {
+            Self::release_transient_shared_pending_gate_state(
+                &mut info,
+                &mut self.transient_shared_pending_gate,
+            )?;
+        }
+        if level <= self.lock_level {
+            return Ok(());
+        }
+        if info.n_transient_shared_pending > 0 && !self.transient_shared_pending_gate {
+            // An unresolved transient PENDING byte is process-wide, not
+            // descriptor-local. Do not let another local handle overwrite its
+            // raw lock type while the owning attempt still needs to retry.
+            return Err(FrankenError::Busy);
+        }
+
+        // None -> Shared: acquire F_RDLCK on the shared byte range.
+        if self.lock_level < LockLevel::Shared && level >= LockLevel::Shared {
+            // Classic fcntl locks do not conflict with locks already held by
+            // this process. Enforce SQLite's pending/exclusive exclusion in
+            // the coalesced in-process state before consulting the kernel.
+            if info.n_pending > 0 || info.n_exclusive > 0 {
+                return Err(FrankenError::Busy);
+            }
+            let Some(next_shared) = info.n_shared.checked_add(1) else {
+                return Self::return_after_main_lock_failure(
+                    &mut info,
+                    &mut self.lock_level,
+                    &mut self.transient_shared_pending_gate,
+                    prior_level,
+                    FrankenError::internal("Unix inode SHARED count overflow"),
+                );
+            };
+            // A WAL-lifetime owner already holds the kernel SHARED lock for this
+            // process (release keeps it while `n_wal_lifetime > 0`), and no other
+            // process can reach EXCLUSIVE past it, so the PENDING pass-through
+            // and the SHARED re-lock would only repeat locks already held.
+            if info.n_shared == 0 && info.n_wal_lifetime == 0 {
+                // Readers must pass through the PENDING byte so a waiting
+                // writer can block new SHARED acquisitions while upgrading.
+                if !self.transient_shared_pending_gate {
+                    let next_transient = info
+                        .n_transient_shared_pending
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            FrankenError::internal(
+                                "Unix inode transient SHARED PENDING count overflow",
+                            )
+                        })?;
+                    match posix_lock_with_timeout(
+                        &*info.file,
+                        libc::F_RDLCK,
+                        PENDING_BYTE,
+                        1,
+                        timeout,
+                    ) {
+                        Ok(true) => {
+                            info.n_transient_shared_pending = next_transient;
+                            self.transient_shared_pending_gate = true;
+                        }
+                        Ok(false) => return Err(FrankenError::Busy),
+                        Err(error) => return Err(error),
+                    }
+                }
+
+                let shared_result = posix_lock_with_timeout_styled(
+                    &*info.file,
+                    libc::F_RDLCK,
+                    SHARED_FIRST,
+                    SHARED_SIZE,
+                    timeout,
+                );
+                match shared_result {
+                    Ok((true, style)) => {
+                        // The SHARED lock is the first lock every connection
+                        // takes on the inode; if byte-range/OFD locking was
+                        // rejected here it is rejected for the whole inode.
+                        // Record the coarse whole-file flock(2) downgrade so it
+                        // is observable above the VFS (GH #343 / bd-qll76).
+                        if style == FileLockStyle::WholeFileFlock {
+                            info.flock_fallback_engaged = true;
+                        }
+                    }
+                    Ok((false, _)) => {
+                        return Self::return_after_main_lock_failure(
+                            &mut info,
+                            &mut self.lock_level,
+                            &mut self.transient_shared_pending_gate,
+                            prior_level,
+                            FrankenError::Busy,
+                        );
+                    }
+                    Err(error) => {
+                        return Self::return_after_main_lock_failure(
+                            &mut info,
+                            &mut self.lock_level,
+                            &mut self.transient_shared_pending_gate,
+                            prior_level,
+                            error,
+                        );
+                    }
+                }
+            }
+            info.n_shared = next_shared;
+            self.lock_level = LockLevel::Shared;
+            if let Err(error) = Self::release_transient_shared_pending_gate_state(
+                &mut info,
+                &mut self.transient_shared_pending_gate,
+            ) {
+                return Self::return_after_main_lock_failure(
+                    &mut info,
+                    &mut self.lock_level,
+                    &mut self.transient_shared_pending_gate,
+                    prior_level,
+                    error,
+                );
+            }
+        }
+
+        // Shared -> Reserved: acquire F_WRLCK on the reserved byte.
+        if self.lock_level < LockLevel::Reserved && level >= LockLevel::Reserved {
+            if info.n_reserved > 0 {
+                // Another handle in this process already holds RESERVED.
+                return Self::return_after_main_lock_failure(
+                    &mut info,
+                    &mut self.lock_level,
+                    &mut self.transient_shared_pending_gate,
+                    prior_level,
+                    FrankenError::Busy,
+                );
+            }
+            let Some(next_reserved) = info.n_reserved.checked_add(1) else {
+                return Self::return_after_main_lock_failure(
+                    &mut info,
+                    &mut self.lock_level,
+                    &mut self.transient_shared_pending_gate,
+                    prior_level,
+                    FrankenError::internal("Unix inode RESERVED count overflow"),
+                );
+            };
+            match posix_lock_with_timeout(&*info.file, libc::F_WRLCK, RESERVED_BYTE, 1, timeout) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Self::return_after_main_lock_failure(
+                        &mut info,
+                        &mut self.lock_level,
+                        &mut self.transient_shared_pending_gate,
+                        prior_level,
+                        FrankenError::Busy,
+                    );
+                }
+                Err(error) => {
+                    return Self::return_after_main_lock_failure(
+                        &mut info,
+                        &mut self.lock_level,
+                        &mut self.transient_shared_pending_gate,
+                        prior_level,
+                        error,
+                    );
+                }
+            }
+            info.n_reserved = next_reserved;
+            self.lock_level = LockLevel::Reserved;
+        }
+
+        // Reserved -> Pending: acquire F_WRLCK on the pending byte.
+        // This blocks new shared-lock acquisitions from other processes.
+        if self.lock_level < LockLevel::Pending && level >= LockLevel::Pending {
+            if info.n_pending > 0 {
+                return Self::return_after_main_lock_failure(
+                    &mut info,
+                    &mut self.lock_level,
+                    &mut self.transient_shared_pending_gate,
+                    prior_level,
+                    FrankenError::Busy,
+                );
+            }
+            let Some(next_pending) = info.n_pending.checked_add(1) else {
+                return Self::return_after_main_lock_failure(
+                    &mut info,
+                    &mut self.lock_level,
+                    &mut self.transient_shared_pending_gate,
+                    prior_level,
+                    FrankenError::internal("Unix inode PENDING count overflow"),
+                );
+            };
+            match posix_lock_with_timeout(&*info.file, libc::F_WRLCK, PENDING_BYTE, 1, timeout) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Self::return_after_main_lock_failure(
+                        &mut info,
+                        &mut self.lock_level,
+                        &mut self.transient_shared_pending_gate,
+                        prior_level,
+                        FrankenError::Busy,
+                    );
+                }
+                Err(error) => {
+                    return Self::return_after_main_lock_failure(
+                        &mut info,
+                        &mut self.lock_level,
+                        &mut self.transient_shared_pending_gate,
+                        prior_level,
+                        error,
+                    );
+                }
+            }
+            info.n_pending = next_pending;
+            self.lock_level = LockLevel::Pending;
+        }
+
+        // Pending -> Exclusive: acquire F_WRLCK on the entire shared range,
+        // replacing the existing shared read lock. This will only succeed when
+        // all other processes have released their shared locks.
+        if self.lock_level < LockLevel::Exclusive && level >= LockLevel::Exclusive {
+            // The kernel sees all classic record locks from this process as a
+            // single owner, so it would happily grant WRLCK even while another
+            // local handle still has a SHARED claim. Refuse that false upgrade
+            // and unwind PENDING (plus any levels acquired by this request).
+            if info.n_shared > 1 || info.n_exclusive > 0 {
+                return Self::return_after_main_lock_failure(
+                    &mut info,
+                    &mut self.lock_level,
+                    &mut self.transient_shared_pending_gate,
+                    prior_level,
+                    FrankenError::Busy,
+                );
+            }
+            let Some(next_exclusive) = info.n_exclusive.checked_add(1) else {
+                return Self::return_after_main_lock_failure(
+                    &mut info,
+                    &mut self.lock_level,
+                    &mut self.transient_shared_pending_gate,
+                    prior_level,
+                    FrankenError::internal("Unix inode EXCLUSIVE count overflow"),
+                );
+            };
+            match posix_lock_with_timeout(
+                &*info.file,
+                libc::F_WRLCK,
+                SHARED_FIRST,
+                SHARED_SIZE,
+                timeout,
+            ) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Self::return_after_main_lock_failure(
+                        &mut info,
+                        &mut self.lock_level,
+                        &mut self.transient_shared_pending_gate,
+                        prior_level,
+                        FrankenError::Busy,
+                    );
+                }
+                Err(error) => {
+                    return Self::return_after_main_lock_failure(
+                        &mut info,
+                        &mut self.lock_level,
+                        &mut self.transient_shared_pending_gate,
+                        prior_level,
+                        error,
+                    );
+                }
+            }
+            info.n_exclusive = next_exclusive;
+            self.lock_level = LockLevel::Exclusive;
+        }
+
+        Ok(())
+    }
+
+    fn unlock(&mut self, _cx: &Cx, level: LockLevel) -> Result<()> {
+        if level >= self.lock_level && !self.transient_shared_pending_gate {
+            return Ok(());
+        }
+
+        let inode_info = Arc::clone(self.inode_info_ref());
+        let mut info = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let target = level.min(self.lock_level);
+        Self::rollback_main_lock_state(
+            &mut info,
+            &mut self.lock_level,
+            &mut self.transient_shared_pending_gate,
+            target,
+        )
+    }
+
+    fn lock_external_shared_snapshot(&mut self, cx: &Cx) -> Result<()> {
+        if self.external_append_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "cannot acquire a Unix snapshot inside a WAL append attempt",
+            ));
+        }
+        if self.external_shared_snapshot_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "Unix external shared-snapshot attempt is already armed",
+            ));
+        }
+        if self.external_maintenance_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "cannot acquire a Unix shared-snapshot fence during external maintenance",
+            ));
+        }
+
+        // Arm the exact prior baseline before the first raw side effect.
+        self.external_shared_snapshot_attempt = Some(UnixExternalSharedSnapshotAttempt {
+            prior_main_level: self.lock_level,
+        });
+        self.lock(cx, LockLevel::Shared)
+    }
+
+    fn restore_external_shared_snapshot_attempt(&mut self, _cx: &Cx) -> Result<()> {
+        if self.external_append_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "restore the Unix WAL append attempt before its enclosing snapshot",
+            ));
+        }
+        let Some(attempt) = self.external_shared_snapshot_attempt else {
+            return Ok(());
+        };
+        let inode_info = Arc::clone(self.inode_info_ref());
+        let mut info = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::rollback_main_lock_state(
+            &mut info,
+            &mut self.lock_level,
+            &mut self.transient_shared_pending_gate,
+            attempt.prior_main_level,
+        )?;
+        self.external_shared_snapshot_attempt = None;
+        Ok(())
+    }
+
+    fn lock_external_wal_append(&mut self, cx: &Cx) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        if self.external_append_attempt.is_some() || self.external_maintenance_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "Unix WAL append cannot overlap another append or maintenance attempt",
+            ));
+        }
+        // Opening SHM can itself acquire the WAL attachment's lifetime claim.
+        // Publish the attempt before that operation or any raw lock change.
+        self.external_append_attempt = Some(UnixExternalAppendAttempt {
+            prior_main_level: self.lock_level,
+            main_restore_pending: true,
+            write_acquired: false,
+            acquisition_complete: false,
+        });
+        if self.acquire_external_wal_slot(cx, WAL_WRITE_LOCK)?
+            && let Some(attempt) = self.external_append_attempt.as_mut()
+        {
+            attempt.write_acquired = true;
+        }
+        self.lock(cx, LockLevel::Reserved)?;
+        self.external_append_attempt
+            .as_mut()
+            .expect("successful append acquisition retains its exact attempt")
+            .acquisition_complete = true;
+        Ok(())
+    }
+
+    fn owns_external_wal_append_write(&self, cx: &Cx) -> Result<bool> {
+        checkpoint_or_abort(cx)?;
+        let Some(attempt) = self.external_append_attempt else {
+            return Ok(false);
+        };
+        if self.closed
+            || !attempt.acquisition_complete
+            || !attempt.write_acquired
+            || !attempt.main_restore_pending
+            || self.lock_level < LockLevel::Reserved
+        {
+            return Ok(false);
+        }
+        let Some(shm) = &self.shm_info else {
+            return Ok(false);
+        };
+        let info = shm
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let slot = &info.slots[usize::try_from(WAL_WRITE_LOCK).expect("WRITE slot fits")];
+        Ok(slot.exclusive_owner == Some(self.shm_owner_id)
+            && !slot
+                .shared_holders
+                .iter()
+                .any(|(owner, count)| *owner != self.shm_owner_id && *count != 0))
+    }
+
+    fn restore_external_wal_append_attempt(&mut self, _cx: &Cx) -> Result<()> {
+        let Some(attempt) = self.external_append_attempt.as_mut() else {
+            return Ok(());
+        };
+        // Once restoration starts, retained locks authorize cleanup only.
+        attempt.acquisition_complete = false;
+        let attempt = *attempt;
+        let mut errors = Vec::new();
+        if attempt.main_restore_pending {
+            let inode_info = Arc::clone(self.inode_info_ref());
+            let mut info = inode_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match Self::rollback_main_lock_state(
+                &mut info,
+                &mut self.lock_level,
+                &mut self.transient_shared_pending_gate,
+                attempt.prior_main_level,
+            ) {
+                Ok(()) => {
+                    if let Some(current) = self.external_append_attempt.as_mut() {
+                        current.main_restore_pending = false;
+                    }
+                }
+                Err(error) => errors.push(format!("main lock prefix: {error}")),
+            }
+        }
+        if attempt.write_acquired {
+            match self.release_external_wal_slot(WAL_WRITE_LOCK) {
+                Ok(()) => {
+                    if let Some(current) = self.external_append_attempt.as_mut() {
+                        current.write_acquired = false;
+                    }
+                }
+                Err(error) => errors.push(format!("WAL WRITE: {error}")),
+            }
+        }
+        let restored = self
+            .external_append_attempt
+            .is_some_and(|current| !current.main_restore_pending && !current.write_acquired);
+        if errors.is_empty() && restored {
+            self.external_append_attempt = None;
+            Ok(())
+        } else {
+            Err(FrankenError::internal(format!(
+                "Unix WAL append retained retryable restore obligations: {}",
+                errors.join(", ")
+            )))
+        }
+    }
+
+    fn lock_external_maintenance(&mut self, cx: &Cx, wal_mode: bool) -> Result<()> {
+        self.acquire_external_maintenance_fence(cx, wal_mode, LockLevel::Exclusive, false)
+    }
+
+    fn lock_external_wal_checkpoint(&mut self, cx: &Cx) -> Result<()> {
+        // FrankenSQLite appends under the main-file RESERVED byte; stock
+        // SQLite appends under WAL_WRITE_LOCK. Hold both, plus CKPT, while
+        // allowing foreign idle WAL-lifetime SHARED claims. The caller must
+        // still acquire the backfill/reset reader gates before page writes.
+        self.acquire_external_maintenance_fence(cx, true, LockLevel::Reserved, false)
+    }
+
+    fn lock_external_wal_recovery(&mut self, cx: &Cx) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        // Arm the recovery kind before even the checkpoint prefix can fail.
+        // The shared maintenance owner forbids nested append/snapshot owners.
+        self.acquire_external_maintenance_fence(cx, true, LockLevel::Reserved, true)?;
+        for slot in WAL_RECOVER_LOCK..WAL_TOTAL_LOCKS {
+            checkpoint_or_abort(cx)?;
+            if self.acquire_external_wal_slot(cx, slot)?
+                && let Some(attempt) = self.external_maintenance_attempt.as_mut()
+            {
+                attempt.record_acquired_slot(slot);
+            }
+        }
+        Ok(())
+    }
+
+    fn restore_external_maintenance_attempt(&mut self, _cx: &Cx) -> Result<()> {
+        let Some(attempt) = self.external_maintenance_attempt else {
+            return Ok(());
+        };
+        let maintenance_kind = if attempt.recovery_mode {
+            "WAL recovery"
+        } else {
+            "maintenance"
+        };
+        let mut restore_errors = Vec::new();
+
+        if attempt.wal_mode {
+            // Reverse the supplemental acquisition, recording each successful
+            // unlock or downgrade immediately. A failed inner release keeps
+            // the outer main/CKPT/WRITE fences intact for the next attempt.
+            for slot in (WAL_RECOVER_LOCK..WAL_TOTAL_LOCKS).rev() {
+                let acquired = self
+                    .external_maintenance_attempt
+                    .is_some_and(|current| current.acquired_slot(slot));
+                if !acquired {
+                    continue;
+                }
+                match self.release_external_wal_slot(slot) {
+                    Ok(()) => {
+                        if let Some(current) = self.external_maintenance_attempt.as_mut() {
+                            current.record_released_slot(slot);
+                        }
+                    }
+                    Err(error) => {
+                        restore_errors.push(format!("WAL supplemental slot {slot}: {error}"));
+                    }
+                }
+            }
+            if !restore_errors.is_empty() {
+                return Err(FrankenError::internal(format!(
+                    "Unix {maintenance_kind} supplemental restore failed; outer fences retained: {}",
+                    restore_errors.join(", ")
+                )));
+            }
+        }
+
+        // Restore the outer main-file prefix, then CKPT and WRITE. Ordinary
+        // maintenance reaches this phase after its reader gates drain. Every
+        // pending surface is attempted independently in this pass; successful
+        // pieces are removed from the retained marker immediately.
+        if attempt.main_restore_pending {
+            let inode_info = Arc::clone(self.inode_info_ref());
+            let mut info = inode_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match Self::rollback_main_lock_state(
+                &mut info,
+                &mut self.lock_level,
+                &mut self.transient_shared_pending_gate,
+                attempt.prior_main_level,
+            ) {
+                Ok(()) => {
+                    if let Some(current) = self.external_maintenance_attempt.as_mut() {
+                        current.main_restore_pending = false;
+                    }
+                }
+                Err(error) => restore_errors.push(format!("main lock prefix: {error}")),
+            }
+        }
+
+        if attempt.wal_mode {
+            for slot in [WAL_CKPT_LOCK, WAL_WRITE_LOCK] {
+                let acquired = self
+                    .external_maintenance_attempt
+                    .is_some_and(|current| current.acquired_slot(slot));
+                if !acquired {
+                    continue;
+                }
+                match self.release_external_wal_slot(slot) {
+                    Ok(()) => {
+                        if let Some(current) = self.external_maintenance_attempt.as_mut() {
+                            current.record_released_slot(slot);
+                        }
+                    }
+                    Err(error) => restore_errors.push(format!("WAL slot {slot}: {error}")),
+                }
+            }
+        }
+
+        let all_wal_released = self
+            .external_maintenance_attempt
+            .is_some_and(|current| current.newly_acquired_wal_slots == 0);
+        let main_restored = self
+            .external_maintenance_attempt
+            .is_some_and(|current| !current.main_restore_pending);
+        if restore_errors.is_empty() && main_restored && all_wal_released {
+            self.external_maintenance_attempt = None;
+        }
+
+        if !restore_errors.is_empty() {
+            return Err(FrankenError::internal(format!(
+                "Unix {maintenance_kind} retained retryable surfaces after restore: {}",
+                restore_errors.join(", ")
+            )));
+        }
+        if !all_wal_released {
+            return Err(FrankenError::internal(
+                "Unix external maintenance retained WAL ownership without a recorded release error",
+            ));
+        }
+        if !main_restored {
+            return Err(FrankenError::internal(
+                "Unix external maintenance retained its main-lock obligation without a recorded release error",
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_reserved_lock(&self, _cx: &Cx) -> Result<bool> {
+        // F_GETLK never reports classic fcntl locks owned by this process.
+        // Consult the coalesced inode state first so a different connection in
+        // this process observes RESERVED, PENDING, or EXCLUSIVE exactly as
+        // SQLite's xCheckReservedLock contract requires. Keep the inode mutex
+        // through F_GETLK so a local writer cannot enter the gap between the
+        // process-local and kernel-level checks.
+        let inode_info = Arc::clone(self.inode_info_ref());
+        let info = inode_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let self_reserved = u32::from(self.lock_level >= LockLevel::Reserved);
+        let self_pending = u32::from(self.lock_level >= LockLevel::Pending);
+        let self_exclusive = u32::from(self.lock_level >= LockLevel::Exclusive);
+        if info.n_reserved > self_reserved
+            || info.n_pending > self_pending
+            || info.n_exclusive > self_exclusive
+        {
+            return Ok(true);
+        }
+
+        let flock = posix_getlk(&info.file, libc::F_WRLCK, RESERVED_BYTE, 1)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let unlocked: libc::c_short = libc::F_UNLCK as libc::c_short;
+        Ok(flock.l_type != unlocked)
+    }
+
+    fn holds_main_wal_lifetime_read_lock(&self) -> bool {
+        self.wal_lifetime_claim == WalLifetimeClaim::Held
+    }
+
+    fn claim_wal_lifetime_before_join(&mut self, cx: &Cx) -> Result<bool> {
+        if self.wal_lifetime_claim == WalLifetimeClaim::Held {
+            return Ok(true);
+        }
+        if !self.main_header_is_wal() {
+            return Ok(false);
+        }
+        self.acquire_wal_lifetime_claim(cx)?;
+        // The claim excludes EXCLUSIVE, so the journal mode is now pinned.
+        // A peer may have left WAL mode between the first read and the claim;
+        // never keep a WAL-lifetime claim on a rollback-journal file.
+        if !self.main_header_is_wal() {
+            self.release_wal_lifetime_claim()?;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn locking_downgraded_to_whole_file_flock(&self) -> bool {
+        // A permanent property of the inode's filesystem, recorded on the shared
+        // inode state when the SHARED acquisition first dropped to the coarse
+        // whole-file flock(2) fallback. Safe on a closed handle (no inode state
+        // => no lock was ever taken => false). Always false on Linux, which
+        // never falls back (GH #343 / bd-qll76).
+        self.inode_info.as_ref().is_some_and(|inode_info| {
+            inode_info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .flock_fallback_engaged
+        })
+    }
+
+    fn mvcc_shm_map(&mut self, cx: &Cx, payload_bytes: u64, create: bool) -> Result<ShmRegion> {
+        use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+        checkpoint_or_abort(cx)?;
+        if self.closed || !self.open_flags.contains(VfsOpenFlags::MAIN_DB) {
+            return Err(FrankenError::Unsupported);
+        }
+        if create && !self.open_flags.contains(VfsOpenFlags::READWRITE) {
+            return Err(FrankenError::ReadOnly);
+        }
+        let map_size = usize::try_from(payload_bytes)
+            .ok()
+            .filter(|size| *size != 0 && isize::try_from(*size).is_ok())
+            .ok_or_else(|| invalid_io_input("invalid MVCC payload size".to_owned()))?;
+        let total_bytes = MVCC_SHM_PAYLOAD_OFFSET
+            .checked_add(payload_bytes)
+            .filter(|size| i64::try_from(*size).is_ok())
+            .ok_or_else(|| invalid_io_input("MVCC backing length overflow".to_owned()))?;
+        // SAFETY: sysconf reads an operating-system scalar and owns no memory.
+        let page_bytes = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if page_bytes <= 0 || !MVCC_SHM_PAYLOAD_OFFSET.is_multiple_of(page_bytes as u64) {
+            return Err(FrankenError::Unsupported);
+        }
+
+        let database_path = fs::canonicalize(&self.path)?;
+        let descriptor = self.file_ref().metadata()?;
+        let identity = inode_key_from_file(self.file_ref())?;
+        let named = fs::symlink_metadata(&database_path)?;
+        if !descriptor.is_file()
+            || descriptor.len() == 0
+            || descriptor.nlink() != 1
+            || !named.is_file()
+            || named.nlink() != 1
+            || identity != FileIdentity::from_unix_parts(named.dev(), named.ino())
+        {
+            return Err(FrankenError::CannotOpen {
+                path: database_path,
+            });
+        }
+        // Do not clone the caller's binding: its explicit quiesce would also
+        // release that clone. Hold an independent exclusive admission gate
+        // through creation so a peer cannot strand a just-created empty file
+        // by taking its SHARED flock first. The use claim stays SHARED, so
+        // existing connections/readers remain admitted throughout bootstrap.
+        let admission =
+            PendingNamespaceOpen::begin(&database_path, NamespaceOpenIntent::ExistingCompanion)?;
+        if admission.expected_identity() != Some(identity) {
+            return Err(FrankenError::CannotOpen {
+                path: database_path,
+            });
+        }
+        let owner = self.new_mvcc_mapping_owner()?;
+        let mut lifetime = UnixMvccMappingLifetime {
+            cleanup: Some(UnixMvccMappingCleanup {
+                main: Some(owner),
+                backing: None,
+                admission: Some(admission),
+                namespace: None,
+            }),
+        };
+        let cleanup = lifetime.cleanup.as_mut().expect("new mapping cleanup");
+        let main = cleanup.main.as_mut().expect("new mapping main owner");
+        main.lock(cx, LockLevel::Shared)?;
+        if main.locking_downgraded_to_whole_file_flock() {
+            return Err(FrankenError::Unsupported);
+        }
+        checkpoint_or_abort(cx)?;
+
+        let backing_path = mvcc_shm_path(&database_path);
+        let open = |create_new| {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(create_new)
+                .mode(0o600)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&backing_path)
+        };
+        let (file, created) = if create {
+            match open(true) {
+                Ok(file) => (file, true),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (open(false)?, false),
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            (open(false)?, false)
+        };
+        cleanup.backing = Some(file);
+        let file = cleanup.backing.as_ref().expect("opened MVCC backing");
+        validate_mvcc_shm_backing(file, &backing_path)?;
+        if created {
+            mvcc_shm_lock(file, FileLockMode::Exclusive)?;
+            checkpoint_or_abort(cx)?;
+            // Publish the immutable transport header only after the complete
+            // payload has backing storage, or, where the platform or the
+            // filesystem cannot preallocate, the sparse extent that releases
+            // up to 0.4.10 created here. A storage failure leaves an invalid,
+            // unmapped companion, never a header for a payload that could not
+            // be allocated.
+            crate::unix_shm::ensure_shm_backing_or_sparse(file, total_bytes)?;
+            write_full_at(
+                |buffer, offset| file.write_at(buffer, offset),
+                &mvcc_shm_transport_header(identity, inode_key_from_file(file)?, payload_bytes),
+                0,
+                "MVCC transport header",
+            )?;
+            // flock conversion is not assumed atomic. Every existing-file
+            // opener is read-only with respect to the immutable transport
+            // header and extent, even when no live mapping currently exists.
+            // Revalidate after SHARED admission before exposing any payload.
+        }
+        mvcc_shm_lock(file, FileLockMode::Shared)?;
+        validate_mvcc_shm_backing(file, &backing_path)?;
+        validate_mvcc_shm_header(file, identity, payload_bytes)?;
+        if !created {
+            // An existing MVCC payload can have live atomic writers, and its
+            // bytes are not protected by WAL_WRITE_LOCK, so they are never
+            // read back and rewritten to fill holes. Linux allocates natively
+            // without touching them. Everywhere else, and on a filesystem
+            // that cannot preallocate, the payload is used as it is, as
+            // releases up to 0.4.10 used it: a companion that a 0.4.10 peer
+            // created sparse must stay joinable. The fallback never resizes
+            // the file.
+            crate::unix_shm::ensure_existing_shm_backing(file, total_bytes)?;
+        }
+        if inode_key_from_file(main.file_ref())? != identity {
+            return Err(FrankenError::CannotOpen {
+                path: database_path,
+            });
+        }
+        checkpoint_or_abort(cx)?;
+        // SAFETY: the validated descriptor has this fixed, nonzero extent;
+        // the aligned offset is checked above. The cleanup capsule retains
+        // the backing, main-file claim, and namespace until after munmap.
+        let pointer = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                map_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                MVCC_SHM_PAYLOAD_OFFSET as libc::off_t,
+            )
+        };
+        if pointer == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error().into());
+        }
+        // SAFETY: this owns exactly the successful MAP_SHARED mapping above.
+        let mut region = unsafe { ShmRegion::from_mmap(pointer.cast::<u8>(), map_size) };
+        let namespace = cleanup
+            .admission
+            .as_mut()
+            .expect("pending companion admission")
+            .finish_existing_companion(identity)?;
+        cleanup.namespace = Some(namespace);
+        drop(cleanup.admission.take());
+        region.retain_mmap_lifetime(Box::new(lifetime));
+        checkpoint_or_abort(cx)?;
+        Ok(region)
+    }
+
+    fn shm_map(
+        &mut self,
+        cx: &Cx,
+        region: u32,
+        size: u32,
+        extend: bool,
+    ) -> Result<crate::shm::ShmRegion> {
+        if size == 0 {
+            return Err(FrankenError::LockFailed {
+                detail: "shm_map size must be > 0".to_string(),
+            });
+        }
+
+        let map_size = usize::try_from(size).map_err(|_| FrankenError::LockFailed {
+            detail: format!("shm_map size too large: {size}"),
+        })?;
+
+        let shm_info = self.ensure_shm_info_with_create(cx, extend)?;
+        let info = shm_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Return cached region if it already exists and is large enough.
+        if let Some(existing) = info.regions.get(&region).cloned() {
+            if existing.len() >= map_size {
+                drop(info);
+                return Ok(existing);
+            }
+            // A non-extending request cannot replace a smaller cached alias.
+            // Keep the cache entry until any extending replacement is mapped
+            // successfully, so refusal or mmap failure preserves live aliases.
+            if !extend {
+                drop(info);
+                return Err(FrankenError::LockFailed {
+                    detail: format!(
+                        "shm region {region} is {} bytes, requested {map_size} bytes without extend",
+                        existing.len()
+                    ),
+                });
+            }
+        }
+
+        // A cold region may already exist on disk even when it has never
+        // been mapped by this process. Non-extending requests never grow a
+        // missing/short backing, but still must establish physical backing
+        // for a sufficiently long sparse file before publishing an alias.
+        let region_count = u64::from(region) + 1;
+        let target_len =
+            region_count
+                .checked_mul(u64::from(size))
+                .ok_or_else(|| FrankenError::LockFailed {
+                    detail: "shm_map file length overflow".to_string(),
+                })?;
+        let current_len = info.file.metadata().map_err(FrankenError::Io)?.len();
+        if target_len > current_len && !extend {
+            return Err(FrankenError::CannotOpen {
+                path: self.shm_path.clone(),
+            });
+        }
+        // Allocate the whole prefix, including skipped regions: stock SQLite
+        // may map every preceding region after observing this file length.
+        // Never truncate on failure. A peer or an older live alias may already
+        // depend on the successful prefix; the next attempt repairs any holes.
+        // Where preallocation is unavailable this is the sparse extension
+        // that releases up to 0.4.10 performed here.
+        Self::ensure_wal_shm_backing(&info, target_len)?;
+
+        // Map the region via mmap(MAP_SHARED).
+        let offset = u64::from(region) * u64::from(size);
+        drop(info);
+        let lifetime = self.new_mapping_lifetime(&shm_info)?;
+        let mut info = shm_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let fd = info.file.as_raw_fd();
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                map_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                offset as libc::off_t,
+            )
+        };
+
+        if ptr == libc::MAP_FAILED {
+            let err = std::io::Error::last_os_error();
+            drop(info);
+            drop(lifetime);
+            return Err(FrankenError::Io(std::io::Error::new(
+                err.kind(),
+                format!(
+                    "mmap failed for shm region {region} (offset={offset}, size={map_size}): {err}"
+                ),
+            )));
+        }
+
+        // SAFETY: `ptr` is from a successful `mmap(MAP_SHARED, PROT_READ|PROT_WRITE)`
+        // call. The region is `map_size` bytes. We transfer ownership to ShmRegion
+        // which will `munmap` on drop.
+        let mut new_region = unsafe { ShmRegion::from_mmap(ptr.cast::<u8>(), map_size) };
+        new_region.retain_mmap_lifetime(Box::new(lifetime));
+        let replaced = info.regions.insert(region, new_region.share());
+        drop(info);
+        // The displaced mapping may have no external alias; its destructor
+        // reenters SHM state to retire its independent native lifetime.
+        drop(replaced);
+        Ok(new_region)
+    }
+
+    fn shm_lock(&mut self, cx: &Cx, offset: u32, n: u32, flags: u32) -> Result<()> {
+        Self::validate_shm_request(offset, n)?;
+        let lock_requested = flags & SQLITE_SHM_LOCK != 0;
+        let unlock_requested = flags & SQLITE_SHM_UNLOCK != 0;
+        if lock_requested == unlock_requested {
+            error!(
+                offset,
+                n, flags, "invalid shm_lock request: exactly one of LOCK/UNLOCK is required"
+            );
+            return Err(FrankenError::LockFailed {
+                detail: "invalid shm_lock flags (must set exactly one of LOCK/UNLOCK)".to_string(),
+            });
+        }
+
+        let shared_mode = flags & SQLITE_SHM_SHARED != 0;
+        let exclusive_mode = flags & SQLITE_SHM_EXCLUSIVE != 0;
+        if shared_mode == exclusive_mode {
+            error!(
+                offset,
+                n, flags, "invalid shm_lock request: exactly one of SHARED/EXCLUSIVE is required"
+            );
+            return Err(FrankenError::LockFailed {
+                detail: "invalid shm_lock flags (must set exactly one of SHARED/EXCLUSIVE)"
+                    .to_string(),
+            });
+        }
+
+        let shm_info = self.ensure_shm_info(cx)?;
+        let mut info = shm_info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if lock_requested {
+            let mut acquired = Vec::new();
+            for slot in offset..offset + n {
+                let result = if exclusive_mode {
+                    self.acquire_shm_exclusive_slot(&mut info, slot)
+                } else {
+                    self.acquire_shm_shared_slot(&mut info, slot)
+                };
+                match result {
+                    Ok(true) => acquired.push(slot),
+                    Ok(false) => {}
+                    Err(err) => {
+                        let mut rollback_errors = Vec::new();
+                        for acquired_slot in acquired.into_iter().rev() {
+                            let release_result = if exclusive_mode {
+                                self.release_shm_exclusive_slot(&mut info, acquired_slot)
+                            } else {
+                                self.release_shm_shared_slot(&mut info, acquired_slot)
+                            };
+                            if let Err(release_error) = release_result {
+                                // The slot helper is raw-first/state-second, so
+                                // a failed unwind remains represented in the
+                                // owner table for close or an explicit retry.
+                                rollback_errors
+                                    .push(format!("slot {acquired_slot}: {release_error}"));
+                            }
+                        }
+                        if !rollback_errors.is_empty() {
+                            return Err(FrankenError::internal(format!(
+                                "Unix SHM range acquisition failed and retained retryable slots: lock={err}; rollback={}",
+                                rollback_errors.join(", ")
+                            )));
+                        }
+                        return Err(err);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        for slot in offset..offset + n {
+            if exclusive_mode {
+                self.release_shm_exclusive_slot(&mut info, slot)?;
+            } else {
+                self.release_shm_shared_slot(&mut info, slot)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn shm_barrier(&self) {
+        // Full memory barrier to ensure all prior SHM writes (via mmap) are
+        // visible to other processes before any subsequent reads. This matches
+        // C SQLite's xShmBarrier which calls `__sync_synchronize()` or
+        // equivalent.
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn shm_unmap(&mut self, _cx: &Cx, delete: bool) -> Result<()> {
+        if self.external_append_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "cannot unmap Unix SHM while a WAL append attempt owns its writer fence",
+            ));
+        }
+        if self.external_maintenance_attempt.is_some() {
+            return Err(FrankenError::internal(
+                "cannot unmap Unix SHM while an external maintenance attempt is armed",
+            ));
+        }
+        self.release_shm_owner_state(delete)?;
+        self.release_wal_lifetime_claim()
+    }
+
+    // --- GH#399: cross-process WAL reader registration (C SQLite `aReadMark`) ---
+
+    fn wal_reader_mark_exclusive_acquire(&mut self, cx: &Cx, reader_slot: u32) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        if !(1..WAL_NREADER).contains(&reader_slot) {
+            return Err(FrankenError::LockFailed {
+                detail: format!("invalid reader-mark update slot {reader_slot}"),
+            });
+        }
+        // Acquisition never creates an attachment or a main-file/DMS claim.
+        // Native reader admission already maps region zero before this call.
+        let info_arc = self.shm_info.as_ref().ok_or(FrankenError::BusyRecovery)?;
+        let mut info = info_arc
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let slot = wal_reader_lock_slot(reader_slot)?;
+        let state = &info.slots[usize::try_from(slot).expect("reader slot fits usize")];
+        if state.exclusive_owner.is_some() || !state.shared_holders.is_empty() {
+            return Err(FrankenError::Busy);
+        }
+        // Keep the owner mutex across the empty-slot test and raw acquisition.
+        // The helper changes state only after its single fcntl lock succeeds.
+        self.acquire_shm_exclusive_slot(&mut info, slot).map(|_| ())
+    }
+
+    fn wal_reader_slot_acquire(&mut self, cx: &Cx, mx_frame: u32) -> Result<Option<u32>> {
+        checkpoint_or_abort(cx)?;
+        let region_0 = self.shm_map(cx, 0, SHM_SEGMENT_SIZE, true)?;
+        // Mirror `walTryBeginRead`'s WAL_RETRY loop: a reader table that is
+        // momentarily fully contended (every slot pinned at another mark, or
+        // a slot mutated between publish and share) is retried with backoff
+        // inside the handle's busy budget instead of failing the transaction.
+        let budget = Duration::from_millis(self.busy_timeout_ms.max(WAL_READER_SLOT_MIN_BUDGET_MS));
+        let started = Instant::now();
+        let mut backoff = Duration::from_millis(1);
+        loop {
+            if let Some(slot) = self.try_acquire_wal_reader_slot(cx, &region_0, mx_frame)? {
+                return Ok(Some(slot));
+            }
+            let Some(remaining) = budget.checked_sub(started.elapsed()) else {
+                warn!(
+                    mx_frame,
+                    read_marks = ?self.compat_read_marks(),
+                    "no WAL reader slot could be acquired within the busy budget"
+                );
+                return Err(FrankenError::Busy);
+            };
+            std::thread::sleep(backoff.min(remaining));
+            backoff = (backoff * 2).min(WAL_READER_SLOT_MAX_BACKOFF);
+        }
+    }
+
+    fn wal_reader_slot_release(&mut self, cx: &Cx, slot: u32) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        let lock_slot = wal_reader_lock_slot(slot)?;
+        self.shm_lock(cx, lock_slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+    }
+
+    fn wal_checkpoint_backfill_gate_acquire(&mut self, cx: &Cx) -> Result<bool> {
+        checkpoint_or_abort(cx)?;
+        match self.acquire_checkpoint_reader_slot(cx, 0) {
+            Ok(()) => Ok(true),
+            Err(FrankenError::Busy) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn wal_checkpoint_backfill_gate_release(&mut self, cx: &Cx) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        self.release_checkpoint_reader_slot(0)
+    }
+
+    fn wal_checkpoint_reader_horizon(&mut self, cx: &Cx, mx_frame: u32) -> Result<u32> {
+        checkpoint_or_abort(cx)?;
+        let region_0 = self.shm_map(cx, 0, SHM_SEGMENT_SIZE, true)?;
+        // C SQLite `walCheckpoint`: every reader slot whose mark is below the
+        // WAL end is either free (lock it exclusively, park it, move on) or
+        // pinned by a live reader (its mark becomes the new safe horizon).
+        let mut mx_safe_frame = mx_frame;
+        for index in 1..WAL_NREADER {
+            let mark = read_wal_read_mark(&region_0, index)?;
+            if mx_safe_frame <= mark {
+                continue;
+            }
+            match self.acquire_checkpoint_reader_slot(cx, index) {
+                Ok(()) => {
+                    // Slot 1 is re-armed at the current tip so the next reader
+                    // can share it without an exclusive publish; the rest are
+                    // parked as unused so a stale mark never looks shareable.
+                    let replacement = if index == 1 {
+                        mx_safe_frame
+                    } else {
+                        WAL_READ_MARK_NOT_USED
+                    };
+                    let publish = write_wal_read_mark(&region_0, index, replacement);
+                    self.shm_barrier();
+                    self.release_checkpoint_reader_slot(index)?;
+                    publish?;
+                }
+                Err(FrankenError::Busy) => {
+                    mx_safe_frame = mark;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(mx_safe_frame)
+    }
+
+    fn wal_checkpoint_reset_gate_acquire(&mut self, cx: &Cx) -> Result<bool> {
+        checkpoint_or_abort(cx)?;
+        for reader in 1..WAL_NREADER {
+            if let Err(error) = self.acquire_checkpoint_reader_slot(cx, reader) {
+                let mut cleanup_errors = Vec::new();
+                // Only this call's successful prefix belongs to this unwind.
+                // Mask cancellation so it cannot prevent an otherwise possible
+                // release; a failed release remains in the maintenance owner.
+                for acquired in (1..reader).rev() {
+                    if let Err(cleanup) = self.release_checkpoint_reader_slot(acquired) {
+                        cleanup_errors.push(format!("reader {acquired}: {cleanup}"));
+                    }
+                }
+                if !cleanup_errors.is_empty() {
+                    return Err(FrankenError::internal(format!(
+                        "WAL reset gate acquisition failed ({error}); retained cleanup: {}",
+                        cleanup_errors.join(", ")
+                    )));
+                }
+                return match error {
+                    FrankenError::Busy => Ok(false),
+                    other => Err(other),
+                };
+            }
+        }
+        Ok(true)
+    }
+
+    fn wal_checkpoint_reset_gate_release(&mut self, cx: &Cx) -> Result<()> {
+        checkpoint_or_abort(cx)?;
+        let mut errors = Vec::new();
+        for reader in (1..WAL_NREADER).rev() {
+            if let Err(error) = self.release_checkpoint_reader_slot(reader) {
+                errors.push(format!("reader {reader}: {error}"));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(FrankenError::internal(format!(
+                "WAL reset gate retained retryable claims: {}",
+                errors.join(", ")
+            )))
+        }
+    }
+
+    fn set_busy_timeout_ms(&mut self, ms: u64) {
+        self.busy_timeout_ms = ms;
+    }
+}
+
+/// Smallest busy budget for reader-slot acquisition, even when the handle has
+/// no busy timeout: the table is only ever contended for the microseconds a
+/// peer needs between publishing a mark and sharing it.
+const WAL_READER_SLOT_MIN_BUDGET_MS: u64 = 100;
+const WAL_READER_SLOT_MAX_BACKOFF: Duration = Duration::from_millis(50);
+
+fn wal_reader_lock_slot(index: u32) -> Result<u32> {
+    wal_read_lock_slot(index).ok_or_else(|| FrankenError::LockFailed {
+        detail: format!("invalid WAL reader slot {index}"),
+    })
+}
+
+fn wal_read_mark_offset(index: u32) -> usize {
+    SHM_READ_MARK_OFFSET + usize::try_from(index).expect("reader index fits usize") * 4
+}
+
+fn read_wal_read_mark(region_0: &ShmRegion, index: u32) -> Result<u32> {
+    region_0.atomic_load_u32_ne(wal_read_mark_offset(index), Ordering::Acquire)
+}
+
+fn write_wal_read_mark(region_0: &ShmRegion, index: u32, mark: u32) -> Result<()> {
+    region_0.atomic_store_u32_ne(wal_read_mark_offset(index), mark, Ordering::Release)
+}
+
+impl UnixFile {
+    /// One `walTryBeginRead` attempt: share the slot already published at the
+    /// best mark `<= mx_frame`, publishing `mx_frame` into a free slot first
+    /// when no slot carries it and this handle permits writes. A read-only
+    /// handle shares an existing conservative mark without mutating SHM.
+    /// `Ok(None)` asks the caller to retry after a
+    /// transient conflict (every slot pinned, or the shared slot's mark moved
+    /// between publish and share).
+    fn try_acquire_wal_reader_slot(
+        &mut self,
+        cx: &Cx,
+        region_0: &ShmRegion,
+        mx_frame: u32,
+    ) -> Result<Option<u32>> {
+        // An empty WAL snapshot reads only the main database. Slot 0 protects
+        // it from backfill without requiring a published mark or pinning a
+        // WAL generation it does not use. This also admits a read-only opener
+        // immediately after a checkpoint has retired the older WAL marks.
+        if !self.open_flags.contains(VfsOpenFlags::READWRITE) && mx_frame == 0 {
+            let slot = wal_reader_lock_slot(0)?;
+            return match self.shm_lock(cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_SHARED) {
+                Ok(()) => Ok(Some(0)),
+                Err(FrankenError::Busy) => Ok(None),
+                Err(error) => Err(error),
+            };
+        }
+        let mut mx_read_mark = 0_u32;
+        let mut mx_index = 0_u32;
+        for index in 1..WAL_NREADER {
+            let mark = read_wal_read_mark(region_0, index)?;
+            if mx_read_mark <= mark && mark <= mx_frame {
+                mx_read_mark = mark;
+                mx_index = index;
+            }
+        }
+
+        if self.open_flags.contains(VfsOpenFlags::READWRITE)
+            && (mx_read_mark < mx_frame || mx_index == 0)
+        {
+            for index in 1..WAL_NREADER {
+                let lock_slot = wal_reader_lock_slot(index)?;
+                match self.shm_lock(cx, lock_slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE) {
+                    Ok(()) => {
+                        let publish = write_wal_read_mark(region_0, index, mx_frame);
+                        self.shm_barrier();
+                        self.shm_lock(cx, lock_slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE)?;
+                        publish?;
+                        mx_read_mark = mx_frame;
+                        mx_index = index;
+                        break;
+                    }
+                    Err(FrankenError::Busy) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        if mx_index == 0 {
+            return Ok(None);
+        }
+
+        let lock_slot = wal_reader_lock_slot(mx_index)?;
+        match self.shm_lock(cx, lock_slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_SHARED) {
+            Ok(()) => {}
+            Err(FrankenError::Busy) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        self.shm_barrier();
+        // A checkpointer may have re-armed the slot between the scan and the
+        // SHARED acquisition; a mark that moved no longer describes this
+        // reader, so give the slot back and rescan.
+        if read_wal_read_mark(region_0, mx_index)? != mx_read_mark {
+            self.shm_lock(cx, lock_slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)?;
+            return Ok(None);
+        }
+        Ok(Some(mx_index))
+    }
+}
+
+#[cfg(test)]
+impl UnixFile {
+    fn read(&self, cx: &Cx, buf: &mut [u8], offset: u64) -> Result<usize> {
+        crate::block_on_test_io(cx, <Self as VfsFile>::read(self, cx, buf, offset))
+    }
+
+    fn write(&self, cx: &Cx, buf: &[u8], offset: u64) -> Result<()> {
+        crate::block_on_test_io(cx, <Self as VfsFile>::write(self, cx, buf, offset))
+    }
+
+    fn write_tracked_sync(
+        &self,
+        cx: &Cx,
+        buf: &[u8],
+        offset: u64,
+        completion: VfsWriteCompletion,
+    ) -> Result<()> {
+        crate::block_on_test_io(
+            cx,
+            <Self as VfsFile>::write_tracked(self, cx, buf, offset, completion),
+        )
+    }
+
+    fn write_page_batch_sync(&self, cx: &Cx, writes: &[(u64, &[u8])]) -> Result<()> {
+        crate::block_on_test_io(cx, <Self as VfsFile>::write_page_batch(self, cx, writes))
+    }
+}
+
+impl Drop for UnixFile {
+    fn drop(&mut self) {
+        if !self.closed {
+            let cx = Cx::new();
+            if let Err(error) = self.close(&cx) {
+                warn!(
+                    path = %self.path.display(),
+                    %error,
+                    "Unix implicit close retained its exact cleanup state for process-root retry"
+                );
+                let deferred = self.take_for_deferred_cleanup();
+                deferred_unix_cleanup_queue()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(deferred);
+                return;
+            }
+        }
+
+        if let (Some(inode_info), Some(file)) = (self.inode_info.take(), self.file.take()) {
+            global_inode_table().finish_handle_drop(inode_info, file);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write as _};
+    use std::process::{Child, Stdio};
+    use std::process::{Command, Output};
+
+    fn admitted_mvcc_fixture(
+        name: &str,
+    ) -> (
+        tempfile::TempDir,
+        PathBuf,
+        UnixFile,
+        Arc<DatabaseNamespaceBinding>,
+    ) {
+        let directory = tempfile::tempdir().expect("MVCC fixture directory");
+        let requested = directory.path().join(name);
+        fs::write(&requested, [0x53_u8; 4096]).expect("materialize main file");
+        let path = fs::canonicalize(requested).expect("canonical main file");
+        let (file, _) = UnixVfs::new()
+            .open(
+                &Cx::new(),
+                Some(&path),
+                VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE,
+            )
+            .expect("open main file");
+        let namespace = PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::Shared)
+            .expect("begin namespace")
+            .bind(file.file_identity().unwrap().unwrap())
+            .expect("bind namespace");
+        namespace
+            .finish_bootstrap()
+            .expect("finish namespace bootstrap");
+        (directory, path, file, namespace)
+    }
+
+    struct MvccTransportChild(Child);
+
+    impl Drop for MvccTransportChild {
+        fn drop(&mut self) {
+            if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+
+    #[test]
+    fn mvcc_shm_native_process_atomic_ownership_and_alias_lifetime() {
+        const CHILD: &str = "FSQLITE_MVCC_TRANSPORT_CHILD";
+        const TEST: &str =
+            "unix::tests::mvcc_shm_native_process_atomic_ownership_and_alias_lifetime";
+        let cx = Cx::new();
+        if let Some(path) = std::env::var_os(CHILD) {
+            let (mut file, _) = UnixVfs::new()
+                .open(
+                    &cx,
+                    Some(Path::new(&path)),
+                    VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE,
+                )
+                .expect("child opens actual main file");
+            let region = file
+                .mvcc_shm_map(&cx, 4096, false)
+                .expect("child maps existing payload");
+            assert!(region.is_mmap_backed());
+            assert_eq!(
+                region
+                    .atomic_compare_exchange_u64_le(
+                        0,
+                        101,
+                        202,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .unwrap(),
+                Ok(101)
+            );
+            file.close(&cx).expect("child closes origin before alias");
+            println!("mvcc-child-owned");
+            std::io::stdout().flush().unwrap();
+            let mut command = String::new();
+            assert_ne!(std::io::stdin().read_line(&mut command).unwrap(), 0);
+            assert_eq!(command.trim(), "release");
+            assert_eq!(
+                region
+                    .atomic_compare_exchange_u64_le(0, 202, 0, Ordering::AcqRel, Ordering::Acquire)
+                    .unwrap(),
+                Ok(202)
+            );
+            drop(region);
+            println!("mvcc-child-released");
+            std::io::stdout().flush().unwrap();
+            return;
+        }
+
+        let (directory, path, mut file, namespace) = admitted_mvcc_fixture("native.db");
+        let alias = directory.path().join("symlink.db");
+        std::os::unix::fs::symlink(&path, &alias).unwrap();
+        let (mut existing_reader, _) = UnixVfs::new()
+            .open(
+                &cx,
+                Some(&path),
+                VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE,
+            )
+            .unwrap();
+        existing_reader.lock(&cx, LockLevel::Shared).unwrap();
+        let region = file
+            .mvcc_shm_map(&cx, 4096, true)
+            .expect("first mapping coexists with an admitted main SHARED reader");
+        existing_reader.close(&cx).unwrap();
+        assert!(region.is_mmap_backed());
+        region
+            .atomic_store_u64_le(0, 101, Ordering::Release)
+            .unwrap();
+        let surviving_alias = region.share();
+        let mut child = MvccTransportChild(
+            Command::new(std::env::current_exe().unwrap())
+                .args([TEST, "--exact", "--nocapture"])
+                .env(CHILD, &alias)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .expect("spawn actual native peer"),
+        );
+        let output = child.0.stdout.take().unwrap();
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(output).lines() {
+                if send.send(line.expect("child stdout")).is_err() {
+                    break;
+                }
+            }
+        });
+        let expect_witness = |expected: &str| {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let line = receive
+                    .recv_timeout(remaining)
+                    .expect("bounded child witness");
+                if line == expected {
+                    break;
+                }
+            }
+        };
+        expect_witness("mvcc-child-owned");
+        assert_eq!(
+            region.atomic_load_u64_le(0, Ordering::Acquire).unwrap(),
+            202
+        );
+        assert_eq!(
+            region
+                .atomic_compare_exchange_u64_le(0, 101, 0, Ordering::AcqRel, Ordering::Acquire)
+                .unwrap(),
+            Err(202),
+            "a stale owner cannot release the peer's actual claim"
+        );
+        file.close(&cx).unwrap();
+        namespace.quiesce();
+        drop(region);
+        assert_eq!(
+            surviving_alias
+                .atomic_load_u64_le(0, Ordering::Acquire)
+                .unwrap(),
+            202
+        );
+        drop(surviving_alias);
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::ReservedExclusive),
+            Err(FrankenError::Busy)
+        ));
+        writeln!(child.0.stdin.as_mut().unwrap(), "release").unwrap();
+        expect_witness("mvcc-child-released");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                assert!(status.success(), "native peer failed: {status}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "native peer did not exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        reader.join().unwrap();
+        drop(
+            PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::ReservedExclusive)
+                .expect("final native alias releases namespace generation"),
+        );
+        assert!(
+            !sqlite_shm_path(&path).exists(),
+            "MVCC never creates the stock WAL index"
+        );
+        assert!(
+            !mvcc_shm_path(&alias).exists(),
+            "symlink spelling never creates a second authority"
+        );
+    }
+
+    #[test]
+    fn mvcc_shm_admission_refusals_preserve_existing_payload_and_main_identity() {
+        let cx = Cx::new();
+        let (directory, path, mut file, namespace) = admitted_mvcc_fixture("admission.db");
+        let backing_path = mvcc_shm_path(&path);
+        let cancelled = Cx::new();
+        cancelled.cancel();
+        assert!(matches!(
+            file.mvcc_shm_map(&cancelled, 4096, true),
+            Err(FrankenError::Abort)
+        ));
+        assert!(file.mvcc_shm_map(&cx, 4096, false).is_err());
+        assert!(!backing_path.exists());
+        let (mut readonly, _) = UnixVfs::new()
+            .open(
+                &cx,
+                Some(&path),
+                VfsOpenFlags::MAIN_DB | VfsOpenFlags::READONLY,
+            )
+            .unwrap();
+        assert!(matches!(
+            readonly.mvcc_shm_map(&cx, 4096, true),
+            Err(FrankenError::ReadOnly)
+        ));
+        assert!(!backing_path.exists());
+        let hardlink = directory.path().join("hardlink.db");
+        fs::hard_link(&path, &hardlink).unwrap();
+        assert!(matches!(
+            file.mvcc_shm_map(&cx, 4096, true),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert!(!backing_path.exists());
+        // Keep this hard-linked fixture intact. A distinct admitted database
+        // exercises successful mapping and all post-creation refusals.
+        let (_other_directory, other_path, mut other, other_namespace) =
+            admitted_mvcc_fixture("mapped.db");
+        let region = other.mvcc_shm_map(&cx, 4096, true).unwrap();
+        region
+            .atomic_store_u64_le(0, 0x1234, Ordering::Release)
+            .unwrap();
+        for create in [false, true] {
+            assert!(matches!(
+                other.mvcc_shm_map(&cx, 8192, create),
+                Err(FrankenError::BusyRecovery)
+            ));
+            assert_eq!(
+                region.atomic_load_u64_le(0, Ordering::Acquire).unwrap(),
+                0x1234
+            );
+        }
+        assert_eq!(
+            fs::metadata(mvcc_shm_path(&other_path)).unwrap().len(),
+            MVCC_SHM_PAYLOAD_OFFSET + 4096
+        );
+        drop(region);
+        other.close(&cx).unwrap();
+        other_namespace.quiesce();
+        readonly.close(&cx).unwrap();
+        file.close(&cx).unwrap();
+        namespace.quiesce();
+    }
+
+    #[test]
+    fn mvcc_shm_unadmitted_and_invalid_requests_create_no_companions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("unadmitted.db");
+        fs::write(&path, [0x41_u8; 4096]).unwrap();
+        let cx = Cx::new();
+        let (mut file, _) = UnixVfs::new()
+            .open(
+                &cx,
+                Some(&path),
+                VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE,
+            )
+            .unwrap();
+        for payload_bytes in [0, u64::MAX] {
+            assert!(file.mvcc_shm_map(&cx, payload_bytes, true).is_err());
+        }
+        assert!(matches!(
+            file.mvcc_shm_map(&cx, 4096, true),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn mvcc_shm_existing_partial_and_foreign_headers_are_never_reinitialized() {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let cx = Cx::new();
+        let (_source_directory, _source_path, source, source_namespace) =
+            admitted_mvcc_fixture("source.db");
+        let foreign_identity = source.file_identity().unwrap().unwrap();
+        let foreign_header = mvcc_shm_transport_header(foreign_identity, foreign_identity, 4096);
+        for (name, bytes) in [
+            ("empty.db", Vec::new()),
+            ("partial.db", b"FSMVCC01".to_vec()),
+            ("foreign.db", {
+                let mut bytes = vec![0_u8; (MVCC_SHM_PAYLOAD_OFFSET + 4096) as usize];
+                bytes[..foreign_header.len()].copy_from_slice(&foreign_header);
+                bytes[MVCC_SHM_PAYLOAD_OFFSET as usize] = 0x9A;
+                bytes
+            }),
+        ] {
+            let (_directory, path, mut file, namespace) = admitted_mvcc_fixture(name);
+            let backing_path = mvcc_shm_path(&path);
+            let backing = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&backing_path)
+                .unwrap();
+            write_full_at(
+                |buffer, offset| backing.write_at(buffer, offset),
+                &bytes,
+                0,
+                "fixture",
+            )
+            .unwrap();
+            for create in [false, true] {
+                assert!(matches!(
+                    file.mvcc_shm_map(&cx, 4096, create),
+                    Err(FrankenError::BusyRecovery)
+                ));
+                assert_eq!(fs::read(&backing_path).unwrap(), bytes);
+            }
+            file.close(&cx).unwrap();
+            namespace.quiesce();
+        }
+        source_namespace.quiesce();
+    }
+
+    #[test]
+    fn mvcc_shm_bootstrap_and_replaced_main_refuse_before_backing_mutation() {
+        let cx = Cx::new();
+        let (directory, path, mut file, namespace) = admitted_mvcc_fixture("generation.db");
+        namespace.quiesce();
+        let bootstrap =
+            PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::ReservedExclusive).unwrap();
+        assert!(matches!(
+            file.mvcc_shm_map(&cx, 4096, true),
+            Err(FrankenError::Busy)
+        ));
+        assert!(!mvcc_shm_path(&path).exists());
+        drop(bootstrap);
+        let region = file.mvcc_shm_map(&cx, 4096, true).unwrap();
+        region
+            .atomic_store_u64_le(0, 73, Ordering::Release)
+            .unwrap();
+        // Deliberately bypass cooperative namespace replacement to prove the
+        // transport rejects a pathname that no longer names its descriptor.
+        let retired = directory.path().join("retired.db");
+        fs::rename(&path, &retired).unwrap();
+        fs::write(&path, [0x72_u8; 4096]).unwrap();
+        assert!(matches!(
+            file.mvcc_shm_map(&cx, 4096, true),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(region.atomic_load_u64_le(0, Ordering::Acquire).unwrap(), 73);
+        drop(region);
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn mvcc_shm_copied_header_cannot_join_a_replacement_backing_inode() {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let cx = Cx::new();
+        let (directory, path, mut file, namespace) = admitted_mvcc_fixture("backing.db");
+        let region = file.mvcc_shm_map(&cx, 4096, true).unwrap();
+        region
+            .atomic_store_u64_le(0, 91, Ordering::Release)
+            .unwrap();
+        let backing_path = mvcc_shm_path(&path);
+        let copied = fs::read(&backing_path).unwrap();
+        // A deliberately uncooperative replacement keeps the exact old
+        // header, but cannot reuse the old backing's descriptor identity.
+        fs::rename(&backing_path, directory.path().join("retired.fsqlite-shm")).unwrap();
+        let replacement = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&backing_path)
+            .unwrap();
+        write_full_at(
+            |buffer, offset| replacement.write_at(buffer, offset),
+            &copied,
+            0,
+            "copied transport fixture",
+        )
+        .unwrap();
+        for create in [false, true] {
+            assert!(matches!(
+                file.mvcc_shm_map(&cx, 4096, create),
+                Err(FrankenError::BusyRecovery)
+            ));
+            assert_eq!(fs::read(&backing_path).unwrap(), copied);
+        }
+        assert_eq!(region.atomic_load_u64_le(0, Ordering::Acquire).unwrap(), 91);
+        drop(region);
+        file.close(&cx).unwrap();
+        namespace.quiesce();
+    }
+
+    #[test]
+    fn mvcc_shm_failed_main_cleanup_retains_the_independent_namespace_owner() {
+        let cx = Cx::new();
+        let (_directory, path, mut file, namespace) = admitted_mvcc_fixture("cleanup.db");
+        let identity = file.file_identity().unwrap().unwrap();
+        let independent = PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::ReadOnlyExisting)
+            .unwrap()
+            .bind(identity)
+            .unwrap();
+        let mut owner = file.new_mvcc_mapping_owner().unwrap();
+        owner.lock(&cx, LockLevel::Shared).unwrap();
+        let mut cleanup = UnixMvccMappingCleanup {
+            main: Some(owner),
+            backing: None,
+            admission: None,
+            namespace: Some(independent),
+        };
+        file.close(&cx).unwrap();
+        namespace.quiesce();
+        // Synthetic close refusal at the real cleanup boundary: this tests
+        // retained ownership, not a fault injected into a native syscall.
+        assert!(matches!(
+            cleanup.try_close_with(|_| Err(FrankenError::Busy)),
+            Err(FrankenError::Busy)
+        ));
+        assert_eq!(cleanup.main.as_ref().unwrap().lock_level, LockLevel::Shared);
+        assert!(!cleanup.namespace.as_ref().unwrap().is_quiesced());
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::ReservedExclusive),
+            Err(FrankenError::Busy)
+        ));
+        deferred_mvcc_mapping_cleanup_queue()
+            .lock()
+            .unwrap()
+            .push(cleanup);
+        retry_deferred_mvcc_mapping_cleanups();
+        drop(
+            PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::ReservedExclusive)
+                .expect("deferred retry releases the exact last namespace lease"),
+        );
+    }
+
+    #[test]
+    fn mvcc_shm_pending_companion_gate_survives_validation_and_cleanup_failure() {
+        let cx = Cx::new();
+        let (_directory, path, mut file, namespace) = admitted_mvcc_fixture("pending.db");
+        let admission =
+            PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::ExistingCompanion).unwrap();
+        assert!(matches!(
+            file.mvcc_shm_map(&cx, 4096, true),
+            Err(FrankenError::Busy)
+        ));
+        assert!(!mvcc_shm_path(&path).exists());
+        let mut owner = file.new_mvcc_mapping_owner().unwrap();
+        owner.lock(&cx, LockLevel::Shared).unwrap();
+        let mut cleanup = UnixMvccMappingCleanup {
+            main: Some(owner),
+            backing: None,
+            admission: Some(admission),
+            namespace: None,
+        };
+        file.close(&cx).unwrap();
+        namespace.quiesce();
+        assert!(matches!(
+            cleanup
+                .admission
+                .as_mut()
+                .unwrap()
+                .finish_existing_companion(FileIdentity::from_unix_parts(0, 0)),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        // Synthetic close refusal preserves the real exclusive admission gate.
+        assert!(cleanup.try_close_with(|_| Err(FrankenError::Busy)).is_err());
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::ReadOnlyExisting),
+            Err(FrankenError::Busy)
+        ));
+        cleanup.try_close().unwrap();
+        drop(
+            PendingNamespaceOpen::begin(&path, NamespaceOpenIntent::ReservedExclusive)
+                .expect("pending owner releases its gate only after main cleanup"),
+        );
+    }
+
+    #[test]
+    fn shm_table_registration_and_orphan_removal_preserve_one_lock_domain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("registration-race-shm");
+        let table = ShmTable::new();
+
+        let old = table
+            .get_or_open_and_register(path.clone(), 1, true)
+            .expect("register initial owner");
+        old.lock().expect("old SHM state").owner_refs.remove(&1);
+
+        // Model the exact last-close/new-open interleaving: the old owner has
+        // become invisible but has not removed the table entry yet. The new
+        // opener must publish its owner while the table mutex is still held,
+        // so orphan removal cannot pass between lookup and registration.
+        let reopened = table
+            .get_or_open_and_register_with(path.clone(), 2, false, || {
+                assert!(matches!(
+                    table.map.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+            })
+            .expect("register replacement owner");
+        assert!(Arc::ptr_eq(&old, &reopened));
+        table.finish_owner_release(&path, Arc::clone(&old));
+
+        let mapped = {
+            let map = table.map.lock().expect("SHM table");
+            Arc::clone(map.get(&path).expect("registered state remains mapped"))
+        };
+        assert!(Arc::ptr_eq(&mapped, &reopened));
+        assert_eq!(
+            mapped.lock().expect("mapped SHM state").owner_refs.get(&2),
+            Some(&1)
+        );
+
+        // A surviving observer must keep the canonical descriptor in the
+        // table even after its registered owner drains. Otherwise its later
+        // close could erase native locks on a replacement descriptor.
+        mapped
+            .lock()
+            .expect("mapped SHM state")
+            .owner_refs
+            .remove(&2);
+        table.finish_owner_release(&path, Arc::clone(&mapped));
+        assert!(Arc::ptr_eq(
+            table.map.lock().unwrap().get(&path).unwrap(),
+            &old
+        ));
+        let retired = Arc::downgrade(&old);
+        drop(mapped);
+        drop(reopened);
+        table.finish_owner_release(&path, old);
+        assert!(
+            retired.upgrade().is_none(),
+            "canonical fd closes inside table retirement"
+        );
+        let replacement = table
+            .get_or_open_and_register(path.clone(), 3, false)
+            .expect("register new generation");
+        assert!(!Weak::ptr_eq(&retired, &Arc::downgrade(&replacement)));
+        replacement
+            .lock()
+            .expect("replacement SHM state")
+            .owner_refs
+            .remove(&3);
+        table.finish_owner_release(&path, Arc::clone(&replacement));
+
+        let map = table.map.lock().expect("SHM table");
+        assert!(Arc::ptr_eq(
+            map.get(&path).expect("new generation remains mapped"),
+            &replacement
+        ));
+    }
+
+    #[test]
+    fn inode_registration_and_final_removal_preserve_one_canonical_generation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("inode-registration-race.db");
+        fs::write(&path, b"inode").expect("seed inode");
+        let table = InodeTable::new();
+
+        let opened = File::options()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open initial descriptor");
+        let key = inode_key_from_file(&opened).expect("initial identity");
+        let (old_info, old_file) = table
+            .register_opened_file(key, opened)
+            .expect("register initial descriptor");
+        old_info.lock().expect("old inode state").n_ref = 0;
+
+        let reopened = File::options()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open racing descriptor");
+        let shard_idx = table.shard_idx(key);
+        let (reopened_info, reopened_file) = table
+            .register_opened_file_with(key, reopened, || {
+                assert!(matches!(
+                    table.shards[shard_idx].try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+            })
+            .expect("atomically register reopen");
+        assert!(Arc::ptr_eq(&old_info, &reopened_info));
+
+        // Delayed finalization from the old handle must observe the published
+        // reopen and retain the exact canonical generation.
+        table.finish_handle_drop(old_info, old_file);
+        let mapped = table.get(key).expect("reopened generation remains mapped");
+        assert!(Arc::ptr_eq(&mapped, &reopened_info));
+        assert_eq!(mapped.lock().expect("mapped inode state").n_ref, 1);
+
+        reopened_info.lock().expect("reopened inode state").n_ref = 0;
+        drop(mapped);
+        table.finish_handle_drop(reopened_info, reopened_file);
+        assert!(table.get(key).is_none());
+    }
+
+    /// GH#416: migrating a live generation to the key the descriptor reports
+    /// now must keep one shared lock domain (every handle sees the new
+    /// identity), let a later open under the new key join it, and finalize
+    /// the entry under the migrated key even from a handle that captured the
+    /// old key at open.
+    #[test]
+    fn inode_migration_rekeys_the_live_generation_for_every_handle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("inode-migration.db");
+        fs::write(&path, b"").expect("seed zero-length inode");
+        let table = InodeTable::new();
+
+        let opened = File::options()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open initial descriptor");
+        let real = inode_key_from_file(&opened).expect("descriptor identity");
+        // Stand in for the msdosfs placeholder: register under an identity the
+        // filesystem will never report for this descriptor.
+        let placeholder = FileIdentity::from_unix_parts(0x5EED, 999_999_999);
+        let (info, canonical) = table
+            .register_opened_file(placeholder, opened)
+            .expect("register under the placeholder key");
+        let sibling = File::open(&path).expect("open sibling descriptor");
+        let (sibling_info, sibling_file) = table
+            .register_opened_file(placeholder, sibling)
+            .expect("sibling joins the placeholder generation");
+        assert!(Arc::ptr_eq(&info, &sibling_info));
+        assert_eq!(info.lock().expect("inode state").n_ref, 2);
+
+        table
+            .migrate(placeholder, real, &info)
+            .expect("migrate to the descriptor's live key");
+        assert_eq!(info.lock().expect("inode state").key, real);
+        assert!(table.get(placeholder).is_none());
+        assert!(Arc::ptr_eq(
+            &table.get(real).expect("mapped under real"),
+            &info
+        ));
+        // Idempotent for a sibling that observes the same transition.
+        table
+            .migrate(placeholder, real, &info)
+            .expect("repeat migration is a no-op");
+        // A stale key that is neither the registered nor the target key is
+        // refused; a request whose target is already current is a no-op.
+        let other = FileIdentity::from_unix_parts(0x5EED, 42);
+        let another = FileIdentity::from_unix_parts(0x5EED, 43);
+        assert!(table.migrate(other, another, &info).is_err());
+        assert!(table.migrate(other, real, &info).is_ok());
+        assert_eq!(info.lock().expect("inode state").key, real);
+        assert!(
+            table.migrate(real, other, &info).is_ok(),
+            "moving on from the migrated key is allowed"
+        );
+        table
+            .migrate(other, real, &info)
+            .expect("move back to the real key");
+
+        // A later open under the live key converges on the same generation.
+        let reopened = File::open(&path).expect("reopen under real key");
+        let (reopened_info, reopened_file) = table
+            .register_opened_file(real, reopened)
+            .expect("join under the live key");
+        assert!(Arc::ptr_eq(&reopened_info, &info));
+        assert_eq!(info.lock().expect("inode state").n_ref, 3);
+
+        // Handles that captured the placeholder at open finalize under the
+        // migrated key: the entry stays until the last one, then goes away.
+        for (handle_info, handle_file) in
+            [(sibling_info, sibling_file), (reopened_info, reopened_file)]
+        {
+            handle_info.lock().expect("inode state").n_ref -= 1;
+            table.finish_handle_drop(handle_info, handle_file);
+            assert!(table.get(real).is_some(), "entry must outlive its siblings");
+        }
+        info.lock().expect("inode state").n_ref = 0;
+        table.finish_handle_drop(info, canonical);
+        assert!(
+            table.get(real).is_none(),
+            "last handle evicts under the live key"
+        );
+        assert!(table.get(placeholder).is_none());
+    }
+
+    #[test]
+    fn redundant_descriptor_close_is_deferred_until_posix_locks_are_gone() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("deferred-redundant-fd.db");
+        setup_sqlite_delete_journal_db(&path);
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+
+        let (mut locked, _) = vfs.open(&cx, Some(&path), flags).expect("open locker");
+        locked
+            .lock(&cx, LockLevel::Shared)
+            .expect("acquire process SHARED");
+        let (mut reopened, _) = vfs.open(&cx, Some(&path), flags).expect("racing reopen");
+
+        {
+            let info = locked.inode_info_ref().lock().expect("shared inode state");
+            assert_eq!(info.n_ref, 2);
+            assert_eq!(
+                info.deferred_close_files.len(),
+                1,
+                "the redundant descriptor must remain open while fcntl locks exist"
+            );
+        }
+
+        if sqlite3_available() {
+            let blocked = sqlite3_exec(&path, "PRAGMA busy_timeout=0; BEGIN EXCLUSIVE; ROLLBACK;");
+            assert!(
+                !blocked.status.success(),
+                "opening the second handle must not silently release the first handle's SHARED lock"
+            );
+        }
+
+        locked
+            .unlock(&cx, LockLevel::None)
+            .expect("release final lock claim");
+        assert!(
+            locked
+                .inode_info_ref()
+                .lock()
+                .expect("shared inode state")
+                .deferred_close_files
+                .is_empty(),
+            "the redundant descriptor should close synchronously with the final unlock"
+        );
+        reopened.close(&cx).expect("close reopen");
+        locked.close(&cx).expect("close locker");
+    }
+
+    /// Count this process' open descriptors that name `path`'s file.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn descriptors_naming(path: &Path) -> usize {
+        let canonical = std::fs::canonicalize(path).expect("canonicalize descriptor witness path");
+        let descriptor_paths = std::fs::read_dir(if cfg!(target_os = "linux") {
+            "/proc/self/fd"
+        } else {
+            "/dev/fd"
+        })
+        .expect("inspect actual process descriptors")
+        .filter_map(std::result::Result::ok)
+        .filter_map(|entry| {
+            #[cfg(target_os = "linux")]
+            {
+                std::fs::read_link(entry.path()).ok()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                use std::os::unix::ffi::OsStrExt as _;
+                let fd: libc::c_int = entry.file_name().to_str()?.parse().ok()?;
+                let mut buffer = [0_u8; libc::PATH_MAX as usize];
+                // SAFETY: F_GETPATH writes at most MAXPATHLEN (== PATH_MAX)
+                // bytes, NUL-terminated, into `buffer`; a descriptor that has
+                // closed since the directory listing fails with EBADF.
+                let status = unsafe { libc::fcntl(fd, libc::F_GETPATH, buffer.as_mut_ptr()) };
+                if status == -1 {
+                    return None;
+                }
+                let len = buffer.iter().position(|&byte| byte == 0)?;
+                Some(PathBuf::from(std::ffi::OsStr::from_bytes(&buffer[..len])))
+            }
+        })
+        .collect::<Vec<_>>();
+        descriptor_paths
+            .iter()
+            .filter(|target| **target == canonical)
+            .count()
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn repeated_opens_bound_descriptors_without_releasing_foreign_lock_fence() {
+        const PROBE_PATH: &str = "FSQLITE_REPEATED_OPEN_LOCK_PROBE";
+        const TEST: &str =
+            "unix::tests::repeated_opens_bound_descriptors_without_releasing_foreign_lock_fence";
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        if let Some(path) = std::env::var_os(PROBE_PATH) {
+            let (mut probe, _) = vfs.open(&cx, Some(Path::new(&path)), flags).unwrap();
+            let acquired = match probe.lock(&cx, LockLevel::Exclusive) {
+                Ok(()) => true,
+                Err(FrankenError::Busy) => false,
+                Err(error) => panic!("unexpected foreign lock failure: {error}"),
+            };
+            println!("foreign-exclusive={acquired}");
+            probe.close(&cx).unwrap();
+            return;
+        }
+        let (_dir, path) = make_temp_path("bounded-repeated-opens.db");
+        let (mut owner, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        owner.lock(&cx, LockLevel::Shared).unwrap();
+        let foreign_exclusive = || {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([TEST, "--exact", "--nocapture"])
+                .env(PROBE_PATH, &path)
+                .output()
+                .expect("execute independent kernel-lock probe");
+            assert!(output.status.success(), "foreign probe failed: {output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(stdout.contains("foreign-exclusive="));
+            stdout.contains("foreign-exclusive=true")
+        };
+        let descriptor_count = || descriptors_naming(&path);
+        assert!(
+            !foreign_exclusive(),
+            "initial shared lock must exclude writers"
+        );
+        let before = descriptor_count();
+        assert!(before > 0, "descriptor witness must identify the real file");
+        for _ in 0..64 {
+            let (mut reopened, _) = vfs.open(&cx, Some(&path), flags).unwrap();
+            reopened.close(&cx).unwrap();
+        }
+        let after = descriptor_count();
+        assert!(
+            !foreign_exclusive(),
+            "repeated opens must preserve the lock"
+        );
+        owner.unlock(&cx, LockLevel::None).unwrap();
+        assert!(foreign_exclusive(), "final unlock must release the lock");
+        owner.close(&cx).unwrap();
+        assert!(
+            after <= before + 2,
+            "64 sequential opens must retain bounded descriptors: before={before}, after={after}"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn retained_descriptor_reuse_preserves_create_and_replacement_semantics() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("reuse-replacement.db");
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        let (mut owner, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        owner.lock(&cx, LockLevel::Shared).unwrap();
+        let (mut sibling, _) = vfs.open(&cx, Some(&path), flags).unwrap();
+        sibling.close(&cx).unwrap();
+        let identity = owner.file_identity().unwrap().expect("real file identity");
+        let (mut reused, _) = vfs.open(&cx, Some(&path), flags).unwrap();
+        assert_eq!(reused.file_identity().unwrap(), Some(identity));
+        reused.close(&cx).unwrap();
+        assert!(
+            vfs.open(
+                &cx,
+                Some(&path),
+                flags | VfsOpenFlags::CREATE | VfsOpenFlags::EXCLUSIVE,
+            )
+            .is_err(),
+            "cached inode must not bypass exclusive-create refusal"
+        );
+        let original_permissions = std::fs::metadata(&path).unwrap().permissions();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let after_revocation = vfs.open(&cx, Some(&path), flags);
+        std::fs::set_permissions(&path, original_permissions).unwrap();
+        if nix::unistd::geteuid().is_root() {
+            // Root retains DAC override; ordinary root opens also succeed.
+            let (mut privileged, _) = after_revocation.unwrap();
+            privileged.close(&cx).unwrap();
+        } else {
+            assert!(
+                after_revocation.is_err(),
+                "cached descriptor must not bypass revoked read/write access"
+            );
+        }
+        let retired = path.with_extension("retired");
+        std::fs::rename(&path, &retired).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+        let (mut replacement, _) = vfs.open(&cx, Some(&path), flags).unwrap();
+        assert_ne!(replacement.file_identity().unwrap(), Some(identity));
+        replacement.close(&cx).unwrap();
+        owner.unlock(&cx, LockLevel::None).unwrap();
+        owner.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn same_process_readers_block_exclusive_and_exclusive_blocks_new_readers() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("same-process-lock-conflict.db");
+        let (mut reader, _) = vfs
+            .open(&cx, Some(&path), open_flags_create())
+            .expect("create database");
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        let (mut writer, _) = vfs.open(&cx, Some(&path), flags).expect("open writer");
+
+        reader
+            .lock(&cx, LockLevel::Shared)
+            .expect("acquire local reader");
+        assert!(matches!(
+            writer.lock(&cx, LockLevel::Exclusive),
+            Err(FrankenError::Busy)
+        ));
+        assert_eq!(writer.lock_level, LockLevel::None);
+        {
+            let info = reader.inode_info_ref().lock().expect("shared inode state");
+            assert_eq!(info.n_shared, 1);
+            assert_eq!(info.n_reserved, 0);
+            assert_eq!(info.n_pending, 0);
+            assert_eq!(info.n_exclusive, 0);
+        }
+
+        reader
+            .unlock(&cx, LockLevel::None)
+            .expect("release local reader");
+        writer
+            .lock(&cx, LockLevel::Exclusive)
+            .expect("exclusive succeeds after reader drains");
+
+        let (mut late_reader, _) = vfs.open(&cx, Some(&path), flags).expect("open late reader");
+        assert!(matches!(
+            late_reader.lock(&cx, LockLevel::Shared),
+            Err(FrankenError::Busy)
+        ));
+        writer
+            .unlock(&cx, LockLevel::None)
+            .expect("release exclusive");
+        late_reader
+            .lock(&cx, LockLevel::Shared)
+            .expect("reader succeeds after exclusive drains");
+
+        late_reader.close(&cx).expect("close late reader");
+        writer.close(&cx).expect("close writer");
+        reader.close(&cx).expect("close reader");
+    }
+
+    #[test]
+    fn wal_lifetime_claim_preserves_foreign_fence_without_pinning_idle_peers() {
+        const PROBE_PATH: &str = "FSQLITE_VFS_LIFETIME_EXCLUSIVE_PROBE";
+        const TEST: &str =
+            "unix::tests::wal_lifetime_claim_preserves_foreign_fence_without_pinning_idle_peers";
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        if let Some(path) = std::env::var_os(PROBE_PATH) {
+            let (mut probe, _) = vfs
+                .open(&cx, Some(Path::new(&path)), open_flags_create())
+                .unwrap();
+            let acquired = match probe.lock(&cx, LockLevel::Exclusive) {
+                Ok(()) => true,
+                Err(FrankenError::Busy) => false,
+                Err(error) => panic!("unexpected raw-lock probe failure: {error}"),
+            };
+            println!("lifetime-exclusive={acquired}");
+            probe.close(&cx).unwrap();
+            return;
+        }
+        let (_dir, path) = make_temp_path("wal-lifetime.db");
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        let (mut first, _) = vfs
+            .open(&cx, Some(&path), open_flags_create())
+            .expect("first handle");
+        first.ensure_shm_info(&cx).expect("first WAL attachment");
+        let (mut second, _) = vfs.open(&cx, Some(&path), flags).expect("second handle");
+        second.ensure_shm_info(&cx).expect("second WAL attachment");
+        {
+            let info = first.inode_info_ref().lock().expect("inode state");
+            assert_eq!(info.n_wal_lifetime, 2);
+            assert_eq!(info.n_shared, 0, "idle attachments are not transactions");
+            assert_eq!(info.deferred_close_files.len(), 1);
+        }
+        let foreign_exclusive = || {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([TEST, "--exact", "--nocapture"])
+                .env(PROBE_PATH, &path)
+                .output()
+                .expect("run a separate-process kernel lock probe");
+            assert!(output.status.success(), "probe failed: {output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(
+                stdout.contains("lifetime-exclusive="),
+                "missing probe witness"
+            );
+            stdout.contains("lifetime-exclusive=true")
+        };
+        assert!(
+            !foreign_exclusive(),
+            "foreign last-close lock must conflict"
+        );
+        assert_eq!(second.wal_checkpoint_reader_horizon(&cx, 41).unwrap(), 41);
+        second
+            .lock_external_maintenance(&cx, true)
+            .expect("idle peer permits maintenance");
+        second
+            .restore_external_maintenance_attempt(&cx)
+            .expect("restore maintenance");
+        assert!(
+            !foreign_exclusive(),
+            "downgrade must restore the lifetime fence"
+        );
+
+        first
+            .lock_external_shared_snapshot(&cx)
+            .expect("real reader snapshot");
+        assert!(matches!(
+            second.lock_external_maintenance(&cx, true),
+            Err(FrankenError::Busy)
+        ));
+        second
+            .restore_external_maintenance_attempt(&cx)
+            .expect("failed upgrade restores");
+        first
+            .restore_external_shared_snapshot_attempt(&cx)
+            .expect("end snapshot");
+        assert_eq!(first.lock_level, LockLevel::None);
+        assert!(
+            !foreign_exclusive(),
+            "transaction exit must retain the fence"
+        );
+        drop(first);
+        assert!(
+            !foreign_exclusive(),
+            "a sibling attachment still owns the fence"
+        );
+        second
+            .shm_unmap(&cx, false)
+            .expect("last attachment unmaps");
+        assert!(
+            foreign_exclusive(),
+            "last unmap releases the real kernel lock"
+        );
+        {
+            let info = second.inode_info_ref().lock().expect("inode state");
+            assert!(!info.has_lock_claims());
+            assert!(info.deferred_close_files.is_empty());
+        }
+        second.close(&cx).expect("close remaining descriptor");
+    }
+
+    #[test]
+    fn shm_attachment_dms_lifetime_refuses_foreign_truncation_and_survives_transfer() {
+        use std::io::{BufRead as _, Write as _};
+
+        const PROBE: &str = "FSQLITE_VFS_DMS_ATTACHMENT_PROBE";
+        const HOLD: &str = "FSQLITE_VFS_DMS_ATTACHMENT_HOLD";
+        const TEST: &str = "unix::tests::shm_attachment_dms_lifetime_refuses_foreign_truncation_and_survives_transfer";
+        if let Some(path) = std::env::var_os(PROBE) {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .unwrap();
+            let acquired = posix_lock(&file, libc::F_WRLCK, sqlite_shm_dms_lock_byte(), 1).unwrap();
+            println!("dms-exclusive={acquired}");
+            std::io::stdout().flush().unwrap();
+            if std::env::var_os(HOLD).is_some() {
+                assert!(acquired);
+                let mut line = String::new();
+                std::io::stdin().lock().read_line(&mut line).unwrap();
+                assert_eq!(line.trim(), "release");
+            }
+            if acquired {
+                posix_unlock(&file, sqlite_shm_dms_lock_byte(), 1).unwrap();
+            }
+            return;
+        }
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm-attachment-dms.db");
+        let (mut first, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let shm_path = sqlite_shm_path(&path);
+        fs::write(
+            &shm_path,
+            vec![0; usize::try_from(SHM_SEGMENT_SIZE).unwrap()],
+        )
+        .unwrap();
+        let mut blocker = Command::new(std::env::current_exe().unwrap())
+            .args([TEST, "--exact", "--nocapture"])
+            .env(PROBE, &shm_path)
+            .env(HOLD, "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = std::io::BufReader::new(blocker.stdout.take().unwrap());
+        loop {
+            let mut line = String::new();
+            assert_ne!(output.read_line(&mut line).unwrap(), 0);
+            if line.trim() == "dms-exclusive=true" {
+                break;
+            }
+        }
+        assert!(matches!(
+            first.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false),
+            Err(FrankenError::Busy)
+        ));
+        assert!(!first.shm_dms_lifetime_claim);
+        let info = Arc::clone(
+            first
+                .shm_info
+                .as_ref()
+                .expect("failed acquisition retains registration"),
+        );
+        assert!(
+            info.lock().unwrap().regions.is_empty(),
+            "no alias escapes before DMS acquisition"
+        );
+        writeln!(blocker.stdin.as_mut().unwrap(), "release").unwrap();
+        assert!(blocker.wait().unwrap().success());
+
+        let region = first.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+        first.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+        first.compat_shm_hold_dms_shared(&cx).unwrap();
+        first.compat_shm_release_dms_shared(&cx).unwrap();
+        let dms_slot = usize::try_from(SQLITE_SHM_DMS_SLOT).unwrap();
+        assert_eq!(
+            info.lock().unwrap().slots[dms_slot].shared_holders[&first.shm_owner_id],
+            1
+        );
+        assert!(first.shm_dms_lifetime_claim);
+        drop(info);
+        let (mut second, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        second.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+        let probe_exclusive = || {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([TEST, "--exact", "--nocapture"])
+                .env(PROBE, &shm_path)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "DMS probe failed: {output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(stdout.contains("dms-exclusive="));
+            stdout.contains("dms-exclusive=true")
+        };
+        assert!(
+            !probe_exclusive(),
+            "foreign first opener cannot truncate live mappings"
+        );
+        region
+            .atomic_store_u32_ne(0, 0x1357_2468, Ordering::Release)
+            .unwrap();
+        first.close(&cx).unwrap();
+        assert!(!first.shm_dms_lifetime_claim);
+        assert!(!probe_exclusive(), "sibling attachment retains DMS");
+        let mut deferred = second.take_for_deferred_cleanup();
+        assert!(!second.shm_dms_lifetime_claim);
+        assert!(deferred.shm_dms_lifetime_claim);
+        assert!(
+            !probe_exclusive(),
+            "transferred cleanup retains the same raw claim"
+        );
+        assert!(matches!(
+            deferred.compat_writer_release_wal_write_lock(&cx),
+            Err(FrankenError::LockFailed { .. })
+        ));
+        assert!(deferred.shm_dms_lifetime_claim);
+        assert_eq!(
+            deferred.shm_info.as_ref().unwrap().lock().unwrap().slots[dms_slot].shared_holders
+                [&deferred.shm_owner_id],
+            1,
+            "an unmatched compatibility release cannot consume the attachment claim"
+        );
+        assert!(
+            !probe_exclusive(),
+            "refused compatibility release preserves raw DMS exclusion"
+        );
+        assert_eq!(
+            region.atomic_load_u32_ne(0, Ordering::Acquire).unwrap(),
+            0x1357_2468
+        );
+        deferred.close(&cx).unwrap();
+        assert!(!deferred.shm_dms_lifetime_claim);
+        assert!(
+            !probe_exclusive(),
+            "a surviving mapping alias must still exclude truncation"
+        );
+        assert_eq!(
+            region.atomic_load_u32_ne(0, Ordering::Acquire).unwrap(),
+            0x1357_2468
+        );
+        drop(region);
+        assert!(
+            probe_exclusive(),
+            "the final mapping drop releases DMS without leaking a lock"
+        );
+    }
+
+    #[test]
+    fn wal_lifetime_failed_shared_acquisition_can_retry_without_a_claim_leak() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("wal-lifetime-busy.db");
+        let (mut blocker, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut contender, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        blocker.lock(&cx, LockLevel::Exclusive).unwrap();
+        assert!(matches!(
+            contender.ensure_shm_info(&cx),
+            Err(FrankenError::Busy)
+        ));
+        assert_eq!(contender.wal_lifetime_claim, WalLifetimeClaim::Unclaimed);
+        assert!(contender.shm_info.is_none());
+        blocker.unlock(&cx, LockLevel::None).unwrap();
+        contender
+            .ensure_shm_info(&cx)
+            .expect("retry after blocker drains");
+        assert_eq!(contender.wal_lifetime_claim, WalLifetimeClaim::Held);
+        contender.close(&cx).unwrap();
+        assert!(!blocker.inode_info_ref().lock().unwrap().has_lock_claims());
+        blocker.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn wal_lifetime_claim_survives_failed_shm_open_until_close() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("wal-lifetime-open-failure.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        fs::create_dir(&file.shm_path).expect("make SHM path unopenable as a file");
+        assert!(file.ensure_shm_info(&cx).is_err());
+        assert!(file.shm_info.is_none());
+        assert_eq!(file.wal_lifetime_claim, WalLifetimeClaim::Held);
+        let inode = Arc::clone(file.inode_info_ref());
+        assert_eq!(inode.lock().unwrap().n_wal_lifetime, 1);
+        file.close(&cx)
+            .expect("close releases the independent retained claim");
+        assert!(!inode.lock().unwrap().has_lock_claims());
+    }
+
+    #[test]
+    fn wal_checkpoint_admits_foreign_idle_lifetime_but_excludes_appenders() {
+        const CHILD_PATH: &str = "FSQLITE_VFS_CHECKPOINT_LIFETIME_CHILD";
+        const TEST: &str =
+            "unix::tests::wal_checkpoint_admits_foreign_idle_lifetime_but_excludes_appenders";
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        if let Some(path) = std::env::var_os(CHILD_PATH) {
+            let (mut reader, _) = vfs
+                .open(&cx, Some(Path::new(&path)), open_flags_create())
+                .unwrap();
+            let slot = reader.wal_reader_slot_acquire(&cx, 17).unwrap().unwrap();
+            println!("checkpoint-child-ready");
+            std::io::stdout().flush().unwrap();
+            let expect = |expected: &str| {
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).unwrap();
+                assert_eq!(line.trim(), expected);
+            };
+            expect("probe");
+            assert!(matches!(
+                reader.shm_lock(
+                    &cx,
+                    WAL_WRITE_LOCK,
+                    1,
+                    SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE
+                ),
+                Err(FrankenError::Busy)
+            ));
+            println!("checkpoint-child-writer-blocked");
+            std::io::stdout().flush().unwrap();
+            expect("idle");
+            reader.wal_reader_slot_release(&cx, slot).unwrap();
+            assert_eq!(reader.wal_lifetime_claim, WalLifetimeClaim::Held);
+            println!("checkpoint-child-idle");
+            std::io::stdout().flush().unwrap();
+            expect("exit");
+            reader.close(&cx).unwrap();
+            return;
+        }
+
+        let (_dir, path) = make_temp_path("wal-checkpoint-lifetime-child.db");
+        let (mut checkpointer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([TEST, "--exact", "--nocapture"])
+            .env(CHILD_PATH, &path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut wait_for = |expected: &str| {
+            loop {
+                let mut line = String::new();
+                assert_ne!(
+                    output.read_line(&mut line).unwrap(),
+                    0,
+                    "child exited before {expected}"
+                );
+                if line.trim() == expected {
+                    break;
+                }
+            }
+        };
+        wait_for("checkpoint-child-ready");
+        checkpointer
+            .lock_external_wal_checkpoint(&cx)
+            .expect("reader does not prevent bounded backfill");
+        assert_eq!(checkpointer.lock_level, LockLevel::Reserved);
+        assert_eq!(
+            checkpointer.wal_checkpoint_reader_horizon(&cx, 25).unwrap(),
+            17
+        );
+        assert!(!checkpointer.wal_checkpoint_reset_gate_acquire(&cx).unwrap());
+        writeln!(input, "probe").unwrap();
+        wait_for("checkpoint-child-writer-blocked");
+        let (mut appender, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        assert!(matches!(
+            appender.lock(&cx, LockLevel::Reserved),
+            Err(FrankenError::Busy)
+        ));
+        checkpointer
+            .restore_external_maintenance_attempt(&cx)
+            .unwrap();
+        writeln!(input, "idle").unwrap();
+        wait_for("checkpoint-child-idle");
+        // Instrumentation must preserve the dedicated checkpoint fence. The
+        // trait's conservative maintenance default would request EXCLUSIVE
+        // and fail while the foreign idle lifetime claim remains held.
+        let mut checkpointer =
+            crate::metrics::TracingFile::new(checkpointer, path.to_string_lossy().into_owned());
+        checkpointer
+            .lock_external_wal_checkpoint(&cx)
+            .expect("idle foreign lifetime permits checkpoint");
+        assert_eq!(
+            checkpointer.wal_checkpoint_reader_horizon(&cx, 25).unwrap(),
+            25
+        );
+        assert!(
+            checkpointer
+                .wal_checkpoint_backfill_gate_acquire(&cx)
+                .unwrap()
+        );
+        checkpointer
+            .wal_checkpoint_backfill_gate_release(&cx)
+            .unwrap();
+        assert!(checkpointer.wal_checkpoint_reset_gate_acquire(&cx).unwrap());
+        checkpointer.wal_checkpoint_reset_gate_release(&cx).unwrap();
+        checkpointer
+            .restore_external_maintenance_attempt(&cx)
+            .unwrap();
+        appender
+            .lock(&cx, LockLevel::Reserved)
+            .expect("appender resumes after checkpoint");
+        appender.unlock(&cx, LockLevel::None).unwrap();
+        writeln!(input, "exit").unwrap();
+        assert!(child.wait().unwrap().success());
+        appender.close(&cx).unwrap();
+        checkpointer.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn wal_append_attempt_preserves_snapshot_and_preowned_write() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("wal-append-baseline.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        assert!(!file.owns_external_wal_append_write(&cx).unwrap());
+        assert!(file.shm_info.is_none(), "authority query never creates SHM");
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+        file.lock_external_shared_snapshot(&cx).unwrap();
+        assert!(!file.owns_external_wal_append_write(&cx).unwrap());
+        file.lock_external_wal_append(&cx).unwrap();
+        assert!(file.owns_external_wal_append_write(&cx).unwrap());
+        assert_eq!(file.lock_level, LockLevel::Reserved);
+        assert!(file.lock_external_wal_append(&cx).is_err());
+        assert!(file.lock_external_maintenance(&cx, true).is_err());
+        assert!(file.restore_external_shared_snapshot_attempt(&cx).is_err());
+        assert!(file.shm_unmap(&cx, false).is_err());
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+        assert!(!file.owns_external_wal_append_write(&cx).unwrap());
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        assert!(file.external_shared_snapshot_attempt.is_some());
+
+        file.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .unwrap();
+        file.lock(&cx, LockLevel::Reserved).unwrap();
+        file.lock_external_wal_append(&cx).unwrap();
+        assert!(!file.external_append_attempt.unwrap().write_acquired);
+        assert!(
+            !file.owns_external_wal_append_write(&cx).unwrap(),
+            "preowned WRITE cannot classify an orphan"
+        );
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+        assert_eq!(
+            file.lock_level,
+            LockLevel::Reserved,
+            "preserve prior Immediate ownership"
+        );
+        let (mut peer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        assert!(matches!(
+            peer.shm_lock(
+                &cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE
+            ),
+            Err(FrankenError::Busy)
+        ));
+        file.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .unwrap();
+        file.unlock(&cx, LockLevel::Shared).unwrap();
+        file.restore_external_shared_snapshot_attempt(&cx).unwrap();
+        assert_eq!(file.lock_level, LockLevel::None);
+        peer.close(&cx).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn wal_append_partial_acquisition_and_deferred_close_preserve_owners() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("wal-append-partial.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut peer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.lock_external_shared_snapshot(&cx).unwrap();
+        peer.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .unwrap();
+        let cancelled = Cx::new();
+        cancelled.cancel();
+        assert!(matches!(
+            file.lock_external_wal_append(&cancelled),
+            Err(FrankenError::Abort)
+        ));
+        assert!(file.external_append_attempt.is_none());
+        assert!(file.shm_info.is_none());
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+
+        assert!(matches!(
+            file.lock_external_wal_append(&cx),
+            Err(FrankenError::Busy)
+        ));
+        let refused = file
+            .external_append_attempt
+            .expect("retain refused attempt");
+        assert!(!refused.write_acquired);
+        assert_eq!(refused.prior_main_level, LockLevel::Shared);
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+        assert!(file.external_append_attempt.is_none());
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        assert!(file.external_shared_snapshot_attempt.is_some());
+        assert!(matches!(
+            file.shm_lock(
+                &cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE
+            ),
+            Err(FrankenError::Busy)
+        ));
+        peer.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .unwrap();
+
+        peer.lock(&cx, LockLevel::Reserved).unwrap();
+        assert!(matches!(
+            file.lock_external_wal_append(&cx),
+            Err(FrankenError::Busy)
+        ));
+        assert!(file.external_append_attempt.unwrap().write_acquired);
+        assert!(
+            !file.owns_external_wal_append_write(&cx).unwrap(),
+            "failed RESERVED leaves cleanup, not append authority"
+        );
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        assert_eq!(peer.lock_level, LockLevel::Reserved);
+        peer.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .expect("failed append released only its newly acquired WRITE");
+        peer.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .unwrap();
+        peer.unlock(&cx, LockLevel::None).unwrap();
+        peer.close(&cx).unwrap();
+        file.lock_external_wal_append(&cx)
+            .expect("retry after blocker leaves");
+
+        let inode = Arc::clone(file.inode_info_ref());
+        let mut deferred = file.take_for_deferred_cleanup();
+        assert!(file.closed);
+        assert!(file.external_append_attempt.is_none());
+        assert!(deferred.external_append_attempt.is_some());
+        assert!(!file.owns_external_wal_append_write(&cx).unwrap());
+        assert!(
+            !deferred.owns_external_wal_append_write(&cx).unwrap(),
+            "deferred transfer authorizes cleanup only"
+        );
+        assert!(deferred.external_shared_snapshot_attempt.is_some());
+        deferred
+            .close(&cx)
+            .expect("close restores inner append before outer snapshot");
+        assert!(deferred.external_append_attempt.is_none());
+        assert!(deferred.external_shared_snapshot_attempt.is_none());
+        assert!(!inode.lock().unwrap().has_lock_claims());
+    }
+
+    #[test]
+    fn wal_append_restore_retries_main_failure_without_retaining_write() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("wal-append-restore-retry.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.lock_external_shared_snapshot(&cx).unwrap();
+        file.lock_external_wal_append(&cx).unwrap();
+        // Isolate independent restoration scheduling using the existing VFS
+        // test technique: raw locks/counters remain intact while the published
+        // prefix temporarily disagrees. This is not an OS syscall fault.
+        file.lock_level = LockLevel::None;
+        assert!(file.restore_external_wal_append_attempt(&cx).is_err());
+        assert!(!file.owns_external_wal_append_write(&cx).unwrap());
+        let retained = file
+            .external_append_attempt
+            .expect("retain failed main surface");
+        assert!(retained.main_restore_pending);
+        assert!(!retained.write_acquired);
+        assert!(file.restore_external_shared_snapshot_attempt(&cx).is_err());
+        let (mut peer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        peer.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .expect("WRITE restoration is independent of failed main restoration");
+        peer.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .unwrap();
+        file.lock_level = LockLevel::Reserved;
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        file.restore_external_shared_snapshot_attempt(&cx).unwrap();
+        peer.close(&cx).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn wal_append_authority_requires_matching_live_write_ledger() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("wal-append-authority-ledger.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.lock_external_wal_append(&cx).unwrap();
+        assert!(file.owns_external_wal_append_write(&cx).unwrap());
+        let shm = Arc::clone(file.shm_info.as_ref().unwrap());
+        let slot = usize::try_from(WAL_WRITE_LOCK).unwrap();
+        // Controlled ownership-mismatch test, not an OS unlock simulation.
+        shm.lock().unwrap().slots[slot].exclusive_owner = None;
+        assert!(!file.owns_external_wal_append_write(&cx).unwrap());
+        shm.lock().unwrap().slots[slot].exclusive_owner = Some(file.shm_owner_id);
+        assert!(file.owns_external_wal_append_write(&cx).unwrap());
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+        assert!(!file.owns_external_wal_append_write(&cx).unwrap());
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn wal_append_fence_excludes_foreign_write_without_taking_reader_locks() {
+        const CHILD_PATH: &str = "FSQLITE_VFS_APPEND_FENCE_CHILD";
+        const TEST: &str =
+            "unix::tests::wal_append_fence_excludes_foreign_write_without_taking_reader_locks";
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        if let Some(path) = std::env::var_os(CHILD_PATH) {
+            let (mut peer, _) = vfs
+                .open(&cx, Some(Path::new(&path)), open_flags_create())
+                .unwrap();
+            assert!(matches!(
+                peer.shm_lock(
+                    &cx,
+                    WAL_WRITE_LOCK,
+                    1,
+                    SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE
+                ),
+                Err(FrankenError::Busy)
+            ));
+            let slot = peer.wal_reader_slot_acquire(&cx, 17).unwrap().unwrap();
+            println!("append-child-write-blocked-reader-pinned");
+            std::io::stdout().flush().unwrap();
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "restored");
+            peer.shm_lock(
+                &cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+            )
+            .expect("native WRITE released while parent snapshot remains");
+            peer.lock(&cx, LockLevel::Reserved)
+                .expect("native appender also resumes");
+            peer.unlock(&cx, LockLevel::None).unwrap();
+            peer.shm_lock(
+                &cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+            )
+            .unwrap();
+            peer.wal_reader_slot_release(&cx, slot).unwrap();
+            peer.close(&cx).unwrap();
+            return;
+        }
+        let (_dir, path) = make_temp_path("wal-append-foreign.db");
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let mut file = crate::metrics::TracingFile::new(file, path.to_string_lossy().into_owned());
+        file.lock_external_shared_snapshot(&cx).unwrap();
+        file.lock_external_wal_append(&cx).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([TEST, "--exact", "--nocapture"])
+            .env(CHILD_PATH, &path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        loop {
+            let mut line = String::new();
+            assert_ne!(
+                output.read_line(&mut line).unwrap(),
+                0,
+                "child exited before lock witness"
+            );
+            if line.trim() == "append-child-write-blocked-reader-pinned" {
+                break;
+            }
+        }
+        file.restore_external_wal_append_attempt(&cx).unwrap();
+        writeln!(child.stdin.as_mut().unwrap(), "restored").unwrap();
+        assert!(child.wait().unwrap().success());
+        file.restore_external_shared_snapshot_attempt(&cx).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn external_snapshot_restore_is_exact_before_after_and_across_retries() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("external-snapshot-attempt.db");
+        let (mut file, _) = vfs
+            .open(&cx, Some(&path), open_flags_create())
+            .expect("open database");
+
+        file.restore_external_shared_snapshot_attempt(&cx)
+            .expect("pre-acquisition restore is a no-op");
+        file.lock_external_shared_snapshot(&cx)
+            .expect("acquire external snapshot");
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        assert!(!file.transient_shared_pending_gate);
+        assert_eq!(
+            file.inode_info_ref()
+                .lock()
+                .expect("inode state")
+                .n_transient_shared_pending,
+            0
+        );
+        file.restore_external_shared_snapshot_attempt(&cx)
+            .expect("restore newly acquired SHARED");
+        assert_eq!(file.lock_level, LockLevel::None);
+        assert!(file.external_shared_snapshot_attempt.is_none());
+        file.restore_external_shared_snapshot_attempt(&cx)
+            .expect("double restore is a no-op");
+
+        file.lock(&cx, LockLevel::Shared)
+            .expect("establish prior SHARED baseline");
+        file.lock_external_shared_snapshot(&cx)
+            .expect("snapshot over pre-existing SHARED");
+        file.restore_external_shared_snapshot_attempt(&cx)
+            .expect("restore exact pre-existing baseline");
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        file.unlock(&cx, LockLevel::None).expect("release baseline");
+        file.close(&cx).expect("close");
+    }
+
+    #[test]
+    fn wal_recovery_attempt_preserves_preowned_slots_and_shared_reader_baselines() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("wal-recovery-preowned.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.restore_external_maintenance_attempt(&cx).unwrap();
+        let cancelled = Cx::new();
+        cancelled.cancel();
+        assert!(matches!(
+            file.lock_external_wal_recovery(&cancelled),
+            Err(FrankenError::Abort)
+        ));
+        assert!(file.external_maintenance_attempt.is_none());
+        assert!(file.shm_info.is_none());
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        let preowned = [
+            WAL_WRITE_LOCK,
+            WAL_RECOVER_LOCK,
+            wal_read_lock_slot(2).unwrap(),
+        ];
+        let shared_slot = wal_read_lock_slot(1).unwrap();
+        for slot in preowned {
+            file.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE)
+                .unwrap();
+        }
+        for _ in 0..2 {
+            file.shm_lock(&cx, shared_slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_SHARED)
+                .unwrap();
+        }
+
+        file.lock_external_wal_recovery(&cx)
+            .expect("acquire recovery");
+        assert_eq!(file.lock_level, LockLevel::Reserved);
+        let attempt = file.external_maintenance_attempt.expect("recovery marker");
+        assert!(attempt.recovery_mode);
+        assert_eq!(attempt.prior_main_level, LockLevel::Shared);
+        for slot in 0..WAL_TOTAL_LOCKS {
+            assert_eq!(attempt.acquired_slot(slot), !preowned.contains(&slot));
+        }
+        assert!(file.shm_unmap(&cx, false).is_err());
+        file.restore_external_maintenance_attempt(&cx).unwrap();
+        file.restore_external_maintenance_attempt(&cx).unwrap();
+        assert!(file.external_maintenance_attempt.is_none());
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        {
+            let info = file.shm_info.as_ref().unwrap().lock().unwrap();
+            for slot in 0..WAL_TOTAL_LOCKS {
+                let state = &info.slots[usize::try_from(slot).unwrap()];
+                assert_eq!(
+                    state.exclusive_owner,
+                    preowned.contains(&slot).then_some(file.shm_owner_id)
+                );
+            }
+            assert_eq!(
+                info.slots[usize::try_from(shared_slot).unwrap()]
+                    .shared_holders
+                    .get(&file.shm_owner_id),
+                Some(&2),
+                "upgrading and restoring must preserve both prior shared claims"
+            );
+        }
+        file.lock(&cx, LockLevel::Reserved).unwrap();
+        file.lock_external_wal_recovery(&cx).unwrap();
+        file.restore_external_maintenance_attempt(&cx).unwrap();
+        assert_eq!(
+            file.lock_level,
+            LockLevel::Reserved,
+            "a prior native appender fence must survive recovery restoration"
+        );
+        for slot in preowned {
+            file.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE)
+                .unwrap();
+        }
+        for _ in 0..2 {
+            file.shm_lock(&cx, shared_slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+                .unwrap();
+        }
+        file.unlock(&cx, LockLevel::None).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn wal_recovery_partial_acquisition_preserves_exact_conflicting_reader_and_fences() {
+        let reader_zero = wal_read_lock_slot(0).unwrap();
+        for blocked_slot in [
+            WAL_WRITE_LOCK,
+            WAL_CKPT_LOCK,
+            WAL_RECOVER_LOCK,
+            reader_zero,
+            wal_read_lock_slot(4).unwrap(),
+        ] {
+            let cx = Cx::new();
+            let vfs = UnixVfs::new();
+            let (_dir, path) = make_temp_path("wal-recovery-partial.db");
+            let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            let (mut blocker, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            file.lock(&cx, LockLevel::Shared).unwrap();
+            let blocker_mode = if blocked_slot >= reader_zero {
+                SQLITE_SHM_SHARED
+            } else {
+                SQLITE_SHM_EXCLUSIVE
+            };
+            blocker
+                .shm_lock(&cx, blocked_slot, 1, SQLITE_SHM_LOCK | blocker_mode)
+                .unwrap();
+            assert!(matches!(
+                file.lock_external_wal_recovery(&cx),
+                Err(FrankenError::Busy)
+            ));
+            let attempt = file
+                .external_maintenance_attempt
+                .expect("partial recovery marker");
+            assert!(attempt.recovery_mode);
+            assert_eq!(attempt.newly_acquired_wal_slots, (1_u8 << blocked_slot) - 1);
+            assert_eq!(
+                file.lock_level,
+                if blocked_slot >= WAL_RECOVER_LOCK {
+                    LockLevel::Reserved
+                } else {
+                    LockLevel::Shared
+                }
+            );
+            assert!(file.shm_unmap(&cx, false).is_err());
+            assert!(file.lock_external_wal_recovery(&cx).is_err());
+            assert!(file.lock_external_wal_checkpoint(&cx).is_err());
+            assert!(file.lock_external_wal_append(&cx).is_err());
+            assert!(file.lock_external_shared_snapshot(&cx).is_err());
+            assert!(file.external_append_attempt.is_none());
+            assert!(file.external_shared_snapshot_attempt.is_none());
+            file.restore_external_maintenance_attempt(&cx).unwrap();
+            assert!(file.external_maintenance_attempt.is_none());
+            assert_eq!(file.lock_level, LockLevel::Shared);
+            {
+                let info = blocker.shm_info.as_ref().unwrap().lock().unwrap();
+                for slot in 0..WAL_TOTAL_LOCKS {
+                    let state = &info.slots[usize::try_from(slot).unwrap()];
+                    assert_ne!(state.exclusive_owner, Some(file.shm_owner_id));
+                }
+                let blocked = &info.slots[usize::try_from(blocked_slot).unwrap()];
+                if blocker_mode == SQLITE_SHM_SHARED {
+                    assert_eq!(blocked.shared_holders.get(&blocker.shm_owner_id), Some(&1));
+                } else {
+                    assert_eq!(blocked.exclusive_owner, Some(blocker.shm_owner_id));
+                }
+            }
+            blocker
+                .shm_lock(&cx, blocked_slot, 1, SQLITE_SHM_UNLOCK | blocker_mode)
+                .unwrap();
+            file.lock_external_wal_recovery(&cx)
+                .expect("retry after reader or fence drains");
+            assert_eq!(
+                file.external_maintenance_attempt
+                    .unwrap()
+                    .newly_acquired_wal_slots,
+                u8::MAX
+            );
+            file.restore_external_maintenance_attempt(&cx).unwrap();
+            file.restore_external_maintenance_attempt(&cx).unwrap();
+            assert_eq!(file.lock_level, LockLevel::Shared);
+            file.unlock(&cx, LockLevel::None).unwrap();
+            blocker.close(&cx).unwrap();
+            file.close(&cx).unwrap();
+        }
+    }
+
+    #[test]
+    fn wal_recovery_restore_failure_retains_outer_fences_and_deferred_owner() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("wal-recovery-restore-retry.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        file.lock_external_wal_recovery(&cx).unwrap();
+        let inode = Arc::clone(file.inode_info_ref());
+        let shm = Arc::clone(file.shm_info.as_ref().unwrap());
+        let owner_id = file.shm_owner_id;
+        let retained_slot = wal_read_lock_slot(4).unwrap();
+        // Controlled ownership mismatch, not an OS syscall fault: leave the
+        // actual kernel lock and attempt ledger intact while making the
+        // ownership validator refuse one supplemental release.
+        shm.lock().unwrap().slots[usize::try_from(retained_slot).unwrap()].exclusive_owner = None;
+        assert!(file.restore_external_maintenance_attempt(&cx).is_err());
+        let retained = file
+            .external_maintenance_attempt
+            .expect("retained recovery");
+        assert!(retained.recovery_mode);
+        assert!(retained.main_restore_pending);
+        assert_eq!(
+            retained.newly_acquired_wal_slots,
+            (1_u8 << WAL_WRITE_LOCK) | (1_u8 << WAL_CKPT_LOCK) | (1_u8 << retained_slot)
+        );
+        assert_eq!(file.lock_level, LockLevel::Reserved);
+        {
+            let info = shm.lock().unwrap();
+            for slot in [WAL_WRITE_LOCK, WAL_CKPT_LOCK] {
+                assert_eq!(
+                    info.slots[usize::try_from(slot).unwrap()].exclusive_owner,
+                    Some(owner_id)
+                );
+            }
+        }
+        assert!(file.shm_unmap(&cx, false).is_err());
+        assert!(file.close(&cx).is_err());
+        assert!(!file.closed);
+        assert!(file.file.is_some());
+        let mut deferred = file.take_for_deferred_cleanup();
+        assert!(file.closed);
+        assert!(file.file.is_none());
+        assert!(file.shm_info.is_none());
+        assert!(file.external_maintenance_attempt.is_none());
+        assert!(deferred.external_maintenance_attempt.unwrap().recovery_mode);
+        assert_eq!(deferred.lock_level, LockLevel::Reserved);
+        assert_eq!(deferred.wal_lifetime_claim, WalLifetimeClaim::Held);
+        assert!(!file.shm_dms_lifetime_claim);
+        assert!(deferred.shm_dms_lifetime_claim);
+        assert!(deferred.shm_unmap(&cx, false).is_err());
+        // Restore the validator's view, then exercise real raw unlocks through
+        // the sole surviving owner. Close also drains the prior main baseline.
+        shm.lock().unwrap().slots[usize::try_from(retained_slot).unwrap()].exclusive_owner =
+            Some(owner_id);
+        deferred
+            .close(&cx)
+            .expect("retry all remaining recovery cleanup");
+        deferred.close(&cx).unwrap();
+        assert!(deferred.external_maintenance_attempt.is_none());
+        assert!(deferred.shm_info.is_none());
+        assert!(!deferred.shm_dms_lifetime_claim);
+        assert!(!inode.lock().unwrap().has_lock_claims());
+        let info = shm.lock().unwrap();
+        assert!(!info.owner_refs.contains_key(&owner_id));
+        assert!(info.slots.iter().all(|slot| {
+            slot.exclusive_owner != Some(owner_id) && !slot.shared_holders.contains_key(&owner_id)
+        }));
+    }
+
+    #[test]
+    fn wal_checkpoint_reader_gates_retain_outer_owner_until_exact_cleanup() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        for retain_reader in [0, 4] {
+            let (_dir, path) = make_temp_path("wal-checkpoint-gate-cleanup.db");
+            let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            file.lock(&cx, LockLevel::Shared).unwrap();
+            file.lock_external_wal_checkpoint(&cx).unwrap();
+            assert!(file.wal_checkpoint_backfill_gate_acquire(&cx).unwrap());
+            assert!(file.wal_checkpoint_reset_gate_acquire(&cx).unwrap());
+            let shm = Arc::clone(file.shm_info.as_ref().unwrap());
+            let owner = file.shm_owner_id;
+            let slot = wal_reader_lock_slot(retain_reader).unwrap();
+            // Controlled validator mismatch; the actual native claim remains
+            // held. This exercises retry ownership, not an injected syscall.
+            shm.lock().unwrap().slots[usize::try_from(slot).unwrap()].exclusive_owner = None;
+            let cancelled = Cx::new();
+            cancelled.cancel();
+            assert!(matches!(
+                file.wal_checkpoint_reset_gate_release(&cancelled),
+                Err(FrankenError::Abort)
+            ));
+            assert!(
+                file.restore_external_maintenance_attempt(&cancelled)
+                    .is_err()
+            );
+            let attempt = file.external_maintenance_attempt.unwrap();
+            assert!(!attempt.recovery_mode);
+            assert!(attempt.main_restore_pending);
+            assert_eq!(
+                attempt.newly_acquired_wal_slots,
+                (1_u8 << WAL_WRITE_LOCK) | (1_u8 << WAL_CKPT_LOCK) | (1_u8 << slot)
+            );
+            assert_eq!(file.lock_level, LockLevel::Reserved);
+            for outer in [WAL_WRITE_LOCK, WAL_CKPT_LOCK] {
+                assert_eq!(
+                    shm.lock().unwrap().slots[usize::try_from(outer).unwrap()].exclusive_owner,
+                    Some(owner)
+                );
+            }
+            assert!(file.shm_unmap(&cx, false).is_err());
+            assert!(file.close(&cx).is_err());
+            let mut deferred = file.take_for_deferred_cleanup();
+            assert!(file.closed);
+            assert!(
+                deferred
+                    .external_maintenance_attempt
+                    .unwrap()
+                    .acquired_slot(slot)
+            );
+            shm.lock().unwrap().slots[usize::try_from(slot).unwrap()].exclusive_owner = Some(owner);
+            deferred.close(&cx).unwrap();
+            deferred.close(&cx).unwrap();
+            assert!(deferred.external_maintenance_attempt.is_none());
+            assert!(shm.lock().unwrap().slots.iter().all(|state| {
+                state.exclusive_owner != Some(owner) && !state.shared_holders.contains_key(&owner)
+            }));
+            let (mut retry, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            retry.lock_external_wal_checkpoint(&cx).unwrap();
+            assert!(retry.wal_checkpoint_backfill_gate_acquire(&cx).unwrap());
+            assert!(retry.wal_checkpoint_reset_gate_acquire(&cx).unwrap());
+            retry.restore_external_maintenance_attempt(&cx).unwrap();
+            retry.close(&cx).unwrap();
+        }
+    }
+
+    #[test]
+    fn wal_checkpoint_reader_gates_preserve_preowned_claims_and_partial_prefix() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        for mode in [SQLITE_SHM_SHARED, SQLITE_SHM_EXCLUSIVE] {
+            let (_dir, path) = make_temp_path("wal-checkpoint-preowned-reader.db");
+            let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            file.lock_external_maintenance(&cx, false).unwrap();
+            assert!(matches!(
+                file.wal_checkpoint_backfill_gate_acquire(&cx),
+                Err(FrankenError::BusyRecovery)
+            ));
+            assert!(
+                file.shm_info.is_none(),
+                "incompatible owner creates no SHM attachment"
+            );
+            assert_eq!(
+                file.external_maintenance_attempt
+                    .unwrap()
+                    .newly_acquired_wal_slots,
+                0
+            );
+            file.restore_external_maintenance_attempt(&cx).unwrap();
+            let region = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+            let slot = wal_reader_lock_slot(3).unwrap();
+            write_wal_read_mark(&region, 3, 9).unwrap();
+            file.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | mode).unwrap();
+            file.lock_external_wal_checkpoint(&cx).unwrap();
+            assert!(!file.wal_checkpoint_reset_gate_acquire(&cx).unwrap());
+            assert_eq!(
+                file.external_maintenance_attempt
+                    .unwrap()
+                    .newly_acquired_wal_slots,
+                (1_u8 << WAL_WRITE_LOCK) | (1_u8 << WAL_CKPT_LOCK)
+            );
+            assert_eq!(file.wal_checkpoint_reader_horizon(&cx, 20).unwrap(), 9);
+            assert_eq!(read_wal_read_mark(&region, 3).unwrap(), 9);
+            file.wal_checkpoint_reset_gate_release(&cx).unwrap();
+            file.restore_external_maintenance_attempt(&cx).unwrap();
+            {
+                let info = file.shm_info.as_ref().unwrap().lock().unwrap();
+                let state = &info.slots[usize::try_from(slot).unwrap()];
+                if mode == SQLITE_SHM_SHARED {
+                    assert_eq!(state.shared_holders.get(&file.shm_owner_id), Some(&1));
+                    assert!(state.exclusive_owner.is_none());
+                } else {
+                    assert_eq!(state.exclusive_owner, Some(file.shm_owner_id));
+                }
+            }
+            file.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | mode)
+                .unwrap();
+            file.lock_external_wal_checkpoint(&cx).unwrap();
+            assert!(file.wal_checkpoint_reset_gate_acquire(&cx).unwrap());
+            file.wal_checkpoint_reset_gate_release(&cx).unwrap();
+            assert_eq!(
+                file.external_maintenance_attempt
+                    .unwrap()
+                    .newly_acquired_wal_slots,
+                (1_u8 << WAL_WRITE_LOCK) | (1_u8 << WAL_CKPT_LOCK)
+            );
+            file.restore_external_maintenance_attempt(&cx).unwrap();
+            drop(region);
+            file.close(&cx).unwrap();
+        }
+    }
+
+    #[test]
+    fn wal_recovery_fence_has_exact_native_child_ownership_and_reader_conflicts() {
+        const CHILD_PATH: &str = "FSQLITE_VFS_RECOVERY_FENCE_CHILD";
+        const CHILD_PHASE: &str = "FSQLITE_VFS_RECOVERY_FENCE_PHASE";
+        const TEST: &str =
+            "unix::tests::wal_recovery_fence_has_exact_native_child_ownership_and_reader_conflicts";
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let reader_slot = wal_read_lock_slot(2).unwrap();
+        if let Some(path) = std::env::var_os(CHILD_PATH) {
+            let phase = std::env::var(CHILD_PHASE).unwrap();
+            let (exclusive_blocked, shared_blocked, reserved_blocked) = match phase.as_str() {
+                "held" => (u8::MAX, u8::MAX, true),
+                "restored" => (
+                    (1_u8 << WAL_RECOVER_LOCK) | (1_u8 << reader_slot),
+                    1_u8 << WAL_RECOVER_LOCK,
+                    false,
+                ),
+                "reader-conflict" => (1_u8 << reader_slot, 0, false),
+                "clear" => (0, 0, false),
+                _ => panic!("unexpected recovery child phase {phase}"),
+            };
+            let (mut peer, _) = vfs
+                .open(&cx, Some(Path::new(&path)), open_flags_create())
+                .unwrap();
+            for (mode, blocked_mask) in [
+                (SQLITE_SHM_EXCLUSIVE, exclusive_blocked),
+                (SQLITE_SHM_SHARED, shared_blocked),
+            ] {
+                for slot in 0..WAL_TOTAL_LOCKS {
+                    let result = peer.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | mode);
+                    if blocked_mask & (1_u8 << slot) != 0 {
+                        assert!(
+                            matches!(result, Err(FrankenError::Busy)),
+                            "{phase}: slot {slot} mode {mode}"
+                        );
+                    } else {
+                        result.expect("foreign slot should be available");
+                        peer.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | mode)
+                            .unwrap();
+                    }
+                }
+            }
+            let reserved = peer.lock(&cx, LockLevel::Reserved);
+            if reserved_blocked {
+                assert!(matches!(reserved, Err(FrankenError::Busy)));
+            } else {
+                reserved.expect("foreign native appender fence should be available");
+                peer.unlock(&cx, LockLevel::None).unwrap();
+            }
+            if phase == "reader-conflict" {
+                assert!(matches!(
+                    peer.lock_external_wal_recovery(&cx),
+                    Err(FrankenError::Busy)
+                ));
+                let attempt = peer
+                    .external_maintenance_attempt
+                    .expect("foreign partial recovery");
+                assert!(attempt.recovery_mode);
+                assert_eq!(attempt.newly_acquired_wal_slots, (1_u8 << reader_slot) - 1);
+                assert_eq!(peer.lock_level, LockLevel::Reserved);
+                peer.restore_external_maintenance_attempt(&cx).unwrap();
+            }
+            peer.close(&cx).unwrap();
+            println!("recovery-child-probed-all-eight-slots:{phase}");
+            return;
+        }
+
+        let (_dir, path) = make_temp_path("wal-recovery-foreign.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        file.shm_lock(
+            &cx,
+            WAL_RECOVER_LOCK,
+            1,
+            SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .unwrap();
+        file.shm_lock(&cx, reader_slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        let probe = |phase: &str| {
+            // The child issues only nonblocking slot/main-lock operations;
+            // parent ownership remains stable for its entire one-shot probe.
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([TEST, "--exact", "--nocapture"])
+                .env(CHILD_PATH, &path)
+                .env(CHILD_PHASE, phase)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "recovery child {phase}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains(&format!("recovery-child-probed-all-eight-slots:{phase}"))
+            );
+        };
+        file.lock_external_wal_recovery(&cx).unwrap();
+        probe("held");
+        file.restore_external_maintenance_attempt(&cx).unwrap();
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        probe("restored");
+        file.shm_lock(
+            &cx,
+            WAL_RECOVER_LOCK,
+            1,
+            SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .unwrap();
+        probe("reader-conflict");
+        file.shm_lock(&cx, reader_slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        file.unlock(&cx, LockLevel::None).unwrap();
+        probe("clear");
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn external_maintenance_restores_only_wal_slots_newly_acquired_by_attempt() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("external-maintenance-preowned-wal.db");
+        let (mut file, _) = vfs
+            .open(&cx, Some(&path), open_flags_create())
+            .expect("open database");
+
+        file.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .expect("pre-acquire WRITE");
+        file.lock_external_maintenance(&cx, true)
+            .expect("acquire maintenance");
+        let attempt = file
+            .external_maintenance_attempt
+            .expect("maintenance marker");
+        assert!(!attempt.acquired_slot(WAL_WRITE_LOCK));
+        assert!(attempt.acquired_slot(WAL_CKPT_LOCK));
+
+        file.restore_external_maintenance_attempt(&cx)
+            .expect("restore the exact surfaces recorded by the attempt");
+        assert_eq!(file.lock_level, LockLevel::None);
+        assert!(file.external_maintenance_attempt.is_none());
+        {
+            let info = file
+                .shm_info
+                .as_ref()
+                .expect("SHM state")
+                .lock()
+                .expect("SHM state lock");
+            assert_eq!(
+                info.slots[usize::try_from(WAL_WRITE_LOCK).expect("slot")].exclusive_owner,
+                Some(file.shm_owner_id)
+            );
+            assert_eq!(
+                info.slots[usize::try_from(WAL_CKPT_LOCK).expect("slot")].exclusive_owner,
+                None
+            );
+        }
+        file.restore_external_maintenance_attempt(&cx)
+            .expect("repeated restore is a no-op");
+        file.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .expect("release pre-existing WRITE");
+        file.close(&cx).expect("close");
+    }
+
+    #[test]
+    fn failed_maintenance_acquisition_retains_and_restores_exact_partial_wal_set() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("external-maintenance-partial-wal.db");
+        let (mut attempt_file, _) = vfs
+            .open(&cx, Some(&path), open_flags_create())
+            .expect("open attempt file");
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        let (mut blocker, _) = vfs.open(&cx, Some(&path), flags).expect("open blocker");
+
+        blocker
+            .shm_lock(
+                &cx,
+                WAL_CKPT_LOCK,
+                1,
+                SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+            )
+            .expect("block CKPT");
+        assert!(matches!(
+            attempt_file.lock_external_maintenance(&cx, true),
+            Err(FrankenError::Busy)
+        ));
+        let attempt = attempt_file
+            .external_maintenance_attempt
+            .expect("partial attempt marker");
+        assert!(attempt.acquired_slot(WAL_WRITE_LOCK));
+        assert!(!attempt.acquired_slot(WAL_CKPT_LOCK));
+        assert_eq!(attempt_file.lock_level, LockLevel::None);
+
+        attempt_file
+            .restore_external_maintenance_attempt(&cx)
+            .expect("restore partial attempt");
+        assert!(attempt_file.external_maintenance_attempt.is_none());
+        {
+            let info = blocker
+                .shm_info
+                .as_ref()
+                .expect("SHM state")
+                .lock()
+                .expect("SHM state lock");
+            assert_eq!(
+                info.slots[usize::try_from(WAL_WRITE_LOCK).expect("slot")].exclusive_owner,
+                None
+            );
+            assert_eq!(
+                info.slots[usize::try_from(WAL_CKPT_LOCK).expect("slot")].exclusive_owner,
+                Some(blocker.shm_owner_id)
+            );
+        }
+
+        blocker
+            .shm_lock(
+                &cx,
+                WAL_CKPT_LOCK,
+                1,
+                SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+            )
+            .expect("release blocker");
+        blocker.close(&cx).expect("close blocker");
+        attempt_file.close(&cx).expect("close attempt");
+    }
+
+    #[test]
+    fn maintenance_restore_releases_wal_surfaces_when_main_restore_fails() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("external-maintenance-main-retry.db");
+        let (mut file, _) = vfs
+            .open(&cx, Some(&path), open_flags_create())
+            .expect("open database");
+
+        file.lock(&cx, LockLevel::Shared)
+            .expect("establish prior main-lock baseline");
+        file.lock_external_maintenance(&cx, true)
+            .expect("acquire every maintenance surface");
+        assert_eq!(file.lock_level, LockLevel::Exclusive);
+
+        // Exercise the failure scheduler without a syscall fault injector:
+        // make the retained target temporarily exceed the published prefix.
+        // The inode counters and raw main locks are left untouched and
+        // restored below, so this isolates independent surface cleanup.
+        file.lock_level = LockLevel::None;
+        assert!(file.restore_external_maintenance_attempt(&cx).is_err());
+        let retained = file
+            .external_maintenance_attempt
+            .expect("failed main surface remains armed");
+        assert!(retained.main_restore_pending);
+        assert_eq!(
+            retained.newly_acquired_wal_slots, 0,
+            "CKPT and WRITE must restore independently of the main failure"
+        );
+        {
+            let info = file
+                .shm_info
+                .as_ref()
+                .expect("SHM state")
+                .lock()
+                .expect("SHM state lock");
+            for slot in [WAL_CKPT_LOCK, WAL_WRITE_LOCK] {
+                assert_eq!(
+                    info.slots[usize::try_from(slot).expect("slot")].exclusive_owner,
+                    None
+                );
+            }
+        }
+
+        file.lock_level = LockLevel::Exclusive;
+        file.restore_external_maintenance_attempt(&cx)
+            .expect("retry restores the sole retained main surface");
+        assert!(file.external_maintenance_attempt.is_none());
+        assert_eq!(file.lock_level, LockLevel::Shared);
+        file.unlock(&cx, LockLevel::None)
+            .expect("release prior main-lock baseline");
+        file.close(&cx).expect("close");
+    }
+
+    #[test]
+    fn deferred_cleanup_transfer_preserves_every_live_lock_obligation() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("deferred-cleanup-owner.db");
+        let (mut dropped_shell, _) = vfs
+            .open(&cx, Some(&path), open_flags_create())
+            .expect("open database");
+
+        dropped_shell
+            .lock_external_maintenance(&cx, true)
+            .expect("acquire every maintenance surface");
+        let owner_id = dropped_shell.shm_owner_id;
+        let inode_info = Arc::clone(dropped_shell.inode_info_ref());
+        let shm_info = dropped_shell
+            .shm_info
+            .as_ref()
+            .map(Arc::clone)
+            .expect("maintenance SHM state");
+
+        let mut deferred = dropped_shell.take_for_deferred_cleanup();
+        assert!(dropped_shell.closed);
+        assert!(dropped_shell.file.is_none());
+        assert!(dropped_shell.inode_info.is_none());
+        assert!(dropped_shell.shm_info.is_none());
+        assert_eq!(
+            dropped_shell.wal_lifetime_claim,
+            WalLifetimeClaim::Unclaimed
+        );
+        assert_eq!(deferred.wal_lifetime_claim, WalLifetimeClaim::Held);
+        assert_eq!(deferred.lock_level, LockLevel::Exclusive);
+        assert!(deferred.external_maintenance_attempt.is_some());
+
+        deferred
+            .close(&cx)
+            .expect("process-root owner retries all cleanup to terminal");
+        assert!(deferred.closed);
+        assert!(deferred.external_maintenance_attempt.is_none());
+        assert!(deferred.shm_info.is_none());
+        {
+            let info = shm_info.lock().expect("SHM state");
+            assert!(!info.owner_refs.contains_key(&owner_id));
+            assert!(info.slots.iter().all(|slot| {
+                slot.exclusive_owner != Some(owner_id)
+                    && !slot.shared_holders.contains_key(&owner_id)
+            }));
+        }
+        {
+            let info = inode_info.lock().expect("inode state");
+            assert_eq!(info.n_ref, 0);
+            assert!(!info.has_lock_claims());
+        }
+    }
+
+    fn assert_invalid_input_error(err: FrankenError, expected_detail: &str) {
+        match err {
+            FrankenError::Io(io_err) => {
+                assert_eq!(io_err.kind(), std::io::ErrorKind::InvalidInput);
+                assert!(
+                    io_err.to_string().contains(expected_detail),
+                    "expected error detail containing {expected_detail:?}, got {io_err}"
+                );
+            }
+            other => {
+                assert!(
+                    matches!(&other, FrankenError::Io(_)),
+                    "expected Io error, got {other:?}"
+                );
+            }
+        }
+    }
+
+    fn debug_dump_sqlite_wal_files(cx: &Cx, coordinator: &mut UnixFile) {
+        use std::fmt::Write as _;
+
+        if std::env::var_os("FSQLITE_DEBUG_SQLITE_WAL_INTEROP").is_none() {
+            return;
+        }
+
+        let db_path = &coordinator.path;
+        let shm_path = &coordinator.shm_path;
+        let wal_path = sqlite_wal_path(db_path);
+
+        let db_len = fs::metadata(db_path).map_or(0, |m| m.len());
+        let shm_len = fs::metadata(shm_path).map_or(0, |m| m.len());
+        let wal_len = fs::metadata(&wal_path).map_or(0, |m| m.len());
+
+        eprintln!(
+            "[debug] sqlite interop paths:\n  db={}\n  shm={} (len={shm_len})\n  wal={} (len={wal_len})\n  db_len={db_len}",
+            db_path.display(),
+            shm_path.display(),
+            wal_path.display(),
+        );
+
+        if let Ok(shm_info) = coordinator.ensure_shm_info(cx) {
+            let shm_file = {
+                let info = shm_info
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                Arc::clone(&info.file)
+            };
+            let mut header = [0_u8; SQLITE_WAL_SHM_HEADER_BYTES];
+            let n = shm_file.read_at(&mut header, 0).unwrap_or(0);
+            let valid = sqlite_wal_shm_header_is_valid(&header).unwrap_or(false);
+            eprintln!("[debug] shm header read_at(0) -> {n} bytes, valid={valid}");
+
+            let mut line = String::new();
+            for (i, b) in header.iter().enumerate() {
+                if i % 16 == 0 {
+                    if !line.is_empty() {
+                        eprintln!("{line}");
+                        line.clear();
+                    }
+                    let _ = write!(line, "[debug] {i:04x}: ");
+                }
+                let _ = write!(line, "{b:02x} ");
+            }
+            if !line.is_empty() {
+                eprintln!("{line}");
+            }
+        } else {
+            eprintln!("[debug] shm file open failed");
+        }
+    }
+
+    fn make_temp_path(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(name);
+        (dir, path)
+    }
+
+    fn open_flags_create() -> VfsOpenFlags {
+        VfsOpenFlags::MAIN_DB | VfsOpenFlags::CREATE | VfsOpenFlags::READWRITE
+    }
+
+    fn sqlite3_available() -> bool {
+        Command::new("sqlite3").arg("--version").output().is_ok()
+    }
+
+    fn sqlite3_exec(db_path: &Path, sql: &str) -> Output {
+        Command::new("sqlite3")
+            .arg(db_path)
+            .arg(sql)
+            .output()
+            .expect("sqlite3 command should execute")
+    }
+
+    fn setup_sqlite_delete_journal_db(path: &Path) {
+        let setup = sqlite3_exec(
+            path,
+            "PRAGMA journal_mode=DELETE; \
+             DROP TABLE IF EXISTS t; \
+             CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); \
+             INSERT INTO t(v) VALUES('alpha');",
+        );
+        assert!(
+            setup.status.success(),
+            "sqlite3 setup failed: {}",
+            String::from_utf8_lossy(&setup.stderr)
+        );
+    }
+
+    #[allow(clippy::zombie_processes)]
+    fn spawn_sqlite3_reader_transaction(db_path: &Path) -> Child {
+        let mut child = Command::new("sqlite3")
+            .arg(db_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("sqlite3 reader process should start");
+
+        let stdin = child
+            .stdin
+            .as_mut()
+            .expect("sqlite3 reader should expose stdin");
+        stdin
+            .write_all(b"PRAGMA busy_timeout=0;\nBEGIN;\nSELECT COUNT(*) FROM t;\n")
+            .expect("sqlite3 reader setup should write");
+        stdin.flush().expect("sqlite3 reader setup should flush");
+
+        let stdout = child
+            .stdout
+            .take()
+            .expect("sqlite3 reader should expose stdout");
+        let mut stdout = BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let read = stdout
+                .read_line(&mut line)
+                .expect("sqlite3 reader output should be readable");
+            assert!(
+                read > 0,
+                "sqlite3 reader exited before acquiring shared lock: {}",
+                child.wait_with_output().map_or_else(
+                    |_| "wait_with_output failed".to_string(),
+                    |output| String::from_utf8_lossy(&output.stderr).into_owned(),
+                )
+            );
+            if line.trim() == "1" {
+                child.stdout = Some(stdout.into_inner());
+                return child;
+            }
+        }
+    }
+
+    fn finish_sqlite3_transaction(mut child: Child) {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .expect("sqlite3 reader should keep stdin open");
+        stdin
+            .write_all(b"COMMIT;\n.quit\n")
+            .expect("sqlite3 reader teardown should write");
+        stdin.flush().expect("sqlite3 reader teardown should flush");
+        let output = child
+            .wait_with_output()
+            .expect("sqlite3 reader should exit cleanly");
+        assert!(
+            output.status.success(),
+            "sqlite3 reader teardown failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn setup_sqlite_wal_db(path: &Path) {
+        let setup = sqlite3_exec(
+            path,
+            "PRAGMA journal_mode=WAL; \
+             DROP TABLE IF EXISTS t; \
+             CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); \
+             INSERT INTO t(v) VALUES('alpha'),('beta');",
+        );
+        assert!(
+            setup.status.success(),
+            "sqlite3 setup failed: {}",
+            String::from_utf8_lossy(&setup.stderr)
+        );
+    }
+
+    // -- Basic I/O --
+
+    #[test]
+    fn test_unix_vfs_create_write_close_reopen_read() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("rw_test.db");
+
+        // Create and write.
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"hello unix vfs", 0).unwrap();
+        assert_eq!(file.file_size(&cx).unwrap(), 14);
+        file.close(&cx).unwrap();
+
+        // Reopen and read.
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        let (mut file, _) = vfs.open(&cx, Some(&path), flags).unwrap();
+        let mut buf = [0u8; 14];
+        let n = file.read(&cx, &mut buf, 0).unwrap();
+        assert_eq!(n, 14);
+        assert_eq!(&buf, b"hello unix vfs");
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_concurrent_readers() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("concurrent_readers.db");
+
+        let (mut writer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        writer.write(&cx, b"shared-reader-bytes", 0).unwrap();
+        writer.close(&cx).unwrap();
+
+        let read_flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        let (mut reader_a, _) = vfs.open(&cx, Some(&path), read_flags).unwrap();
+        let (mut reader_b, _) = vfs.open(&cx, Some(&path), read_flags).unwrap();
+
+        let mut a = [0_u8; 19];
+        let mut b = [0_u8; 19];
+        assert_eq!(reader_a.read(&cx, &mut a, 0).unwrap(), 19);
+        assert_eq!(reader_b.read(&cx, &mut b, 0).unwrap(), 19);
+        assert_eq!(&a, b"shared-reader-bytes");
+        assert_eq!(a, b);
+
+        reader_a.close(&cx).unwrap();
+        reader_b.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_readonly_open_does_not_poison_later_writable_open() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("readonly_then_writable.db");
+
+        let (mut seed, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        seed.write(&cx, b"seed", 0).unwrap();
+        seed.close(&cx).unwrap();
+
+        let read_flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READONLY;
+        let (mut readonly, _) = vfs.open(&cx, Some(&path), read_flags).unwrap();
+        let mut buf = [0_u8; 4];
+        assert_eq!(readonly.read(&cx, &mut buf, 0).unwrap(), 4);
+        assert_eq!(&buf, b"seed");
+
+        let write_flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        let (mut writable, _) = vfs.open(&cx, Some(&path), write_flags).unwrap();
+        writable.write(&cx, b"done", 0).unwrap();
+
+        let mut check = [0_u8; 4];
+        assert_eq!(writable.read(&cx, &mut check, 0).unwrap(), 4);
+        assert_eq!(&check, b"done");
+
+        writable.close(&cx).unwrap();
+        readonly.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_inode_generation_is_retained_while_stale_fd_clone_survives_close() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("inode_generation_retained.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"x", 0).unwrap();
+
+        let inode_key = file.inode_key;
+        let stale_fd_clone = Arc::clone(file.file.as_ref().expect("open canonical descriptor"));
+        let stale_fd_raw = stale_fd_clone.as_raw_fd();
+
+        file.close(&cx).unwrap();
+        drop(file);
+
+        assert!(
+            global_inode_table().get(inode_key).is_some(),
+            "inode table evicted {inode_key:?} even though stale fd clone {stale_fd_raw} is still alive"
+        );
+
+        drop(stale_fd_clone);
+    }
+
+    #[test]
+    fn test_unix_vfs_read_past_end_zeroes() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("short_read.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"hi", 0).unwrap();
+
+        let mut buf = [0xFF_u8; 10];
+        let n = file.read(&cx, &mut buf, 0).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(&buf[..2], b"hi");
+        assert!(
+            buf[2..].iter().all(|&b| b == 0),
+            "short read must zero-fill"
+        );
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_truncate() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("truncate.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"hello world!!", 0).unwrap();
+        assert_eq!(file.file_size(&cx).unwrap(), 13);
+
+        file.truncate(&cx, 5).unwrap();
+        assert_eq!(file.file_size(&cx).unwrap(), 5);
+
+        let mut buf = [0u8; 5];
+        file.read(&cx, &mut buf, 0).unwrap();
+        assert_eq!(&buf, b"hello");
+
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_delete_nonexistent() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("nonexistent_delete_test.db");
+        let result = vfs.delete(&cx, &path, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unix_vfs_delete_file() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("delete_me.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"data", 0).unwrap();
+        file.close(&cx).unwrap();
+
+        assert!(vfs.access(&cx, &path, AccessFlags::EXISTS).unwrap());
+        vfs.delete(&cx, &path, false).unwrap();
+        assert!(!vfs.access(&cx, &path, AccessFlags::EXISTS).unwrap());
+    }
+
+    #[test]
+    fn test_unix_vfs_open_nonexistent_without_create_fails() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("definitely_not_here.db");
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        let result = vfs.open(&cx, Some(&path), flags);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unix_vfs_full_pathname() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+
+        let abs = vfs.full_pathname(&cx, Path::new("/tmp/test.db")).unwrap();
+        let expected = Path::new("/tmp").canonicalize().unwrap().join("test.db");
+        assert_eq!(abs, expected);
+
+        let rel = vfs.full_pathname(&cx, Path::new("test.db")).unwrap();
+        assert!(rel.is_absolute());
+    }
+
+    #[test]
+    fn test_unix_vfs_name() {
+        let vfs = UnixVfs::new();
+        assert_eq!(vfs.name(), "unix");
+    }
+
+    // -- Locking --
+
+    #[test]
+    fn test_unix_vfs_lock_escalation() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("lock_test.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"lock test data", 0).unwrap();
+
+        // Escalate: None -> Shared -> Reserved -> Exclusive.
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        assert_eq!(file.lock_level, LockLevel::Shared);
+
+        file.lock(&cx, LockLevel::Reserved).unwrap();
+        assert_eq!(file.lock_level, LockLevel::Reserved);
+
+        file.lock(&cx, LockLevel::Exclusive).unwrap();
+        assert_eq!(file.lock_level, LockLevel::Exclusive);
+
+        // Downgrade: Exclusive -> Shared -> None.
+        file.unlock(&cx, LockLevel::Shared).unwrap();
+        assert_eq!(file.lock_level, LockLevel::Shared);
+
+        file.unlock(&cx, LockLevel::None).unwrap();
+        assert_eq!(file.lock_level, LockLevel::None);
+
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_lock_idempotent() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("idem_lock.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        // Requesting the same lock level is a no-op.
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        assert_eq!(file.lock_level, LockLevel::Shared);
+
+        file.unlock(&cx, LockLevel::None).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_failed_exclusive_upgrade_releases_pending_lock() {
+        if !sqlite3_available() {
+            return;
+        }
+
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("exclusive_upgrade_busy.db");
+        setup_sqlite_delete_journal_db(&path);
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        file.lock(&cx, LockLevel::Reserved).unwrap();
+
+        let reader = spawn_sqlite3_reader_transaction(&path);
+        let err = file.lock(&cx, LockLevel::Exclusive).unwrap_err();
+        assert!(
+            matches!(err, FrankenError::Busy),
+            "exclusive upgrade should fail while a legacy reader holds SHARED"
+        );
+        assert_eq!(
+            file.lock_level,
+            LockLevel::Reserved,
+            "failed upgrade should roll back to the prior lock level"
+        );
+
+        let another_reader = sqlite3_exec(&path, "PRAGMA busy_timeout=0; SELECT COUNT(*) FROM t;");
+        assert!(
+            another_reader.status.success(),
+            "failed exclusive upgrade must not strand the PENDING byte; stderr={}",
+            String::from_utf8_lossy(&another_reader.stderr)
+        );
+
+        finish_sqlite3_transaction(reader);
+        file.unlock(&cx, LockLevel::None).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_exclusive_upgrade_honors_busy_timeout_against_legacy_reader() {
+        if !sqlite3_available() {
+            return;
+        }
+
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("exclusive_upgrade_busy_timeout.db");
+        setup_sqlite_delete_journal_db(&path);
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        file.lock(&cx, LockLevel::Reserved).unwrap();
+        file.set_busy_timeout_ms(200);
+
+        let reader = spawn_sqlite3_reader_transaction(&path);
+        let started = Instant::now();
+        let err = file.lock(&cx, LockLevel::Exclusive).unwrap_err();
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(err, FrankenError::Busy),
+            "exclusive upgrade should still fail once the timeout budget is exhausted"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(150),
+            "busy timeout should wait before failing; elapsed={elapsed:?}"
+        );
+        assert_eq!(
+            file.lock_level,
+            LockLevel::Reserved,
+            "timed-out upgrade should roll back to the prior lock level"
+        );
+
+        let another_reader = sqlite3_exec(&path, "PRAGMA busy_timeout=0; SELECT COUNT(*) FROM t;");
+        assert!(
+            another_reader.status.success(),
+            "timed-out exclusive upgrade must not strand the PENDING byte; stderr={}",
+            String::from_utf8_lossy(&another_reader.stderr)
+        );
+
+        finish_sqlite3_transaction(reader);
+        file.unlock(&cx, LockLevel::None).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_check_reserved_lock_across_same_process_handles() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("check_reserved.db");
+
+        let (mut writer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        writer.write(&cx, b"data", 0).unwrap();
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READWRITE;
+        let (mut observer, _) = vfs.open(&cx, Some(&path), flags).unwrap();
+
+        assert!(!writer.check_reserved_lock(&cx).unwrap());
+        assert!(!observer.check_reserved_lock(&cx).unwrap());
+
+        writer.lock(&cx, LockLevel::Reserved).unwrap();
+        assert!(!writer.check_reserved_lock(&cx).unwrap());
+        assert!(observer.check_reserved_lock(&cx).unwrap());
+
+        writer.lock(&cx, LockLevel::Pending).unwrap();
+        assert!(!writer.check_reserved_lock(&cx).unwrap());
+        assert!(observer.check_reserved_lock(&cx).unwrap());
+
+        writer.lock(&cx, LockLevel::Exclusive).unwrap();
+        assert!(!writer.check_reserved_lock(&cx).unwrap());
+        assert!(observer.check_reserved_lock(&cx).unwrap());
+
+        writer.unlock(&cx, LockLevel::None).unwrap();
+        assert!(!writer.check_reserved_lock(&cx).unwrap());
+        assert!(!observer.check_reserved_lock(&cx).unwrap());
+        observer.close(&cx).unwrap();
+        writer.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_sync() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("sync_test.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"sync me", 0).unwrap();
+
+        file.sync(&cx, SyncFlags::NORMAL).unwrap();
+        file.sync(&cx, SyncFlags::FULL).unwrap();
+        file.sync(&cx, SyncFlags::DATAONLY).unwrap();
+
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_delete_on_close() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("auto_delete.db");
+
+        let flags = VfsOpenFlags::MAIN_DB
+            | VfsOpenFlags::CREATE
+            | VfsOpenFlags::READWRITE
+            | VfsOpenFlags::DELETEONCLOSE;
+        let (mut file, _) = vfs.open(&cx, Some(&path), flags).unwrap();
+        file.write(&cx, b"temp", 0).unwrap();
+        assert!(path.exists());
+
+        file.close(&cx).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_unix_vfs_write_at_offset() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("offset_write.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"AAAA", 0).unwrap();
+        file.write(&cx, b"BB", 1).unwrap();
+
+        let mut buf = [0u8; 4];
+        file.read(&cx, &mut buf, 0).unwrap();
+        assert_eq!(&buf, b"ABBA");
+
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_page_write_read() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("pages.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        let page1 = vec![0xAA_u8; 4096];
+        let page2 = vec![0xBB_u8; 4096];
+        file.write(&cx, &page1, 0).unwrap();
+        file.write(&cx, &page2, 4096).unwrap();
+        assert_eq!(file.file_size(&cx).unwrap(), 8192);
+
+        let mut buf = vec![0u8; 4096];
+        file.read(&cx, &mut buf, 0).unwrap();
+        assert!(buf.iter().all(|&b| b == 0xAA));
+
+        file.read(&cx, &mut buf, 4096).unwrap();
+        assert!(buf.iter().all(|&b| b == 0xBB));
+
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_randomness() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let mut buf1 = [0u8; 16];
+        let mut buf2 = [0u8; 16];
+        vfs.randomness(&cx, &mut buf1);
+        vfs.randomness(&cx, &mut buf2);
+        assert_ne!(buf1, buf2, "randomness should produce different outputs");
+    }
+
+    #[test]
+    fn test_compat_reader_acquires_wal_read_lock() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("compat_reader_join.db");
+        let (mut reader1, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut reader2, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        let updated = reader1
+            .compat_reader_acquire_wal_read_lock(&cx, 0, 41)
+            .unwrap();
+        assert!(updated, "first reader must seed aReadMark[0]");
+
+        let joined = reader2
+            .compat_reader_acquire_wal_read_lock(&cx, 0, 41)
+            .unwrap();
+        assert!(
+            !joined,
+            "second reader should join existing aReadMark[0] with SHARED lock"
+        );
+
+        let read_marks = reader1.compat_read_marks().expect("shm state should exist");
+        assert_eq!(read_marks[0], 41);
+
+        let slot = wal_read_lock_slot(0).expect("reader slot 0 should exist");
+        reader2
+            .shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        reader1
+            .shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+    }
+
+    /// Deterministic same-process native-VFS interleaving. The peer obeys the
+    /// real exclusive-update protocol; this does not simulate full reader
+    /// admission or claim an independently scheduled foreign-process race.
+    fn compat_reader_replaced_mark_case(initial_mark: u32) {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        for reader_slot in [0, 1, 4] {
+            let (_dir, path) = make_temp_path("compat-reader-mark-race.db");
+            let (mut reader, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            let (mut peer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            let region = reader.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+            write_wal_read_mark(&region, reader_slot, initial_mark).unwrap();
+            let slot = wal_read_lock_slot(reader_slot).unwrap();
+            let interleaved = std::cell::Cell::new(false);
+            let result =
+                reader.compat_reader_acquire_wal_read_lock_with(&cx, reader_slot, 41, || {
+                    assert_eq!(read_wal_read_mark(&region, reader_slot).unwrap(), 41);
+                    peer.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE)
+                        .expect("peer owns the unpinned mark before SHARED acquisition");
+                    write_wal_read_mark(&region, reader_slot, 59).unwrap();
+                    peer.shm_barrier();
+                    peer.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE)
+                        .unwrap();
+                    interleaved.set(true);
+                });
+            assert!(
+                interleaved.get(),
+                "the peer reached the actual acquisition window"
+            );
+            assert!(
+                matches!(result, Err(FrankenError::BusyRecovery)),
+                "slot {reader_slot}: changed mark cannot certify the requested snapshot: {result:?}"
+            );
+            assert_eq!(read_wal_read_mark(&region, reader_slot).unwrap(), 59);
+            {
+                let info = reader.shm_info.as_ref().unwrap().lock().unwrap();
+                let state = &info.slots[usize::try_from(slot).unwrap()];
+                assert!(!state.shared_holders.contains_key(&reader.shm_owner_id));
+                assert!(state.exclusive_owner.is_none());
+            }
+            peer.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE)
+                .expect("failed admission released its exact new shared claim");
+            peer.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE)
+                .unwrap();
+            assert!(
+                reader
+                    .compat_reader_acquire_wal_read_lock(&cx, reader_slot, 41)
+                    .unwrap(),
+                "an explicit retry may still pin an older mark, including slot zero"
+            );
+            assert_eq!(read_wal_read_mark(&region, reader_slot).unwrap(), 41);
+            assert!(matches!(
+                peer.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE),
+                Err(FrankenError::Busy)
+            ));
+            reader
+                .shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+                .unwrap();
+            peer.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE)
+                .unwrap();
+            peer.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE)
+                .unwrap();
+            reader.close(&cx).unwrap();
+            peer.close(&cx).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_compat_reader_rechecks_replaced_mark_before_shared_join() {
+        compat_reader_replaced_mark_case(41);
+    }
+
+    #[test]
+    fn test_compat_reader_rechecks_replaced_mark_after_exclusive_publish() {
+        compat_reader_replaced_mark_case(7);
+    }
+
+    #[test]
+    fn test_compat_reader_preserves_preowned_shared_and_exclusive_claims() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        for reader_slot in [0, 1, 4] {
+            for mode in [SQLITE_SHM_SHARED, SQLITE_SHM_EXCLUSIVE] {
+                let (_dir, path) = make_temp_path("compat-reader-preowned.db");
+                let (mut reader, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+                let (mut peer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+                let region = reader.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+                let slot = wal_read_lock_slot(reader_slot).unwrap();
+                write_wal_read_mark(&region, reader_slot, 41).unwrap();
+                let baseline_count = if mode == SQLITE_SHM_SHARED { 2 } else { 1 };
+                for _ in 0..baseline_count {
+                    reader
+                        .shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | mode)
+                        .unwrap();
+                }
+                assert!(
+                    !reader
+                        .compat_reader_acquire_wal_read_lock(&cx, reader_slot, 41)
+                        .unwrap()
+                );
+                {
+                    let info = reader.shm_info.as_ref().unwrap().lock().unwrap();
+                    let state = &info.slots[usize::try_from(slot).unwrap()];
+                    if mode == SQLITE_SHM_SHARED {
+                        assert_eq!(state.shared_holders.get(&reader.shm_owner_id), Some(&3));
+                        assert!(state.exclusive_owner.is_none());
+                    } else {
+                        assert_eq!(state.exclusive_owner, Some(reader.shm_owner_id));
+                        assert!(state.shared_holders.is_empty());
+                    }
+                }
+                if mode == SQLITE_SHM_SHARED {
+                    reader
+                        .shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+                        .unwrap();
+                }
+                let reached_shared = std::cell::Cell::new(false);
+                assert!(matches!(
+                    reader.compat_reader_acquire_wal_read_lock_with(&cx, reader_slot, 59, || {
+                        reached_shared.set(true);
+                    },),
+                    Err(FrankenError::Busy)
+                ));
+                assert!(
+                    !reached_shared.get(),
+                    "a pinned mark must refuse mutation first"
+                );
+                assert_eq!(read_wal_read_mark(&region, reader_slot).unwrap(), 41);
+                {
+                    let info = reader.shm_info.as_ref().unwrap().lock().unwrap();
+                    let state = &info.slots[usize::try_from(slot).unwrap()];
+                    if mode == SQLITE_SHM_SHARED {
+                        assert_eq!(state.shared_holders.get(&reader.shm_owner_id), Some(&2));
+                        assert!(state.exclusive_owner.is_none());
+                    } else {
+                        assert_eq!(state.exclusive_owner, Some(reader.shm_owner_id));
+                        assert!(state.shared_holders.is_empty());
+                    }
+                }
+                for _ in 0..baseline_count {
+                    assert!(matches!(
+                        peer.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE),
+                        Err(FrankenError::Busy)
+                    ));
+                    reader
+                        .shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | mode)
+                        .unwrap();
+                }
+                peer.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE)
+                    .unwrap();
+                peer.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE)
+                    .unwrap();
+                reader.close(&cx).unwrap();
+                peer.close(&cx).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn test_compat_reader_exclusive_for_update() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("compat_reader_update.db");
+        let (mut reader1, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut reader2, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        let first_update = reader1
+            .compat_reader_acquire_wal_read_lock(&cx, 0, 7)
+            .unwrap();
+        assert!(first_update);
+
+        let slot = wal_read_lock_slot(0).expect("reader slot 0 should exist");
+        reader1
+            .shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+
+        let second_update = reader1
+            .compat_reader_acquire_wal_read_lock(&cx, 0, 9)
+            .unwrap();
+        assert!(
+            second_update,
+            "reader must take EXCLUSIVE briefly to update aReadMark then downgrade"
+        );
+        assert_eq!(reader1.compat_read_marks().expect("shm state exists")[0], 9);
+
+        let joined = reader2
+            .compat_reader_acquire_wal_read_lock(&cx, 0, 9)
+            .unwrap();
+        assert!(!joined, "reader2 should join updated aReadMark");
+
+        reader2
+            .shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        reader1
+            .shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+    }
+
+    #[test]
+    fn strict_reader_mark_acquire_refuses_unmapped_invalid_and_cancelled_requests() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("strict-reader-mark-preflight.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        assert!(matches!(
+            file.wal_reader_mark_exclusive_acquire(&cx, 1),
+            Err(FrankenError::BusyRecovery)
+        ));
+        assert!(file.shm_info.is_none());
+        assert_eq!(file.lock_level, LockLevel::None);
+        assert_eq!(file.wal_lifetime_claim, WalLifetimeClaim::Unclaimed);
+        let region = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        let before = region.lock().to_vec();
+        for invalid in [0, WAL_NREADER, u32::MAX] {
+            assert!(matches!(
+                file.wal_reader_mark_exclusive_acquire(&cx, invalid),
+                Err(FrankenError::LockFailed { .. })
+            ));
+        }
+        let cancelled = Cx::new();
+        cancelled.cancel();
+        assert!(matches!(
+            file.wal_reader_mark_exclusive_acquire(&cancelled, 1),
+            Err(FrankenError::Abort)
+        ));
+        assert_eq!(region.lock().to_vec(), before);
+        file.wal_reader_mark_exclusive_acquire(&cx, 1)
+            .expect("refusal leaves the slot unclaimed");
+        file.shm_lock(
+            &cx,
+            wal_reader_lock_slot(1).unwrap(),
+            1,
+            SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+        )
+        .unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn strict_reader_mark_acquire_preserves_existing_owners_and_marks() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("strict-reader-mark.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut peer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let region = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        peer.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+        write_wal_read_mark(&region, 1, 4).unwrap();
+        let before = region.lock().to_vec();
+        let slot = wal_reader_lock_slot(1).unwrap();
+        file.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        file.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        assert!(matches!(
+            file.wal_reader_mark_exclusive_acquire(&cx, 1),
+            Err(FrankenError::Busy)
+        ));
+        assert!(matches!(
+            peer.wal_reader_mark_exclusive_acquire(&cx, 1),
+            Err(FrankenError::Busy)
+        ));
+        assert_eq!(region.lock().to_vec(), before);
+        file.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        assert!(
+            matches!(
+                peer.wal_reader_mark_exclusive_acquire(&cx, 1),
+                Err(FrankenError::Busy)
+            ),
+            "refusal must not consume either same-handle shared claim"
+        );
+        file.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        peer.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        assert!(matches!(
+            file.wal_reader_mark_exclusive_acquire(&cx, 1),
+            Err(FrankenError::Busy)
+        ));
+        peer.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        file.wal_reader_mark_exclusive_acquire(&cx, 1)
+            .expect("empty slot acquisition");
+        assert!(
+            matches!(
+                file.wal_reader_mark_exclusive_acquire(&cx, 1),
+                Err(FrankenError::Busy)
+            ),
+            "a preowned exclusive claim is not a second acquisition"
+        );
+        assert!(matches!(
+            peer.shm_lock(&cx, slot, 1, SQLITE_SHM_LOCK | SQLITE_SHM_SHARED),
+            Err(FrankenError::Busy)
+        ));
+        assert_eq!(
+            region.lock().to_vec(),
+            before,
+            "claiming never changes aReadMark"
+        );
+        file.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE)
+            .unwrap();
+        peer.wal_reader_mark_exclusive_acquire(&cx, 1)
+            .expect("peer acquires after release");
+        assert!(matches!(
+            file.wal_reader_mark_exclusive_acquire(&cx, 1),
+            Err(FrankenError::Busy)
+        ));
+        peer.shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE)
+            .unwrap();
+        assert_eq!(region.lock().to_vec(), before);
+        file.close(&cx).unwrap();
+        peer.close(&cx).unwrap();
+    }
+
+    /// GH#399: a registered reader clamps a peer checkpointer's safe horizon
+    /// to its published mark and holds the reset gate closed until it ends.
+    #[test]
+    fn test_wal_reader_slot_publishes_horizon_and_gates_reset() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("gh399_reader_horizon.db");
+        let (mut reader, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut checkpointer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        let slot = reader
+            .wal_reader_slot_acquire(&cx, 41)
+            .unwrap()
+            .expect("unix backend registers readers");
+        assert!(
+            (1..WAL_NREADER).contains(&slot),
+            "reader slot {slot} out of range"
+        );
+        let slot_idx = usize::try_from(slot).unwrap();
+        assert_eq!(
+            reader.compat_read_marks().expect("shm mapped")[slot_idx],
+            41
+        );
+
+        assert!(
+            checkpointer
+                .wal_checkpoint_backfill_gate_acquire(&cx)
+                .unwrap(),
+            "no reader serves pages straight from the database file"
+        );
+        assert_eq!(
+            checkpointer
+                .wal_checkpoint_reader_horizon(&cx, 100)
+                .unwrap(),
+            41,
+            "the live reader's mark bounds the safe backfill horizon"
+        );
+        let marks = checkpointer.compat_read_marks().expect("shm mapped");
+        assert_eq!(marks[slot_idx], 41, "a held slot keeps its mark");
+        for (index, mark) in marks.iter().enumerate().skip(1) {
+            if index == slot_idx {
+                continue;
+            }
+            let expected = if index == 1 {
+                100
+            } else {
+                WAL_READ_MARK_NOT_USED
+            };
+            assert_eq!(*mark, expected, "free slot {index} is re-armed or parked");
+        }
+        assert!(
+            !checkpointer.wal_checkpoint_reset_gate_acquire(&cx).unwrap(),
+            "the reset gate must stay closed while a reader pins the generation"
+        );
+        checkpointer
+            .wal_checkpoint_backfill_gate_release(&cx)
+            .unwrap();
+
+        reader.wal_reader_slot_release(&cx, slot).unwrap();
+
+        assert_eq!(
+            checkpointer
+                .wal_checkpoint_reader_horizon(&cx, 100)
+                .unwrap(),
+            100,
+            "with no live reader the whole WAL is safe to backfill"
+        );
+        assert!(
+            checkpointer.wal_checkpoint_reset_gate_acquire(&cx).unwrap(),
+            "the reset gate opens once the last reader is gone"
+        );
+        checkpointer.wal_checkpoint_reset_gate_release(&cx).unwrap();
+
+        // A reader arriving after the checkpointer's pass shares the re-armed
+        // tip slot without publishing a new mark.
+        let tip_slot = reader
+            .wal_reader_slot_acquire(&cx, 100)
+            .unwrap()
+            .expect("registered");
+        assert_eq!(tip_slot, 1, "slot 1 was re-armed at the WAL tip");
+        reader.wal_reader_slot_release(&cx, tip_slot).unwrap();
+    }
+
+    #[test]
+    fn test_readonly_wal_reader_shares_older_mark_without_mutating_shm() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("readonly_reader_horizon.db");
+        let (mut writer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let original_slot = writer.wal_reader_slot_acquire(&cx, 41).unwrap().unwrap();
+        writer.wal_reader_slot_release(&cx, original_slot).unwrap();
+        let before = fs::read(sqlite_shm_path(&path)).unwrap();
+
+        // The canonical descriptor is writable because the writer opened it
+        // first. The new handle must still honor its requested READONLY mode.
+        let (mut reader, _) = vfs
+            .open(
+                &cx,
+                Some(&path),
+                VfsOpenFlags::READONLY | VfsOpenFlags::MAIN_DB,
+            )
+            .unwrap();
+        let slot = reader.wal_reader_slot_acquire(&cx, 42).unwrap().unwrap();
+        assert_eq!(slot, original_slot, "reuse the conservative older horizon");
+        assert_eq!(fs::read(sqlite_shm_path(&path)).unwrap(), before);
+
+        // Publishing a newer writer horizon remains possible while the
+        // read-only handle pins the older slot: no writer serialization.
+        let newer_slot = writer.wal_reader_slot_acquire(&cx, 42).unwrap().unwrap();
+        assert_ne!(newer_slot, slot);
+        writer.wal_reader_slot_release(&cx, newer_slot).unwrap();
+        assert_eq!(writer.wal_checkpoint_reader_horizon(&cx, 42).unwrap(), 41);
+        assert!(!writer.wal_checkpoint_reset_gate_acquire(&cx).unwrap());
+
+        let before_release = fs::read(sqlite_shm_path(&path)).unwrap();
+        reader.wal_reader_slot_release(&cx, slot).unwrap();
+        reader.close(&cx).unwrap();
+        assert_eq!(fs::read(sqlite_shm_path(&path)).unwrap(), before_release);
+        assert_eq!(writer.wal_checkpoint_reader_horizon(&cx, 42).unwrap(), 42);
+        assert!(writer.wal_checkpoint_reset_gate_acquire(&cx).unwrap());
+        writer.wal_checkpoint_reset_gate_release(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_readonly_wal_reader_rejects_missing_safe_mark_without_publication() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("readonly_reader_no_safe_mark.db");
+        let (mut writer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let region = writer.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        for index in 1..WAL_NREADER {
+            write_wal_read_mark(&region, index, WAL_READ_MARK_NOT_USED).unwrap();
+        }
+        let before = fs::read(sqlite_shm_path(&path)).unwrap();
+        let (mut reader, _) = vfs
+            .open(
+                &cx,
+                Some(&path),
+                VfsOpenFlags::READONLY | VfsOpenFlags::MAIN_DB,
+            )
+            .unwrap();
+        reader.set_busy_timeout_ms(1);
+        assert!(matches!(
+            reader.wal_reader_slot_acquire(&cx, 42),
+            Err(FrankenError::Busy)
+        ));
+        assert_eq!(fs::read(sqlite_shm_path(&path)).unwrap(), before);
+
+        // Once a writable peer publishes a safe mark, the same read-only
+        // handle can acquire it. The failed attempt left no stale lock.
+        let writer_slot = writer.wal_reader_slot_acquire(&cx, 42).unwrap().unwrap();
+        let reader_slot = reader.wal_reader_slot_acquire(&cx, 42).unwrap().unwrap();
+        assert_eq!(reader_slot, writer_slot);
+        reader.wal_reader_slot_release(&cx, reader_slot).unwrap();
+        writer.wal_reader_slot_release(&cx, writer_slot).unwrap();
+    }
+
+    #[test]
+    fn test_readonly_empty_wal_reader_uses_byte_neutral_backfill_fence() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("readonly_empty_wal_reader.db");
+        let (mut writer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let region = writer.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        for index in 1..WAL_NREADER {
+            write_wal_read_mark(&region, index, WAL_READ_MARK_NOT_USED).unwrap();
+        }
+        let before = fs::read(sqlite_shm_path(&path)).unwrap();
+        let (mut reader, _) = vfs
+            .open(
+                &cx,
+                Some(&path),
+                VfsOpenFlags::READONLY | VfsOpenFlags::MAIN_DB,
+            )
+            .unwrap();
+        let slot = reader.wal_reader_slot_acquire(&cx, 0).unwrap().unwrap();
+        assert_eq!(slot, 0, "an empty WAL uses the database-only reader slot");
+        assert_eq!(fs::read(sqlite_shm_path(&path)).unwrap(), before);
+        assert!(!writer.wal_checkpoint_backfill_gate_acquire(&cx).unwrap());
+        assert!(writer.wal_checkpoint_reset_gate_acquire(&cx).unwrap());
+        writer.wal_checkpoint_reset_gate_release(&cx).unwrap();
+
+        let newer_slot = writer.wal_reader_slot_acquire(&cx, 42).unwrap().unwrap();
+        writer.wal_reader_slot_release(&cx, newer_slot).unwrap();
+        reader.wal_reader_slot_release(&cx, slot).unwrap();
+        assert!(writer.wal_checkpoint_backfill_gate_acquire(&cx).unwrap());
+        writer.wal_checkpoint_backfill_gate_release(&cx).unwrap();
+    }
+
+    /// GH#399: readers at one mark share a slot; a reader whose mark has no
+    /// free slot falls back to the largest published mark below it (which is
+    /// conservative for the checkpointer); a reader below every held mark
+    /// cannot register and reports Busy instead of pinning a wrong horizon.
+    #[test]
+    fn test_wal_reader_slots_share_marks_and_fall_back_conservatively() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("gh399_reader_slots.db");
+        let mut handles = Vec::new();
+        for _ in 0..6 {
+            let (handle, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            handles.push(handle);
+        }
+
+        let first = handles[0]
+            .wal_reader_slot_acquire(&cx, 10)
+            .unwrap()
+            .unwrap();
+        let shared = handles[1]
+            .wal_reader_slot_acquire(&cx, 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, shared, "equal marks share one slot");
+
+        let mut held = vec![(0_usize, first), (1_usize, shared)];
+        for (owner, mark) in [(2_usize, 20_u32), (3, 30), (4, 40)] {
+            let slot = handles[owner]
+                .wal_reader_slot_acquire(&cx, mark)
+                .unwrap()
+                .unwrap();
+            assert!(
+                held.iter().all(|(_, other)| *other != slot),
+                "distinct marks need distinct slots"
+            );
+            held.push((owner, slot));
+        }
+
+        // Every slot is pinned: 35 has no exact slot and cannot claim one, so
+        // it shares the 30 slot (the largest published mark below it).
+        let fallback = handles[5]
+            .wal_reader_slot_acquire(&cx, 35)
+            .unwrap()
+            .unwrap();
+        let slot_of_30 = held[3].1;
+        assert_eq!(
+            fallback, slot_of_30,
+            "falls back to the largest mark <= mx_frame"
+        );
+        handles[5].wal_reader_slot_release(&cx, fallback).unwrap();
+
+        // Below every held mark there is nothing safe to share.
+        let (mut latecomer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        latecomer.set_busy_timeout_ms(1);
+        assert!(matches!(
+            latecomer.wal_reader_slot_acquire(&cx, 5),
+            Err(FrankenError::Busy)
+        ));
+
+        for (owner, slot) in held {
+            handles[owner].wal_reader_slot_release(&cx, slot).unwrap();
+        }
+    }
+
+    /// GH#399: a legacy reader that pinned `WAL_READ_LOCK(0)` (serving pages
+    /// straight from the database file) blocks the backfill gate.
+    #[test]
+    fn test_wal_checkpoint_backfill_gate_blocked_by_slot0_reader() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("gh399_backfill_gate.db");
+        let (mut legacy_reader, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut checkpointer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        legacy_reader
+            .compat_reader_acquire_wal_read_lock(&cx, 0, 0)
+            .unwrap();
+        assert!(
+            !checkpointer
+                .wal_checkpoint_backfill_gate_acquire(&cx)
+                .unwrap(),
+            "a slot-0 reader forbids any backfill"
+        );
+        assert!(
+            checkpointer.wal_checkpoint_reset_gate_acquire(&cx).unwrap(),
+            "slot 0 does not pin the WAL generation itself"
+        );
+        checkpointer.wal_checkpoint_reset_gate_release(&cx).unwrap();
+
+        let slot = wal_read_lock_slot(0).expect("reader slot 0 should exist");
+        legacy_reader
+            .shm_lock(&cx, slot, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        assert!(
+            checkpointer
+                .wal_checkpoint_backfill_gate_acquire(&cx)
+                .unwrap()
+        );
+        checkpointer
+            .wal_checkpoint_backfill_gate_release(&cx)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_compat_writer_holds_wal_write_lock() {
+        if !sqlite3_available() {
+            return;
+        }
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("compat_writer_lock.db");
+        setup_sqlite_wal_db(&path);
+        let (mut coordinator, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut contender, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        coordinator.compat_writer_hold_wal_write_lock(&cx).unwrap();
+        let contender_err = contender
+            .compat_writer_hold_wal_write_lock(&cx)
+            .unwrap_err();
+        assert!(
+            matches!(contender_err, FrankenError::Busy),
+            "contender should observe SQLITE_BUSY while coordinator holds WAL_WRITE_LOCK"
+        );
+
+        coordinator
+            .compat_writer_release_wal_write_lock(&cx)
+            .unwrap();
+        contender.compat_writer_hold_wal_write_lock(&cx).unwrap();
+        contender.compat_writer_release_wal_write_lock(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_legacy_sqlite_reader_coexists() {
+        if !sqlite3_available() {
+            return;
+        }
+
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("legacy_reader_coexists.db");
+        setup_sqlite_wal_db(&path);
+
+        let (mut coordinator, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        coordinator.compat_writer_hold_wal_write_lock(&cx).unwrap();
+        debug_dump_sqlite_wal_files(&cx, &mut coordinator);
+
+        let reader_output = sqlite3_exec(&path, "PRAGMA busy_timeout=0; SELECT COUNT(*) FROM t;");
+        assert!(
+            reader_output.status.success(),
+            "legacy sqlite reader should coexist while coordinator holds WAL_WRITE_LOCK; stderr={}",
+            String::from_utf8_lossy(&reader_output.stderr)
+        );
+        let count_text = String::from_utf8_lossy(&reader_output.stdout);
+        assert!(
+            count_text.contains('2'),
+            "expected reader to observe table rows; stdout={count_text}"
+        );
+
+        coordinator
+            .compat_writer_release_wal_write_lock(&cx)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_legacy_sqlite_writer_gets_busy() {
+        if !sqlite3_available() {
+            return;
+        }
+
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("legacy_writer_busy.db");
+        setup_sqlite_wal_db(&path);
+
+        let (mut coordinator, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        coordinator.compat_writer_hold_wal_write_lock(&cx).unwrap();
+        debug_dump_sqlite_wal_files(&cx, &mut coordinator);
+
+        let writer_output = sqlite3_exec(
+            &path,
+            "PRAGMA busy_timeout=0; \
+             BEGIN IMMEDIATE; INSERT INTO t(v) VALUES('blocked'); COMMIT;",
+        );
+        assert!(
+            !writer_output.status.success(),
+            "legacy writer must fail with SQLITE_BUSY while coordinator holds WAL_WRITE_LOCK"
+        );
+        let busy_text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&writer_output.stdout),
+            String::from_utf8_lossy(&writer_output.stderr)
+        )
+        .to_ascii_lowercase();
+        assert!(
+            busy_text.contains("database is locked") || busy_text.contains("busy"),
+            "expected sqlite busy/locked message, got: {busy_text}"
+        );
+
+        coordinator
+            .compat_writer_release_wal_write_lock(&cx)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_e2e_hybrid_shm_interop_with_c_sqlite() {
+        if !sqlite3_available() {
+            return;
+        }
+
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("hybrid_shm_interop_e2e.db");
+        setup_sqlite_wal_db(&path);
+
+        let (mut coordinator, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        coordinator.compat_writer_hold_wal_write_lock(&cx).unwrap();
+        debug_dump_sqlite_wal_files(&cx, &mut coordinator);
+
+        // Reader interop while coordinator holds WAL_WRITE_LOCK.
+        let read_output = sqlite3_exec(&path, "PRAGMA busy_timeout=0; SELECT SUM(id) FROM t;");
+        assert!(
+            read_output.status.success(),
+            "reader should succeed during coordinator lifetime; stderr={}",
+            String::from_utf8_lossy(&read_output.stderr)
+        );
+        let read_text = String::from_utf8_lossy(&read_output.stdout);
+        assert!(
+            read_text.contains('3'),
+            "expected deterministic SUM(id)=3 from initial rows; stdout={read_text}"
+        );
+
+        coordinator
+            .compat_writer_release_wal_write_lock(&cx)
+            .unwrap();
+
+        // After release, legacy writer should proceed.
+        let allowed_write = sqlite3_exec(
+            &path,
+            "PRAGMA busy_timeout=0; \
+             BEGIN IMMEDIATE; INSERT INTO t(v) VALUES('allowed'); COMMIT;",
+        );
+        assert!(
+            allowed_write.status.success(),
+            "legacy writer should proceed after coordinator releases WAL_WRITE_LOCK; stderr={}",
+            String::from_utf8_lossy(&allowed_write.stderr)
+        );
+
+        let verify_count = sqlite3_exec(&path, "SELECT COUNT(*) FROM t;");
+        assert!(
+            verify_count.status.success(),
+            "count verification query should succeed; stderr={}",
+            String::from_utf8_lossy(&verify_count.stderr)
+        );
+        let count_text = String::from_utf8_lossy(&verify_count.stdout);
+        assert!(
+            count_text.contains('3'),
+            "expected exactly one post-release insert (count=3); stdout={count_text}"
+        );
+    }
+
+    // -- Internal helper tests --
+
+    #[test]
+    fn test_wal_checksum_empty_input() {
+        let (s1, s2) = sqlite_wal_checksum_native_8byte_chunks(&[]).unwrap();
+        assert_eq!(s1, 0);
+        assert_eq!(s2, 0);
+    }
+
+    #[test]
+    fn test_wal_checksum_8_bytes() {
+        let data = [1u8, 0, 0, 0, 2, 0, 0, 0];
+        let (s1, s2) = sqlite_wal_checksum_native_8byte_chunks(&data).unwrap();
+        // w1 = 1, w2 = 2 (native byte order on little-endian)
+        // s1 = 0 + 1 + 0 = 1
+        // s2 = 0 + 2 + 1 = 3
+        assert_eq!(s1, 1);
+        assert_eq!(s2, 3);
+    }
+
+    #[test]
+    fn test_wal_checksum_non_aligned_fails() {
+        let data = [0u8; 7];
+        let result = sqlite_wal_checksum_native_8byte_chunks(&data);
+        assert!(result.is_err());
+    }
+
+    fn refresh_wal_shm_header_checksums(header: &mut [u8; SQLITE_WAL_SHM_HEADER_BYTES]) {
+        for offset in [0, 48] {
+            let (ck1, ck2) = sqlite_wal_checksum_native_8byte_chunks(&header[offset..offset + 40])
+                .expect("test header checksum input is aligned");
+            write_ne_u32(header, offset + 40, ck1);
+            write_ne_u32(header, offset + 44, ck2);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn test_page_size_from_header_valid_sizes() {
+        for &expected_size in &[512u32, 1024, 2048, 4096, 8192, 16384, 32768] {
+            let mut header = [0u8; 100];
+            let raw = expected_size as u16;
+            header[16] = (raw >> 8) as u8;
+            header[17] = (raw & 0xFF) as u8;
+            let size = sqlite_page_size_from_db_header(&header).unwrap();
+            assert_eq!(size, expected_size);
+        }
+    }
+
+    #[test]
+    fn test_page_size_from_header_65536() {
+        let mut header = [0u8; 100];
+        // Page size 65536 is encoded as 1.
+        header[16] = 0;
+        header[17] = 1;
+        let size = sqlite_page_size_from_db_header(&header).unwrap();
+        assert_eq!(size, 65536);
+    }
+
+    #[test]
+    fn test_page_size_from_header_too_small() {
+        let header = [0u8; 50];
+        let result = sqlite_page_size_from_db_header(&header);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_page_size_from_header_invalid() {
+        let mut header = [0u8; 100];
+        // Page size 3 is not a power of two.
+        header[16] = 0;
+        header[17] = 3;
+        let result = sqlite_page_size_from_db_header(&header);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_page_size_from_header_too_small_value() {
+        let mut header = [0u8; 100];
+        // Page size 256 is below minimum 512.
+        header[16] = 1;
+        header[17] = 0;
+        let result = sqlite_page_size_from_db_header(&header);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_and_validate_wal_shm_header() {
+        let header = build_empty_sqlite_wal_shm_header(4096, 10).unwrap();
+        assert_eq!(header.len(), SQLITE_WAL_SHM_HEADER_BYTES);
+        assert!(sqlite_wal_shm_header_is_valid(&header).unwrap());
+    }
+
+    #[test]
+    fn test_build_wal_shm_header_65536() {
+        let header = build_empty_sqlite_wal_shm_header(65536, 1).unwrap();
+        assert!(sqlite_wal_shm_header_is_valid(&header).unwrap());
+    }
+
+    #[test]
+    fn test_wal_shm_header_invalid_too_short() {
+        let buf = [0u8; 10];
+        assert!(!sqlite_wal_shm_header_is_valid(&buf).unwrap());
+    }
+
+    #[test]
+    fn test_wal_shm_header_invalid_mismatched_copies() {
+        let mut header = build_empty_sqlite_wal_shm_header(4096, 5).unwrap();
+        // Corrupt the second copy.
+        header[48] ^= 0xFF;
+        assert!(!sqlite_wal_shm_header_is_valid(&header).unwrap());
+    }
+
+    #[test]
+    fn test_wal_shm_header_invalid_not_initialized() {
+        let mut header = build_empty_sqlite_wal_shm_header(4096, 5).unwrap();
+        // Clear isInit flag.
+        header[12] = 0;
+        header[48 + 12] = 0;
+        assert!(!sqlite_wal_shm_header_is_valid(&header).unwrap());
+    }
+
+    #[test]
+    fn test_wal_shm_header_invalid_bad_checksum() {
+        let mut header = build_empty_sqlite_wal_shm_header(4096, 5).unwrap();
+        // Corrupt a data byte in the checksum area.
+        header[8] ^= 0xFF;
+        header[48 + 8] ^= 0xFF;
+        assert!(!sqlite_wal_shm_header_is_valid(&header).unwrap());
+    }
+
+    #[test]
+    fn test_wal_shm_header_invalid_version_even_with_valid_checksum() {
+        let mut header = build_empty_sqlite_wal_shm_header(4096, 5).unwrap();
+        write_ne_u32(&mut header, 0, SQLITE_WAL_INDEX_VERSION + 1);
+        write_ne_u32(&mut header, 48, SQLITE_WAL_INDEX_VERSION + 1);
+        refresh_wal_shm_header_checksums(&mut header);
+        assert!(!sqlite_wal_shm_header_is_valid(&header).unwrap());
+    }
+
+    #[test]
+    fn test_wal_shm_header_invalid_checksum_endian_flag_even_with_valid_checksum() {
+        let mut header = build_empty_sqlite_wal_shm_header(4096, 5).unwrap();
+        header[13] = 2;
+        header[48 + 13] = 2;
+        refresh_wal_shm_header_checksums(&mut header);
+        assert!(!sqlite_wal_shm_header_is_valid(&header).unwrap());
+    }
+
+    #[test]
+    fn test_wal_shm_header_invalid_page_size_even_with_valid_checksum() {
+        let mut header = build_empty_sqlite_wal_shm_header(4096, 5).unwrap();
+        header[14..16].copy_from_slice(&3_u16.to_ne_bytes());
+        header[48 + 14..48 + 16].copy_from_slice(&3_u16.to_ne_bytes());
+        refresh_wal_shm_header_checksums(&mut header);
+        assert!(!sqlite_wal_shm_header_is_valid(&header).unwrap());
+    }
+
+    #[test]
+    fn test_sqlite_wal_path() {
+        let path = Path::new("/tmp/test.db");
+        assert_eq!(sqlite_wal_path(path), PathBuf::from("/tmp/test.db-wal"));
+    }
+
+    #[test]
+    fn test_sqlite_shm_path() {
+        let path = Path::new("/tmp/test.db");
+        assert_eq!(sqlite_shm_path(path), PathBuf::from("/tmp/test.db-shm"));
+    }
+
+    #[test]
+    fn test_write_ne_u32() {
+        let mut buf = [0u8; 8];
+        write_ne_u32(&mut buf, 0, 42);
+        write_ne_u32(&mut buf, 4, u32::MAX);
+        assert_eq!(u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]), 42);
+        assert_eq!(
+            u32::from_ne_bytes([buf[4], buf[5], buf[6], buf[7]]),
+            u32::MAX
+        );
+    }
+
+    #[test]
+    fn test_unix_vfs_default_trait() {
+        let vfs = UnixVfs;
+        assert_eq!(vfs.name(), "unix");
+    }
+
+    #[test]
+    fn test_unix_vfs_temp_file() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let flags = VfsOpenFlags::TEMP_DB
+            | VfsOpenFlags::CREATE
+            | VfsOpenFlags::READWRITE
+            | VfsOpenFlags::DELETEONCLOSE;
+
+        let (mut file, out_flags) = vfs.open(&cx, None, flags).unwrap();
+        assert!(out_flags.contains(VfsOpenFlags::READWRITE));
+
+        file.write(&cx, b"temp data", 0).unwrap();
+        let mut buf = [0u8; 9];
+        file.read(&cx, &mut buf, 0).unwrap();
+        assert_eq!(&buf, b"temp data");
+
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_anonymous_temp_file_auto_deletes_on_close() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let flags = VfsOpenFlags::TEMP_DB | VfsOpenFlags::CREATE | VfsOpenFlags::READWRITE;
+
+        let (mut file, out_flags) = vfs.open(&cx, None, flags).unwrap();
+        let temp_path = file.path.clone();
+        assert!(out_flags.contains(VfsOpenFlags::READWRITE));
+        assert!(file.delete_on_close);
+        assert!(
+            temp_path.exists(),
+            "anonymous temp path should exist while open"
+        );
+
+        file.write(&cx, b"temp data", 0).unwrap();
+        file.close(&cx).unwrap();
+
+        assert!(
+            !temp_path.exists(),
+            "anonymous temp files must be deleted on close even without DELETEONCLOSE"
+        );
+    }
+
+    #[test]
+    fn test_unix_vfs_read_empty_file() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("empty_read.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let mut buf = [0xFF_u8; 8];
+        let n = file.read(&cx, &mut buf, 0).unwrap();
+        assert_eq!(n, 0);
+        assert!(buf.iter().all(|&b| b == 0));
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_file_size_zero_on_create() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("size_zero.db");
+
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        assert_eq!(file.file_size(&cx).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_unix_vfs_access_readwrite() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("access_rw.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"test", 0).unwrap();
+        file.close(&cx).unwrap();
+
+        assert!(vfs.access(&cx, &path, AccessFlags::READWRITE).unwrap());
+    }
+
+    #[test]
+    fn test_unix_vfs_access_modes_match_posix_contract() {
+        assert_eq!(unix_access_mode(AccessFlags::EXISTS), UnixAccessFlags::F_OK);
+        assert_eq!(unix_access_mode(AccessFlags::READ), UnixAccessFlags::R_OK);
+        assert_eq!(
+            unix_access_mode(AccessFlags::READWRITE),
+            UnixAccessFlags::R_OK | UnixAccessFlags::W_OK
+        );
+    }
+
+    #[test]
+    fn test_unix_vfs_readonly_open_of_readable_nonwritable_file() {
+        let path = Path::new("/etc/passwd");
+        if unix_access(path, UnixAccessFlags::R_OK).is_err()
+            || unix_access(path, UnixAccessFlags::W_OK).is_ok()
+        {
+            // Privileged test runners may legitimately have write access.
+            return;
+        }
+
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        assert!(!vfs.access(&cx, path, AccessFlags::READWRITE).unwrap());
+
+        let flags = VfsOpenFlags::MAIN_DB | VfsOpenFlags::READONLY;
+        let (mut file, out_flags) = vfs.open(&cx, Some(path), flags).unwrap();
+        let mut byte = [0_u8; 1];
+        assert_eq!(file.read(&cx, &mut byte, 0).unwrap(), 1);
+        assert!(out_flags.contains(VfsOpenFlags::READONLY));
+        assert!(!out_flags.contains(VfsOpenFlags::READWRITE));
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_promoted_readonly_open_retries_without_write_access() {
+        let mut attempts = Vec::new();
+        let opened = open_with_optional_readonly_fallback(false, true, |write| {
+            attempts.push(write);
+            if write {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "fixture rejects read-write open",
+                ))
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(opened.is_ok());
+        assert_eq!(attempts, [true, false]);
+    }
+
+    #[test]
+    fn test_requested_readwrite_open_does_not_fallback_to_readonly() {
+        let mut attempts = Vec::new();
+        let opened: io::Result<()> = open_with_optional_readonly_fallback(true, false, |write| {
+            attempts.push(write);
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "fixture rejects read-write open",
+            ))
+        });
+
+        assert_eq!(opened.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(attempts, [true]);
+    }
+
+    #[test]
+    fn test_unix_vfs_access_nonexistent() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("nofile.db");
+        assert!(!vfs.access(&cx, &path, AccessFlags::EXISTS).unwrap());
+        assert!(!vfs.access(&cx, &path, AccessFlags::READWRITE).unwrap());
+    }
+
+    #[test]
+    fn test_unix_vfs_delete_with_sync_dir() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("sync_del.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"data", 0).unwrap();
+        file.close(&cx).unwrap();
+
+        vfs.delete(&cx, &path, true).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_unix_vfs_write_extends_and_read_gap() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("gap_write.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"end", 100).unwrap();
+        assert_eq!(file.file_size(&cx).unwrap(), 103);
+
+        let mut buf = [0xFF_u8; 10];
+        let n = file.read(&cx, &mut buf, 0).unwrap();
+        assert_eq!(n, 10);
+        assert!(buf.iter().all(|&b| b == 0), "gap should be zeroed");
+
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_read_rejects_overflowing_offset_range() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("read_overflow.db");
+
+        let mut buf = [0_u8; 2];
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let err = file.read(&cx, &mut buf, u64::MAX).unwrap_err();
+        assert_invalid_input_error(err, "offset overflow during unix vfs read");
+    }
+
+    #[test]
+    fn test_unix_vfs_write_rejects_overflowing_offset_range() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("write_overflow.db");
+
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let err = file.write(&cx, &[1, 2], u64::MAX).unwrap_err();
+        assert_invalid_input_error(err, "offset overflow during unix vfs write");
+    }
+
+    #[test]
+    fn test_unix_vfs_sector_size_and_device_characteristics() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("sector.db");
+
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        assert_eq!(file.sector_size(), 4096);
+        assert_eq!(file.device_characteristics(), 0);
+    }
+
+    #[test]
+    fn test_unix_vfs_shm_barrier_is_fence() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("barrier.db");
+
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.shm_barrier(); // should not panic; emits SeqCst fence
+    }
+
+    #[test]
+    fn test_shm_dms_lock_byte() {
+        let byte = sqlite_shm_dms_lock_byte();
+        // WAL_WRITE_LOCK is slot 0, lock byte 120, plus WAL_TOTAL_LOCKS (8) = 128.
+        assert_eq!(byte, 128);
+    }
+
+    #[test]
+    fn probe_foreign_wal_participation_is_lock_neutral_and_skips_own_inodes() {
+        // bd-sz9j5: foreign participants are covered by the cross-process
+        // keeper in fsqlite-core; here, the verdicts this process can reach.
+        let (_dir, path) = make_temp_path("probe.db");
+        assert_eq!(
+            probe_foreign_wal_participation(&path),
+            ForeignWalParticipation::Unknown,
+            "a missing file proves nothing"
+        );
+        let mut header = vec![0_u8; 100];
+        std::fs::write(&path, &header).unwrap();
+        assert_eq!(
+            probe_foreign_wal_participation(&path),
+            ForeignWalParticipation::Unknown,
+            "a rollback-journal file has no WAL participants"
+        );
+        header[18] = 2;
+        header[19] = 2;
+        std::fs::write(&path, &header).unwrap();
+        assert_eq!(
+            probe_foreign_wal_participation(&path),
+            ForeignWalParticipation::NoParticipant
+        );
+        // An unlocked `-shm` is still no participant.
+        std::fs::write(sqlite_shm_path(&path), vec![0_u8; 32_768]).unwrap();
+        assert_eq!(
+            probe_foreign_wal_participation(&path),
+            ForeignWalParticipation::NoParticipant
+        );
+
+        // Once this process registers the inode, its own locks are invisible
+        // to F_GETLK, so the probe must not claim a verdict (and returns
+        // before opening the temporary descriptor whose close would drop
+        // this process's locks).
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (mut file, _) = vfs
+            .open(
+                &cx,
+                Some(&path),
+                VfsOpenFlags::READWRITE | VfsOpenFlags::MAIN_DB,
+            )
+            .unwrap();
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        assert_eq!(
+            vfs.probe_foreign_wal_participation(&cx, &path).unwrap(),
+            ForeignWalParticipation::Unknown
+        );
+        file.unlock(&cx, LockLevel::None).unwrap();
+    }
+
+    #[test]
+    fn test_validate_shm_request_zero_n() {
+        let result = UnixFile::validate_shm_request(0, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_shm_request_overflow() {
+        let result = UnixFile::validate_shm_request(u32::MAX, 2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_shm_request_exceeds_total() {
+        let result = UnixFile::validate_shm_request(WAL_TOTAL_LOCKS, 1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_shm_request_valid() {
+        UnixFile::validate_shm_request(0, 1).unwrap();
+        UnixFile::validate_shm_request(0, WAL_TOTAL_LOCKS).unwrap();
+        UnixFile::validate_shm_request(WAL_TOTAL_LOCKS - 1, 1).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_lock_downgrade_idempotent() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("down_lock.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.lock(&cx, LockLevel::Shared).unwrap();
+
+        // Unlock to None, then try again — should be idempotent.
+        file.unlock(&cx, LockLevel::None).unwrap();
+        file.unlock(&cx, LockLevel::None).unwrap();
+        assert_eq!(file.lock_level, LockLevel::None);
+
+        file.close(&cx).unwrap();
+    }
+
+    /// GH #343 / bd-qll76: on a local filesystem (Linux `F_SETLK`, Darwin
+    /// `F_OFD_SETLK`) byte-range locking succeeds, so the whole-file `flock(2)`
+    /// fallback is never taken and the handle reports no downgrade. This pins
+    /// the accessor plumbing end-to-end for the non-degraded case (the degraded
+    /// case is only reachable on a network mount that rejects OFD locks, which
+    /// no local test host can synthesize).
+    #[test]
+    fn test_local_file_reports_no_whole_file_flock_downgrade() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("flock_downgrade.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        // Before any lock, the observation conservatively reports false.
+        assert!(!file.locking_downgraded_to_whole_file_flock());
+
+        // A SHARED acquisition on a local file uses byte-range / OFD locking.
+        file.lock(&cx, LockLevel::Shared).unwrap();
+        assert!(
+            !file.locking_downgraded_to_whole_file_flock(),
+            "local byte-range/OFD locking must not report a whole-file flock downgrade"
+        );
+
+        file.unlock(&cx, LockLevel::None).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_unix_vfs_shm_unmap_without_prior_shm() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("no_shm.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        // shm_unmap with delete=false should succeed even when no SHM was mapped.
+        file.shm_unmap(&cx, false).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    // -- mmap-backed SHM region tests --
+
+    /// Keep a regression that could SIGBUS inside a bounded child process.
+    fn run_shm_allocation_child(test_name: &str) {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
+            .env("FSQLITE_SHM_ALLOCATION_CHILD", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                let output = child.wait_with_output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "SHM allocation child failed: {output:?}"
+                );
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                assert!(
+                    stdout.contains(test_name) && stdout.contains("test result: ok. 1 passed"),
+                    "SHM allocation child did not execute the requested test: {output:?}"
+                );
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let output = child.wait_with_output().unwrap();
+                panic!("SHM allocation child timed out: {output:?}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn shm_506_partial_allocation_errors_preserve_aliases_and_recover() {
+        if std::env::var_os("FSQLITE_SHM_ALLOCATION_CHILD").is_none() {
+            run_shm_allocation_child(
+                "unix::tests::shm_506_partial_allocation_errors_preserve_aliases_and_recover",
+            );
+            return;
+        }
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let segment = usize::try_from(SHM_SEGMENT_SIZE).unwrap();
+        for errno in [libc::ENOSPC, libc::EDQUOT, libc::EIO, libc::EFBIG] {
+            let (_dir, path) = make_temp_path("shm-allocation-retry.db");
+            let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            let original = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+            for offset in (0..segment).step_by(4096) {
+                original.write_u32_le(offset, 0x1234_ABCD).unwrap();
+            }
+            let info = Arc::clone(file.shm_info.as_ref().unwrap());
+            let (mut peer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            peer.shm_lock(
+                &cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+            )
+            .unwrap();
+            let inode = Arc::clone(file.inode_info_ref());
+            let references = inode.lock().unwrap().n_ref;
+            {
+                // Simulate a syscall that backed a prefix but left the full
+                // requested length with holes. All calls go through shm_map;
+                // only the allocation syscall is faulted in this thread.
+                let _fault = crate::unix_shm::fail_allocations(
+                    errno,
+                    Some(u64::from(SHM_SEGMENT_SIZE) + 4096),
+                );
+                for _ in 0..2 {
+                    for result in [
+                        file.shm_map(&cx, 0, SHM_SEGMENT_SIZE * 2, true),
+                        file.shm_map(&cx, 1, SHM_SEGMENT_SIZE, false),
+                        peer.shm_map(&cx, 1, SHM_SEGMENT_SIZE, false),
+                    ] {
+                        let error = result.expect_err("an unbacked region must not escape");
+                        assert_eq!(error.error_code(), fsqlite_error::ErrorCode::IoErr);
+                        let FrankenError::Io(error) = error else {
+                            panic!("allocation failure lost its I/O error");
+                        };
+                        assert_eq!(error.raw_os_error(), Some(errno));
+                    }
+                    let cached = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+                    assert_eq!(cached.len(), segment);
+                    for offset in (0..segment).step_by(4096) {
+                        assert_eq!(cached.read_u32_le(offset).unwrap(), 0x1234_ABCD);
+                    }
+                    let registered = info.lock().unwrap();
+                    assert_eq!(registered.regions.len(), 1);
+                    assert_eq!(registered.regions[&0].len(), segment);
+                    assert_eq!(registered.mapping_owners.len(), 1);
+                    assert_eq!(
+                        registered.slots[WAL_WRITE_LOCK as usize].exclusive_owner,
+                        Some(peer.shm_owner_id),
+                        "allocation must not borrow or release the peer's WRITE lock"
+                    );
+                }
+            }
+            assert_eq!(inode.lock().unwrap().n_ref, references);
+            let expanded = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE * 2, true).unwrap();
+            let next = peer.shm_map(&cx, 1, SHM_SEGMENT_SIZE, false).unwrap();
+            for offset in (0..segment).step_by(4096) {
+                assert_eq!(original.read_u32_le(offset).unwrap(), 0x1234_ABCD);
+                assert_eq!(expanded.read_u32_le(offset).unwrap(), 0x1234_ABCD);
+                next.write_u32_le(offset, 0x5678_CDEF).unwrap();
+                assert_eq!(expanded.read_u32_le(segment + offset).unwrap(), 0x5678_CDEF);
+            }
+            peer.shm_lock(
+                &cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+            )
+            .unwrap();
+            file.close(&cx).unwrap();
+            peer.close(&cx).unwrap();
+            original.write_u32_le(0, 0xCAFE_BABE).unwrap();
+            assert_eq!(expanded.read_u32_le(0).unwrap(), 0xCAFE_BABE);
+            assert_eq!(next.read_u32_le(segment - 4096).unwrap(), 0x5678_CDEF);
+        }
+    }
+
+    /// GH #506 follow-up: a filesystem that cannot preallocate must not fail a
+    /// WAL open. With every allocation attempt answered "unsupported" (NFS
+    /// before 4.2, 9p, many FUSE mounts, btrfs UNSHARE_RANGE on shared
+    /// extents), creating the index, growing it, and cold-mapping a region
+    /// that a peer extended sparsely all succeed, as they did in 0.4.10.
+    #[test]
+    fn shm_506_unsupported_preallocation_maps_sparsely_instead_of_failing() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let segment = usize::try_from(SHM_SEGMENT_SIZE).unwrap();
+        let segment_len = u64::from(SHM_SEGMENT_SIZE);
+        for errno in [libc::EOPNOTSUPP, libc::ENOSYS, libc::EINVAL] {
+            let (_dir, path) = make_temp_path("shm-allocation-unsupported.db");
+            let _fault = crate::unix_shm::fail_allocations(errno, None);
+
+            let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            let first = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+            assert_eq!(first.len(), segment);
+            for offset in (0..segment).step_by(4096) {
+                first.write_u32_le(offset, 0x1234_ABCD).unwrap();
+            }
+            let info = Arc::clone(file.shm_info.as_ref().unwrap());
+            let shm_len = || info.lock().unwrap().file.metadata().unwrap().len();
+            assert_eq!(shm_len(), segment_len);
+
+            // Growth into the next region is a sparse extension too.
+            let second = file.shm_map(&cx, 1, SHM_SEGMENT_SIZE, true).unwrap();
+            second.write_u32_le(0, 0x5678_CDEF).unwrap();
+            assert_eq!(shm_len(), segment_len * 2);
+
+            // A peer on a release up to 0.4.10 extends with a bare set_len.
+            // Mapping that region without extending must not need allocation
+            // and must not resize the file.
+            info.lock().unwrap().file.set_len(segment_len * 3).unwrap();
+            let (mut peer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            let third = peer.shm_map(&cx, 2, SHM_SEGMENT_SIZE, false).unwrap();
+            third.write_u32_le(segment - 4096, 0x0BAD_CAFE).unwrap();
+            assert_eq!(shm_len(), segment_len * 3);
+
+            for offset in (0..segment).step_by(4096) {
+                assert_eq!(first.read_u32_le(offset).unwrap(), 0x1234_ABCD);
+            }
+            assert_eq!(second.read_u32_le(0).unwrap(), 0x5678_CDEF);
+            assert_eq!(third.read_u32_le(segment - 4096).unwrap(), 0x0BAD_CAFE);
+            file.close(&cx).unwrap();
+            peer.close(&cx).unwrap();
+        }
+    }
+
+    #[test]
+    fn shm_506_concurrent_growth_preserves_existing_readers_and_skipped_regions() {
+        if std::env::var_os("FSQLITE_SHM_ALLOCATION_CHILD").is_none() {
+            run_shm_allocation_child(
+                "unix::tests::shm_506_concurrent_growth_preserves_existing_readers_and_skipped_regions",
+            );
+            return;
+        }
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm-concurrent-allocation.db");
+        let (mut reader, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let original = reader.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        original.write_u32_le(512, 0x7654_3210).unwrap();
+        let start = Arc::new(std::sync::Barrier::new(4));
+        let workers = (1..=4_u32)
+            .map(|region| {
+                let path = path.clone();
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    let cx = Cx::new();
+                    let (mut writer, _) = UnixVfs::new()
+                        .open(&cx, Some(&path), open_flags_create())
+                        .unwrap();
+                    start.wait();
+                    let mapping = writer.shm_map(&cx, region, SHM_SEGMENT_SIZE, true).unwrap();
+                    for offset in (0..SHM_SEGMENT_SIZE as usize).step_by(4096) {
+                        mapping.write_u32_le(offset, region * 100 + 7).unwrap();
+                    }
+                    for _ in 0..8 {
+                        let repeated = writer
+                            .shm_map(&cx, region, SHM_SEGMENT_SIZE, false)
+                            .unwrap();
+                        assert_eq!(repeated.read_u32_le(0).unwrap(), region * 100 + 7);
+                        let first = writer.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+                        assert_eq!(first.read_u32_le(512).unwrap(), 0x7654_3210);
+                    }
+                    writer.close(&cx).unwrap();
+                    mapping
+                })
+            })
+            .collect::<Vec<_>>();
+        for (index, worker) in workers.into_iter().enumerate() {
+            let mapping = worker.join().unwrap();
+            for offset in (0..SHM_SEGMENT_SIZE as usize).step_by(4096) {
+                assert_eq!(
+                    mapping.read_u32_le(offset).unwrap(),
+                    (index as u32 + 1) * 100 + 7
+                );
+            }
+            assert_eq!(original.read_u32_le(512).unwrap(), 0x7654_3210);
+        }
+        // Linux exposes a nonmutating allocation query. Other native backends
+        // may establish backing without exposing such a query; their mappings
+        // and preserved bytes were exercised above.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        assert!(
+            crate::unix_shm::shm_backing_is_allocated(
+                &reader.shm_info.as_ref().unwrap().lock().unwrap().file,
+                u64::from(SHM_SEGMENT_SIZE) * 5,
+            )
+            .unwrap()
+        );
+        reader.close(&cx).unwrap();
+        assert_eq!(original.read_u32_le(512).unwrap(), 0x7654_3210);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn shm_506_mvcc_header_is_not_published_after_partial_allocation() {
+        if std::env::var_os("FSQLITE_SHM_ALLOCATION_CHILD").is_none() {
+            run_shm_allocation_child(
+                "unix::tests::shm_506_mvcc_header_is_not_published_after_partial_allocation",
+            );
+            return;
+        }
+        let cx = Cx::new();
+        let (_dir, path, mut file, namespace) = admitted_mvcc_fixture("mvcc-allocation.db");
+        {
+            let _fault = crate::unix_shm::fail_allocations(libc::ENOSPC, Some(4096));
+            let error = file.mvcc_shm_map(&cx, 4096, true).unwrap_err();
+            let FrankenError::Io(error) = error else {
+                panic!("MVCC allocation must propagate its I/O error");
+            };
+            assert_eq!(error.raw_os_error(), Some(libc::ENOSPC));
+        }
+        let backing = fs::read(mvcc_shm_path(&path)).unwrap();
+        assert_eq!(
+            &backing[..8],
+            &[0; 8],
+            "no valid header may advertise an unbacked payload"
+        );
+        assert!(matches!(
+            file.mvcc_shm_map(&cx, 4096, false),
+            Err(FrankenError::BusyRecovery)
+        ));
+        file.close(&cx).unwrap();
+        namespace.quiesce();
+    }
+
+    /// Run explicitly on a host permitting unprivileged user/mount namespaces:
+    /// `cargo test -p fsqlite-vfs --lib shm_506_private_tmpfs -- --ignored --nocapture`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a private user/mount namespace; never fills a shared filesystem"]
+    fn shm_506_private_tmpfs_enospc_preserves_readers_and_recovers() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        const TEST: &str =
+            "unix::tests::shm_506_private_tmpfs_enospc_preserves_readers_and_recovers";
+        const CHILD: &str = "FSQLITE_SHM_PRIVATE_TMPFS_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = Command::new("unshare")
+                .args([
+                    "--user",
+                    "--map-root-user",
+                    "--mount",
+                    "--fork",
+                    "--kill-child=KILL",
+                ])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    TEST,
+                    "--exact",
+                    "--ignored",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("unshare must be installed to run the private tmpfs keeper");
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                if child.try_wait().unwrap().is_some() {
+                    let output = child.wait_with_output().unwrap();
+                    assert!(
+                        output.status.success(),
+                        "private tmpfs child failed: {output:?}"
+                    );
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    assert!(
+                        stdout.contains("gh506-private-tmpfs-enospc-and-recovery-verified")
+                            && stdout.contains("test result: ok. 1 passed"),
+                        "private tmpfs child did not complete the keeper: {output:?}"
+                    );
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    child.wait().unwrap();
+                    panic!("private tmpfs child timed out");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let mount_path = std::ffi::CString::new(directory.path().as_os_str().as_bytes()).unwrap();
+        // SAFETY: all strings are live NUL-terminated buffers; the parent
+        // launched this test in a fresh mount namespace. This 1 MiB tmpfs is
+        // the only filesystem filled, and disappears with the child process.
+        let mounted = unsafe {
+            libc::mount(
+                c"tmpfs".as_ptr(),
+                mount_path.as_ptr(),
+                c"tmpfs".as_ptr(),
+                libc::MS_NODEV | libc::MS_NOSUID,
+                c"size=1048576".as_ptr().cast(),
+            )
+        };
+        assert_eq!(
+            mounted,
+            0,
+            "private tmpfs mount: {}",
+            io::Error::last_os_error()
+        );
+        let path = directory.path().join("full.db");
+        fs::write(&path, [0x5A; 4096]).unwrap();
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let original = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        for offset in (0..SHM_SEGMENT_SIZE as usize).step_by(4096) {
+            original.write_u32_le(offset, 0xAABB_CCDD).unwrap();
+        }
+        let (mut reader, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let reader_alias = reader.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+        reader
+            .shm_lock(&cx, 3, 1, SQLITE_SHM_LOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        let mut ballast = File::create(directory.path().join("ballast")).unwrap();
+        loop {
+            match ballast.write_all(&[0x19; 4096]) {
+                Ok(()) => {}
+                Err(error) => {
+                    assert_eq!(error.raw_os_error(), Some(libc::ENOSPC));
+                    break;
+                }
+            }
+        }
+        // Leave four pages free, matching the reported health-probe setup.
+        // Extending by a 32 KiB region still needs eight pages.
+        ballast
+            .set_len(ballast.metadata().unwrap().len() - 4 * 4096)
+            .unwrap();
+        for _ in 0..2 {
+            let error = file.shm_map(&cx, 1, SHM_SEGMENT_SIZE, true).unwrap_err();
+            let FrankenError::Io(error) = error else {
+                panic!("exhausted tmpfs must return an allocation I/O error");
+            };
+            assert_eq!(error.raw_os_error(), Some(libc::ENOSPC));
+            assert!(reader.shm_map(&cx, 1, SHM_SEGMENT_SIZE, false).is_err());
+            let cached = reader.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+            for offset in (0..SHM_SEGMENT_SIZE as usize).step_by(4096) {
+                assert_eq!(cached.read_u32_le(offset).unwrap(), 0xAABB_CCDD);
+                assert_eq!(reader_alias.read_u32_le(offset).unwrap(), 0xAABB_CCDD);
+            }
+        }
+        ballast.set_len(0).unwrap();
+        let recovered = file.shm_map(&cx, 1, SHM_SEGMENT_SIZE, true).unwrap();
+        let recovered_reader = reader.shm_map(&cx, 1, SHM_SEGMENT_SIZE, false).unwrap();
+        for offset in (0..SHM_SEGMENT_SIZE as usize).step_by(4096) {
+            recovered.write_u32_le(offset, 0xEEFF_0011).unwrap();
+            assert_eq!(recovered_reader.read_u32_le(offset).unwrap(), 0xEEFF_0011);
+        }
+        let mut main = [0; 4096];
+        assert_eq!(file.read(&cx, &mut main, 0).unwrap(), main.len());
+        assert_eq!(
+            main, [0x5A; 4096],
+            "allocation must not alter database bytes"
+        );
+        reader
+            .shm_lock(&cx, 3, 1, SQLITE_SHM_UNLOCK | SQLITE_SHM_SHARED)
+            .unwrap();
+        file.close(&cx).unwrap();
+        reader.close(&cx).unwrap();
+        assert_eq!(original.read_u32_le(0).unwrap(), 0xAABB_CCDD);
+        println!("gh506-private-tmpfs-enospc-and-recovery-verified");
+    }
+
+    #[test]
+    fn test_shm_map_nonextend_maps_cold_existing_regions_without_mutation() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let segment_size = usize::try_from(SHM_SEGMENT_SIZE).unwrap();
+        let original_main = vec![0x3C; 4096];
+        for (first_region, access_flags) in [
+            (0_u32, VfsOpenFlags::READWRITE),
+            (1, VfsOpenFlags::READWRITE),
+            (0, VfsOpenFlags::READONLY),
+            (1, VfsOpenFlags::READONLY),
+        ] {
+            let (_dir, path) = make_temp_path("shm_cold_existing.db");
+            let shm_path = sqlite_shm_path(&path);
+            let mut original = vec![0x5A; segment_size * 2];
+            original[segment_size..].fill(0xA3);
+            fs::write(&path, &original_main).unwrap();
+            fs::write(&shm_path, &original).unwrap();
+            // Only the main descriptor is read-only in those cases. SHM
+            // retains writable permissions for its canonical read/write fd.
+            let flags = VfsOpenFlags::MAIN_DB | access_flags;
+            let (mut file, actual_flags) = vfs.open(&cx, Some(&path), flags).unwrap();
+            assert!(actual_flags.contains(access_flags));
+            assert!(file.shm_info.is_none());
+            for region in [first_region, 1 - first_region] {
+                let mapped = file.shm_map(&cx, region, SHM_SEGMENT_SIZE, false).unwrap();
+                assert!(mapped.is_mmap_backed());
+                assert_eq!(mapped.len(), segment_size);
+                let expected = if region == 0 {
+                    0x5A5A_5A5A
+                } else {
+                    0xA3A3_A3A3
+                };
+                assert_eq!(mapped.read_u32_le(0).unwrap(), expected);
+                assert_eq!(mapped.read_u32_le(segment_size - 4).unwrap(), expected);
+            }
+            let info = Arc::clone(file.shm_info.as_ref().unwrap());
+            {
+                let registered = info.lock().unwrap();
+                assert_eq!(registered.owner_refs.get(&file.shm_owner_id), Some(&1));
+                assert_eq!(registered.regions.len(), 2);
+            }
+            assert_eq!(fs::read(&shm_path).unwrap(), original);
+            // Do not open and close a second main-file fd while the WAL
+            // lifetime claim owns process-wide POSIX locks on that inode.
+            let mut observed_main = vec![0_u8; original_main.len()];
+            assert_eq!(
+                file.read(&cx, &mut observed_main, 0).unwrap(),
+                original_main.len()
+            );
+            assert_eq!(observed_main, original_main);
+            file.shm_unmap(&cx, false).unwrap();
+            assert!(info.lock().unwrap().owner_refs.is_empty());
+            assert_eq!(file.wal_lifetime_claim, WalLifetimeClaim::Unclaimed);
+            file.close(&cx).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), original_main);
+            assert_eq!(fs::read(&shm_path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn test_shm_map_nonextend_missing_backing_does_not_create_and_releases_lifetime() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_cold_missing.db");
+        let shm_path = sqlite_shm_path(&path);
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        assert!(!shm_path.exists());
+        assert!(matches!(
+            file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert!(!shm_path.exists());
+        assert!(file.shm_info.is_none());
+        assert_eq!(file.lock_level, LockLevel::None);
+        assert_eq!(file.wal_lifetime_claim, WalLifetimeClaim::Held);
+        file.shm_unmap(&cx, false).unwrap();
+        assert_eq!(file.wal_lifetime_claim, WalLifetimeClaim::Unclaimed);
+        assert_eq!(file.inode_info_ref().lock().unwrap().n_wal_lifetime, 0);
+        file.close(&cx).unwrap();
+        assert!(!shm_path.exists());
+    }
+
+    #[test]
+    fn test_shm_map_nonextend_short_backing_preserves_bytes_size_and_registration() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let segment_size = usize::try_from(SHM_SEGMENT_SIZE).unwrap();
+        for (region, len) in [
+            (0_u32, 0_usize),
+            (0, segment_size - 1),
+            (1, segment_size * 2 - 1),
+        ] {
+            let (_dir, path) = make_temp_path("shm_cold_short.db");
+            let shm_path = sqlite_shm_path(&path);
+            let original = vec![0x6D; len];
+            fs::write(&shm_path, &original).unwrap();
+            let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+            assert!(matches!(
+                file.shm_map(&cx, region, SHM_SEGMENT_SIZE, false),
+                Err(FrankenError::CannotOpen { .. })
+            ));
+            assert_eq!(fs::read(&shm_path).unwrap(), original);
+            let info = Arc::clone(file.shm_info.as_ref().unwrap());
+            {
+                let registered = info.lock().unwrap();
+                assert_eq!(registered.owner_refs.get(&file.shm_owner_id), Some(&1));
+                assert!(registered.regions.is_empty());
+            }
+            file.close(&cx).unwrap();
+            assert!(info.lock().unwrap().owner_refs.is_empty());
+            assert_eq!(file.wal_lifetime_claim, WalLifetimeClaim::Unclaimed);
+            assert_eq!(fs::read(&shm_path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn test_shm_map_nonextend_refusal_preserves_cached_alias() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_cached_nonextend.db");
+        let shm_path = sqlite_shm_path(&path);
+        let segment_size = usize::try_from(SHM_SEGMENT_SIZE).unwrap();
+        let original = vec![0x47; segment_size];
+        fs::write(&shm_path, &original).unwrap();
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let original_alias = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+        assert!(matches!(
+            file.shm_map(&cx, 0, SHM_SEGMENT_SIZE * 2, false),
+            Err(FrankenError::LockFailed { .. })
+        ));
+        assert!(matches!(
+            file.shm_map(&cx, 1, SHM_SEGMENT_SIZE, false),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(fs::read(&shm_path).unwrap(), original);
+        {
+            let info = file.shm_info.as_ref().unwrap().lock().unwrap();
+            assert_eq!(info.regions.len(), 1);
+            assert_eq!(info.regions.get(&0).unwrap().len(), segment_size);
+            assert_eq!(info.owner_refs.get(&file.shm_owner_id), Some(&1));
+        }
+        let returned_alias = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, false).unwrap();
+        returned_alias.write_u32_le(256, 0xCAFE_BABE).unwrap();
+        assert_eq!(original_alias.read_u32_le(256).unwrap(), 0xCAFE_BABE);
+        drop(returned_alias);
+        drop(original_alias);
+        file.shm_unmap(&cx, false).unwrap();
+        file.close(&cx).unwrap();
+        assert_eq!(
+            fs::metadata(&shm_path).unwrap().len(),
+            u64::from(SHM_SEGMENT_SIZE)
+        );
+    }
+
+    #[test]
+    fn test_shm_map_returns_mmap_backed_region() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_mmap_backed.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"x", 0).unwrap();
+
+        let region = file.shm_map(&cx, 0, 32768, true).unwrap();
+        assert!(
+            region.is_mmap_backed(),
+            "unix VFS shm_map must return mmap-backed region"
+        );
+        assert_eq!(region.len(), 32768);
+
+        // Verify the underlying SHM file was created and extended.
+        let shm_path = sqlite_shm_path(&file.path);
+        assert!(shm_path.exists(), "SHM file must exist after shm_map");
+        let shm_len = fs::metadata(&shm_path).unwrap().len();
+        assert!(
+            shm_len >= 32768,
+            "SHM file must be at least 32KB, got {shm_len}"
+        );
+
+        drop(region);
+        file.lock(&cx, LockLevel::Exclusive).unwrap();
+        file.shm_unmap(&cx, true).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_shm_mmap_region_read_write_roundtrip() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_mmap_rw.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"x", 0).unwrap();
+
+        let region = file.shm_map(&cx, 0, 32768, true).unwrap();
+        assert!(region.is_mmap_backed());
+
+        // Write through the mmap region and read back.
+        region.write_u32_le(0, 0xDEAD_BEEF).unwrap();
+        region.write_u64_le(8, 0x0102_0304_0506_0708).unwrap();
+        assert_eq!(region.read_u32_le(0).unwrap(), 0xDEAD_BEEF);
+        assert_eq!(region.read_u64_le(8).unwrap(), 0x0102_0304_0506_0708);
+
+        // Verify writes are visible in the SHM file on disk.
+        file.shm_barrier();
+        let shm_path = sqlite_shm_path(&file.path);
+        let shm_data = fs::read(&shm_path).unwrap();
+        assert_eq!(
+            u32::from_le_bytes([shm_data[0], shm_data[1], shm_data[2], shm_data[3]]),
+            0xDEAD_BEEF,
+            "mmap write must be visible in the SHM file"
+        );
+
+        drop(region);
+        file.lock(&cx, LockLevel::Exclusive).unwrap();
+        file.shm_unmap(&cx, true).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_shm_mmap_two_handles_share_data() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_mmap_share.db");
+
+        let (mut file_a, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut file_b, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file_a.write(&cx, b"x", 0).unwrap();
+
+        let region_a = file_a.shm_map(&cx, 0, 32768, true).unwrap();
+        let region_b = file_b.shm_map(&cx, 0, 32768, true).unwrap();
+        assert!(region_a.is_mmap_backed());
+        assert!(region_b.is_mmap_backed());
+
+        // Write a distinctive pattern at offset 256 in the SHM region.
+        region_a.write_u32_le(256, 0xCAFE_BABE).unwrap();
+        file_a.shm_barrier();
+        file_b.shm_barrier();
+
+        assert_eq!(
+            region_b.read_u32_le(256).unwrap(),
+            0xCAFE_BABE,
+            "mmap write at offset 256 must be visible to another handle (same process)"
+        );
+
+        drop(region_a);
+        drop(region_b);
+        file_a.shm_unmap(&cx, false).unwrap();
+        file_b.lock(&cx, LockLevel::Exclusive).unwrap();
+        file_b.shm_unmap(&cx, true).unwrap();
+        file_a.close(&cx).unwrap();
+        file_b.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_shm_mmap_multiple_regions() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_mmap_multi.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"x", 0).unwrap();
+
+        let region0 = file.shm_map(&cx, 0, 32768, true).unwrap();
+        let region1 = file.shm_map(&cx, 1, 32768, true).unwrap();
+
+        // Write different data to each region.
+        region0.write_u32_le(0, 0xAAAA_AAAA).unwrap();
+        region1.write_u32_le(0, 0xBBBB_BBBB).unwrap();
+
+        // Verify regions are independent.
+        assert_eq!(region0.read_u32_le(0).unwrap(), 0xAAAA_AAAA);
+        assert_eq!(region1.read_u32_le(0).unwrap(), 0xBBBB_BBBB);
+
+        // Verify SHM file is at least 2 * 32KB.
+        let shm_path = sqlite_shm_path(&file.path);
+        let shm_len = fs::metadata(&shm_path).unwrap().len();
+        assert!(
+            shm_len >= 65536,
+            "SHM file must be at least 64KB for 2 regions, got {shm_len}"
+        );
+
+        drop(region0);
+        drop(region1);
+        file.lock(&cx, LockLevel::Exclusive).unwrap();
+        file.shm_unmap(&cx, true).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_shm_mmap_unmap_deletes_file() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_mmap_delete.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"x", 0).unwrap();
+
+        let region = file.shm_map(&cx, 0, 32768, true).unwrap();
+        let shm_path = sqlite_shm_path(&file.path);
+        assert!(shm_path.exists());
+
+        assert!(matches!(file.shm_unmap(&cx, true), Err(FrankenError::Busy)));
+        file.lock(&cx, LockLevel::Exclusive).unwrap();
+        assert!(matches!(file.shm_unmap(&cx, true), Err(FrankenError::Busy)));
+        assert!(
+            file.shm_info.is_some(),
+            "refusal retains the requesting owner"
+        );
+        assert!(file.shm_dms_lifetime_claim);
+        assert!(
+            shm_path.exists(),
+            "a live alias refuses deletion under even the main fence"
+        );
+        region
+            .atomic_store_u32_ne(0, 0x6789_ABCD, Ordering::Release)
+            .unwrap();
+        assert_eq!(
+            region.atomic_load_u32_ne(0, Ordering::Acquire).unwrap(),
+            0x6789_ABCD
+        );
+        drop(region);
+        let retired = Arc::clone(file.shm_info.as_ref().unwrap());
+        file.shm_unmap(&cx, true).unwrap();
+        assert!(
+            !shm_path.exists(),
+            "retry under current main/DMS exclusion deletes after aliases drain"
+        );
+        assert!(matches!(file.shm_unmap(&cx, true), Err(FrankenError::Busy)));
+        assert!(retired.lock().unwrap().namespace_unlinked);
+        file.unlock(&cx, LockLevel::None).unwrap();
+        let (mut replacement, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let replacement_region = replacement.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        assert!(shm_path.exists(), "replacement opens the current pathname");
+        assert!(!Arc::ptr_eq(
+            replacement.shm_info.as_ref().unwrap(),
+            &retired
+        ));
+        drop(retired);
+        replacement.close(&cx).unwrap();
+        drop(replacement_region);
+
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn shm_delete_refuses_live_peer_and_missing_current_attachment() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm-delete-peer.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut peer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let region = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        let peer_region = peer.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        let shm_path = sqlite_shm_path(&path);
+        file.lock(&cx, LockLevel::Exclusive).unwrap();
+        assert!(matches!(file.shm_unmap(&cx, true), Err(FrankenError::Busy)));
+        assert!(file.shm_info.is_some());
+        assert!(shm_path.exists());
+        file.shm_unmap(&cx, false).unwrap();
+        assert!(matches!(file.shm_unmap(&cx, true), Err(FrankenError::Busy)));
+        file.close(&cx).unwrap();
+        drop(region);
+        peer_region
+            .atomic_store_u32_ne(0, 19, Ordering::Release)
+            .unwrap();
+        assert_eq!(
+            peer_region
+                .atomic_load_u32_ne(0, Ordering::Acquire)
+                .unwrap(),
+            19
+        );
+        assert!(
+            shm_path.exists(),
+            "the closed request never becomes delayed authority"
+        );
+        drop(peer_region);
+        peer.lock(&cx, LockLevel::Exclusive).unwrap();
+        peer.shm_unmap(&cx, true).unwrap();
+        assert!(!shm_path.exists());
+        peer.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn shm_replaced_mapping_aliases_keep_independent_lifetime_owners() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm-replaced-lifetimes.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let original = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        let info = Arc::downgrade(file.shm_info.as_ref().unwrap());
+        let inode = Arc::clone(file.inode_info_ref());
+        let before_refs = inode.lock().unwrap().n_ref;
+        assert!(
+            matches!(file.shm_map(&cx, 1, 1, true), Err(FrankenError::Io(_))),
+            "unaligned mmap offset refuses after lifetime registration"
+        );
+        assert_eq!(inode.lock().unwrap().n_ref, before_refs);
+        assert_eq!(
+            info.upgrade().unwrap().lock().unwrap().mapping_owners.len(),
+            1
+        );
+        let expanded = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE * 2, true).unwrap();
+        assert_eq!(
+            info.upgrade().unwrap().lock().unwrap().mapping_owners.len(),
+            2
+        );
+        assert_eq!(inode.lock().unwrap().n_wal_lifetime, 3);
+        file.close(&cx).unwrap();
+        assert!(info.upgrade().unwrap().lock().unwrap().regions.is_empty());
+        assert_eq!(inode.lock().unwrap().n_wal_lifetime, 2);
+        expanded
+            .atomic_store_u32_ne(0, 0x8912_ABCD, Ordering::Release)
+            .unwrap();
+        assert_eq!(
+            original.atomic_load_u32_ne(0, Ordering::Acquire).unwrap(),
+            0x8912_ABCD
+        );
+        drop(original);
+        assert_eq!(
+            info.upgrade().unwrap().lock().unwrap().mapping_owners.len(),
+            1
+        );
+        assert_eq!(inode.lock().unwrap().n_wal_lifetime, 1);
+        drop(expanded);
+        assert!(
+            info.upgrade().is_none(),
+            "final alias retires the canonical SHM entry"
+        );
+        assert_eq!(inode.lock().unwrap().n_wal_lifetime, 0);
+        assert!(!inode.lock().unwrap().has_lock_claims());
+    }
+
+    #[test]
+    fn shm_mapping_drop_retains_failed_main_lifetime_cleanup_for_exact_retry() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm-mapping-cleanup-retry.db");
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let region = file.shm_map(&cx, 0, SHM_SEGMENT_SIZE, true).unwrap();
+        let mapping_owner = *file
+            .shm_info
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .mapping_owners
+            .iter()
+            .next()
+            .unwrap();
+        let inode = Arc::clone(file.inode_info_ref());
+        file.close(&cx).unwrap();
+        assert_eq!(inode.lock().unwrap().n_wal_lifetime, 1);
+        // Controlled validator mismatch, not an OS syscall fault: retain the
+        // real main-file SHARED claim while forcing its cleanup to refuse.
+        inode.lock().unwrap().n_wal_lifetime = 0;
+        drop(region);
+        {
+            let queue = deferred_unix_cleanup_queue().lock().unwrap();
+            let retained = queue
+                .iter()
+                .find(|owner| owner.shm_owner_id == mapping_owner)
+                .expect("final mapping drop retained the exact failed owner");
+            assert_eq!(retained.wal_lifetime_claim, WalLifetimeClaim::Held);
+            assert!(
+                !retained.shm_dms_lifetime_claim,
+                "successful inner release is not repeated"
+            );
+            assert!(retained.shm_info.is_none());
+            assert!(!retained.closed);
+        }
+        inode.lock().unwrap().n_wal_lifetime = 1;
+        retry_deferred_unix_cleanups();
+        assert!(
+            !deferred_unix_cleanup_queue()
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|owner| owner.shm_owner_id == mapping_owner)
+        );
+        assert_eq!(inode.lock().unwrap().n_wal_lifetime, 0);
+        assert!(!inode.lock().unwrap().has_lock_claims());
+    }
+
+    #[test]
+    fn test_shm_mmap_cross_process_visibility() {
+        // This test verifies that mmap-backed SHM regions are visible across
+        // process boundaries. Process A writes a magic value to the SHM file,
+        // and process B reads it back.
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_cross_proc.db");
+
+        let (mut file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        file.write(&cx, b"x", 0).unwrap();
+
+        let region = file.shm_map(&cx, 0, 32768, true).unwrap();
+        assert!(region.is_mmap_backed());
+
+        // Write a distinctive pattern at offset 256 in the SHM region.
+        region.write_u32_le(256, 0xCAFE_BABE).unwrap();
+        file.shm_barrier();
+
+        // Read the SHM file directly (simulating another process) and verify.
+        let shm_path = sqlite_shm_path(&file.path);
+        let shm_data = fs::read(&shm_path).unwrap();
+        assert!(shm_data.len() >= 260);
+        let val = u32::from_le_bytes([shm_data[256], shm_data[257], shm_data[258], shm_data[259]]);
+        assert_eq!(
+            val, 0xCAFE_BABE,
+            "mmap write at offset 256 must be visible when reading the SHM file directly"
+        );
+
+        drop(region);
+        file.lock(&cx, LockLevel::Exclusive).unwrap();
+        file.shm_unmap(&cx, true).unwrap();
+        file.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_shm_barrier_ensures_ordering() {
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_barrier_order.db");
+
+        let (mut writer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut reader, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        writer.write(&cx, b"x", 0).unwrap();
+
+        let w_region = writer.shm_map(&cx, 0, 32768, true).unwrap();
+        let r_region = reader.shm_map(&cx, 0, 32768, true).unwrap();
+
+        // Write a sequence of values with barriers between them.
+        w_region.write_u32_le(0, 1).unwrap();
+        writer.shm_barrier();
+        w_region.write_u32_le(4, 2).unwrap();
+        writer.shm_barrier();
+
+        reader.shm_barrier();
+        let v1 = r_region.read_u32_le(0).unwrap();
+        let v2 = r_region.read_u32_le(4).unwrap();
+        assert_eq!(v1, 1, "first write must be visible after barrier");
+        assert_eq!(v2, 2, "second write must be visible after barrier");
+
+        drop(w_region);
+        drop(r_region);
+        writer.shm_unmap(&cx, false).unwrap();
+        reader.lock(&cx, LockLevel::Exclusive).unwrap();
+        reader.shm_unmap(&cx, true).unwrap();
+        writer.close(&cx).unwrap();
+        reader.close(&cx).unwrap();
+    }
+
+    #[test]
+    fn test_shm_lock_coordination_with_mmap() {
+        // Verify that shm_lock + shm_barrier + mmap regions work together
+        // for the WAL write lock protocol.
+        let cx = Cx::new();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("shm_lock_mmap.db");
+
+        let (mut writer, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let (mut reader, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        writer.write(&cx, b"x", 0).unwrap();
+
+        // Map SHM regions for both.
+        let w_region = writer.shm_map(&cx, 0, 32768, true).unwrap();
+        let r_region = reader.shm_map(&cx, 0, 32768, true).unwrap();
+
+        // Writer acquires exclusive lock on slot 0 (WAL_WRITE_LOCK).
+        writer
+            .shm_lock(
+                &cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+            )
+            .unwrap();
+
+        // Write data under the lock.
+        w_region.write_u32_le(200, 0x1234_5678).unwrap();
+        writer.shm_barrier();
+
+        // Reader should fail to get exclusive lock on same slot (BUSY).
+        let err = reader.shm_lock(
+            &cx,
+            WAL_WRITE_LOCK,
+            1,
+            SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE,
+        );
+        assert!(
+            err.is_err(),
+            "reader must fail to acquire exclusive lock held by writer"
+        );
+
+        // But reader can still read the mmap data (SHM is MAP_SHARED).
+        reader.shm_barrier();
+        assert_eq!(
+            r_region.read_u32_le(200).unwrap(),
+            0x1234_5678,
+            "reader must see writer's data through mmap even without its own exclusive lock"
+        );
+
+        // Writer releases.
+        writer
+            .shm_lock(
+                &cx,
+                WAL_WRITE_LOCK,
+                1,
+                SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE,
+            )
+            .unwrap();
+
+        drop(w_region);
+        drop(r_region);
+        writer.shm_unmap(&cx, false).unwrap();
+        reader.lock(&cx, LockLevel::Exclusive).unwrap();
+        reader.shm_unmap(&cx, true).unwrap();
+        writer.close(&cx).unwrap();
+        reader.close(&cx).unwrap();
+    }
+
+    // -- GH #200: EINTR mid-buffer must be retried with progress preserved --
+
+    #[test]
+    fn test_write_full_at_retries_eintr_after_partial_progress() {
+        // Schedule from the issue: Ok(2048), Interrupted, Ok(2048) for a
+        // 4096-byte positional write. The interruption must be retried and
+        // the full buffer written.
+        let buf = vec![0xAB_u8; 4096];
+        let mut sink = vec![0_u8; 4096];
+        let mut calls = 0_usize;
+        {
+            let sink = std::cell::RefCell::new(&mut sink);
+            let result = write_full_at(
+                |src, off| {
+                    calls += 1;
+                    match calls {
+                        1 => {
+                            assert_eq!(off, 0);
+                            sink.borrow_mut()[..2048].copy_from_slice(&src[..2048]);
+                            Ok(2048)
+                        }
+                        2 => {
+                            assert_eq!(off, 2048, "retry must preserve partial progress");
+                            Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+                        }
+                        _ => {
+                            assert_eq!(off, 2048, "post-EINTR retry must resume at offset 2048");
+                            sink.borrow_mut()[2048..].copy_from_slice(&src[..2048]);
+                            Ok(2048)
+                        }
+                    }
+                },
+                &buf,
+                0,
+                "write",
+            );
+            result.expect("interrupted write must be retried to completion");
+        }
+        assert_eq!(calls, 3);
+        assert_eq!(sink, buf, "full buffer must be written after EINTR retry");
+    }
+
+    #[test]
+    fn test_write_full_at_propagates_non_eintr_errors() {
+        let buf = vec![0_u8; 128];
+        let result = write_full_at(
+            |_, _| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            &buf,
+            0,
+            "write",
+        );
+        assert!(result.is_err(), "non-EINTR errors must still propagate");
+    }
+
+    #[test]
+    fn tracked_blocking_write_completion_survives_observer_future_drop() {
+        use std::future::{Future as _, poll_fn};
+        use std::sync::mpsc;
+        use std::task::Poll;
+        use std::time::Duration;
+
+        let directory = tempfile::tempdir().expect("create tracked-write tempdir");
+        let path = directory.path().join("tracked-write.db");
+        let file = Arc::new(
+            File::options()
+                .create(true)
+                .truncate(true)
+                .read(true)
+                .write(true)
+                .open(&path)
+                .expect("open tracked-write target"),
+        );
+        let completion = VfsWriteCompletion::new();
+        let source_completion = VfsWriteCompletionSource::new(completion.clone());
+        let (started_tx, started_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let payload = b"completion survives observer drop".to_vec();
+        let expected = payload.clone();
+        let cx = Cx::new();
+
+        crate::block_on_test_io(&cx, async {
+            let mut observer = Box::pin(spawn_blocking_io(move || {
+                started_tx.send(()).expect("report source start");
+                release_rx.recv().expect("wait for observer drop");
+                write_owned_at_tracked(file, payload, 0, source_completion)
+            }));
+            poll_fn(|task_cx| match observer.as_mut().poll(task_cx) {
+                Poll::Pending => Poll::Ready(()),
+                Poll::Ready(_) => panic!("gated blocking write cannot complete on first poll"),
+            })
+            .await;
+            started_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("blocking source must start before observer is dropped");
+            drop(observer);
+
+            release_tx
+                .send(())
+                .expect("release source after observer drop");
+            assert_eq!(
+                completion.wait().await,
+                crate::traits::VfsWriteCompletionState::Success
+            );
+        });
+
+        assert_eq!(
+            std::fs::read(path).expect("read tracked-write target"),
+            expected
+        );
+    }
+
+    #[test]
+    fn tracked_blocking_write_completion_cancelled_while_queued_reports_error() {
+        use std::future::{Future as _, poll_fn};
+        use std::sync::mpsc;
+        use std::task::Poll;
+        use std::time::Duration;
+
+        let runtime = asupersync::runtime::RuntimeBuilder::current_thread()
+            .blocking_threads(1, 1)
+            .build()
+            .expect("build one-worker blocking runtime");
+        let cx = Cx::new();
+        let directory = tempfile::tempdir().expect("create queued-write tempdir");
+        let path = directory.path().join("queued-write.db");
+        let file = Arc::new(
+            File::options()
+                .create(true)
+                .truncate(true)
+                .read(true)
+                .write(true)
+                .open(&path)
+                .expect("open queued-write target"),
+        );
+        let completion = VfsWriteCompletion::new();
+        let source_completion = VfsWriteCompletionSource::new(completion.clone());
+        let (blocker_started_tx, blocker_started_rx) = mpsc::sync_channel(0);
+        let (release_blocker_tx, release_blocker_rx) = mpsc::sync_channel(0);
+
+        runtime.block_on(async {
+            let native_cx =
+                asupersync::Cx::current().expect("runtime must install a capability context");
+            cx.set_native_cx(native_cx);
+
+            let mut blocker = Box::pin(spawn_blocking_io(move || {
+                blocker_started_tx.send(()).expect("report blocker start");
+                release_blocker_rx.recv().expect("wait to release blocker");
+                Ok(())
+            }));
+            poll_fn(|task_cx| match blocker.as_mut().poll(task_cx) {
+                Poll::Pending => Poll::Ready(()),
+                Poll::Ready(_) => panic!("blocking-pool blocker cannot finish before release"),
+            })
+            .await;
+            blocker_started_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the sole blocking worker must start the blocker");
+
+            let mut observer = Box::pin(spawn_blocking_io(move || {
+                write_owned_at_tracked(file, b"must not be written".to_vec(), 0, source_completion)
+            }));
+            poll_fn(|task_cx| match observer.as_mut().poll(task_cx) {
+                Poll::Pending => Poll::Ready(()),
+                Poll::Ready(_) => panic!("tracked write must remain queued behind the blocker"),
+            })
+            .await;
+            drop(observer);
+
+            release_blocker_tx
+                .send(())
+                .expect("release blocking worker");
+            blocker.await.expect("blocking-pool blocker must finish");
+            assert_eq!(
+                completion.wait().await,
+                crate::traits::VfsWriteCompletionState::Error
+            );
+        });
+
+        assert!(
+            std::fs::read(path)
+                .expect("read cancelled queued-write target")
+                .is_empty(),
+            "a write cancelled before its source starts must not mutate the file"
+        );
+    }
+
+    #[test]
+    fn test_read_full_at_retries_eintr_after_partial_progress() {
+        let src = (0..4096_usize).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+        let mut buf = vec![0_u8; 4096];
+        let mut calls = 0_usize;
+        let total = read_full_at(
+            |dst, off| {
+                calls += 1;
+                match calls {
+                    1 => {
+                        assert_eq!(off, 0);
+                        dst[..1024].copy_from_slice(&src[..1024]);
+                        Ok(1024)
+                    }
+                    2 => Err(std::io::Error::from(std::io::ErrorKind::Interrupted)),
+                    _ => {
+                        let off = usize::try_from(off).unwrap();
+                        let n = dst.len();
+                        dst.copy_from_slice(&src[off..off + n]);
+                        Ok(n)
+                    }
+                }
+            },
+            &mut buf,
+            0,
+            "read",
+        )
+        .expect("interrupted read must be retried to completion");
+        assert_eq!(total, 4096);
+        assert_eq!(buf, src);
+        assert_eq!(calls, 3);
+    }
+    // === bd-bjm5d: inline small-transfer gate ===
+
+    #[test]
+    fn inline_marker_read_write_roundtrip_and_short_read() {
+        let cx = Cx::new();
+        cx.mark_blocking_io_inline_safe();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("inline.db");
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        let payload = vec![0xAB_u8; 4096];
+        file.write(&cx, &payload, 0).unwrap();
+
+        let mut buf = vec![0_u8; 4096];
+        let total = file.read(&cx, &mut buf, 0).unwrap();
+        assert_eq!(total, 4096);
+        assert_eq!(buf, payload);
+
+        // Short read past EOF must zero-fill the tail and report the actual
+        // byte count — identical to the pooled path's contract.
+        let mut past = vec![0xFF_u8; 4096];
+        let total = file.read(&cx, &mut past, 2048).unwrap();
+        assert_eq!(total, 2048);
+        assert_eq!(&past[..2048], &payload[2048..]);
+        assert!(past[2048..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn inline_marker_tracked_write_completes_token() {
+        let cx = Cx::new();
+        cx.mark_blocking_io_inline_safe();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("inline-tracked.db");
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        let completion = VfsWriteCompletion::new();
+        let observer = completion.clone();
+        let payload = vec![0x5C_u8; 512];
+        file.write_tracked_sync(&cx, &payload, 0, completion)
+            .unwrap();
+        assert_eq!(
+            observer.state(),
+            crate::traits::VfsWriteCompletionState::Success
+        );
+
+        let mut buf = vec![0_u8; 512];
+        assert_eq!(file.read(&cx, &mut buf, 0).unwrap(), 512);
+        assert_eq!(buf, payload);
+    }
+
+    #[test]
+    fn inline_marker_respects_size_threshold() {
+        let cx = Cx::new();
+        cx.mark_blocking_io_inline_safe();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("inline-big.db");
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        // One byte over the bound: must take the pooled path (and still
+        // succeed) — the gate is a perf switch, never a size limit.
+        let big = vec![0x11_u8; INLINE_IO_MAX_BYTES + 1];
+        file.write(&cx, &big, 0).unwrap();
+        let mut readback = vec![0_u8; INLINE_IO_MAX_BYTES + 1];
+        let total = file.read(&cx, &mut readback, 0).unwrap();
+        assert_eq!(total, INLINE_IO_MAX_BYTES + 1);
+        assert_eq!(readback, big);
+    }
+
+    #[test]
+    fn inline_marker_batch_write_applies_all_entries() {
+        let cx = Cx::new();
+        cx.mark_blocking_io_inline_safe();
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("inline-batch.db");
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+
+        let a = vec![0x01_u8; 4096];
+        let b = vec![0x02_u8; 4096];
+        let writes: Vec<(u64, &[u8])> = vec![(0, a.as_slice()), (4096, b.as_slice())];
+        file.write_page_batch_sync(&cx, &writes).unwrap();
+
+        let mut buf = vec![0_u8; 8192];
+        assert_eq!(file.read(&cx, &mut buf, 0).unwrap(), 8192);
+        assert_eq!(&buf[..4096], a.as_slice());
+        assert_eq!(&buf[4096..], b.as_slice());
+    }
+
+    #[test]
+    fn unmarked_cx_page_io_roundtrips_inline() {
+        // Bounded I/O no longer depends on the marker: an unmarked context
+        // takes the same inline path.
+        let cx = Cx::new();
+        assert!(!cx.blocking_io_inline_safe());
+        let vfs = UnixVfs::new();
+        let (_dir, path) = make_temp_path("inline-off.db");
+        let (file, _) = vfs.open(&cx, Some(&path), open_flags_create()).unwrap();
+        let payload = vec![0x77_u8; 4096];
+        file.write(&cx, &payload, 0).unwrap();
+        let mut buf = vec![0_u8; 4096];
+        assert_eq!(file.read(&cx, &mut buf, 0).unwrap(), 4096);
+        assert_eq!(buf, payload);
+    }
+}

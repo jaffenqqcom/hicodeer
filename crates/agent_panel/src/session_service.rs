@@ -59,10 +59,13 @@ pub(crate) struct SessionEntry {
     pub workspace_root: Option<String>,
     pub pinned: bool,
     pub archived: bool,
+    /// Whether the store behind this row can remove it.
+    pub deletable: bool,
 }
 
 /// The history view: pinned rows first, then one group per folder the sessions
-/// ran in, then the archive. Groups with nothing in them are dropped here, so
+/// ran in plus a catch-all for sessions whose folder the scanner could not
+/// recover, then the archive. Groups with nothing in them are dropped here, so
 /// the UI never renders an empty shell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HistoryView {
@@ -154,12 +157,6 @@ impl SessionService {
             if is_open {
                 continue;
             }
-            // A session without a working directory cannot be placed in a
-            // space and cannot be resumed either — `agent.start` needs a cwd.
-            // Such rows only ever rendered as a nameless group, so drop them.
-            if raw.workspace_root.is_none() {
-                continue;
-            }
             // Read-only: a session the user never pinned, archived or renamed
             // leaves no entry behind, so the state file only holds real
             // decisions instead of one blank row per scanned session.
@@ -178,6 +175,7 @@ impl SessionService {
                 workspace_root: raw.workspace_root.clone(),
                 pinned,
                 archived,
+                deletable: raw.deletable,
             };
 
             // Groups are named after the folder the session ran in, never after
@@ -185,8 +183,7 @@ impl SessionService {
             // called right now, so reusing it made the same session appear
             // under a different name (or no name at all) just because the user
             // opened or renamed a space. A folder name cannot move.
-            let (group_key, group_label) =
-                folder_group(raw.workspace_root.as_deref().unwrap_or_default());
+            let (group_key, group_label) = group_for(raw.workspace_root.as_deref());
 
             if pinned {
                 view.pinned.push(entry);
@@ -214,8 +211,8 @@ impl SessionService {
         }
         view.pinned.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         // Folders are listed by name so the order is as stable as the names.
-        view.groups.sort_by(|a, b| a.1.cmp(&b.1));
-        view.archived.sort_by(|a, b| a.1.cmp(&b.1));
+        sort_groups(&mut view.groups);
+        sort_groups(&mut view.archived);
         view
     }
 
@@ -256,6 +253,43 @@ fn push_grouped(
             groups.push((group_key, group_label, vec![entry]));
         }
     }
+}
+
+/// Group key for sessions whose scanner could not recover a working directory.
+/// Empty, because every folder group is keyed by a non-empty path.
+const UNKNOWN_FOLDER_KEY: &str = "";
+
+/// Label of the catch-all group. Localized like every other string the panel
+/// shows, so it reads the same way in a translated build.
+fn unknown_folder_label() -> String {
+    localization::localized_str!("Unknown folder").to_owned()
+}
+
+/// Group key and label for where a session ran. A session with no recoverable
+/// directory still gets a group: it can be resumed once the panel supplies a
+/// directory, so hiding the row would hide a session the user can open.
+fn group_for(root: Option<&str>) -> (String, String) {
+    let Some(root) = root.map(str::trim).filter(|root| !root.is_empty()) else {
+        return (UNKNOWN_FOLDER_KEY.to_owned(), unknown_folder_label());
+    };
+    let (key, label) = folder_group(root);
+    // A session started in the filesystem root trims down to an empty key,
+    // which is this file's marker for "no folder"; keep the two apart so the
+    // row is not filed under the catch-all.
+    if key.is_empty() {
+        return (root.to_owned(), root.to_owned());
+    }
+    (key, label)
+}
+
+/// Folders are listed by name, and the catch-all group always comes last: it is
+/// not a project, so it must not sit between two real ones.
+fn sort_groups(groups: &mut [(String, String, Vec<SessionEntry>)]) {
+    groups.sort_by(|a, b| {
+        a.0.is_empty()
+            .cmp(&b.0.is_empty())
+            .then_with(|| a.1.cmp(&b.1))
+    });
 }
 
 /// Group key and label for the folder a session ran in. The key folds case so
@@ -314,6 +348,7 @@ mod tests {
             workspace_root: Some("/repo".to_owned()),
             updated_at: Some(updated_at),
             source_path: format!("/store/{id}.jsonl"),
+            deletable: true,
         }
     }
 
@@ -367,5 +402,49 @@ mod tests {
         assert_eq!(view.archived[0].2[0].title, "my name");
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn sessions_without_a_folder_share_one_group_that_sorts_last() {
+        let path = std::env::temp_dir().join(format!("herdr-hist-{}c.json", std::process::id()));
+        let service = SessionService::load(path);
+
+        let mut orphan = raw("hermes", "h1", "no folder", 300);
+        orphan.workspace_root = None;
+        let view = service.history(
+            vec![
+                orphan,
+                raw("claude", "c1", "has folder", 100),
+                raw("claude", "c2", "same folder", 200),
+            ],
+            &[],
+        );
+
+        assert_eq!(view.groups.len(), 2, "the orphan row still gets a group");
+        assert_eq!(view.groups[0].1, "repo", "a real folder is unaffected");
+        assert_eq!(view.groups[0].2.len(), 2);
+        let (key, label, rows) = view.groups.last().expect("unknown folder group");
+        assert_eq!(key, UNKNOWN_FOLDER_KEY);
+        assert_eq!(label, &unknown_folder_label());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, SessionKey::new("hermes", "h1"));
+    }
+
+    /// The filesystem root is a real directory, so a session started there must
+    /// not fall into the catch-all group that is keyed by an empty string.
+    #[test]
+    fn a_session_in_the_filesystem_root_keeps_its_own_group() {
+        let path = std::env::temp_dir().join(format!("herdr-hist-{}d.json", std::process::id()));
+        let service = SessionService::load(path);
+
+        let mut at_root = raw("claude", "r1", "at root", 100);
+        at_root.workspace_root = Some("/".to_owned());
+        let view = service.history(vec![at_root], &[]);
+
+        assert_eq!(view.groups.len(), 1);
+        let (key, label, rows) = &view.groups[0];
+        assert_eq!(key, "/");
+        assert_eq!(label, "/");
+        assert_eq!(rows.len(), 1);
     }
 }

@@ -1,0 +1,6285 @@
+//! Lifetime binding between an opened database and its pathname namespace.
+//!
+//! Native file VFSes use two persistent sidecars.  The `gate` lock serializes
+//! admission, while the `use` lock is shared by every connection bound to the
+//! same file identity.  A new generation may replace the identity record only
+//! while it owns `use` exclusively.  Reserved-empty bootstrap retains both
+//! locks exclusively until [`DatabaseNamespaceBinding::finish_bootstrap`].
+//! Sidecars are deliberately never unlinked for ordinary database lifetimes:
+//! unlinking a locked file would split the advisory-lock domain on Unix. The
+//! sole exception is [`cleanup_abandoned_private_database`], which is limited
+//! to a caller-reserved transient candidate after all pager bindings have
+//! closed and requires exclusive ownership of both namespace locks.
+//!
+//! This is a cooperative, trusted-parent protocol.  Native processes that
+//! bypass FrankenSQLite can ignore advisory locks, and Unix permits a raw
+//! unlink/rename despite an open descriptor.  Callers must not mutate the
+//! database namespace or these sidecars outside the library while a binding
+//! is live, and must not open one database through multiple hard-link aliases.
+//!
+//! On Unix both sidecars must be regular files owned by the effective user
+//! with a single hard link, and they are created `0600`. A sidecar that is
+//! group- or other-accessible is refused unless the bits are demonstrably not
+//! an exposure: the file was created `0600` on this call and the filesystem
+//! reported them anyway (a mount that does not persist POSIX permission bits,
+//! such as a WSL2 Windows drive without `metadata`), or the sidecar grants no
+//! principal class a bit that the database file does not already grant it
+//! (group bits count as the same principals only when the two files share a
+//! group). See `sidecar_exposure_is_acceptable`.
+//!
+//! Explicit Unix group sharing is available for one existing database via
+//! `FSQLITE_TRUSTED_UNIX_DATABASE` (absolute resolved path) and
+//! `FSQLITE_TRUSTED_UNIX_GID` (numeric GID). Both must be supplied before open.
+//! The caller must be a member of that group, the parent must be `2770`, and
+//! the database and both sidecars must be `0660` with that GID. Sidecar owners
+//! must equal the database owner. Only that owner can create missing sidecars.
+//! The group and directory ancestry are trusted; ACLs must grant no outside
+//! access. This opt-in never authorizes private-candidate cleanup or repairs.
+
+use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use advisory_lock::{AdvisoryFileLock, FileLockError, FileLockMode};
+use fsqlite_error::{FrankenError, Result};
+
+use crate::traits::{
+    FileIdentity, PrivateDatabaseCleanupDurability, PrivateDatabaseCleanupEntryReceipt,
+    PrivateDatabaseCleanupEntryState, PrivateDatabaseCleanupFailure,
+    PrivateDatabaseCleanupFailureStage, PrivateDatabaseCleanupOutcome,
+};
+
+const GATE_SUFFIX: &str = "-fsqlite-ns-gate";
+const USE_SUFFIX: &str = "-fsqlite-ns-use";
+const RECORD_MAGIC: [u8; 8] = *b"FSQLNS01";
+const RECORD_VERSION: u8 = 1;
+const IDENTITY_BYTES: usize = 25;
+const RECORD_BYTES: usize = 40;
+const TRANSITION_MAGIC: [u8; 8] = *b"FSQLNT01";
+const TRANSITION_VERSION: u8 = 1;
+const TRANSITION_BYTES: usize = 88;
+const TRANSITION_CHECKSUM_OFFSET: usize = 80;
+const PREPARE_MAGIC: [u8; 8] = *b"FSQLNP01";
+const PREPARE_VERSION: u8 = 1;
+const PREPARE_BYTES: usize = TRANSITION_BYTES;
+const PREPARE_CHECKSUM_OFFSET: usize = TRANSITION_CHECKSUM_OFFSET;
+const FINISH_MAGIC: [u8; 8] = *b"FSQLNF01";
+const FINISH_VERSION: u8 = 1;
+const FINISH_BYTES: usize = TRANSITION_BYTES;
+const FINISH_CHECKSUM_OFFSET: usize = TRANSITION_CHECKSUM_OFFSET;
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Admission mode for a database namespace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NamespaceOpenIntent {
+    /// Join the live generation, or establish a new shared generation when no
+    /// connection currently owns the namespace.
+    Shared,
+    /// Join an existing generation without creating or rewriting namespace
+    /// records. Missing or malformed records fail closed.
+    ReadOnlyExisting,
+    /// Join an existing identity while retaining the exclusive admission gate
+    /// through creation or validation of one identity-bound companion. Never
+    /// create namespace sidecars or admit without an existing identity record.
+    ExistingCompanion,
+    /// Exclusively reserve the namespace through empty-database bootstrap.
+    ReservedExclusive,
+}
+
+/// Durable result of an exact namespace-generation transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NamespaceGenerationTransitionOutcome {
+    /// This call durably published the replacement identity.
+    Published,
+    /// The same exact old-to-replacement request was already published.
+    AlreadyPublished,
+}
+
+/// Exclusive namespace lease spanning caller-owned generation replacement.
+///
+/// The guard owns both persistent namespace locks and leaves a durable
+/// fail-closed prepare marker until [`Self::finish`] succeeds. It may publish
+/// more than one replacement while held, which permits an exact `A -> B`
+/// activation followed by an exact `B -> A` rollback before admissions resume.
+#[derive(Debug)]
+pub struct DatabaseNamespaceGenerationTransition {
+    stable_path: PathBuf,
+    gate: Option<File>,
+    use_file: Option<File>,
+    current_identity: FileIdentity,
+    last_sequence: u64,
+    prepare_offset: u64,
+    append_offset: u64,
+    interrupted_tail: Vec<u8>,
+    finished: bool,
+    poisoned: bool,
+}
+
+#[derive(Debug)]
+enum PendingLease {
+    NewShared {
+        gate: File,
+        use_file: File,
+    },
+    JoinShared {
+        gate: File,
+        use_file: File,
+        generation_identity: FileIdentity,
+    },
+    BootstrapExclusive {
+        gate: File,
+        use_file: File,
+    },
+    /// GH#140 / bd-daqmp: read-only admission of a database that no
+    /// FrankenSQLite ever admitted (no namespace sidecars exist, e.g. a stock
+    /// SQLite file). Nothing is created, opened, or locked — the reader
+    /// behaves like an external stock process. A namespace created by a peer
+    /// AFTER this admission cannot coordinate with it, which is identical to
+    /// the peer's exposure to any non-FrankenSQLite reader.
+    ReadOnlyUnadmitted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NamespaceBindMode {
+    PreserveRecord,
+    ReplaceQuiescentRecord,
+}
+
+/// Admission guard held while the caller opens and verifies the main file.
+///
+/// Dropping this value at any error point releases every acquired lock.
+#[derive(Debug)]
+pub struct PendingNamespaceOpen {
+    stable_path: PathBuf,
+    lease: Option<PendingLease>,
+}
+
+impl PendingNamespaceOpen {
+    /// Begin namespace admission for an already-resolved absolute database
+    /// path.  This operation is non-blocking; lock contention returns BUSY.
+    ///
+    /// bd-sz9j5: a read-write ([`NamespaceOpenIntent::Shared`]) admission
+    /// that would join a live WAL-mode generation first checks that some other
+    /// process visibly participates in the WAL the way every 0.4.x engine
+    /// does. A live namespace with no such participant is held by a pre-0.4
+    /// engine (no `-shm` publication, no reader registration), and joining it
+    /// can corrupt the file, so the admission is refused with
+    /// [`FrankenError::IncompatiblePeerEngine`] before anything is written.
+    /// A 0.4.x peer caught between its own admission and its WAL attach, or
+    /// one that is closing, looks the same for a moment; admission is
+    /// therefore restarted with a short backoff (about 0.6 s in total) and
+    /// refuses only if the signature persists while the namespace stays live.
+    /// Peers this process already has open, non-WAL files, and filesystems
+    /// whose locks cannot be probed are never refused.
+    ///
+    /// The backoff blocks the calling thread. Async callers retry
+    /// [`Self::begin_attempt`] on the runtime's timer instead (bd-h644q).
+    pub fn begin(stable_path: &Path, intent: NamespaceOpenIntent) -> Result<Self> {
+        let mut delays = Self::LEGACY_PEER_RETRY_DELAYS.iter();
+        loop {
+            if let Some(admission) = Self::begin_attempt(stable_path, intent)? {
+                return Ok(admission);
+            }
+            let Some(&delay) = delays.next() else {
+                return Err(FrankenError::IncompatiblePeerEngine {
+                    path: stable_path.to_owned(),
+                });
+            };
+            std::thread::sleep(delay);
+        }
+    }
+
+    /// Backoff between admission attempts while a live WAL generation shows
+    /// no 0.4.x participant (bd-sz9j5): about 0.6 s in total, after which the
+    /// admission is refused with [`FrankenError::IncompatiblePeerEngine`].
+    pub const LEGACY_PEER_RETRY_DELAYS: [std::time::Duration; 7] = [
+        std::time::Duration::from_millis(5),
+        std::time::Duration::from_millis(10),
+        std::time::Duration::from_millis(20),
+        std::time::Duration::from_millis(40),
+        std::time::Duration::from_millis(80),
+        std::time::Duration::from_millis(160),
+        std::time::Duration::from_millis(320),
+    ];
+
+    /// One admission attempt. `Ok(None)` means a live WAL generation shows no
+    /// 0.4.x participant (bd-sz9j5); no lock is retained in that case, and
+    /// the caller retries after the next [`Self::LEGACY_PEER_RETRY_DELAYS`]
+    /// entry or refuses once they are exhausted.
+    pub fn begin_attempt(stable_path: &Path, intent: NamespaceOpenIntent) -> Result<Option<Self>> {
+        validate_stable_path(stable_path)?;
+        #[cfg(unix)]
+        let _ = trusted_unix_group(stable_path)?;
+        let (gate, mut use_file) = if matches!(
+            intent,
+            NamespaceOpenIntent::ReadOnlyExisting | NamespaceOpenIntent::ExistingCompanion
+        ) {
+            // GH#140 / bd-daqmp: a read-only open must be byte-neutral for the
+            // whole file family. When the namespace sidecars do not exist (a
+            // database never admitted by FrankenSQLite), creating them here
+            // would make a read-only open side-effecting, so admit
+            // sidecar-less instead. Absence is checked explicitly; any OTHER
+            // sidecar-open failure (malformed, permissions) still fails
+            // closed through `open_existing_secure_lock_file` below.
+            let gate_path = sidecar_path(stable_path, GATE_SUFFIX);
+            let use_path = sidecar_path(stable_path, USE_SUFFIX);
+            let sidecar_missing = |path: &Path| {
+                matches!(
+                    std::fs::metadata(path),
+                    Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+                )
+            };
+            if sidecar_missing(&gate_path) || sidecar_missing(&use_path) {
+                if intent == NamespaceOpenIntent::ExistingCompanion {
+                    return Err(cannot_open(stable_path));
+                }
+                return Ok(Some(Self {
+                    stable_path: stable_path.to_owned(),
+                    lease: Some(PendingLease::ReadOnlyUnadmitted),
+                }));
+            }
+            (
+                open_existing_secure_lock_file(stable_path, &gate_path)?,
+                open_existing_secure_lock_file(stable_path, &use_path)?,
+            )
+        } else {
+            (
+                open_secure_lock_file(stable_path, &sidecar_path(stable_path, GATE_SUFFIX))?,
+                open_secure_lock_file(stable_path, &sidecar_path(stable_path, USE_SUFFIX))?,
+            )
+        };
+        let gate_mode = if intent == NamespaceOpenIntent::ReadOnlyExisting {
+            FileLockMode::Shared
+        } else {
+            FileLockMode::Exclusive
+        };
+        try_lock(&gate, gate_mode)?;
+
+        let lease = match intent {
+            NamespaceOpenIntent::ReservedExclusive => {
+                if let Err(error) = try_lock(&use_file, FileLockMode::Exclusive) {
+                    release_namespace_locks(&gate, &use_file);
+                    return Err(error);
+                }
+                PendingLease::BootstrapExclusive { gate, use_file }
+            }
+            NamespaceOpenIntent::Shared => {
+                match AdvisoryFileLock::try_lock(&use_file, FileLockMode::Exclusive) {
+                    Ok(()) => PendingLease::NewShared { gate, use_file },
+                    Err(FileLockError::AlreadyLocked) => {
+                        // bd-sz9j5: probe before taking `use` shared. Until
+                        // then this descriptor holds no namespace lock, so a
+                        // restarted attempt's exclusive `use` lock proves
+                        // whether the live peers have gone.
+                        #[cfg(unix)]
+                        if crate::unix::probe_foreign_wal_participation(stable_path)
+                            == crate::traits::ForeignWalParticipation::NoParticipant
+                        {
+                            release_namespace_locks(&gate, &use_file);
+                            return Ok(None);
+                        }
+                        if let Err(error) = try_lock(&use_file, FileLockMode::Shared) {
+                            release_namespace_locks(&gate, &use_file);
+                            return Err(error);
+                        }
+                        let generation_identity =
+                            match read_identity_record(&mut use_file, stable_path) {
+                                Ok(identity) => identity,
+                                Err(error) => {
+                                    release_namespace_locks(&gate, &use_file);
+                                    return Err(error);
+                                }
+                            };
+                        PendingLease::JoinShared {
+                            gate,
+                            use_file,
+                            generation_identity,
+                        }
+                    }
+                    Err(FileLockError::Io(error)) => {
+                        release_namespace_locks(&gate, &use_file);
+                        return Err(error.into());
+                    }
+                }
+            }
+            NamespaceOpenIntent::ReadOnlyExisting | NamespaceOpenIntent::ExistingCompanion => {
+                if let Err(error) = try_lock(&use_file, FileLockMode::Shared) {
+                    release_namespace_locks(&gate, &use_file);
+                    return Err(error);
+                }
+                let generation_identity = match read_identity_record(&mut use_file, stable_path) {
+                    Ok(identity) => identity,
+                    Err(error) => {
+                        release_namespace_locks(&gate, &use_file);
+                        return Err(error);
+                    }
+                };
+                PendingLease::JoinShared {
+                    gate,
+                    use_file,
+                    generation_identity,
+                }
+            }
+        };
+
+        Ok(Some(Self {
+            stable_path: stable_path.to_owned(),
+            lease: Some(lease),
+        }))
+    }
+
+    /// Identity of the live generation this admission must join.  When this
+    /// returns `Some`, callers must strip CREATE/EXCLUSIVE and open that exact
+    /// existing identity before calling [`Self::bind`].
+    #[must_use]
+    pub fn expected_identity(&self) -> Option<FileIdentity> {
+        match self.lease.as_ref() {
+            Some(PendingLease::JoinShared {
+                generation_identity,
+                ..
+            }) => Some(*generation_identity),
+            _ => None,
+        }
+    }
+
+    /// Whether this admission exclusively owns a nonempty namespace record.
+    ///
+    /// `true` identifies the only state in which a caller may need
+    /// [`Self::bind_replacing_quiescent_record`]. New namespaces have an empty
+    /// record; joined/live namespaces are never reported as quiescent.
+    pub fn has_quiescent_record_bytes(&self) -> Result<bool> {
+        match self.lease.as_ref() {
+            Some(PendingLease::NewShared { use_file, .. }) => Ok(use_file.metadata()?.len() != 0),
+            _ => Ok(false),
+        }
+    }
+
+    /// Bind admission to the identity obtained from the opened main-file
+    /// descriptor.  No recovery artifact may be inspected before this step.
+    pub fn bind(self, identity: FileIdentity) -> Result<Arc<DatabaseNamespaceBinding>> {
+        self.bind_with_gate_release(identity, release_gate)
+    }
+
+    /// Finish a companion admission without consuming its retry owner on error.
+    /// Native mapping cleanup retains this pending admission until the main
+    /// lifetime has closed, including a failed gate release or validation.
+    #[cfg(unix)]
+    pub(crate) fn finish_existing_companion(
+        &mut self,
+        identity: FileIdentity,
+    ) -> Result<Arc<DatabaseNamespaceBinding>> {
+        let Some(PendingLease::JoinShared {
+            gate,
+            use_file,
+            generation_identity,
+        }) = self.lease.as_mut()
+        else {
+            return Err(cannot_open(&self.stable_path));
+        };
+        if *generation_identity != identity
+            || read_identity_record(use_file, &self.stable_path)? != identity
+        {
+            return Err(cannot_open(&self.stable_path));
+        }
+        validate_generation_path_identity(&self.stable_path, identity)?;
+        release_gate(gate)?;
+        let Some(PendingLease::JoinShared { gate, use_file, .. }) = self.lease.take() else {
+            unreachable!("validated companion admission still owns its lease");
+        };
+        drop(gate);
+        Ok(Arc::new(DatabaseNamespaceBinding {
+            stable_path: self.stable_path.clone(),
+            identity: Mutex::new(identity),
+            provisional_identity: AtomicBool::new(false),
+            lease: Mutex::new(BindingLease::Shared { use_file }),
+        }))
+    }
+
+    /// Bind a newly opened generation after proving that a stale namespace
+    /// record has no live owner.
+    ///
+    /// This is deliberately narrower than [`Self::bind`]: it succeeds only
+    /// for a `Shared` admission that owns both namespace locks exclusively.
+    /// The caller must already have opened the current main-file descriptor;
+    /// its identity is revalidated against the pathname before the stale
+    /// record is replaced. A joined/live generation always fails closed.
+    pub fn bind_replacing_quiescent_record(
+        self,
+        identity: FileIdentity,
+    ) -> Result<Arc<DatabaseNamespaceBinding>> {
+        self.bind_with_gate_release_mode(
+            identity,
+            release_gate,
+            NamespaceBindMode::ReplaceQuiescentRecord,
+        )
+    }
+
+    fn bind_with_gate_release<F>(
+        self,
+        identity: FileIdentity,
+        release_gate_fn: F,
+    ) -> Result<Arc<DatabaseNamespaceBinding>>
+    where
+        F: FnOnce(&File) -> Result<()>,
+    {
+        self.bind_with_gate_release_mode(
+            identity,
+            release_gate_fn,
+            NamespaceBindMode::PreserveRecord,
+        )
+    }
+
+    fn bind_with_gate_release_mode<F>(
+        mut self,
+        identity: FileIdentity,
+        release_gate_fn: F,
+        bind_mode: NamespaceBindMode,
+    ) -> Result<Arc<DatabaseNamespaceBinding>>
+    where
+        F: FnOnce(&File) -> Result<()>,
+    {
+        let lease = self
+            .lease
+            .take()
+            .ok_or_else(|| FrankenError::internal("namespace admission already consumed"))?;
+
+        let state = match lease {
+            PendingLease::NewShared { gate, mut use_file } => {
+                let write_result = match bind_mode {
+                    NamespaceBindMode::PreserveRecord => {
+                        write_identity_record(&mut use_file, &self.stable_path, identity)
+                    }
+                    NamespaceBindMode::ReplaceQuiescentRecord => replace_quiescent_identity_record(
+                        &mut use_file,
+                        &self.stable_path,
+                        identity,
+                    ),
+                };
+                if let Err(error) = write_result {
+                    release_namespace_locks(&gate, &use_file);
+                    return Err(error);
+                }
+                // Keep a new generation exclusive through pager
+                // initialization.  Otherwise a peer could join a freshly
+                // created zero-length file before page 1 is durable.
+                BindingLease::BootstrapExclusive { gate, use_file }
+            }
+            PendingLease::JoinShared {
+                gate,
+                mut use_file,
+                generation_identity,
+            } => {
+                if bind_mode == NamespaceBindMode::ReplaceQuiescentRecord {
+                    release_namespace_locks(&gate, &use_file);
+                    return Err(cannot_open(&self.stable_path));
+                }
+                let observed_identity = match read_identity_record(&mut use_file, &self.stable_path)
+                {
+                    Ok(identity) => identity,
+                    Err(error) => {
+                        release_namespace_locks(&gate, &use_file);
+                        return Err(error);
+                    }
+                };
+                if observed_identity != generation_identity || identity != generation_identity {
+                    release_namespace_locks(&gate, &use_file);
+                    return Err(cannot_open(&self.stable_path));
+                }
+                if let Err(error) = release_gate_fn(&gate) {
+                    release_namespace_locks(&gate, &use_file);
+                    return Err(error);
+                }
+                drop(gate);
+                BindingLease::Shared { use_file }
+            }
+            PendingLease::BootstrapExclusive { gate, mut use_file } => {
+                if bind_mode == NamespaceBindMode::ReplaceQuiescentRecord {
+                    release_namespace_locks(&gate, &use_file);
+                    return Err(cannot_open(&self.stable_path));
+                }
+                if let Err(error) =
+                    write_identity_record(&mut use_file, &self.stable_path, identity)
+                {
+                    release_namespace_locks(&gate, &use_file);
+                    return Err(error);
+                }
+                BindingLease::BootstrapExclusive { gate, use_file }
+            }
+            PendingLease::ReadOnlyUnadmitted => {
+                if bind_mode == NamespaceBindMode::ReplaceQuiescentRecord {
+                    return Err(cannot_open(&self.stable_path));
+                }
+                BindingLease::ReadOnlyUnadmitted
+            }
+        };
+
+        // GH#416: an identity read from a still-empty main file may be a
+        // filesystem placeholder; remember that so exactly one materialization
+        // can be adopted later instead of being classified as a supersession.
+        let provisional_identity = main_file_is_zero_length(&self.stable_path);
+        Ok(Arc::new(DatabaseNamespaceBinding {
+            stable_path: std::mem::take(&mut self.stable_path),
+            identity: Mutex::new(identity),
+            provisional_identity: AtomicBool::new(provisional_identity),
+            lease: Mutex::new(state),
+        }))
+    }
+}
+
+impl Drop for PendingNamespaceOpen {
+    fn drop(&mut self) {
+        let Some(lease) = self.lease.take() else {
+            return;
+        };
+        let (gate, use_file) = match lease {
+            PendingLease::NewShared { gate, use_file }
+            | PendingLease::JoinShared { gate, use_file, .. }
+            | PendingLease::BootstrapExclusive { gate, use_file } => (gate, use_file),
+            // Sidecar-less admission holds no files and no locks.
+            PendingLease::ReadOnlyUnadmitted => return,
+        };
+        let _ = AdvisoryFileLock::unlock(&use_file);
+        let _ = AdvisoryFileLock::unlock(&gate);
+    }
+}
+
+#[derive(Debug)]
+enum BindingLease {
+    Shared {
+        use_file: File,
+    },
+    BootstrapExclusive {
+        gate: File,
+        use_file: File,
+    },
+    BootstrapUseShared {
+        gate: File,
+        use_file: File,
+    },
+    Transitioning,
+    /// GH#140 / bd-daqmp sidecar-less read-only binding: no files, no locks.
+    ReadOnlyUnadmitted,
+    /// bd-97kjm terminal teardown state: every advisory lock has been released
+    /// and every retained sidecar descriptor has been closed. A binding enters
+    /// this state through [`DatabaseNamespaceBinding::quiesce`] (explicit
+    /// pool-drop teardown) or [`DatabaseNamespaceBinding::guard_generation`]
+    /// (on a detected main-file quarantine/rename). It is inert and idempotent:
+    /// a lingering `Arc` clone can no longer write through the released
+    /// descriptors, and the binding's own `Drop` has nothing left to release.
+    Quiesced,
+}
+
+/// Lifetime lease binding all path-derived companions to one main-file
+/// identity.  Keep this value alive for the full connection lifetime.
+#[derive(Debug)]
+pub struct DatabaseNamespaceBinding {
+    stable_path: PathBuf,
+    identity: Mutex<FileIdentity>,
+    /// GH#416: `true` while the bound identity was captured from a
+    /// zero-length main file. Filesystems that number a file by its first
+    /// data cluster (macOS `msdosfs`) report a placeholder inode for an empty
+    /// file and a different one once data is allocated, so such an identity
+    /// may legitimately move exactly once — at the first page write. Cleared
+    /// by [`DatabaseNamespaceBinding::validate_path_identity_with_descriptor`]
+    /// when the materialized identity is adopted, or as soon as a plain
+    /// validation proves the identity did not move.
+    provisional_identity: AtomicBool,
+    lease: Mutex<BindingLease>,
+}
+
+/// GH#416: whether the main file at `path` is currently a zero-length regular
+/// file — the only state in which a captured `(dev, ino)` may be a
+/// filesystem placeholder rather than the file's durable identity.
+fn main_file_is_zero_length(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() == 0)
+}
+
+/// Outcome of re-probing whether a binding's bound generation is still
+/// installed at its stable path. Distinguishing a *proven* supersession from a
+/// transient probe failure is what keeps
+/// [`DatabaseNamespaceBinding::guard_generation`] from releasing a still-live
+/// writer's advisory locks on a transient stat error (bd-ep8y9).
+enum GenerationProbe {
+    /// The stable path still names the bound file identity.
+    Current,
+    /// The stable path provably no longer names this generation: a different
+    /// inode, a non-file, or nothing (`ENOENT`) now occupies it.
+    Superseded,
+    /// The probe itself failed for a transient or ambiguous reason; the bound
+    /// generation's liveness is unknown and the lease must be left intact.
+    ProbeFailed(FrankenError),
+}
+
+impl DatabaseNamespaceBinding {
+    /// The single absolute path from which all companion names must derive.
+    #[must_use]
+    pub fn stable_path(&self) -> &Path {
+        &self.stable_path
+    }
+
+    /// The main-file identity to which this lease is bound.
+    ///
+    /// Stable for the binding's lifetime except for the single GH#416
+    /// materialization adoption of an identity captured from a zero-length
+    /// file (see [`Self::validate_path_identity_with_descriptor`]).
+    #[must_use]
+    pub fn identity(&self) -> FileIdentity {
+        *self
+            .identity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// GH#416: whether the bound identity was captured from a zero-length
+    /// main file and has not yet been confirmed (or replaced) by a validation
+    /// against the materialized file.
+    #[must_use]
+    pub fn identity_is_provisional(&self) -> bool {
+        self.provisional_identity.load(Ordering::Acquire)
+    }
+
+    /// Side-effect-free identity validation for operation boundaries.  The
+    /// caller obtains the current pathname identity through its VFS first.
+    pub fn validate_identity(&self, current: Option<FileIdentity>) -> Result<()> {
+        if current == Some(self.identity()) {
+            Ok(())
+        } else {
+            Err(cannot_open(&self.stable_path))
+        }
+    }
+
+    /// [`Self::validate_path_identity`] with the GH#416 placeholder-inode
+    /// adoption: when the bound identity is provisional (captured from a
+    /// zero-length file) and the stable path now names a non-empty regular
+    /// file whose identity the caller's OPEN DESCRIPTOR also reports
+    /// (`descriptor_identity`, re-read from the live descriptor), the file
+    /// was not replaced — the filesystem renumbered it on first allocation —
+    /// so the binding adopts the materialized identity, republishes it in the
+    /// `-ns-use` record, and validates. A descriptor that still reports the
+    /// old identity means the path was rebound to a different file (the
+    /// rename/quarantine case), which stays a fail-closed mismatch exactly as
+    /// in the plain probe.
+    ///
+    /// The adoption never opens the main file (bd-qduu1): the path side is a
+    /// `symlink_metadata`, the descriptor side comes from the caller.
+    pub fn validate_path_identity_with_descriptor(
+        &self,
+        descriptor_identity: Option<FileIdentity>,
+    ) -> Result<()> {
+        let error = match self.validate_path_identity() {
+            Ok(()) => {
+                // A match against a NON-EMPTY file proves the identity did not
+                // move on first allocation (or already moved and was adopted):
+                // it is durable from here on. A match while the file is still
+                // empty proves nothing — the placeholder is still in effect.
+                if self.identity_is_provisional() && !main_file_is_zero_length(&self.stable_path) {
+                    self.provisional_identity.store(false, Ordering::Release);
+                }
+                return Ok(());
+            }
+            Err(error) => error,
+        };
+        if !self.identity_is_provisional() {
+            return Err(error);
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let Ok(metadata) = std::fs::symlink_metadata(&self.stable_path) else {
+                return Err(error);
+            };
+            if !metadata.is_file() || metadata.len() == 0 || metadata.nlink() != 1 {
+                return Err(error);
+            }
+            let materialized = FileIdentity::from_unix_parts(metadata.dev(), metadata.ino());
+            if descriptor_identity != Some(materialized) {
+                return Err(error);
+            }
+            let bound = self.identity();
+            if bound == materialized {
+                self.provisional_identity.store(false, Ordering::Release);
+                return Ok(());
+            }
+            self.adopt_materialized_identity(bound, materialized)
+        }
+
+        #[cfg(not(unix))]
+        {
+            // Windows file identifiers are assigned at creation and never
+            // move; a provisional identity there can only be a real mismatch.
+            let _ = descriptor_identity;
+            Err(error)
+        }
+    }
+
+    /// Replace a provisional (zero-length-captured) identity with the
+    /// materialized one the filesystem assigned on first allocation.
+    ///
+    /// The namespace record is rewritten in place under the lease mutex so a
+    /// peer admitted afterwards reads the live identity. Only a pristine
+    /// record (no transition ledger, no prepared marker) that still names the
+    /// provisional identity is rewritten; anything else is left untouched
+    /// and the mismatch stays fail-closed.
+    #[cfg(unix)]
+    fn adopt_materialized_identity(
+        &self,
+        bound: FileIdentity,
+        materialized: FileIdentity,
+    ) -> Result<()> {
+        let mut lease = self
+            .lease
+            .lock()
+            .map_err(|_| FrankenError::internal("namespace lease mutex poisoned"))?;
+        match &mut *lease {
+            BindingLease::Shared { use_file }
+            | BindingLease::BootstrapExclusive { use_file, .. }
+            | BindingLease::BootstrapUseShared { use_file, .. } => {
+                rewrite_materialized_identity_record(
+                    use_file,
+                    &self.stable_path,
+                    bound,
+                    materialized,
+                )?;
+            }
+            // Sidecar-less read-only admission published nothing to rewrite.
+            BindingLease::ReadOnlyUnadmitted => {}
+            BindingLease::Transitioning | BindingLease::Quiesced => {
+                return Err(cannot_open(&self.stable_path));
+            }
+        }
+        *self
+            .identity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = materialized;
+        self.provisional_identity.store(false, Ordering::Release);
+        drop(lease);
+        Ok(())
+    }
+
+    /// Verify that the stable main pathname (without following its final
+    /// symlink) still names this binding's file identity.  The probe is
+    /// read-only and never creates database or companion files.
+    ///
+    /// bd-qduu1: on Unix this must NOT open (and then close) a descriptor
+    /// for the main database file. POSIX record locks are per-process,
+    /// per-file: closing ANY descriptor of a file releases ALL of this
+    /// process's `fcntl` locks on it, including the RESERVED byte that
+    /// gates cross-process WAL appends. This probe runs on every WAL
+    /// backend operation, so the open+close variant silently destroyed the
+    /// append gate the group-commit flush had just acquired — two
+    /// processes then derived the same WAL append offset and overwrote
+    /// each other's committed frames (read-your-own-write returned zero
+    /// rows) or tripped the parallel-WAL certificate cross-check. A path
+    /// stat creates no descriptor, so no lock is disturbed;
+    /// `symlink_metadata` preserves the `O_NOFOLLOW` property by
+    /// identifying a final-component symlink itself (rejected as
+    /// not-a-file) rather than its target.
+    pub fn validate_path_identity(&self) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let metadata = std::fs::symlink_metadata(&self.stable_path)
+                .map_err(|_| cannot_open(&self.stable_path))?;
+            if !metadata.is_file() {
+                return Err(cannot_open(&self.stable_path));
+            }
+            self.validate_identity(Some(FileIdentity::from_unix_parts(
+                metadata.dev(),
+                metadata.ino(),
+            )))
+        }
+
+        // Windows closes do not release byte-range locks held on other
+        // handles, and the robust 128-bit file identifier requires an open
+        // handle, so the handle-based probe remains correct there.
+        #[cfg(not(unix))]
+        {
+            let file = open_identity_probe(&self.stable_path)?;
+            self.validate_identity(FileIdentity::from_file(&file)?)
+        }
+    }
+
+    /// Complete reserved bootstrap by converting `use` to shared and then
+    /// releasing `gate`.  The transition is idempotent.
+    pub fn finish_bootstrap(&self) -> Result<()> {
+        self.finish_bootstrap_with_gate_release(release_gate)
+    }
+
+    fn finish_bootstrap_with_gate_release<F>(&self, release_gate_fn: F) -> Result<()>
+    where
+        F: FnOnce(&File) -> Result<()>,
+    {
+        let mut lease = self
+            .lease
+            .lock()
+            .map_err(|_| FrankenError::internal("namespace lease mutex poisoned"))?;
+        if matches!(
+            *lease,
+            BindingLease::Shared { .. } | BindingLease::ReadOnlyUnadmitted | BindingLease::Quiesced
+        ) {
+            return Ok(());
+        }
+        let old = std::mem::replace(&mut *lease, BindingLease::Transitioning);
+        let (gate, use_file, use_is_shared) = match old {
+            BindingLease::BootstrapExclusive { gate, use_file } => (gate, use_file, false),
+            BindingLease::BootstrapUseShared { gate, use_file } => (gate, use_file, true),
+            other => {
+                *lease = other;
+                return Err(FrankenError::internal(
+                    "namespace bootstrap transition re-entered",
+                ));
+            }
+        };
+
+        if !use_is_shared && let Err(error) = downgrade_to_shared(&use_file) {
+            *lease = BindingLease::BootstrapExclusive { gate, use_file };
+            return Err(error);
+        }
+        if let Err(error) = release_gate_fn(&gate) {
+            *lease = BindingLease::BootstrapUseShared { gate, use_file };
+            return Err(error);
+        }
+        drop(gate);
+        *lease = BindingLease::Shared { use_file };
+        Ok(())
+    }
+
+    /// Whether bootstrap still owns the namespace exclusively.
+    #[must_use]
+    pub fn bootstrap_is_exclusive(&self) -> bool {
+        self.lease.lock().is_ok_and(|lease| {
+            matches!(
+                *lease,
+                BindingLease::BootstrapExclusive { .. } | BindingLease::BootstrapUseShared { .. }
+            )
+        })
+    }
+
+    /// bd-97kjm ask #2 — explicit namespace quiescence/teardown.
+    ///
+    /// Deterministically release every advisory lock and close every retained
+    /// sidecar descriptor owned by this generation **now**, regardless of how
+    /// many [`Arc`] clones still reference the binding. The persistent sidecar
+    /// files are never unlinked (that would split the advisory-lock domain);
+    /// only the process-local descriptors and their `flock` claims are dropped.
+    ///
+    /// A pool owner calls this once the last connection bound to the file has
+    /// closed, so a subsequent generation transition (or a fresh admission)
+    /// observes no stale `use` lease even when a background reference (a
+    /// detached flusher, a pooled handle) still holds an `Arc` clone. The
+    /// operation is idempotent and, after it returns, the binding is inert:
+    /// [`Self::finish_bootstrap`] becomes a no-op and no retained descriptor
+    /// can write through the released `use`/`gate` handles.
+    ///
+    /// The caller owns the "no live connection is cut off" contract exactly as
+    /// [`cleanup_abandoned_private_database`] does: invoke this only after every
+    /// pager/validation connection bound to this generation has closed. For a
+    /// teardown that is safe even while a connection may still be live, prefer
+    /// [`Self::guard_generation`], which releases only after proving the bound
+    /// generation is no longer installed at the path.
+    pub fn quiesce(&self) {
+        let mut lease = match self.lease.lock() {
+            Ok(lease) => lease,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        Self::quiesce_lease(&mut lease);
+    }
+
+    /// Release the descriptors owned by `lease` and leave it [`BindingLease::Quiesced`].
+    fn quiesce_lease(lease: &mut BindingLease) {
+        // Unlock explicitly before the descriptor closes so the advisory-lock
+        // handoff boundary is immediate on every platform, then drop the owned
+        // `File`s so their (single) open file descriptions — and thus the
+        // retained fds — are gone the instant this returns.
+        match std::mem::replace(lease, BindingLease::Quiesced) {
+            BindingLease::Shared { use_file } => {
+                let _ = AdvisoryFileLock::unlock(&use_file);
+                drop(use_file);
+            }
+            BindingLease::BootstrapExclusive { gate, use_file }
+            | BindingLease::BootstrapUseShared { gate, use_file } => {
+                let _ = AdvisoryFileLock::unlock(&use_file);
+                let _ = AdvisoryFileLock::unlock(&gate);
+                drop(use_file);
+                drop(gate);
+            }
+            BindingLease::Transitioning
+            | BindingLease::ReadOnlyUnadmitted
+            | BindingLease::Quiesced => {}
+        }
+    }
+
+    /// Whether this binding has been torn down by [`Self::quiesce`] or a
+    /// generation-guard release. A quiesced binding owns no descriptors and no
+    /// advisory locks.
+    #[must_use]
+    pub fn is_quiesced(&self) -> bool {
+        // bd-l6cnd: fail CLOSED on a poisoned lease mutex, matching `quiesce()`'s
+        // `into_inner()` recovery. `is_ok_and` treated a poisoned lock as
+        // "not quiesced" (fail-open), so a binding that was quiesced by a thread
+        // that then panicked would read back as live and let operations proceed
+        // on already-released descriptors. A poisoned mutex still exposes the
+        // real lease state via `into_inner()`, so read it rather than lie.
+        let lease = match self.lease.lock() {
+            Ok(lease) => lease,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        matches!(*lease, BindingLease::Quiesced)
+    }
+
+    /// bd-97kjm ask #3 — generation-bound teardown.
+    ///
+    /// Re-probe the stable pathname's file identity and act on the three
+    /// distinguishable outcomes (bd-ep8y9):
+    ///
+    /// * **Current** — the path still names this binding's identity: a pure,
+    ///   side-effect-free check identical to [`Self::validate_path_identity`].
+    /// * **Superseded** — the probe *proves* the generation changed (a different
+    ///   inode, a non-file, or nothing at all now occupies the path — the
+    ///   recovery quarantine/rename case). Only then does this [`Self::quiesce`]
+    ///   the binding, closing the retained `use`/`gate` descriptors so they can
+    ///   never write through the superseded generation. Returns `Err`.
+    /// * **Probe failure** — the identity could not be read at all (a transient
+    ///   `EIO`/`EACCES`/`ESTALE`, an ambiguous open error): liveness is UNKNOWN.
+    ///   The lease is left fully intact and `Err` is returned so the caller
+    ///   fails the operation *closed* with its advisory locks still held.
+    ///
+    /// The last case is the whole point of the split-brain fix: a transient stat
+    /// error must NOT release the namespace locks of a still-live writer. If it
+    /// did, this process would keep writing lock-free while a second process
+    /// could win admission on the released `-ns-use`/`-ns-gate` locks. For the
+    /// same reason, once the lease is already [`BindingLease::Quiesced`] this
+    /// fails closed unconditionally: a later successful probe must never report
+    /// a lock-less binding as a live generation.
+    ///
+    /// This never mutates the main database, the quarantined old inode, or the
+    /// persistent sidecars: identity is probed with `symlink_metadata` on Unix
+    /// (no descriptor, so no `fcntl` record lock is disturbed — bd-qduu1) and
+    /// the release path only unlocks and closes already-held descriptors.
+    pub fn guard_generation(&self) -> Result<()> {
+        // Fail closed once quiesced: a quiesced lease owns no advisory locks, so
+        // reporting its generation as live would let this lock-less binding keep
+        // writing while another process holds the namespace locks (bd-ep8y9).
+        if self.is_quiesced() {
+            return Err(cannot_open(&self.stable_path));
+        }
+        match self.probe_generation() {
+            // bd-r3dt7: re-check quiesced AFTER the probe. Between the leading
+            // `is_quiesced()` and this probe a peer could have superseded and
+            // quiesced this binding (releasing its advisory locks), then renamed
+            // the same identity back onto the stable path — so the probe reads
+            // `Current` on a now-lock-less lease. Without this re-check that one
+            // call would report the quiesced binding as a live generation (only
+            // the NEXT call fails closed on the leading `is_quiesced()`). The
+            // re-check runs through the same lease mutex as `quiesce()`, so it
+            // linearizes against a concurrent supersession and closes the
+            // one-call resurrection window.
+            GenerationProbe::Current => {
+                if self.is_quiesced() {
+                    Err(cannot_open(&self.stable_path))
+                } else {
+                    Ok(())
+                }
+            }
+            GenerationProbe::Superseded => {
+                // The bound generation is provably gone: release the retained
+                // descriptors/locks so they cannot write through the superseded
+                // inode. A still-live connection is never reached here.
+                self.quiesce();
+                Err(cannot_open(&self.stable_path))
+            }
+            // Transient/ambiguous probe failure: identity unknown. Never release
+            // the lease — dropping a live writer's locks here is the split-brain
+            // bug (bd-ep8y9). Surface the error so the caller fails closed.
+            GenerationProbe::ProbeFailed(error) => Err(error),
+        }
+    }
+
+    /// Classify a generation re-probe into the three outcomes acted on by
+    /// [`Self::guard_generation`]. Separating a *proven* supersession from a
+    /// transient probe failure is load-bearing: only the former may release the
+    /// lease (bd-ep8y9). The probe never opens the main database file on Unix
+    /// (`symlink_metadata`, no descriptor — bd-qduu1).
+    fn probe_generation(&self) -> GenerationProbe {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            match std::fs::symlink_metadata(&self.stable_path) {
+                Ok(metadata) => {
+                    if metadata.is_file()
+                        && FileIdentity::from_unix_parts(metadata.dev(), metadata.ino())
+                            == self.identity()
+                    {
+                        GenerationProbe::Current
+                    } else {
+                        // Stat succeeded, but a different inode (or a non-file)
+                        // now occupies the path: provably superseded.
+                        GenerationProbe::Superseded
+                    }
+                }
+                // ENOENT: the main file was renamed/unlinked off the stable path
+                // — a proven supersession (the bd-97kjm quarantine case), not a
+                // transient read failure.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    GenerationProbe::Superseded
+                }
+                // EIO / EACCES / ESTALE / …: the identity could not be read.
+                // Liveness is unknown — leave the lease intact, fail closed.
+                Err(_) => GenerationProbe::ProbeFailed(cannot_open(&self.stable_path)),
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            // Windows: closing a handle releases *that handle's* byte-range
+            // locks, so a probe-error quiesce would drop this binding's
+            // `-ns-use`/`-ns-gate` locks exactly as on Unix. Classify
+            // conservatively — only a successfully-read mismatching identity
+            // supersedes; every open/identity failure is a transient probe
+            // failure (fail closed, lease retained), never a supersession.
+            match open_identity_probe(&self.stable_path) {
+                Ok(file) => match FileIdentity::from_file(&file) {
+                    Ok(Some(current)) if current == self.identity() => GenerationProbe::Current,
+                    Ok(Some(_)) => GenerationProbe::Superseded,
+                    Ok(None) | Err(_) => {
+                        GenerationProbe::ProbeFailed(cannot_open(&self.stable_path))
+                    }
+                },
+                // bd-ntipn: `open_identity_probe` collapses the io error kind into
+                // `FrankenError`, so re-probe existence directly to mirror the
+                // unix ENOENT arm. A main file renamed/unlinked off the stable
+                // path leaves no entry — a *proven* supersession (the bd-97kjm
+                // rename-away teardown case) that must release the binding's
+                // `-ns-use`/`-ns-gate` locks so a successor can proceed. A foreign
+                // exclusive / deny-share hold leaves the file present (metadata
+                // still readable) and stays a fail-closed `ProbeFailed`.
+                Err(_) => match std::fs::symlink_metadata(&self.stable_path) {
+                    Err(meta_err) if meta_err.kind() == std::io::ErrorKind::NotFound => {
+                        GenerationProbe::Superseded
+                    }
+                    _ => GenerationProbe::ProbeFailed(cannot_open(&self.stable_path)),
+                },
+            }
+        }
+    }
+}
+
+impl Drop for DatabaseNamespaceBinding {
+    fn drop(&mut self) {
+        // The last Arc is the exact end of this generation's lifetime lease.
+        // Unlock explicitly at that boundary before the descriptors close so
+        // a following generation transition cannot observe a stale shared
+        // lease, even on filesystems where close-driven flock handoff is not
+        // immediate.
+        let lease = match self.lease.get_mut() {
+            Ok(lease) => lease,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match lease {
+            BindingLease::Shared { use_file } => {
+                let _ = AdvisoryFileLock::unlock(use_file);
+            }
+            BindingLease::BootstrapExclusive { gate, use_file }
+            | BindingLease::BootstrapUseShared { gate, use_file } => {
+                let _ = AdvisoryFileLock::unlock(use_file);
+                let _ = AdvisoryFileLock::unlock(gate);
+            }
+            BindingLease::Transitioning
+            | BindingLease::ReadOnlyUnadmitted
+            | BindingLease::Quiesced => {}
+        }
+    }
+}
+
+/// Begin an exact namespace-generation transition before mutating the path.
+///
+/// This opens the existing persistent sidecars without creating them, acquires
+/// both namespace locks exclusively, and verifies the durable namespace record.
+/// On a fresh transition it also requires the current main pathname to identify
+/// `expected_old_identity`, then writes a durable prepare marker before
+/// returning. Lock acquisition is non-blocking, so any live binding or
+/// concurrent admission returns [`FrankenError::Busy`].
+///
+/// On restart, an exact existing full or partial prepare marker changes the
+/// contract: `expected_old_identity` names the identity still recorded by the
+/// ledger, while the main pathname may be absent after quarantine or may
+/// already name a candidate replacement. The resumed guard retains any exact
+/// partial publication tail. `publish_replacement` accepts only the byte-exact
+/// continuation for the supplied replacement identity; `finish` accepts only
+/// the recorded identity. A foreign pathname or foreign ledger tail is never
+/// adopted.
+///
+/// The caller must acquire this guard before quarantining or renaming the old
+/// main file, retain it across every activation or rollback rename, call
+/// [`DatabaseNamespaceGenerationTransition::publish_replacement`] after each
+/// exact pathname replacement, and call
+/// [`DatabaseNamespaceGenerationTransition::finish`] only when the generation
+/// that should become visible is installed. The caller must also exclude
+/// non-library pathname mutation while the guard is live.
+///
+/// Dropping the guard before any finish attempt releases the advisory locks but
+/// deliberately retains the durable prepare marker. Ordinary admission then
+/// fails closed until recovery resumes this guard for the exact currently
+/// recorded identity and finishes or publishes another exact replacement. If a
+/// finish attempt mutates the ledger but cannot confirm durability, dropping
+/// the poisoned guard fail-stops by retaining both exclusive descriptors for
+/// the process lifetime. No namespace sidecar is ever renamed or unlinked.
+pub fn begin_database_namespace_generation_transition(
+    database_path: &Path,
+    expected_old_identity: FileIdentity,
+) -> Result<DatabaseNamespaceGenerationTransition> {
+    begin_database_namespace_generation_transition_inner(
+        database_path,
+        expected_old_identity,
+        || Ok(()),
+    )
+}
+
+fn begin_database_namespace_generation_transition_inner<F>(
+    database_path: &Path,
+    expected_old_identity: FileIdentity,
+    before_prepare: F,
+) -> Result<DatabaseNamespaceGenerationTransition>
+where
+    F: FnOnce() -> Result<()>,
+{
+    validate_stable_path(database_path)?;
+
+    let gate_path = sidecar_path(database_path, GATE_SUFFIX);
+    let use_path = sidecar_path(database_path, USE_SUFFIX);
+    let gate = open_existing_transition_lock_file(database_path, &gate_path)?;
+    let mut use_file = open_existing_transition_lock_file(database_path, &use_path)?;
+    try_lock(&gate, FileLockMode::Exclusive)?;
+    if let Err(error) = try_lock(&use_file, FileLockMode::Exclusive) {
+        let _ = AdvisoryFileLock::unlock(&gate);
+        return Err(error);
+    }
+
+    let preparation = (|| {
+        let state = read_namespace_record_state(&mut use_file, database_path, true)?;
+        if state.current_identity != expected_old_identity {
+            return Err(cannot_open(database_path));
+        }
+
+        let next_sequence = state
+            .last_sequence
+            .checked_add(1)
+            .ok_or_else(|| cannot_open(database_path))?;
+        let (prepare_offset, append_offset, interrupted_tail) = if let Some(prepared_sequence) =
+            state.prepared_sequence
+        {
+            if prepared_sequence != next_sequence {
+                return Err(cannot_open(database_path));
+            }
+            (
+                state
+                    .prepare_offset
+                    .ok_or_else(|| cannot_open(database_path))?,
+                state.valid_bytes,
+                state.interrupted_tail,
+            )
+        } else {
+            let prepare = encode_prepare_record(next_sequence, expected_old_identity);
+            if !state.interrupted_tail.is_empty() && !prepare.starts_with(&state.interrupted_tail) {
+                return Err(cannot_open(database_path));
+            }
+
+            let resuming_partial_prepare = !state.interrupted_tail.is_empty();
+            if !resuming_partial_prepare {
+                validate_generation_path_identity(database_path, expected_old_identity)?;
+            }
+            before_prepare()?;
+            if !resuming_partial_prepare {
+                validate_generation_path_identity(database_path, expected_old_identity)?;
+            }
+            if resuming_partial_prepare {
+                use_file.set_len(state.valid_bytes)?;
+                use_file.sync_data()?;
+            }
+            use_file.seek(SeekFrom::Start(state.valid_bytes))?;
+            use_file.write_all(&prepare)?;
+            let append_offset = state
+                .valid_bytes
+                .checked_add(PREPARE_BYTES as u64)
+                .ok_or_else(|| cannot_open(database_path))?;
+            use_file.set_len(append_offset)?;
+            use_file.flush()?;
+            use_file.sync_data()?;
+            if !resuming_partial_prepare {
+                validate_generation_path_identity(database_path, expected_old_identity)?;
+            }
+            (state.valid_bytes, append_offset, Vec::new())
+        };
+
+        Ok((
+            state.last_sequence,
+            prepare_offset,
+            append_offset,
+            interrupted_tail,
+        ))
+    })();
+    let (last_sequence, prepare_offset, append_offset, interrupted_tail) = match preparation {
+        Ok(preparation) => preparation,
+        Err(error) => {
+            let _ = AdvisoryFileLock::unlock(&use_file);
+            let _ = AdvisoryFileLock::unlock(&gate);
+            return Err(error);
+        }
+    };
+
+    Ok(DatabaseNamespaceGenerationTransition {
+        stable_path: database_path.to_owned(),
+        gate: Some(gate),
+        use_file: Some(use_file),
+        current_identity: expected_old_identity,
+        last_sequence,
+        prepare_offset,
+        append_offset,
+        interrupted_tail,
+        finished: false,
+        poisoned: false,
+    })
+}
+
+impl DatabaseNamespaceGenerationTransition {
+    /// Identity currently recorded by this exclusively leased namespace.
+    #[must_use]
+    pub const fn current_identity(&self) -> FileIdentity {
+        self.current_identity
+    }
+
+    /// Durably publish the exact identity currently installed at the path.
+    ///
+    /// Both namespace locks remain exclusive after publication. A fresh
+    /// prepare marker for `replacement_identity` is written in the same
+    /// durability unit, so the caller may replace it again (for example, an
+    /// exact rollback) before calling [`Self::finish`].
+    ///
+    pub fn publish_replacement(
+        &mut self,
+        replacement_identity: FileIdentity,
+    ) -> Result<NamespaceGenerationTransitionOutcome> {
+        self.publish_replacement_inner(replacement_identity, || Ok(()))
+    }
+
+    fn publish_replacement_inner<F>(
+        &mut self,
+        replacement_identity: FileIdentity,
+        before_publish: F,
+    ) -> Result<NamespaceGenerationTransitionOutcome>
+    where
+        F: FnOnce() -> Result<()>,
+    {
+        if self.finished {
+            return Err(FrankenError::internal(
+                "namespace generation transition already finished",
+            ));
+        }
+        self.validate_prepare_marker()?;
+        self.validate_interrupted_tail()?;
+        validate_generation_path_identity(&self.stable_path, replacement_identity)?;
+
+        if replacement_identity == self.current_identity && self.interrupted_tail.is_empty() {
+            return Ok(NamespaceGenerationTransitionOutcome::AlreadyPublished);
+        }
+        if replacement_identity == self.current_identity {
+            return Err(cannot_open(&self.stable_path));
+        }
+
+        let sequence = self
+            .last_sequence
+            .checked_add(1)
+            .ok_or_else(|| cannot_open(&self.stable_path))?;
+        let old_identity = self.current_identity;
+        let transition = encode_transition_record(sequence, old_identity, replacement_identity);
+        let next_prepare = encode_prepare_record(
+            sequence
+                .checked_add(1)
+                .ok_or_else(|| cannot_open(&self.stable_path))?,
+            replacement_identity,
+        );
+        let mut publication = [0_u8; TRANSITION_BYTES + PREPARE_BYTES];
+        publication[..TRANSITION_BYTES].copy_from_slice(&transition);
+        publication[TRANSITION_BYTES..].copy_from_slice(&next_prepare);
+        if !publication.starts_with(&self.interrupted_tail) {
+            return Err(cannot_open(&self.stable_path));
+        }
+
+        before_publish()?;
+        validate_generation_path_identity(&self.stable_path, replacement_identity)?;
+
+        let append_offset = self.append_offset;
+        let use_file = self
+            .use_file
+            .as_mut()
+            .ok_or_else(|| FrankenError::internal("namespace transition lease missing"))?;
+        if !self.interrupted_tail.is_empty() {
+            use_file.set_len(append_offset)?;
+            use_file.sync_data()?;
+        }
+        use_file.seek(SeekFrom::Start(append_offset))?;
+        use_file.write_all(&publication)?;
+        let next_append_offset = append_offset
+            .checked_add(TRANSITION_BYTES as u64)
+            .and_then(|offset| offset.checked_add(PREPARE_BYTES as u64))
+            .ok_or_else(|| cannot_open(&self.stable_path))?;
+        use_file.set_len(next_append_offset)?;
+        use_file.flush()?;
+        use_file.sync_data()?;
+
+        self.current_identity = replacement_identity;
+        self.last_sequence = sequence;
+        self.prepare_offset = append_offset + TRANSITION_BYTES as u64;
+        self.append_offset = next_append_offset;
+        self.interrupted_tail.clear();
+        Ok(NamespaceGenerationTransitionOutcome::Published)
+    }
+
+    /// Make the current exact generation visible.
+    ///
+    /// This method is deliberately non-consuming so the caller can retry after
+    /// an error; while such a retryable guard remains alive, both namespace
+    /// locks still exclude admissions. A successful finish releases both locks
+    /// before returning and subsequent calls return the same identity.
+    /// Publication uses an appended, checksummed finish record rather than
+    /// deleting the prepare marker, so a torn write remains fail-closed. If an
+    /// error occurs after ledger mutation, retry on this same guard. Abandoning
+    /// that poisoned guard deliberately retains both locks for the process
+    /// lifetime rather than admitting against an unconfirmed finish record.
+    pub fn finish(&mut self) -> Result<FileIdentity> {
+        self.finish_inner(|| Ok(()))
+    }
+
+    fn finish_inner<F>(&mut self, before_sync: F) -> Result<FileIdentity>
+    where
+        F: FnOnce() -> Result<()>,
+    {
+        if self.finished {
+            return Ok(self.current_identity);
+        }
+        let stable_path = self.stable_path.clone();
+        let current_identity = self.current_identity;
+        let append_offset = self.append_offset;
+        let mut must_fail_stop_on_drop = false;
+        let result = (|| {
+            self.validate_prepare_marker()?;
+            validate_generation_path_identity(&stable_path, current_identity)?;
+
+            let sequence = self
+                .last_sequence
+                .checked_add(1)
+                .ok_or_else(|| cannot_open(&stable_path))?;
+            let finish = encode_finish_record(sequence, current_identity);
+            let finish_end = append_offset
+                .checked_add(FINISH_BYTES as u64)
+                .ok_or_else(|| cannot_open(&stable_path))?;
+            if !finish.starts_with(&self.interrupted_tail) {
+                return Err(cannot_open(&stable_path));
+            }
+            let use_file = self
+                .use_file
+                .as_mut()
+                .ok_or_else(|| FrankenError::internal("namespace transition lease missing"))?;
+            let file_len = use_file.metadata()?.len();
+            if file_len < append_offset || file_len > finish_end {
+                return Err(cannot_open(&stable_path));
+            }
+            let observed_len =
+                usize::try_from(file_len - append_offset).map_err(|_| cannot_open(&stable_path))?;
+            let mut observed = vec![0_u8; observed_len];
+            use_file.seek(SeekFrom::Start(append_offset))?;
+            use_file.read_exact(&mut observed)?;
+            if !finish.starts_with(&observed) {
+                return Err(cannot_open(&stable_path));
+            }
+            if !observed.is_empty() {
+                must_fail_stop_on_drop = true;
+                use_file.set_len(append_offset)?;
+                use_file.sync_data()?;
+            }
+            must_fail_stop_on_drop = true;
+            use_file.seek(SeekFrom::Start(append_offset))?;
+            use_file.write_all(&finish)?;
+            use_file.set_len(finish_end)?;
+            use_file.flush()?;
+            before_sync()?;
+            use_file.sync_data()?;
+            Ok((sequence, finish_end))
+        })();
+
+        match result {
+            Ok((sequence, finish_end)) => {
+                self.last_sequence = sequence;
+                self.append_offset = finish_end;
+                self.interrupted_tail.clear();
+                self.finished = true;
+                self.poisoned = false;
+                self.release_locks();
+                Ok(current_identity)
+            }
+            Err(error) => {
+                self.poisoned |= must_fail_stop_on_drop;
+                Err(error)
+            }
+        }
+    }
+
+    fn validate_prepare_marker(&mut self) -> Result<()> {
+        let expected = encode_prepare_record(
+            self.last_sequence
+                .checked_add(1)
+                .ok_or_else(|| cannot_open(&self.stable_path))?,
+            self.current_identity,
+        );
+        let mut observed = [0_u8; PREPARE_BYTES];
+        let use_file = self
+            .use_file
+            .as_mut()
+            .ok_or_else(|| FrankenError::internal("namespace transition lease missing"))?;
+        use_file.seek(SeekFrom::Start(self.prepare_offset))?;
+        use_file.read_exact(&mut observed)?;
+        if observed != expected {
+            return Err(cannot_open(&self.stable_path));
+        }
+        Ok(())
+    }
+
+    fn validate_interrupted_tail(&mut self) -> Result<()> {
+        let expected_len = self
+            .append_offset
+            .checked_add(
+                u64::try_from(self.interrupted_tail.len())
+                    .map_err(|_| cannot_open(&self.stable_path))?,
+            )
+            .ok_or_else(|| cannot_open(&self.stable_path))?;
+        let use_file = self
+            .use_file
+            .as_mut()
+            .ok_or_else(|| FrankenError::internal("namespace transition lease missing"))?;
+        if use_file.metadata()?.len() != expected_len {
+            return Err(cannot_open(&self.stable_path));
+        }
+        let mut observed = vec![0_u8; self.interrupted_tail.len()];
+        use_file.seek(SeekFrom::Start(self.append_offset))?;
+        use_file.read_exact(&mut observed)?;
+        if observed != self.interrupted_tail {
+            return Err(cannot_open(&self.stable_path));
+        }
+        Ok(())
+    }
+
+    fn release_locks(&mut self) {
+        // Close is the final authority for releasing these descriptor-owned
+        // locks.  Unlock explicitly first so a successful finish or ordinary
+        // abandonment has an immediate, platform-consistent handoff boundary.
+        if let Some(use_file) = self.use_file.take() {
+            let _ = AdvisoryFileLock::unlock(&use_file);
+            drop(use_file);
+        }
+        if let Some(gate) = self.gate.take() {
+            let _ = AdvisoryFileLock::unlock(&gate);
+            drop(gate);
+        }
+    }
+}
+
+impl Drop for DatabaseNamespaceGenerationTransition {
+    fn drop(&mut self) {
+        if self.poisoned && !self.finished {
+            // An I/O error after mutating the finish record makes durability
+            // unknowable. Releasing either descriptor could admit a peer that
+            // observes a complete-but-unconfirmed FINISH. Fail-stop instead:
+            // leak both descriptors so this process retains the exclusive
+            // locks. A successful retry clears `poisoned` and drops normally.
+            if let Some(gate) = self.gate.take() {
+                std::mem::forget(gate);
+            }
+            if let Some(use_file) = self.use_file.take() {
+                std::mem::forget(use_file);
+            }
+            return;
+        }
+
+        self.release_locks();
+    }
+}
+
+fn validate_stable_path(path: &Path) -> Result<()> {
+    if !path.is_absolute() || path.file_name().is_none() {
+        return Err(cannot_open(path));
+    }
+    Ok(())
+}
+
+fn sidecar_path(database_path: &Path, suffix: &str) -> PathBuf {
+    let mut path: OsString = database_path.as_os_str().to_owned();
+    path.push(suffix);
+    PathBuf::from(path)
+}
+
+fn open_secure_lock_file(database_path: &Path, path: &Path) -> Result<File> {
+    #[cfg(unix)]
+    if trusted_unix_group(database_path)?.is_some() {
+        use std::os::unix::fs::MetadataExt as _;
+        let database =
+            std::fs::symlink_metadata(database_path).map_err(|_| cannot_open(database_path))?;
+        if database.uid() != nix::unistd::geteuid().as_raw() {
+            // A peer may use the owner's provisioned locks, but may not
+            // leave a new, foreign-owned lock behind on a failed open.
+            return open_existing_transition_lock_file(database_path, path);
+        }
+    }
+    let (file, provenance) = match configured_open_options(true).open(path) {
+        Ok(file) => (file, SidecarProvenance::CreatedNow),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
+            configured_open_options(false)
+                .open(path)
+                .map_err(|_| cannot_open(path))?,
+            SidecarProvenance::Existing { database_path },
+        ),
+        Err(_) => return Err(cannot_open(path)),
+    };
+    #[cfg(unix)]
+    if matches!(provenance, SidecarProvenance::CreatedNow)
+        && trusted_unix_group(database_path)?.is_some()
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let metadata = file.metadata().map_err(|_| cannot_open(path))?;
+        let database =
+            std::fs::symlink_metadata(database_path).map_err(|_| cannot_open(database_path))?;
+        // Only the database owner provisions a new shared lock domain. Never
+        // chmod an existing sidecar or transfer its ownership.
+        if metadata.uid() != nix::unistd::geteuid().as_raw()
+            || metadata.uid() != database.uid()
+            || metadata.gid() != database.gid()
+            || !metadata.is_file()
+            || metadata.nlink() != 1
+        {
+            return Err(cannot_open(path));
+        }
+        file.set_permissions(std::fs::Permissions::from_mode(0o660))
+            .map_err(|_| cannot_open(path))?;
+        validate_trusted_unix_group_sidecar(database_path, path, &file.metadata()?)?;
+        return Ok(file);
+    }
+    validate_secure_lock_file(path, &file, provenance)?;
+    Ok(file)
+}
+
+fn open_existing_secure_lock_file(database_path: &Path, path: &Path) -> Result<File> {
+    let file = configured_existing_readonly_open_options()
+        .open(path)
+        .map_err(|_| cannot_open(path))?;
+    validate_secure_lock_file(path, &file, SidecarProvenance::Existing { database_path })?;
+    Ok(file)
+}
+
+fn open_existing_transition_lock_file(database_path: &Path, path: &Path) -> Result<File> {
+    let file = configured_open_options(false)
+        .open(path)
+        .map_err(|_| cannot_open(path))?;
+    validate_secure_lock_file(path, &file, SidecarProvenance::Existing { database_path })?;
+    Ok(file)
+}
+
+fn configured_open_options(create_new: bool) -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(create_new);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        options
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options
+}
+
+fn configured_existing_readonly_open_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        options
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options
+}
+
+/// Open an existing namespace lock for transient-candidate cleanup.
+///
+/// Windows cleanup must be able to unlink the two namespace records while the
+/// exclusive lock handles are retained. This special-purpose open therefore
+/// includes `FILE_SHARE_DELETE`; ordinary namespace opens deliberately keep
+/// their stronger no-delete sharing policy.
+fn cleanup_open_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        options
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options
+}
+
+fn open_cleanup_lock_file(database_path: &Path, path: &Path) -> Result<Option<File>> {
+    let file = match cleanup_open_options().open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(cannot_open(path)),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        // Trusted group sharing does not grant private-candidate cleanup
+        // authority over another user's files.
+        if file.metadata()?.uid() != nix::unistd::geteuid().as_raw() {
+            return Err(cannot_open(path));
+        }
+    }
+    validate_secure_lock_file(path, &file, SidecarProvenance::Existing { database_path })?;
+    Ok(Some(file))
+}
+
+#[derive(Debug)]
+enum CleanupEntryObservation {
+    Absent,
+    Present { identity: FileIdentity, guard: File },
+    Unsafe,
+    Unknown,
+}
+
+#[derive(Debug)]
+struct PlannedCleanupEntry {
+    path: PathBuf,
+    preflight_identity: Option<FileIdentity>,
+    _identity_guard: Option<File>,
+    state: PrivateDatabaseCleanupEntryState,
+}
+
+/// One namespace lock that cleanup has successfully acquired.
+/// Closing a `File` alone does not release a Unix `flock` while a descriptor
+/// inherited by a child or otherwise duplicated still refers to it.
+struct CleanupNamespaceLock {
+    file: File,
+}
+
+impl Drop for CleanupNamespaceLock {
+    fn drop(&mut self) {
+        let _ = AdvisoryFileLock::unlock(&self.file);
+    }
+}
+
+trait PrivateDatabaseCleanupHooks {
+    #[cfg(test)]
+    fn after_namespace_locks(&mut self, _gate: &File, _use_file: &File) {}
+
+    fn before_remove(&mut self, _ordinal: usize, _path: &Path) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn after_remove(&mut self, _ordinal: usize, _path: &Path) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn before_directory_sync(&mut self, _parent: &Path) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct ProductionCleanupHooks;
+
+impl PrivateDatabaseCleanupHooks for ProductionCleanupHooks {}
+
+fn cleanup_metadata_is_safe(metadata: &std::fs::Metadata) -> bool {
+    if !metadata.file_type().is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.nlink() != 1 {
+            return false;
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || metadata.number_of_links() != Some(1)
+        {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn observe_cleanup_entry(path: &Path) -> CleanupEntryObservation {
+    let path_metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return CleanupEntryObservation::Absent;
+        }
+        Err(_) => return CleanupEntryObservation::Unknown,
+    };
+    if !cleanup_metadata_is_safe(&path_metadata) {
+        return CleanupEntryObservation::Unsafe;
+    }
+
+    let Ok(guard) = open_cleanup_identity_probe(path) else {
+        return CleanupEntryObservation::Unknown;
+    };
+    let Ok(guard_metadata) = guard.metadata() else {
+        return CleanupEntryObservation::Unknown;
+    };
+    if !cleanup_metadata_is_safe(&guard_metadata) {
+        return CleanupEntryObservation::Unsafe;
+    }
+    let Ok(Some(identity)) = FileIdentity::from_file(&guard) else {
+        return CleanupEntryObservation::Unknown;
+    };
+    CleanupEntryObservation::Present { identity, guard }
+}
+
+fn preflight_cleanup_entry(database_path: &Path, path: PathBuf) -> Result<PlannedCleanupEntry> {
+    match observe_cleanup_entry(&path) {
+        CleanupEntryObservation::Absent => Ok(PlannedCleanupEntry {
+            path,
+            preflight_identity: None,
+            _identity_guard: None,
+            state: PrivateDatabaseCleanupEntryState::AbsentAtPreflight,
+        }),
+        CleanupEntryObservation::Present { identity, guard } => Ok(PlannedCleanupEntry {
+            path,
+            preflight_identity: Some(identity),
+            _identity_guard: Some(guard),
+            state: PrivateDatabaseCleanupEntryState::RetainedOwned,
+        }),
+        CleanupEntryObservation::Unsafe | CleanupEntryObservation::Unknown => {
+            Err(cannot_open(database_path))
+        }
+    }
+}
+
+fn cleanup_companion_paths(database_path: &Path) -> Vec<PathBuf> {
+    let paths = vec![
+        sidecar_path(database_path, "-journal"),
+        sidecar_path(database_path, "-wal"),
+        sidecar_path(database_path, "-wal-fec"),
+        sidecar_path(database_path, "-wal-fec").with_extension("wal-fec.tmp"),
+        sidecar_path(database_path, "-shm"),
+        sidecar_path(database_path, "-lock-shared"),
+        sidecar_path(database_path, "-lock-reserved"),
+        sidecar_path(database_path, "-lock-pending"),
+        sidecar_path(database_path, ".fsqlite-migration-state"),
+    ];
+    #[cfg(windows)]
+    let paths = {
+        let mut paths = paths;
+        paths.extend([
+            sidecar_path(database_path, "-wal-lock-shared"),
+            sidecar_path(database_path, "-wal-lock-reserved"),
+            sidecar_path(database_path, "-wal-lock-pending"),
+        ]);
+        paths
+    };
+    paths
+}
+
+fn cleanup_entry_receipts(
+    entries: &[PlannedCleanupEntry],
+) -> Vec<PrivateDatabaseCleanupEntryReceipt> {
+    entries
+        .iter()
+        .map(|entry| PrivateDatabaseCleanupEntryReceipt {
+            path: entry.path.clone(),
+            state: entry.state,
+        })
+        .collect()
+}
+
+fn refresh_cleanup_states(entries: &mut [PlannedCleanupEntry]) {
+    for entry in entries {
+        let observed = observe_cleanup_entry(&entry.path);
+        entry.state = match (entry.state, entry.preflight_identity, observed) {
+            (
+                PrivateDatabaseCleanupEntryState::RemovedOwned,
+                _,
+                CleanupEntryObservation::Absent,
+            ) => PrivateDatabaseCleanupEntryState::RemovedOwned,
+            (
+                PrivateDatabaseCleanupEntryState::RemovedOwned,
+                _,
+                CleanupEntryObservation::Present { .. } | CleanupEntryObservation::Unsafe,
+            ) => PrivateDatabaseCleanupEntryState::ReplacementDetected,
+            (
+                PrivateDatabaseCleanupEntryState::RemovedOwned,
+                _,
+                CleanupEntryObservation::Unknown,
+            ) => PrivateDatabaseCleanupEntryState::OperationUnknown,
+            (_, None, CleanupEntryObservation::Absent) => {
+                PrivateDatabaseCleanupEntryState::AbsentAtPreflight
+            }
+            (
+                _,
+                None,
+                CleanupEntryObservation::Present { .. } | CleanupEntryObservation::Unsafe,
+            ) => PrivateDatabaseCleanupEntryState::NewlyPresentUnowned,
+            (_, Some(expected), CleanupEntryObservation::Present { identity, .. })
+                if identity == expected =>
+            {
+                PrivateDatabaseCleanupEntryState::RetainedOwned
+            }
+            (
+                _,
+                Some(_),
+                CleanupEntryObservation::Present { .. } | CleanupEntryObservation::Unsafe,
+            ) => PrivateDatabaseCleanupEntryState::ReplacementDetected,
+            (_, Some(_), CleanupEntryObservation::Absent)
+            | (_, _, CleanupEntryObservation::Unknown) => {
+                PrivateDatabaseCleanupEntryState::OperationUnknown
+            }
+        };
+    }
+}
+
+fn partial_cleanup_outcome(
+    entries: &mut [PlannedCleanupEntry],
+    cause: PrivateDatabaseCleanupFailure,
+) -> PrivateDatabaseCleanupOutcome {
+    refresh_cleanup_states(entries);
+    PrivateDatabaseCleanupOutcome::Partial {
+        cause,
+        entries: cleanup_entry_receipts(entries),
+        durability: PrivateDatabaseCleanupDurability::Unknown,
+    }
+}
+
+fn verify_cleanup_completion_entries(
+    entries: &mut [PlannedCleanupEntry],
+) -> Option<(PathBuf, PrivateDatabaseCleanupEntryState)> {
+    let mut first_failure = None;
+    for entry in entries {
+        let observed = observe_cleanup_entry(&entry.path);
+        entry.state = match (entry.state, observed) {
+            (
+                PrivateDatabaseCleanupEntryState::AbsentAtPreflight,
+                CleanupEntryObservation::Absent,
+            ) => PrivateDatabaseCleanupEntryState::AbsentAtPreflight,
+            (PrivateDatabaseCleanupEntryState::RemovedOwned, CleanupEntryObservation::Absent) => {
+                PrivateDatabaseCleanupEntryState::RemovedOwned
+            }
+            (
+                PrivateDatabaseCleanupEntryState::AbsentAtPreflight,
+                CleanupEntryObservation::Present { .. } | CleanupEntryObservation::Unsafe,
+            ) => PrivateDatabaseCleanupEntryState::NewlyPresentUnowned,
+            (
+                PrivateDatabaseCleanupEntryState::RemovedOwned,
+                CleanupEntryObservation::Present { .. } | CleanupEntryObservation::Unsafe,
+            ) => PrivateDatabaseCleanupEntryState::ReplacementDetected,
+            (_, CleanupEntryObservation::Unknown) => {
+                PrivateDatabaseCleanupEntryState::OperationUnknown
+            }
+            _ => PrivateDatabaseCleanupEntryState::OperationUnknown,
+        };
+        if !matches!(
+            entry.state,
+            PrivateDatabaseCleanupEntryState::AbsentAtPreflight
+                | PrivateDatabaseCleanupEntryState::RemovedOwned
+        ) && first_failure.is_none()
+        {
+            first_failure = Some((entry.path.clone(), entry.state));
+        }
+    }
+    first_failure
+}
+
+fn cleanup_io_failure(
+    stage: PrivateDatabaseCleanupFailureStage,
+    path: Option<&Path>,
+    error: &io::Error,
+) -> PrivateDatabaseCleanupFailure {
+    PrivateDatabaseCleanupFailure {
+        stage,
+        path: path.map(Path::to_path_buf),
+        error_kind: Some(error.kind()),
+        detail: error.to_string(),
+    }
+}
+
+fn cleanup_ownership_failure(
+    path: &Path,
+    state: PrivateDatabaseCleanupEntryState,
+) -> PrivateDatabaseCleanupFailure {
+    PrivateDatabaseCleanupFailure {
+        stage: PrivateDatabaseCleanupFailureStage::OwnershipRecheck,
+        path: Some(path.to_path_buf()),
+        error_kind: None,
+        detail: format!("cleanup ownership changed before removal: {state:?}"),
+    }
+}
+
+/// Remove one abandoned caller-reserved transient database and its exact
+/// namespace/recovery companions while holding the namespace exclusively.
+///
+/// This is **not** general database deletion. It exists only for private
+/// `VACUUM` discard/rebuild candidates and failed caller-reserved outputs after
+/// every pager/validation connection has closed. The parent directory is a
+/// trusted cooperative namespace. Contention, a missing namespace record, a
+/// generation-record mismatch, pathname identity drift, symlinks, or any
+/// non-regular companion all fail closed without removing the main file.
+///
+/// The caller must retain the descriptor from which `expected_identity` was
+/// derived until this function returns. [`PrivateDatabaseCleanupOutcome::NotOwned`]
+/// means ownership could not be proven before destructive entry and this call
+/// preserved every planned entry. Once destructive entry begins, every stop is
+/// returned as a typed [`PrivateDatabaseCleanupOutcome::Partial`] receipt.
+pub fn cleanup_abandoned_private_database(
+    database_path: &Path,
+    expected_identity: FileIdentity,
+) -> Result<PrivateDatabaseCleanupOutcome> {
+    cleanup_abandoned_private_database_with_hooks(
+        database_path,
+        expected_identity,
+        &mut ProductionCleanupHooks,
+    )
+}
+
+fn cleanup_abandoned_private_database_with_hooks(
+    database_path: &Path,
+    expected_identity: FileIdentity,
+    hooks: &mut impl PrivateDatabaseCleanupHooks,
+) -> Result<PrivateDatabaseCleanupOutcome> {
+    validate_stable_path(database_path)?;
+    let gate_path = sidecar_path(database_path, GATE_SUFFIX);
+    let use_path = sidecar_path(database_path, USE_SUFFIX);
+    let Some(gate) = open_cleanup_lock_file(database_path, &gate_path)? else {
+        return Ok(PrivateDatabaseCleanupOutcome::NotOwned);
+    };
+    let Some(use_file) = open_cleanup_lock_file(database_path, &use_path)? else {
+        return Ok(PrivateDatabaseCleanupOutcome::NotOwned);
+    };
+
+    match AdvisoryFileLock::try_lock(&gate, FileLockMode::Exclusive) {
+        Ok(()) => {}
+        Err(FileLockError::AlreadyLocked) => {
+            return Ok(PrivateDatabaseCleanupOutcome::NotOwned);
+        }
+        Err(FileLockError::Io(error)) => return Err(error.into()),
+    }
+    let gate = CleanupNamespaceLock { file: gate };
+    match AdvisoryFileLock::try_lock(&use_file, FileLockMode::Exclusive) {
+        Ok(()) => {}
+        Err(FileLockError::AlreadyLocked) => {
+            return Ok(PrivateDatabaseCleanupOutcome::NotOwned);
+        }
+        Err(FileLockError::Io(error)) => return Err(error.into()),
+    }
+    let mut use_file = CleanupNamespaceLock { file: use_file };
+
+    #[cfg(test)]
+    hooks.after_namespace_locks(&gate.file, &use_file.file);
+
+    if read_identity_record(&mut use_file.file, database_path)? != expected_identity {
+        return Ok(PrivateDatabaseCleanupOutcome::NotOwned);
+    }
+    let main_probe = match open_cleanup_identity_probe(database_path) {
+        Ok(file) => file,
+        Err(FrankenError::CannotOpen { .. }) => {
+            return Ok(PrivateDatabaseCleanupOutcome::NotOwned);
+        }
+        Err(error) => return Err(error),
+    };
+    if FileIdentity::from_file(&main_probe)? != Some(expected_identity) {
+        return Ok(PrivateDatabaseCleanupOutcome::NotOwned);
+    }
+
+    // Preflight the complete fixed companion set before removing anything.
+    // Dynamic WAL segment cleanup is intentionally absent: transient VACUUM
+    // candidates never enter WAL mode, and broad prefix deletion would violate
+    // the exact-entry ownership boundary of this function.
+    //
+    // `.fsqlite-migration-state` (bd-zywqc.5 / `fsqlite_core::migration::
+    // MIGRATION_MARKER_SUFFIX`) is included here too. `fsqlite-core` depends
+    // on `fsqlite-vfs`, not the reverse, so the constant cannot be imported
+    // here; it is a literal, same as every other companion suffix in this
+    // list. Without it: this function is the exclusive-ownership teardown
+    // for a caller-reserved transient candidate, called once every pager
+    // binding to `database_path` has closed -- but current fsqlite stamps
+    // that marker at birth on every database it creates (marker-at-birth,
+    // unconditional), so any database this function tears down that was
+    // ever actually opened carries one. Leaving it on disk after this
+    // function reports success means a caller who re-lists the directory
+    // afterward sees a leftover artifact from ITS OWN prior generation and
+    // cannot distinguish it from a genuine new writer having repopulated
+    // the namespace mid-cleanup -- observed live: HFDT's SEC XBRL scratch
+    // cleanup (hfdt-storage) called this, got `true`, re-listed, found
+    // `.fsqlite-migration-state` still present, and correctly (given what
+    // it could see) refused with `store.migration_preflight_scratch_
+    // cleanup_identity_drift` rather than risk deleting a live writer's
+    // file. The false alarm was here: this function's own "complete fixed
+    // companion set" was incomplete.
+    let mut entries = cleanup_companion_paths(database_path)
+        .into_iter()
+        .map(|path| preflight_cleanup_entry(database_path, path))
+        .collect::<Result<Vec<_>>>()?;
+    entries.push(preflight_cleanup_entry(
+        database_path,
+        database_path.to_path_buf(),
+    )?);
+    entries.push(preflight_cleanup_entry(database_path, use_path)?);
+    entries.push(preflight_cleanup_entry(database_path, gate_path)?);
+
+    // Revalidate immediately before the first removal while both namespace
+    // locks and the expected main descriptor are still live.
+    let _final_main_guard = match observe_cleanup_entry(database_path) {
+        CleanupEntryObservation::Present { identity, guard } if identity == expected_identity => {
+            guard
+        }
+        CleanupEntryObservation::Absent
+        | CleanupEntryObservation::Present { .. }
+        | CleanupEntryObservation::Unsafe
+        | CleanupEntryObservation::Unknown => {
+            return Ok(PrivateDatabaseCleanupOutcome::NotOwned);
+        }
+    };
+
+    for ordinal in 0..entries.len() {
+        let path = entries[ordinal].path.clone();
+        if let Err(error) = hooks.before_remove(ordinal, &path) {
+            let cause = cleanup_io_failure(
+                PrivateDatabaseCleanupFailureStage::BeforeRemoval,
+                Some(&path),
+                &error,
+            );
+            return Ok(partial_cleanup_outcome(&mut entries, cause));
+        }
+
+        let current = observe_cleanup_entry(&path);
+        match (entries[ordinal].preflight_identity, current) {
+            (None, CleanupEntryObservation::Absent) => continue,
+            (None, CleanupEntryObservation::Present { .. } | CleanupEntryObservation::Unsafe) => {
+                entries[ordinal].state = PrivateDatabaseCleanupEntryState::NewlyPresentUnowned;
+            }
+            (Some(expected), CleanupEntryObservation::Present { identity, .. })
+                if identity == expected => {}
+            (
+                Some(_),
+                CleanupEntryObservation::Present { .. } | CleanupEntryObservation::Unsafe,
+            ) => {
+                entries[ordinal].state = PrivateDatabaseCleanupEntryState::ReplacementDetected;
+            }
+            (Some(_), CleanupEntryObservation::Absent) | (_, CleanupEntryObservation::Unknown) => {
+                entries[ordinal].state = PrivateDatabaseCleanupEntryState::OperationUnknown;
+            }
+        }
+        if entries[ordinal].state != PrivateDatabaseCleanupEntryState::RetainedOwned {
+            let state = entries[ordinal].state;
+            let cause = cleanup_ownership_failure(&path, state);
+            return Ok(partial_cleanup_outcome(&mut entries, cause));
+        }
+
+        if let Err(error) = std::fs::remove_file(&path) {
+            entries[ordinal].state = PrivateDatabaseCleanupEntryState::OperationUnknown;
+            let cause = cleanup_io_failure(
+                PrivateDatabaseCleanupFailureStage::Remove,
+                Some(&path),
+                &error,
+            );
+            return Ok(partial_cleanup_outcome(&mut entries, cause));
+        }
+        entries[ordinal].state = PrivateDatabaseCleanupEntryState::RemovedOwned;
+        if let Err(error) = hooks.after_remove(ordinal, &path) {
+            let cause = cleanup_io_failure(
+                PrivateDatabaseCleanupFailureStage::AfterRemoval,
+                Some(&path),
+                &error,
+            );
+            return Ok(partial_cleanup_outcome(&mut entries, cause));
+        }
+    }
+
+    #[cfg(unix)]
+    let parent = database_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    #[cfg(unix)]
+    if let Err(error) = hooks.before_directory_sync(parent) {
+        let cause = cleanup_io_failure(
+            PrivateDatabaseCleanupFailureStage::DirectorySync,
+            Some(parent),
+            &error,
+        );
+        return Ok(partial_cleanup_outcome(&mut entries, cause));
+    }
+
+    // This is the final complete-set observation. On Unix it deliberately
+    // follows the last pre-sync hook so a pathname repopulated after its own
+    // removal ordinal cannot be hidden behind a successful durability claim.
+    if let Some((path, state)) = verify_cleanup_completion_entries(&mut entries) {
+        let cause = cleanup_ownership_failure(&path, state);
+        return Ok(partial_cleanup_outcome(&mut entries, cause));
+    }
+
+    #[cfg(unix)]
+    {
+        if let Err(error) = File::open(parent).and_then(|directory| directory.sync_all()) {
+            let cause = cleanup_io_failure(
+                PrivateDatabaseCleanupFailureStage::DirectorySync,
+                Some(parent),
+                &error,
+            );
+            return Ok(partial_cleanup_outcome(&mut entries, cause));
+        }
+    }
+    // Win32 has no portable directory fsync. The caller still invokes the
+    // platform VFS namespace-sync hook, whose Windows contract is an explicit
+    // no-op matching SQLite's own Windows VFS durability boundary.
+
+    drop(use_file);
+    drop(gate);
+    Ok(PrivateDatabaseCleanupOutcome::Complete {
+        entries: cleanup_entry_receipts(&entries),
+        durability: if cfg!(unix) {
+            PrivateDatabaseCleanupDurability::DirectorySynced
+        } else {
+            PrivateDatabaseCleanupDurability::PlatformNoDirectorySync
+        },
+    })
+}
+
+#[cfg(not(unix))]
+fn open_identity_probe(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        options
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+
+    let file = options.open(path).map_err(|_| cannot_open(path))?;
+    let metadata = file.metadata().map_err(|_| cannot_open(path))?;
+    if !metadata.is_file() {
+        return Err(cannot_open(path));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(cannot_open(path));
+        }
+    }
+    Ok(file)
+}
+
+fn open_cleanup_identity_probe(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        options
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+
+    let file = options.open(path).map_err(|_| cannot_open(path))?;
+    let metadata = file.metadata().map_err(|_| cannot_open(path))?;
+    if !metadata.is_file() {
+        return Err(cannot_open(path));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(cannot_open(path));
+        }
+    }
+    Ok(file)
+}
+
+/// How the caller came to hold a namespace sidecar handle.
+///
+/// The Unix permission policy for sidecars is "no group/other access"
+/// (`mode & 0o077 == 0`), because any principal that can open a sidecar can
+/// take advisory locks on it and, with write access, rewrite the generation
+/// record. Whether an observed group/other bit is a real exposure depends on
+/// where the file came from, so the validator needs the provenance.
+#[derive(Clone, Copy, Debug)]
+// Only the Unix validator reads the provenance; other targets carry it through
+// unchanged so the call sites stay identical.
+#[cfg_attr(not(unix), allow(dead_code))]
+enum SidecarProvenance<'a> {
+    /// `O_CREAT | O_EXCL` with mode `0600` succeeded on this call, so the
+    /// handle is exactly the file this process just created.
+    CreatedNow,
+    /// The sidecar already existed; `database_path` is the main database file
+    /// it guards.
+    Existing { database_path: &'a Path },
+}
+
+fn validate_secure_lock_file(
+    path: &Path,
+    file: &File,
+    provenance: SidecarProvenance<'_>,
+) -> Result<()> {
+    let metadata = file.metadata().map_err(|_| cannot_open(path))?;
+    if !metadata.is_file() {
+        return Err(cannot_open(path));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if let SidecarProvenance::Existing { database_path } = provenance
+            && trusted_unix_group(database_path)?.is_some()
+        {
+            return validate_trusted_unix_group_sidecar(database_path, path, &metadata).map(|_| ());
+        }
+        // SAFETY: `geteuid` has no preconditions and does not dereference data.
+        let effective_uid = unsafe { libc::geteuid() };
+        if metadata.uid() != effective_uid || metadata.nlink() != 1 {
+            return Err(cannot_open(path));
+        }
+        if !sidecar_exposure_is_acceptable(metadata.mode(), metadata.gid(), provenance) {
+            return Err(cannot_open(path));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = provenance;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || metadata.number_of_links() != Some(1)
+        {
+            return Err(cannot_open(path));
+        }
+    }
+    Ok(())
+}
+
+/// Explicit process-level Unix sharing opt-in. An absent variable preserves
+/// the single-UID policy. Invalid values and unsafe layouts fail closed.
+/// The environment must be fixed before opening any database and must not be
+/// changed while connections or namespace leases are live.
+#[cfg(unix)]
+fn trusted_unix_group(database_path: &Path) -> Result<Option<u32>> {
+    use std::os::unix::fs::MetadataExt as _;
+    let Some(value) = std::env::var_os("FSQLITE_TRUSTED_UNIX_GID") else {
+        if std::env::var_os("FSQLITE_TRUSTED_UNIX_DATABASE").is_some() {
+            return Err(cannot_open(database_path));
+        }
+        return Ok(None);
+    };
+    let selected = std::env::var_os("FSQLITE_TRUSTED_UNIX_DATABASE")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| cannot_open(database_path))?;
+    // Sharing is scoped to one explicit database. In particular, private
+    // snapshot/recovery candidates keep their single-UID policy.
+    if selected != database_path {
+        return Ok(None);
+    }
+    let value = value
+        .to_str()
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| cannot_open(database_path))?;
+    let gid = value
+        .parse::<u32>()
+        .map_err(|_| cannot_open(database_path))?;
+    let member = nix::unistd::getegid().as_raw() == gid
+        || supplementary_group_ids()
+            .map_err(|_| cannot_open(database_path))?
+            .contains(&gid);
+    if !member {
+        return Err(cannot_open(database_path));
+    }
+    let database =
+        std::fs::symlink_metadata(database_path).map_err(|_| cannot_open(database_path))?;
+    let parent_path = database_path
+        .parent()
+        .ok_or_else(|| cannot_open(database_path))?;
+    let parent = std::fs::symlink_metadata(parent_path).map_err(|_| cannot_open(parent_path))?;
+    if !database.is_file()
+        || database.nlink() != 1
+        || database.gid() != gid
+        || database.mode() & 0o7777 != 0o660
+        || !parent.is_dir()
+        || parent.uid() != database.uid()
+        || parent.gid() != gid
+        || parent.mode() & 0o7777 != 0o2770
+    {
+        return Err(cannot_open(database_path));
+    }
+    Ok(Some(gid))
+}
+
+/// The process's supplementary group IDs.
+///
+/// nix omits `getgroups` on Apple targets, so they read the process
+/// credential's list through `getgroups(2)` directly. A group missing from
+/// that list only makes trusted sharing fail closed.
+#[cfg(all(unix, not(target_vendor = "apple")))]
+fn supplementary_group_ids() -> std::io::Result<Vec<u32>> {
+    nix::unistd::getgroups()
+        .map(|groups| groups.iter().map(|group| group.as_raw()).collect())
+        .map_err(std::io::Error::from)
+}
+
+#[cfg(all(unix, target_vendor = "apple"))]
+fn supplementary_group_ids() -> std::io::Result<Vec<u32>> {
+    loop {
+        // SAFETY: with a zero count `getgroups` only returns the group count
+        // and writes nothing through the null pointer.
+        let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+        let Ok(capacity) = usize::try_from(count) else {
+            return Err(std::io::Error::last_os_error());
+        };
+        let mut groups: Vec<libc::gid_t> = vec![0; capacity];
+        // SAFETY: `groups` holds `count` writable `gid_t` slots, and
+        // `getgroups` writes at most `count` entries.
+        let written = unsafe { libc::getgroups(count, groups.as_mut_ptr()) };
+        match usize::try_from(written) {
+            Ok(len) => {
+                groups.truncate(len);
+                return Ok(groups);
+            }
+            // The list grew between the two calls: size it again.
+            Err(_) if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) => {}
+            Err(_) => return Err(std::io::Error::last_os_error()),
+        }
+    }
+}
+
+/// Validate a retained sidecar descriptor under the explicitly selected Unix group.
+///
+/// Returns false when `FSQLITE_TRUSTED_UNIX_GID` sharing is not enabled.
+/// Callers must supply metadata from a no-follow descriptor and retain that
+/// descriptor through their operation. This does not authorize mode repair,
+/// copying before namespace admission, or private database cleanup.
+///
+/// All group members are trusted to mutate the tracker and its namespace;
+/// the existing cooperative trusted-parent contract still applies. The
+/// database owner must provision both sidecars. ACLs must not grant access to
+/// principals outside the selected trusted group.
+#[cfg(unix)]
+pub fn validate_trusted_unix_group_sidecar(
+    database_path: &Path,
+    sidecar_path: &Path,
+    metadata: &std::fs::Metadata,
+) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt as _;
+    let Some(gid) = trusted_unix_group(database_path)? else {
+        return Ok(false);
+    };
+    let database =
+        std::fs::symlink_metadata(database_path).map_err(|_| cannot_open(database_path))?;
+    let named = std::fs::symlink_metadata(sidecar_path).map_err(|_| cannot_open(sidecar_path))?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != database.uid()
+        || metadata.gid() != gid
+        || metadata.mode() & 0o7777 != 0o660
+        || !named.is_file()
+        || named.nlink() != 1
+        || (
+            named.dev(),
+            named.ino(),
+            named.uid(),
+            named.gid(),
+            named.mode(),
+        ) != (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.uid(),
+            metadata.gid(),
+            metadata.mode(),
+        )
+    {
+        return Err(cannot_open(sidecar_path));
+    }
+    // Recheck the trusted database/parent policy after the pathname check.
+    trusted_unix_group(database_path)?;
+    let rechecked =
+        std::fs::symlink_metadata(database_path).map_err(|_| cannot_open(database_path))?;
+    if (
+        rechecked.dev(),
+        rechecked.ino(),
+        rechecked.uid(),
+        rechecked.gid(),
+        rechecked.mode(),
+        rechecked.nlink(),
+    ) != (
+        database.dev(),
+        database.ino(),
+        database.uid(),
+        database.gid(),
+        database.mode(),
+        database.nlink(),
+    ) {
+        return Err(cannot_open(database_path));
+    }
+    Ok(true)
+}
+
+/// Decide whether a sidecar's group/other permission bits are acceptable.
+///
+/// Sidecars are created `0600`, and on a POSIX filesystem that is what they
+/// stay unless someone loosens them, so a group/other bit on a sidecar is
+/// normally rejected (fail closed: the lock domain must not be shared with
+/// other principals). Two cases are not exposures and are accepted:
+///
+/// 1. [`SidecarProvenance::CreatedNow`]: this process created the file with
+///    `O_CREAT | O_EXCL` and mode `0600` a moment ago and the handle is that
+///    file (the kernel guarantees `O_EXCL` returns the file it created; umask
+///    can only clear bits). Group/other bits reading back anyway means the
+///    filesystem does not persist POSIX permission bits at all — WSL2 `drvfs`
+///    mounts of Windows drives without the `metadata` option report every
+///    file as `0777`, FAT/exFAT volumes report a fixed mount mask, and so on
+///    (beads_rust GH#491). The bits are a property of the mount, not of the
+///    file, and refusing them wedges every write on such a mount while
+///    protecting nothing: the database file itself carries the same bits.
+///
+/// 2. [`SidecarProvenance::Existing`]: the sidecar grants no group/other bit
+///    that the main database file does not already grant. A principal who can
+///    open the sidecar can take advisory locks on it — a read-only descriptor
+///    suffices for `flock(LOCK_EX)`, which blocks readers too — while a
+///    read-only descriptor on the database yields only `fcntl` `F_RDLCK`. The
+///    delta a database-bounded sidecar hands out is therefore availability
+///    only (stalling admission), never data access, and it is handed only to
+///    principals the database already admits; a sidecar at most as exposed
+///    as its database is accepted on that basis. This covers permission-less mounts on
+///    re-open (database and sidecars all report the mount mask) without
+///    accepting a sidecar that was loosened beyond its database on a real
+///    POSIX filesystem. A missing or non-regular database file offers no
+///    baseline and the sidecar fails closed as before.
+///
+///    "Grants no bit the database does not" is evaluated per principal class,
+///    not on the raw bit pattern, because POSIX resolves exactly one class per
+///    process (owner, else group, else other) and the group class names a
+///    specific set of accounts — the file's group. When the two files share a
+///    group, the sidecar's group bits are bounded by the database's group bits
+///    and its other bits by the database's other bits. When the groups differ,
+///    a sidecar-group member may fall into either class of the database, so a
+///    sidecar bit is covered only by the database bit in *both* classes;
+///    permission-less mounts report one owner and group for every file, so
+///    they always take the same-group branch.
+#[cfg(unix)]
+fn sidecar_exposure_is_acceptable(
+    sidecar_mode: u32,
+    sidecar_gid: u32,
+    provenance: SidecarProvenance<'_>,
+) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let exposure = sidecar_mode & 0o077;
+    if exposure == 0 {
+        return true;
+    }
+    match provenance {
+        SidecarProvenance::CreatedNow => true,
+        SidecarProvenance::Existing { database_path } => {
+            let Ok(database) = std::fs::symlink_metadata(database_path) else {
+                return false;
+            };
+            if !database.file_type().is_file() {
+                return false;
+            }
+            let database_group = database.mode() & 0o070;
+            let database_other = database.mode() & 0o007;
+            let (group_cover, other_cover) = if database.gid() == sidecar_gid {
+                (database_group, database_other)
+            } else {
+                let both = (database_group >> 3) & database_other;
+                (both << 3, both)
+            };
+            exposure & !(group_cover | other_cover) == 0
+        }
+    }
+}
+
+fn validate_generation_path_identity(
+    database_path: &Path,
+    expected_identity: FileIdentity,
+) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let metadata =
+            std::fs::symlink_metadata(database_path).map_err(|_| cannot_open(database_path))?;
+        if !metadata.file_type().is_file() || metadata.nlink() != 1 {
+            return Err(cannot_open(database_path));
+        }
+        let current = FileIdentity::from_unix_parts(metadata.dev(), metadata.ino());
+        if current != expected_identity {
+            return Err(cannot_open(database_path));
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        let file = open_identity_probe(database_path)?;
+        if file.metadata()?.number_of_links() != Some(1)
+            || FileIdentity::from_file(&file)? != Some(expected_identity)
+        {
+            return Err(cannot_open(database_path));
+        }
+        Ok(())
+    }
+}
+
+fn write_identity_record(
+    file: &mut File,
+    database_path: &Path,
+    identity: FileIdentity,
+) -> Result<()> {
+    // Preserve the exact transition ledger while this generation remains
+    // current. Once a namespace record exists, ordinary admission may only
+    // reopen that identity; every replacement must use the transition guard.
+    // This also makes a guard dropped during caller-owned mutation fail closed
+    // instead of silently rebinding the namespace to the pathname it finds.
+    let existing_len = file.metadata()?.len();
+    if existing_len != 0 {
+        let state = read_namespace_record_state(file, database_path, false)?;
+        if state.current_identity != identity {
+            return Err(cannot_open(database_path));
+        }
+        file.sync_data()?;
+        return Ok(());
+    }
+
+    write_fresh_identity_record(file, identity)
+}
+
+fn replace_quiescent_identity_record(
+    file: &mut File,
+    database_path: &Path,
+    identity: FileIdentity,
+) -> Result<()> {
+    // `NewShared` holds both `gate` and `use` exclusively. Revalidate the
+    // caller's already-open main generation against the stable pathname before
+    // discarding copied/corrupt machine-local namespace state. A valid,
+    // terminal transition ledger is safe to collapse in a copied namespace;
+    // incomplete or malformed transition evidence must remain fail-closed.
+    let existing_len = file.metadata()?.len();
+    validate_generation_path_identity(database_path, identity)?;
+    if existing_len >= RECORD_BYTES as u64 {
+        match read_namespace_record_state(file, database_path, false) {
+            Ok(state) if state.current_identity == identity => {
+                file.sync_data()?;
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(FrankenError::CannotOpen { .. }) if existing_len <= RECORD_BYTES as u64 => {}
+            Err(FrankenError::CannotOpen { .. }) => return Err(cannot_open(database_path)),
+            Err(error) => return Err(error),
+        }
+    }
+    write_fresh_identity_record(file, identity)
+}
+
+/// GH#416: republish a namespace record whose identity was captured from a
+/// zero-length main file with the identity the filesystem assigned once data
+/// was allocated. Refuses anything but a pristine record (header only, no
+/// transition ledger, no prepared marker) that still names `bound`, so a
+/// generation transition can never be silently collapsed by this path.
+#[cfg(unix)]
+fn rewrite_materialized_identity_record(
+    file: &mut File,
+    database_path: &Path,
+    bound: FileIdentity,
+    materialized: FileIdentity,
+) -> Result<()> {
+    let state = read_namespace_record_state(file, database_path, false)?;
+    if state.current_identity != bound
+        || state.last_sequence != 0
+        || state.valid_bytes != RECORD_BYTES as u64
+    {
+        return Err(cannot_open(database_path));
+    }
+    write_fresh_identity_record(file, materialized)
+}
+
+fn write_fresh_identity_record(file: &mut File, identity: FileIdentity) -> Result<()> {
+    let mut record = [0_u8; RECORD_BYTES];
+    record[..8].copy_from_slice(&RECORD_MAGIC);
+    record[8] = RECORD_VERSION;
+    record[9..9 + IDENTITY_BYTES].copy_from_slice(&identity.to_namespace_bytes());
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&record)?;
+    file.flush()?;
+    file.sync_data()?;
+    Ok(())
+}
+
+fn read_identity_record(file: &mut File, database_path: &Path) -> Result<FileIdentity> {
+    let state = read_namespace_record_state(file, database_path, false)?;
+    Ok(state.current_identity)
+}
+
+#[derive(Debug)]
+struct NamespaceRecordState {
+    current_identity: FileIdentity,
+    last_sequence: u64,
+    prepared_sequence: Option<u64>,
+    prepare_offset: Option<u64>,
+    valid_bytes: u64,
+    interrupted_tail: Vec<u8>,
+}
+
+fn read_namespace_record_state(
+    file: &mut File,
+    database_path: &Path,
+    allow_interrupted_tail: bool,
+) -> Result<NamespaceRecordState> {
+    let file_len = file.metadata()?.len();
+    if file_len < RECORD_BYTES as u64 {
+        return Err(cannot_open(database_path));
+    }
+
+    let mut record = [0_u8; RECORD_BYTES];
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut record)?;
+    if record[..8] != RECORD_MAGIC
+        || record[8] != RECORD_VERSION
+        || record[9 + IDENTITY_BYTES..].iter().any(|byte| *byte != 0)
+    {
+        return Err(cannot_open(database_path));
+    }
+    let mut encoded = [0_u8; IDENTITY_BYTES];
+    encoded.copy_from_slice(&record[9..9 + IDENTITY_BYTES]);
+    let mut current_identity =
+        FileIdentity::from_namespace_bytes(encoded).ok_or_else(|| cannot_open(database_path))?;
+
+    let remaining = file_len - RECORD_BYTES as u64;
+    let complete_records = remaining / TRANSITION_BYTES as u64;
+    let tail_len = usize::try_from(remaining % TRANSITION_BYTES as u64)
+        .map_err(|_| cannot_open(database_path))?;
+
+    let mut last_sequence = 0_u64;
+    let mut prepared_sequence = None;
+    let mut prepare_offset = None;
+    for record_index in 0..complete_records {
+        let mut ledger_record = [0_u8; TRANSITION_BYTES];
+        file.read_exact(&mut ledger_record)?;
+        let record_offset = (RECORD_BYTES as u64)
+            .checked_add(
+                record_index
+                    .checked_mul(TRANSITION_BYTES as u64)
+                    .ok_or_else(|| cannot_open(database_path))?,
+            )
+            .ok_or_else(|| cannot_open(database_path))?;
+
+        if let Some((sequence, old_identity, new_identity)) =
+            decode_transition_record(&ledger_record)
+        {
+            let expected_sequence = prepared_sequence.ok_or_else(|| cannot_open(database_path))?;
+            if sequence != expected_sequence || old_identity != current_identity {
+                return Err(cannot_open(database_path));
+            }
+            last_sequence = sequence;
+            current_identity = new_identity;
+            prepared_sequence = None;
+            prepare_offset = None;
+            continue;
+        }
+
+        if let Some((sequence, identity)) = decode_prepare_record(&ledger_record) {
+            if prepared_sequence.is_some()
+                || sequence
+                    != last_sequence
+                        .checked_add(1)
+                        .ok_or_else(|| cannot_open(database_path))?
+                || identity != current_identity
+            {
+                return Err(cannot_open(database_path));
+            }
+            prepared_sequence = Some(sequence);
+            prepare_offset = Some(record_offset);
+            continue;
+        }
+
+        if let Some((sequence, identity)) = decode_finish_record(&ledger_record) {
+            if prepared_sequence != Some(sequence) || identity != current_identity {
+                return Err(cannot_open(database_path));
+            }
+            last_sequence = sequence;
+            prepared_sequence = None;
+            prepare_offset = None;
+            continue;
+        }
+
+        return Err(cannot_open(database_path));
+    }
+
+    if !allow_interrupted_tail && (tail_len != 0 || prepared_sequence.is_some()) {
+        return Err(cannot_open(database_path));
+    }
+
+    if prepared_sequence.is_some() && prepare_offset.is_none() {
+        return Err(cannot_open(database_path));
+    }
+
+    let mut interrupted_tail = vec![0_u8; tail_len];
+    file.read_exact(&mut interrupted_tail)?;
+    let valid_bytes = (RECORD_BYTES as u64)
+        .checked_add(
+            complete_records
+                .checked_mul(TRANSITION_BYTES as u64)
+                .ok_or_else(|| cannot_open(database_path))?,
+        )
+        .ok_or_else(|| cannot_open(database_path))?;
+    Ok(NamespaceRecordState {
+        current_identity,
+        last_sequence,
+        prepared_sequence,
+        prepare_offset,
+        valid_bytes,
+        interrupted_tail,
+    })
+}
+
+fn encode_transition_record(
+    sequence: u64,
+    old_identity: FileIdentity,
+    new_identity: FileIdentity,
+) -> [u8; TRANSITION_BYTES] {
+    let mut record = [0_u8; TRANSITION_BYTES];
+    record[..8].copy_from_slice(&TRANSITION_MAGIC);
+    record[8] = TRANSITION_VERSION;
+    record[16..24].copy_from_slice(&sequence.to_be_bytes());
+    record[24..24 + IDENTITY_BYTES].copy_from_slice(&old_identity.to_namespace_bytes());
+    record[49..49 + IDENTITY_BYTES].copy_from_slice(&new_identity.to_namespace_bytes());
+    let checksum = transition_checksum(&record[..TRANSITION_CHECKSUM_OFFSET]);
+    record[TRANSITION_CHECKSUM_OFFSET..].copy_from_slice(&checksum.to_be_bytes());
+    record
+}
+
+fn encode_prepare_record(sequence: u64, current_identity: FileIdentity) -> [u8; PREPARE_BYTES] {
+    let mut record = [0_u8; PREPARE_BYTES];
+    record[..8].copy_from_slice(&PREPARE_MAGIC);
+    record[8] = PREPARE_VERSION;
+    record[16..24].copy_from_slice(&sequence.to_be_bytes());
+    record[24..24 + IDENTITY_BYTES].copy_from_slice(&current_identity.to_namespace_bytes());
+    let checksum = transition_checksum(&record[..PREPARE_CHECKSUM_OFFSET]);
+    record[PREPARE_CHECKSUM_OFFSET..].copy_from_slice(&checksum.to_be_bytes());
+    record
+}
+
+fn decode_prepare_record(record: &[u8; PREPARE_BYTES]) -> Option<(u64, FileIdentity)> {
+    decode_identity_ledger_record(
+        record,
+        PREPARE_MAGIC,
+        PREPARE_VERSION,
+        PREPARE_CHECKSUM_OFFSET,
+    )
+}
+
+fn encode_finish_record(sequence: u64, current_identity: FileIdentity) -> [u8; FINISH_BYTES] {
+    let mut record = [0_u8; FINISH_BYTES];
+    record[..8].copy_from_slice(&FINISH_MAGIC);
+    record[8] = FINISH_VERSION;
+    record[16..24].copy_from_slice(&sequence.to_be_bytes());
+    record[24..24 + IDENTITY_BYTES].copy_from_slice(&current_identity.to_namespace_bytes());
+    let checksum = transition_checksum(&record[..FINISH_CHECKSUM_OFFSET]);
+    record[FINISH_CHECKSUM_OFFSET..].copy_from_slice(&checksum.to_be_bytes());
+    record
+}
+
+fn decode_finish_record(record: &[u8; FINISH_BYTES]) -> Option<(u64, FileIdentity)> {
+    decode_identity_ledger_record(record, FINISH_MAGIC, FINISH_VERSION, FINISH_CHECKSUM_OFFSET)
+}
+
+fn decode_identity_ledger_record(
+    record: &[u8; TRANSITION_BYTES],
+    magic: [u8; 8],
+    version: u8,
+    checksum_offset: usize,
+) -> Option<(u64, FileIdentity)> {
+    if record[..8] != magic
+        || record[8] != version
+        || record[9..16].iter().any(|byte| *byte != 0)
+        || record[49..checksum_offset].iter().any(|byte| *byte != 0)
+    {
+        return None;
+    }
+    let mut checksum_bytes = [0_u8; 8];
+    checksum_bytes.copy_from_slice(&record[checksum_offset..]);
+    if u64::from_be_bytes(checksum_bytes) != transition_checksum(&record[..checksum_offset]) {
+        return None;
+    }
+    let mut sequence_bytes = [0_u8; 8];
+    sequence_bytes.copy_from_slice(&record[16..24]);
+    let mut identity_bytes = [0_u8; IDENTITY_BYTES];
+    identity_bytes.copy_from_slice(&record[24..24 + IDENTITY_BYTES]);
+    Some((
+        u64::from_be_bytes(sequence_bytes),
+        FileIdentity::from_namespace_bytes(identity_bytes)?,
+    ))
+}
+
+fn decode_transition_record(
+    record: &[u8; TRANSITION_BYTES],
+) -> Option<(u64, FileIdentity, FileIdentity)> {
+    if record[..8] != TRANSITION_MAGIC
+        || record[8] != TRANSITION_VERSION
+        || record[9..16].iter().any(|byte| *byte != 0)
+        || record[74..TRANSITION_CHECKSUM_OFFSET]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return None;
+    }
+    let mut checksum_bytes = [0_u8; 8];
+    checksum_bytes.copy_from_slice(&record[TRANSITION_CHECKSUM_OFFSET..]);
+    if u64::from_be_bytes(checksum_bytes)
+        != transition_checksum(&record[..TRANSITION_CHECKSUM_OFFSET])
+    {
+        return None;
+    }
+
+    let mut sequence_bytes = [0_u8; 8];
+    sequence_bytes.copy_from_slice(&record[16..24]);
+    let mut old_encoded = [0_u8; IDENTITY_BYTES];
+    old_encoded.copy_from_slice(&record[24..24 + IDENTITY_BYTES]);
+    let mut new_encoded = [0_u8; IDENTITY_BYTES];
+    new_encoded.copy_from_slice(&record[49..49 + IDENTITY_BYTES]);
+    let old_identity = FileIdentity::from_namespace_bytes(old_encoded)?;
+    let new_identity = FileIdentity::from_namespace_bytes(new_encoded)?;
+    if old_identity == new_identity {
+        return None;
+    }
+    Some((
+        u64::from_be_bytes(sequence_bytes),
+        old_identity,
+        new_identity,
+    ))
+}
+
+fn transition_checksum(bytes: &[u8]) -> u64 {
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+fn try_lock(file: &File, mode: FileLockMode) -> Result<()> {
+    AdvisoryFileLock::try_lock(file, mode).map_err(lock_error)
+}
+
+fn lock_error(error: FileLockError) -> FrankenError {
+    match error {
+        FileLockError::AlreadyLocked => FrankenError::Busy,
+        FileLockError::Io(error) => FrankenError::Io(error),
+    }
+}
+
+#[cfg(unix)]
+fn downgrade_to_shared(file: &File) -> Result<()> {
+    // `flock(LOCK_SH)` atomically converts this open file description's
+    // exclusive lock to shared.
+    try_lock(file, FileLockMode::Shared)
+}
+
+#[cfg(windows)]
+fn downgrade_to_shared(file: &File) -> Result<()> {
+    // LockFileEx has no atomic conversion operation.  `gate` remains exclusive
+    // around this call, so no cooperating opener can observe the short gap.
+    AdvisoryFileLock::unlock(file).map_err(lock_error)?;
+    try_lock(file, FileLockMode::Shared)
+}
+
+fn release_gate(gate: &File) -> Result<()> {
+    AdvisoryFileLock::unlock(gate).map_err(lock_error)
+}
+
+fn release_namespace_locks(gate: &File, use_file: &File) {
+    let _ = AdvisoryFileLock::unlock(use_file);
+    let _ = AdvisoryFileLock::unlock(gate);
+}
+
+fn cannot_open(path: &Path) -> FrankenError {
+    FrankenError::CannotOpen {
+        path: path.to_owned(),
+    }
+}
+
+/// Windows advisory-lock sidecar policy for reserved-empty validation.
+///
+/// The post-main-open check permits the three sidecars that opening a Windows
+/// VFS handle necessarily creates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowsLockSidecarPolicy {
+    /// Reject every advisory-lock sidecar before the main handle is opened.
+    RejectAll,
+    /// Allow only the sidecars created by the accepted main-file handle.
+    AllowExpected,
+}
+
+/// A pre-open snapshot of which Windows advisory-lock sidecars already existed.
+///
+/// Captured BEFORE this handle began opening (i.e. before it took any cooperative
+/// lock, which is what creates the `-lock-shared/-reserved/-pending` sidecars).
+///
+/// bd-mnane: `WindowsLockSidecarPolicy::AllowExpected` must permit the sidecars
+/// OUR own open creates, but a sidecar that pre-existed our open is a foreign (or
+/// stale) reservation — not one our accepted main-file handle created — so it
+/// must still be rejected. The path-derived sidecar names are identical whoever
+/// created them, and (per the bead analysis) there is no handle-level owner
+/// tracking, so ownership is established by *timing*: anything present before we
+/// took a lock is not ours. Take this snapshot before the reserved bootstrap's
+/// first `shared_db_lock`, then hand it to
+/// [`validate_reserved_database_artifacts`].
+#[derive(Clone, Debug, Default)]
+pub struct PreOpenLockSidecars {
+    /// The `-lock-*` sidecar paths that already existed at snapshot time. Empty
+    /// on a clean reserved-empty slot (and always empty off Windows, where these
+    /// advisory sidecars do not exist).
+    preexisting: Vec<std::path::PathBuf>,
+}
+
+impl PreOpenLockSidecars {
+    /// Snapshot which advisory-lock sidecars already exist for `database_path`.
+    /// MUST be called before this handle takes any cooperative lock — otherwise
+    /// our own freshly created sidecars would be misread as foreign.
+    #[must_use]
+    pub fn snapshot(database_path: &Path) -> Self {
+        // `mut` only on Windows, where the loop below pushes the discovered
+        // sidecars; off Windows the vec stays empty and immutable (unused_mut).
+        #[cfg(windows)]
+        let mut preexisting = Vec::new();
+        #[cfg(not(windows))]
+        let preexisting = Vec::new();
+        #[cfg(windows)]
+        for suffix in ["-lock-shared", "-lock-reserved", "-lock-pending"] {
+            let candidate = sidecar_path(database_path, suffix);
+            if std::fs::symlink_metadata(&candidate).is_ok() {
+                preexisting.push(candidate);
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = database_path;
+        Self { preexisting }
+    }
+
+    /// The sidecar paths that pre-existed our open (foreign / stale reservations).
+    #[must_use]
+    pub fn preexisting_sidecars(&self) -> &[std::path::PathBuf] {
+        &self.preexisting
+    }
+}
+
+/// Validate that no recovery artifact belongs to a caller-reserved empty DB.
+/// This function performs reads only and never creates or removes entries.
+pub fn validate_reserved_database_artifacts(
+    database_path: &Path,
+    windows_lock_sidecars: WindowsLockSidecarPolicy,
+    pre_open_lock_sidecars: Option<&PreOpenLockSidecars>,
+) -> Result<()> {
+    validate_stable_path(database_path)?;
+    for suffix in ["-journal", "-wal", "-wal-fec", "-shm", ".fsqlite-shm"] {
+        reject_existing_entry(database_path, &sidecar_path(database_path, suffix))?;
+    }
+
+    #[cfg(windows)]
+    match windows_lock_sidecars {
+        WindowsLockSidecarPolicy::RejectAll => {
+            for suffix in ["-lock-shared", "-lock-reserved", "-lock-pending"] {
+                reject_existing_entry(database_path, &sidecar_path(database_path, suffix))?;
+            }
+        }
+        WindowsLockSidecarPolicy::AllowExpected => {
+            // bd-mnane: permit the sidecars OUR open created, but reject any that
+            // PRE-EXISTED our open (captured in `pre_open_lock_sidecars`) — a
+            // foreign or stale reservation, not one our accepted handle created.
+            // Without this witness a foreign process's lock sidecar is silently
+            // mistaken for our own and its reservation is masked.
+            if let Some(pre_open) = pre_open_lock_sidecars {
+                for candidate in pre_open.preexisting_sidecars() {
+                    reject_existing_entry(database_path, candidate)?;
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = windows_lock_sidecars;
+        let _ = pre_open_lock_sidecars;
+    }
+
+    let wal_fec_temp = sidecar_path(database_path, "-wal-fec").with_extension("wal-fec.tmp");
+    reject_existing_entry(database_path, &wal_fec_temp)?;
+
+    let parent = database_path
+        .parent()
+        .ok_or_else(|| cannot_open(database_path))?;
+    let db_name = database_path
+        .file_name()
+        .ok_or_else(|| cannot_open(database_path))?
+        .to_string_lossy();
+    let segment_prefix = format!("{db_name}-wal-seg-");
+    for entry in std::fs::read_dir(parent)? {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&segment_prefix)
+        {
+            // GH#355 (bd-h5oaj) diagnostic: name the WAL-segment leftover that
+            // blocked the reserved open.
+            tracing::warn!(
+                target: "fsqlite_vfs::reserved",
+                database = %database_path.display(),
+                wal_segment = %entry.file_name().to_string_lossy(),
+                "reserved-database WAL segment present; refusing reserved open (CannotOpen)"
+            );
+            return Err(cannot_open(database_path));
+        }
+    }
+    Ok(())
+}
+
+fn reject_existing_entry(database_path: &Path, candidate: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(candidate) {
+        Ok(_) => {
+            // GH#355 (bd-h5oaj) diagnostic: the reserved-builder bootstrap
+            // returns an unsourced `CannotOpen`, which forced a black-box
+            // elimination sweep on Windows. Name the exact artifact that blocked
+            // the reserved open so an instrumented run is self-diagnosing.
+            tracing::warn!(
+                target: "fsqlite_vfs::reserved",
+                database = %database_path.display(),
+                artifact = %candidate.display(),
+                "reserved-database artifact already present; refusing reserved open (CannotOpen)"
+            );
+            Err(cannot_open(database_path))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::{self, FileTimes};
+    use std::process::Command;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    fn create_database(path: &Path, bytes: &[u8]) -> FileIdentity {
+        fs::write(path, bytes).expect("create test database");
+        let file = File::open(path).expect("open test database");
+        FileIdentity::from_file(&file)
+            .expect("query test database identity")
+            .expect("native filesystem identity")
+    }
+
+    /// Subprocess endpoint: environment and kernel credentials are isolated
+    /// from the parallel test runner, rather than changing its UID or env.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_group_child() {
+        use std::io::Write as _;
+        let Some(path) = std::env::var_os("FSQLITE_GROUP_TEST_DATABASE") else {
+            return;
+        };
+        let database = PathBuf::from(path);
+        if std::env::var_os("FSQLITE_GROUP_TEST_SWAP").is_some() {
+            let gate = sidecar_path(&database, GATE_SUFFIX);
+            let retained = configured_existing_readonly_open_options()
+                .open(&gate)
+                .unwrap();
+            let metadata = retained.metadata().unwrap();
+            let displaced = database.with_extension("displaced");
+            fs::rename(&gate, &displaced).unwrap();
+            fs::copy(&displaced, &gate).unwrap();
+            assert!(validate_trusted_unix_group_sidecar(&database, &gate, &metadata).is_err());
+            return;
+        }
+        let expected = std::env::var("FSQLITE_GROUP_TEST_ACCEPT").unwrap() == "yes";
+        let readonly = std::env::var_os("FSQLITE_GROUP_TEST_READONLY").is_some();
+        let intent = if readonly {
+            NamespaceOpenIntent::ReadOnlyExisting
+        } else {
+            NamespaceOpenIntent::Shared
+        };
+        let result = PendingNamespaceOpen::begin(&database, intent).and_then(|pending| {
+            let file = File::open(&database)?;
+            let identity = FileIdentity::from_file(&file)?.ok_or_else(|| cannot_open(&database))?;
+            let binding = pending.bind(identity)?;
+            binding.finish_bootstrap()?;
+            Ok(binding)
+        });
+        if !expected {
+            assert!(result.is_err(), "unsafe or untrusted admission succeeded");
+            return;
+        }
+        if readonly {
+            drop(result.unwrap());
+            return;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .open(&database)
+            .unwrap();
+        let binding = result.unwrap();
+        let mut file = file;
+        file.write_all(b"x").unwrap();
+        file.sync_all().unwrap();
+        drop(binding);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_group_readonly_missing_sidecars_checks_policy() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let directory = tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o2770)).unwrap();
+        let database = directory.path().join("tracker.db");
+        fs::write(&database, b"never admitted").unwrap();
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o660)).unwrap();
+        let gid = fs::metadata(&database).unwrap().gid().to_string();
+        for (selected_gid, accept) in [(&gid[..], "yes"), ("invalid", "no")] {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "namespace::tests::trusted_group_child",
+                    "--nocapture",
+                ])
+                .env("FSQLITE_TRUSTED_UNIX_DATABASE", &database)
+                .env("FSQLITE_TRUSTED_UNIX_GID", selected_gid)
+                .env("FSQLITE_GROUP_TEST_DATABASE", &database)
+                .env("FSQLITE_GROUP_TEST_ACCEPT", accept)
+                .env("FSQLITE_GROUP_TEST_READONLY", "yes")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert_eq!(fs::read(&database).unwrap(), b"never admitted");
+        assert!(!sidecar_path(&database, GATE_SUFFIX).exists());
+        assert!(!sidecar_path(&database, USE_SUFFIX).exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_group_layout_and_scope() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let temp = tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o2770)).unwrap();
+        let database = temp.path().join("tracker.db");
+        fs::write(&database, b"database").unwrap();
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o660)).unwrap();
+        let gid = fs::metadata(&database).unwrap().gid().to_string();
+        let run = |selected: &Path, gid: &str, accept: bool| {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "namespace::tests::trusted_group_child",
+                    "--nocapture",
+                ])
+                .env("FSQLITE_TRUSTED_UNIX_DATABASE", selected)
+                .env("FSQLITE_TRUSTED_UNIX_GID", gid)
+                .env("FSQLITE_GROUP_TEST_DATABASE", &database)
+                .env(
+                    "FSQLITE_GROUP_TEST_ACCEPT",
+                    if accept { "yes" } else { "no" },
+                )
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&database, &gid, true);
+        run(&database, &gid, true);
+        run(&database, "invalid", false);
+        run(&database, "+0", false);
+        run(Path::new("relative.db"), &gid, false);
+        for mode in [0o600, 0o640, 0o666, 0o1660] {
+            fs::set_permissions(&database, fs::Permissions::from_mode(mode)).unwrap();
+            run(&database, &gid, false);
+        }
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o660)).unwrap();
+        for mode in [0o770, 0o2777, 0o3770] {
+            fs::set_permissions(temp.path(), fs::Permissions::from_mode(mode)).unwrap();
+            run(&database, &gid, false);
+        }
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o2770)).unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "namespace::tests::trusted_group_child",
+                "--nocapture",
+            ])
+            .env("FSQLITE_TRUSTED_UNIX_DATABASE", &database)
+            .env("FSQLITE_TRUSTED_UNIX_GID", &gid)
+            .env("FSQLITE_GROUP_TEST_DATABASE", &database)
+            .env("FSQLITE_GROUP_TEST_SWAP", "yes")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "retained-descriptor path-swap regression: {:?}",
+            output
+        );
+        let gate = sidecar_path(&database, GATE_SUFFIX);
+        let file = File::open(&gate).unwrap();
+        let old_metadata = file.metadata().unwrap();
+        fs::rename(&gate, temp.path().join("displaced")).unwrap();
+        fs::write(&gate, b"replacement").unwrap();
+        fs::set_permissions(&gate, fs::Permissions::from_mode(0o660)).unwrap();
+        // The public validator's environment is absent in this runner; the
+        // subprocess exercises the swapped generation through normal open.
+        // Independently show the retained identity differs from the pathname.
+        assert_ne!(old_metadata.ino(), fs::metadata(&gate).unwrap().ino());
+        fs::hard_link(&gate, temp.path().join("alias")).unwrap();
+        run(&database, &gid, false); // even an owner-created alias is refused
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires root and Linux setpriv for real cross-UID credentials"]
+    fn trusted_group_cross_uid_reopen_and_safety() {
+        use nix::unistd::{Gid, Uid, chown, geteuid};
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        assert!(geteuid().is_root(), "run this regression as root");
+        let temp = tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        let shared = temp.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        chown(
+            &shared,
+            Some(Uid::from_raw(61001)),
+            Some(Gid::from_raw(61000)),
+        )
+        .expect("cross-UID regression requires host root with mapped UIDs/GID 61000..61003 and chown/setpriv privileges");
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o2770)).unwrap();
+        let database = shared.join("tracker.db");
+        fs::write(&database, b"database").unwrap();
+        chown(
+            &database,
+            Some(Uid::from_raw(61001)),
+            Some(Gid::from_raw(61000)),
+        )
+        .unwrap();
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o660)).unwrap();
+        let run = |uid: u32, gid: u32, opt_in: bool, accept: bool| {
+            let mut command = Command::new("setpriv");
+            command
+                .args([
+                    "--reuid",
+                    &uid.to_string(),
+                    "--regid",
+                    &gid.to_string(),
+                    "--clear-groups",
+                ])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "namespace::tests::trusted_group_child",
+                    "--nocapture",
+                ])
+                .env_remove("FSQLITE_TRUSTED_UNIX_DATABASE")
+                .env_remove("FSQLITE_TRUSTED_UNIX_GID")
+                .env("FSQLITE_GROUP_TEST_DATABASE", &database)
+                .env(
+                    "FSQLITE_GROUP_TEST_ACCEPT",
+                    if accept { "yes" } else { "no" },
+                );
+            if opt_in {
+                command
+                    .env("FSQLITE_TRUSTED_UNIX_DATABASE", &database)
+                    .env("FSQLITE_TRUSTED_UNIX_GID", "61000");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "child uid {uid}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        // Provision under the owner's restrictive umask; creation must use
+        // the descriptor to establish the explicitly requested shared mode.
+        run(61001, 61000, true, true);
+        for suffix in [GATE_SUFFIX, USE_SUFFIX] {
+            let metadata = fs::metadata(sidecar_path(&database, suffix)).unwrap();
+            assert_eq!(metadata.uid(), 61001);
+            assert_eq!(metadata.gid(), 61000);
+            assert_eq!(metadata.mode() & 0o7777, 0o660);
+        }
+        run(61002, 61000, false, false); // default is still single-UID
+        run(61002, 61000, true, true);
+        run(61001, 61000, true, true); // original owner retains access
+        assert_eq!(fs::read(&database).unwrap(), b"databasexxx");
+        run(61003, 61003, true, false); // selected group membership required
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o666)).unwrap();
+        run(61002, 61000, true, false);
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o660)).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o2777)).unwrap();
+        run(61002, 61000, true, false);
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o2770)).unwrap();
+        let gate = sidecar_path(&database, GATE_SUFFIX);
+        fs::set_permissions(&gate, fs::Permissions::from_mode(0o666)).unwrap();
+        run(61002, 61000, true, false);
+        fs::set_permissions(&gate, fs::Permissions::from_mode(0o660)).unwrap();
+        fs::hard_link(&gate, shared.join("alias")).unwrap();
+        run(61002, 61000, true, false); // hard links remain forbidden
+        let displaced = shared.join("displaced-gate");
+        fs::rename(&gate, &displaced).unwrap();
+        std::os::unix::fs::symlink(&displaced, &gate).unwrap();
+        run(61002, 61000, true, false); // no-follow is retained
+    }
+
+    fn publish_generation(database: &Path, identity: FileIdentity) {
+        let binding = PendingNamespaceOpen::begin(database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(identity)
+            .expect("bind generation");
+        binding.finish_bootstrap().expect("publish generation");
+    }
+
+    fn seed_cleanup_fixture(
+        database: &Path,
+        absent_companion_ordinal: Option<usize>,
+    ) -> (FileIdentity, Vec<PathBuf>) {
+        let identity = create_database(database, b"candidate generation");
+        let binding = PendingNamespaceOpen::begin(database, NamespaceOpenIntent::ReservedExclusive)
+            .expect("reserve cleanup fixture namespace")
+            .bind(identity)
+            .expect("bind cleanup fixture reservation");
+        binding
+            .finish_bootstrap()
+            .expect("finish cleanup fixture bootstrap");
+        drop(binding);
+
+        let companion_paths = cleanup_companion_paths(database);
+        for (ordinal, path) in companion_paths.iter().enumerate() {
+            if Some(ordinal) != absent_companion_ordinal {
+                fs::write(path, format!("owned cleanup companion {ordinal}"))
+                    .expect("seed fixed cleanup companion");
+            }
+        }
+
+        let mut entry_paths = companion_paths;
+        entry_paths.push(database.to_path_buf());
+        entry_paths.push(sidecar_path(database, USE_SUFFIX));
+        entry_paths.push(sidecar_path(database, GATE_SUFFIX));
+        (identity, entry_paths)
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum CleanupInterruption {
+        BeforeRemoval(usize),
+        AfterRemoval(usize),
+        #[cfg(unix)]
+        BeforeDirectorySync,
+    }
+
+    struct InterruptCleanup {
+        at: CleanupInterruption,
+    }
+
+    impl PrivateDatabaseCleanupHooks for InterruptCleanup {
+        fn before_remove(&mut self, ordinal: usize, _path: &Path) -> io::Result<()> {
+            if matches!(self.at, CleanupInterruption::BeforeRemoval(at) if at == ordinal) {
+                return Err(io::Error::other("injected failure before removal"));
+            }
+            Ok(())
+        }
+
+        fn after_remove(&mut self, ordinal: usize, _path: &Path) -> io::Result<()> {
+            if matches!(self.at, CleanupInterruption::AfterRemoval(at) if at == ordinal) {
+                return Err(io::Error::other("injected failure after removal"));
+            }
+            Ok(())
+        }
+
+        #[cfg(unix)]
+        fn before_directory_sync(&mut self, _parent: &Path) -> io::Result<()> {
+            if matches!(self.at, CleanupInterruption::BeforeDirectorySync) {
+                return Err(io::Error::other(
+                    "injected failure before directory synchronization",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn unwrap_partial_cleanup(
+        outcome: PrivateDatabaseCleanupOutcome,
+    ) -> (
+        PrivateDatabaseCleanupFailure,
+        Vec<PrivateDatabaseCleanupEntryReceipt>,
+        PrivateDatabaseCleanupDurability,
+    ) {
+        let PrivateDatabaseCleanupOutcome::Partial {
+            cause,
+            entries,
+            durability,
+        } = outcome
+        else {
+            panic!("expected partial cleanup receipt, got {outcome:?}");
+        };
+        (cause, entries, durability)
+    }
+
+    /// Enumerate every pathname the current process has open (`/proc/self/fd`).
+    ///
+    /// Portable fd-leak detection without the external `lsof` binary. Used to
+    /// assert that a namespace teardown leaves no retained descriptor resolving
+    /// to a database's sidecars (bd-97kjm asks #2/#3).
+    #[cfg(target_os = "linux")]
+    fn process_fd_targets() -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir("/proc/self/fd") else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+            .collect()
+    }
+
+    /// Whether any open descriptor in this process resolves to `path`.
+    #[cfg(target_os = "linux")]
+    fn fd_open_to(path: &Path) -> bool {
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        process_fd_targets().iter().any(|target| {
+            std::fs::canonicalize(target).unwrap_or_else(|_| target.clone()) == canonical
+        })
+    }
+
+    #[test]
+    fn new_generation_stays_exclusive_until_bootstrap_finishes() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("bootstrap.db");
+        let identity = create_database(&database, b"");
+
+        let pending = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit new generation");
+        assert_eq!(pending.expected_identity(), None);
+        let binding = pending.bind(identity).expect("bind new generation");
+        assert!(binding.bootstrap_is_exclusive());
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+
+        assert!(
+            binding
+                .finish_bootstrap_with_gate_release(|_| {
+                    Err(FrankenError::internal(
+                        "injected namespace gate release failure",
+                    ))
+                })
+                .is_err()
+        );
+        assert!(
+            matches!(
+                *binding.lease.lock().expect("inspect bootstrap lease"),
+                BindingLease::BootstrapUseShared { .. }
+            ),
+            "a gate-release error after downgrade must preserve the exact intermediate lock state"
+        );
+        assert!(binding.bootstrap_is_exclusive());
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+
+        binding.finish_bootstrap().expect("finish bootstrap");
+        assert!(!binding.bootstrap_is_exclusive());
+        binding
+            .finish_bootstrap()
+            .expect("finishing bootstrap twice is harmless");
+
+        let join = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("join live generation");
+        assert_eq!(join.expected_identity(), Some(identity));
+        let peer = join.bind(identity).expect("bind peer");
+        assert!(!peer.bootstrap_is_exclusive());
+    }
+
+    #[test]
+    fn binding_last_arc_drop_releases_shared_lease_cross_process() {
+        const CHILD_DATABASE: &str = "FSQLITE_NS_BINDING_DROP_CHILD_DATABASE";
+        const CHILD_EXPECT_TRANSITION: &str = "FSQLITE_NS_BINDING_DROP_CHILD_EXPECT_TRANSITION";
+
+        if let Some(database) = std::env::var_os(CHILD_DATABASE) {
+            let database = PathBuf::from(database);
+            let identity =
+                FileIdentity::from_file(&File::open(&database).expect("open child generation"))
+                    .expect("query child generation identity")
+                    .expect("native child generation identity");
+            let transition = begin_database_namespace_generation_transition(&database, identity);
+            if std::env::var_os(CHILD_EXPECT_TRANSITION).is_some() {
+                transition.expect("last binding Arc drop releases shared lease cross-process");
+            } else {
+                assert!(matches!(transition, Err(FrankenError::Busy)));
+            }
+            return;
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("binding-drop.db");
+        let identity = create_database(&database, b"generation");
+        let binding = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(identity)
+            .expect("bind generation");
+        binding.finish_bootstrap().expect("publish generation");
+        let final_arc = Arc::clone(&binding);
+        drop(binding);
+
+        let run_child = |expect_transition: bool| {
+            let mut command =
+                Command::new(std::env::current_exe().expect("resolve test executable"));
+            command
+                .arg("--exact")
+                .arg("namespace::tests::binding_last_arc_drop_releases_shared_lease_cross_process")
+                .arg("--nocapture")
+                .env(CHILD_DATABASE, &database);
+            if expect_transition {
+                command.env(CHILD_EXPECT_TRANSITION, "1");
+            }
+            let output = command.output().expect("run binding-drop child");
+            assert!(
+                output.status.success(),
+                "child failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        run_child(false);
+        drop(final_arc);
+        run_child(true);
+    }
+
+    #[test]
+    fn readonly_existing_generation_preserves_namespace_records() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("readonly-existing.db");
+        let identity = create_database(&database, b"existing generation");
+        let writer = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(identity)
+            .expect("bind generation");
+        writer.finish_bootstrap().expect("publish generation");
+        drop(writer);
+
+        let gate_path = sidecar_path(&database, GATE_SUFFIX);
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        let sentinel_modified = UNIX_EPOCH + Duration::from_hours(262_968);
+        File::options()
+            .write(true)
+            .open(&use_path)
+            .expect("open identity record for timestamp sentinel")
+            .set_times(FileTimes::new().set_modified(sentinel_modified))
+            .expect("set identity-record timestamp sentinel");
+        let before_gate = fs::read(&gate_path).expect("snapshot gate record");
+        let before_use = fs::read(&use_path).expect("snapshot identity record");
+        let before_use_modified = fs::metadata(&use_path)
+            .expect("identity record metadata")
+            .modified()
+            .expect("identity record modification time");
+
+        let failed_pending =
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+                .expect("begin injected gate-release failure");
+        let retained_gate: std::cell::RefCell<Option<File>> = std::cell::RefCell::new(None);
+        assert!(
+            failed_pending
+                .bind_with_gate_release(identity, |gate| {
+                    #[cfg(unix)]
+                    retained_gate.replace(Some(gate.try_clone()?));
+                    #[cfg(not(unix))]
+                    let _ = &gate;
+                    Err(FrankenError::internal(
+                        "injected namespace gate release failure",
+                    ))
+                })
+                .is_err()
+        );
+
+        let pending = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+            .expect("explicit cleanup releases the injected failed gate lease");
+        assert_eq!(pending.expected_identity(), Some(identity));
+        let reader = pending.bind(identity).expect("bind read-only generation");
+        reader
+            .validate_path_identity()
+            .expect("read-only generation remains bound");
+        reader
+            .finish_bootstrap()
+            .expect("shared read-only binding has no bootstrap transition");
+        drop(reader);
+        drop(retained_gate);
+
+        assert_eq!(fs::read(&gate_path).expect("read gate record"), before_gate);
+        assert_eq!(
+            fs::read(&use_path).expect("read identity record"),
+            before_use
+        );
+        assert_eq!(
+            fs::metadata(&use_path)
+                .expect("identity record metadata")
+                .modified()
+                .expect("identity record modification time"),
+            before_use_modified,
+            "read-only admission must not rewrite an unchanged identity record"
+        );
+    }
+
+    #[test]
+    fn readonly_admission_of_never_admitted_database_creates_no_sidecars() {
+        // GH#140 / bd-daqmp: a read-only open of a database that no
+        // FrankenSQLite ever admitted (e.g. a stock SQLite file) must be
+        // byte-neutral for the whole family — no sidecar creation, no locks.
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("never-admitted.db");
+        let identity = create_database(&database, b"stock-like database");
+        let gate_path = sidecar_path(&database, GATE_SUFFIX);
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        assert!(!gate_path.exists() && !use_path.exists());
+
+        let pending = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+            .expect("sidecar-less read-only admission must succeed");
+        assert_eq!(pending.expected_identity(), None);
+        assert!(
+            !pending
+                .has_quiescent_record_bytes()
+                .expect("sidecar-less admission has no record")
+        );
+        let binding = pending
+            .bind(identity)
+            .expect("bind sidecar-less read-only admission");
+        assert!(!binding.bootstrap_is_exclusive());
+        binding
+            .finish_bootstrap()
+            .expect("sidecar-less binding has no bootstrap transition");
+        drop(binding);
+
+        assert!(
+            !gate_path.exists(),
+            "read-only admission must not create the gate sidecar"
+        );
+        assert!(
+            !use_path.exists(),
+            "read-only admission must not create the identity sidecar"
+        );
+
+        // A later writable admission still creates the namespace normally.
+        let writer = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("subsequent shared admission")
+            .bind(identity)
+            .expect("bind shared generation");
+        writer.finish_bootstrap().expect("publish generation");
+        drop(writer);
+        assert!(gate_path.exists() && use_path.exists());
+    }
+
+    #[test]
+    fn readonly_admission_blocks_generation_transition_then_holds_use_lease() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("readonly-transition.db");
+        let displaced = dir.path().join("readonly-transition.displaced.db");
+        let original_identity = create_database(&database, b"original generation");
+        let writer = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(original_identity)
+            .expect("bind generation");
+        writer.finish_bootstrap().expect("publish generation");
+        drop(writer);
+
+        let pending_reader =
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+                .expect("begin read-only admission");
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+        let reader = pending_reader
+            .bind(original_identity)
+            .expect("bind read-only generation");
+
+        fs::rename(&database, &displaced).expect("displace original generation");
+        let replacement_identity = create_database(&database, b"replacement generation");
+        let stale_writer = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("writer joins the reader-held generation");
+        assert_eq!(stale_writer.expected_identity(), Some(original_identity));
+        assert!(matches!(
+            stale_writer.bind(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+
+        drop(reader);
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+                .expect("admission reaches exact identity validation")
+                .bind(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+
+        let replacement_staging = dir.path().join("readonly-transition.replacement.db");
+        fs::rename(&database, &replacement_staging).expect("stage replacement");
+        fs::rename(&displaced, &database).expect("restore old generation before guard");
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, original_identity)
+                .expect("guard exact old generation");
+        fs::rename(&database, &displaced).expect("quarantine old generation under guard");
+        fs::rename(&replacement_staging, &database).expect("activate replacement under guard");
+        assert_eq!(
+            transition
+                .publish_replacement(replacement_identity)
+                .expect("publish exact replacement"),
+            NamespaceGenerationTransitionOutcome::Published
+        );
+        transition.finish().expect("finish replacement transition");
+    }
+
+    #[test]
+    fn pool_drop_teardown_releases_retained_namespace_fd() {
+        // bd-97kjm ask #2 (lsof-clean): a pool drop must fully release the
+        // namespace state and the retained sidecar descriptor even while a
+        // background reference still holds an `Arc` clone. Before teardown the
+        // `use` lease blocks a generation transition and its fd is open; after
+        // `quiesce()` the lease and its descriptor are gone for every clone.
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("pool-teardown.db");
+        let identity = create_database(&database, b"pooled generation");
+        // Only the Linux `fd_open_to` asserts inspect the sidecar path.
+        #[cfg(target_os = "linux")]
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+
+        let binding = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(identity)
+            .expect("bind generation");
+        binding.finish_bootstrap().expect("publish generation");
+
+        // A pooled/background reference that outlives the intended pool drop.
+        let lingering = Arc::clone(&binding);
+
+        // Precondition: the retained `use` lease blocks a generation transition
+        // and its descriptor is open — this is exactly the fd/lock that
+        // outlives a pool drop on HEAD.
+        assert!(
+            matches!(
+                begin_database_namespace_generation_transition(&database, identity),
+                Err(FrankenError::Busy)
+            ),
+            "a live `use` lease must block a generation transition"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            fd_open_to(&use_path),
+            "the retained identity-sidecar descriptor must be open before teardown"
+        );
+
+        // Teardown releases everything now, even though `lingering` still lives.
+        binding.quiesce();
+        assert!(binding.is_quiesced());
+        assert!(
+            lingering.is_quiesced(),
+            "the shared lease is quiesced through every Arc clone"
+        );
+        assert_eq!(
+            Arc::strong_count(&binding),
+            2,
+            "the background clone still references the binding"
+        );
+
+        // The retained descriptor is gone before any new holder opens it...
+        #[cfg(target_os = "linux")]
+        assert!(
+            !fd_open_to(&use_path),
+            "no retained descriptor may resolve to the identity sidecar after teardown"
+        );
+        // ...and the released `use` lock lets a fresh generation transition run.
+        let transition = begin_database_namespace_generation_transition(&database, identity)
+            .expect("teardown released the retained `use` lease");
+        drop(transition);
+
+        // Teardown is idempotent and the eventual Arc drops are pure no-ops.
+        binding.quiesce();
+        binding
+            .finish_bootstrap()
+            .expect("quiesced bootstrap is inert");
+        drop(binding);
+        drop(lingering);
+    }
+
+    #[test]
+    fn quarantine_generation_guard_releases_retained_fd() {
+        // bd-97kjm ask #3: when a recovery flow quarantines/renames the main
+        // file, the generation guard must detect the superseded generation and
+        // release the retained sidecar descriptor, so no retained fd survives
+        // pointing at the old generation. The quarantined old inode is never
+        // written. GH#334/bd-a5zj5 note: `validate_path_identity` semantics are
+        // unchanged; the guard only *adds* the on-mismatch release.
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("quarantine-guard.db");
+        let quarantined = dir.path().join("quarantine-guard.quarantined.db");
+        let identity = create_database(&database, b"live generation");
+        // Only the Linux `fd_open_to` asserts inspect the sidecar path.
+        #[cfg(target_os = "linux")]
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+
+        let binding = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(identity)
+            .expect("bind generation");
+        binding.finish_bootstrap().expect("publish generation");
+
+        // While the bound generation is live the guard is side-effect-free and
+        // keeps the lease intact (a live connection is never cut off).
+        binding
+            .guard_generation()
+            .expect("live generation passes the guard");
+        assert!(!binding.is_quiesced());
+        #[cfg(target_os = "linux")]
+        assert!(
+            fd_open_to(&use_path),
+            "the retained descriptor stays open while the generation is live"
+        );
+
+        // Simulate recovery: quarantine the main file, install a fresh inode.
+        fs::rename(&database, &quarantined).expect("quarantine main file");
+        let old_bytes = fs::read(&quarantined).expect("snapshot quarantined inode bytes");
+        let replacement = create_database(&database, b"replacement generation");
+        assert_ne!(identity, replacement);
+
+        // The guard now proves the bound generation is gone and releases state.
+        assert!(matches!(
+            binding.guard_generation(),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert!(
+            binding.is_quiesced(),
+            "a superseded generation releases the retained lease"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            !fd_open_to(&use_path),
+            "no retained descriptor may survive a quarantined generation"
+        );
+
+        // No retained fd wrote to the quarantined old inode.
+        assert_eq!(
+            fs::read(&quarantined).expect("re-read quarantined inode bytes"),
+            old_bytes,
+            "the quarantined old inode must remain byte-identical"
+        );
+
+        // Idempotent: guarding a quiesced binding stays fail-closed.
+        assert!(binding.guard_generation().is_err());
+        binding.quiesce();
+        drop(binding);
+    }
+
+    #[test]
+    fn generation_guard_fails_closed_after_supersession_then_restore() {
+        // bd-ep8y9: once a probe releases the lease (here via an ENOENT
+        // rename-away supersession), a LATER successful probe must NOT report
+        // the lock-less binding as a live generation. Before the fix
+        // guard_generation returned Ok after the file was renamed back, leaving
+        // this process writing with no advisory locks while a second process
+        // could win admission on the released -ns-use/-ns-gate locks —
+        // cross-process split-brain.
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("fail-closed.db");
+        let moved = dir.path().join("fail-closed.moved.db");
+        let identity = create_database(&database, b"live generation");
+
+        let binding = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(identity)
+            .expect("bind generation");
+        binding.finish_bootstrap().expect("publish generation");
+        binding
+            .guard_generation()
+            .expect("live generation passes the guard");
+        assert!(!binding.is_quiesced());
+
+        // Rename the main file off the stable path: an ENOENT supersession
+        // releases the lease (quiesce) and reports Err.
+        fs::rename(&database, &moved).expect("rename main file away");
+        assert!(matches!(
+            binding.guard_generation(),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert!(
+            binding.is_quiesced(),
+            "an ENOENT supersession releases the lease"
+        );
+
+        // Restore the ORIGINAL inode at the stable path. The path now names the
+        // bound identity again, but the lease is already quiesced (lock-free):
+        // the guard MUST stay fail-closed rather than resurrect a lock-less
+        // binding that a second writer could race.
+        fs::rename(&moved, &database).expect("rename main file back");
+        assert!(
+            binding.guard_generation().is_err(),
+            "a quiesced binding must fail closed even once its identity reappears"
+        );
+        assert!(binding.is_quiesced(), "the lease stays quiesced");
+
+        binding.quiesce();
+        drop(binding);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn generation_guard_transient_probe_error_keeps_lease() {
+        // bd-ep8y9 core: a transient stat failure (EACCES here, via a parent
+        // directory stripped of search permission) must NOT quiesce a still-live
+        // binding. Before the fix ANY validate_path_identity error quiesced,
+        // releasing the namespace locks of a live writer -> split-brain. The
+        // generation is installed the whole time; only the probe transiently
+        // cannot read it.
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempdir().expect("tempdir");
+        let guarded = dir.path().join("transient");
+        fs::create_dir(&guarded).expect("create guarded dir");
+        let database = guarded.join("transient.db");
+        let identity = create_database(&database, b"live generation");
+
+        let binding = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(identity)
+            .expect("bind generation");
+        binding.finish_bootstrap().expect("publish generation");
+        binding
+            .guard_generation()
+            .expect("live generation passes the guard");
+        assert!(!binding.is_quiesced());
+
+        // Strip search permission from the parent directory so symlink_metadata
+        // on the child fails with EACCES. If we are root (perms bypassed) the
+        // probe still succeeds; skip the assertions rather than assert a false
+        // negative.
+        let original = fs::metadata(&guarded)
+            .expect("stat guarded dir")
+            .permissions();
+        fs::set_permissions(&guarded, fs::Permissions::from_mode(0o000))
+            .expect("strip guarded dir perms");
+        let probe_blocked = fs::symlink_metadata(&database).is_err();
+
+        if probe_blocked {
+            // The transient probe failure surfaces Err WITHOUT quiescing.
+            assert!(
+                binding.guard_generation().is_err(),
+                "a transient probe failure fails the operation closed"
+            );
+            assert!(
+                !binding.is_quiesced(),
+                "a transient probe failure must NOT release a live writer's lease (bd-ep8y9)"
+            );
+        }
+
+        // Restore perms; the generation was live throughout, so the guard passes
+        // and the lease — never released — is still intact.
+        fs::set_permissions(&guarded, original).expect("restore guarded dir perms");
+        binding
+            .guard_generation()
+            .expect("guard passes once the probe recovers");
+        assert!(!binding.is_quiesced());
+
+        binding.quiesce();
+        drop(binding);
+    }
+
+    #[test]
+    fn readonly_reopen_of_retained_generation_is_byte_neutral() {
+        // bd-97kjm ask #1 residual guard (a410c2735 + bd-lcuoc): re-opening a
+        // namespace-retained database READ-ONLY must not re-checkpoint or
+        // otherwise mutate the main file or the persistent sidecars, and the
+        // new teardown/guard primitives must themselves be byte-neutral.
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("readonly-neutral.db");
+        let identity = create_database(&database, b"retained generation payload");
+        publish_generation(&database, identity);
+
+        let gate_path = sidecar_path(&database, GATE_SUFFIX);
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        let before_main = fs::read(&database).expect("snapshot main");
+        let before_gate = fs::read(&gate_path).expect("snapshot gate record");
+        let before_use = fs::read(&use_path).expect("snapshot identity record");
+
+        let reader = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+            .expect("admit read-only generation")
+            .bind(identity)
+            .expect("bind read-only generation");
+        reader
+            .validate_path_identity()
+            .expect("read-only generation remains bound");
+        reader
+            .guard_generation()
+            .expect("guard is neutral while the generation is live");
+        reader
+            .finish_bootstrap()
+            .expect("read-only binding has no bootstrap transition");
+        reader.quiesce();
+        assert!(reader.is_quiesced());
+        drop(reader);
+
+        assert_eq!(fs::read(&database).expect("re-read main"), before_main);
+        assert_eq!(
+            fs::read(&gate_path).expect("re-read gate record"),
+            before_gate
+        );
+        assert_eq!(
+            fs::read(&use_path).expect("re-read identity record"),
+            before_use,
+            "read-only teardown must not rewrite the identity record"
+        );
+    }
+
+    #[test]
+    fn readonly_existing_generation_admits_missing_records_without_creating_them() {
+        // GH#140 / bd-daqmp contract update: missing records no longer fail
+        // closed — a database never admitted by FrankenSQLite admits
+        // SIDECAR-LESS. The unchanged core of this keeper is the second half:
+        // the directory must stay byte-for-byte pristine either way.
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("readonly-missing-records.db");
+        create_database(&database, b"external database");
+        let entries_before = fs::read_dir(dir.path())
+            .expect("list pristine namespace")
+            .map(|entry| entry.expect("namespace entry").file_name())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        let pending = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+            .expect("missing records admit sidecar-less (GH#140)");
+        assert_eq!(pending.expected_identity(), None);
+        drop(pending);
+
+        let entries_after = fs::read_dir(dir.path())
+            .expect("list namespace after sidecar-less admission")
+            .map(|entry| entry.expect("namespace entry").file_name())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(entries_after, entries_before);
+        assert!(!sidecar_path(&database, GATE_SUFFIX).exists());
+        assert!(!sidecar_path(&database, USE_SUFFIX).exists());
+    }
+
+    #[test]
+    fn readonly_existing_generation_refuses_corrupt_record_without_repairing_it() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("readonly-corrupt-record.db");
+        let identity = create_database(&database, b"existing generation");
+        let writer = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(identity)
+            .expect("bind generation");
+        writer.finish_bootstrap().expect("publish generation");
+        drop(writer);
+
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        fs::write(&use_path, b"corrupt identity record").expect("corrupt identity record");
+        let before = fs::read(&use_path).expect("snapshot corrupt identity record");
+
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(&use_path).expect("read refused identity record"),
+            before,
+            "read-only admission must not repair or rewrite a corrupt record"
+        );
+    }
+
+    #[test]
+    fn readonly_existing_generation_refuses_main_identity_drift_without_rebinding() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("readonly-identity-drift.db");
+        let displaced = dir.path().join("readonly-identity-drift.displaced.db");
+        let original_identity = create_database(&database, b"original generation");
+        let writer = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(original_identity)
+            .expect("bind generation");
+        writer.finish_bootstrap().expect("publish generation");
+        drop(writer);
+
+        fs::rename(&database, &displaced).expect("displace original generation");
+        let replacement_identity = create_database(&database, b"replacement generation");
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        let record_before = fs::read(&use_path).expect("snapshot original identity record");
+
+        let pending = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+            .expect("read original recorded identity");
+        assert_eq!(pending.expected_identity(), Some(original_identity));
+        assert!(matches!(
+            pending.bind(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(&use_path).expect("read refused identity record"),
+            record_before,
+            "read-only identity refusal must not rebind the record to a replacement file"
+        );
+    }
+
+    #[test]
+    fn quiescent_rebind_repairs_stale_record_but_live_join_fails_closed() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("quiescent-rebind.db");
+        let displaced = dir.path().join("quiescent-rebind.displaced.db");
+        let original_identity = create_database(&database, b"original generation");
+        let original = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit original generation")
+            .bind(original_identity)
+            .expect("bind original generation");
+        original
+            .finish_bootstrap()
+            .expect("publish original generation");
+        drop(original);
+
+        fs::rename(&database, &displaced).expect("displace original generation");
+        let replacement_identity = create_database(&database, b"replacement generation");
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        let stale_record = fs::read(&use_path).expect("snapshot stale identity record");
+
+        let ordinary = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("obtain quiescent namespace exclusively");
+        assert_eq!(ordinary.expected_identity(), None);
+        assert!(ordinary.has_quiescent_record_bytes().unwrap());
+        assert!(matches!(
+            ordinary.bind(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(&use_path).expect("read preserved stale record"),
+            stale_record,
+            "ordinary admission must retain fail-closed replacement semantics"
+        );
+
+        let wrong_generation = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("reacquire quiescent namespace for identity check");
+        assert!(matches!(
+            wrong_generation.bind_replacing_quiescent_record(original_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(&use_path).expect("read record after rejected identity"),
+            stale_record,
+            "repair must validate the current pathname identity before rewriting"
+        );
+
+        let mut transition_bearing_record = stale_record.clone();
+        transition_bearing_record.push(0x7f);
+        fs::write(&use_path, &transition_bearing_record)
+            .expect("append simulated transition evidence");
+        let transition_bearing =
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+                .expect("reacquire namespace with transition evidence");
+        assert!(matches!(
+            transition_bearing.bind_replacing_quiescent_record(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(&use_path).expect("read preserved transition evidence"),
+            transition_bearing_record,
+            "repair must never discard namespace transition evidence"
+        );
+        fs::write(&use_path, &stale_record).expect("restore plain stale admission record");
+
+        let replacement = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("reacquire quiescent namespace exclusively")
+            .bind_replacing_quiescent_record(replacement_identity)
+            .expect("replace copied machine-local namespace record");
+        replacement
+            .finish_bootstrap()
+            .expect("publish replacement namespace generation");
+
+        let joined = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("join live replacement generation");
+        assert_eq!(joined.expected_identity(), Some(replacement_identity));
+        assert!(!joined.has_quiescent_record_bytes().unwrap());
+        let replacement_record = fs::read(&use_path).expect("snapshot replacement record");
+        assert!(matches!(
+            joined.bind_replacing_quiescent_record(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(&use_path).expect("read live replacement record"),
+            replacement_record,
+            "a live joined generation must never enter the repair path"
+        );
+    }
+
+    #[test]
+    fn quiescent_rebind_collapses_completed_copied_transition_history() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("completed-ledger-source.db");
+        let displaced = dir.path().join("completed-ledger-source.displaced.db");
+        let original_identity = create_database(&database, b"original generation");
+        publish_generation(&database, original_identity);
+
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, original_identity)
+                .expect("prepare generation transition");
+        fs::rename(&database, &displaced).expect("displace original generation");
+        let replacement_identity = create_database(&database, b"replacement generation");
+        transition
+            .publish_replacement(replacement_identity)
+            .expect("publish replacement generation");
+        transition.finish().expect("finish replacement generation");
+
+        let source_use_path = sidecar_path(&database, USE_SUFFIX);
+        let terminal_ledger_len = fs::metadata(&source_use_path).unwrap().len();
+        assert!(
+            terminal_ledger_len > RECORD_BYTES as u64,
+            "completed transition must leave durable history for this keeper"
+        );
+        let reopened = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit current terminal namespace")
+            .bind_replacing_quiescent_record(replacement_identity)
+            .expect("retain current terminal namespace history");
+        reopened
+            .finish_bootstrap()
+            .expect("publish current namespace");
+        drop(reopened);
+        assert_eq!(
+            fs::metadata(&source_use_path).unwrap().len(),
+            terminal_ledger_len,
+            "an already-current terminal ledger must not be rewritten"
+        );
+        let copied = dir.path().join("completed-ledger-copy.db");
+        fs::copy(&database, &copied).expect("copy replacement main database");
+        for suffix in [GATE_SUFFIX, USE_SUFFIX] {
+            fs::copy(
+                sidecar_path(&database, suffix),
+                sidecar_path(&copied, suffix),
+            )
+            .expect("copy namespace sidecar");
+        }
+        let copied_file = File::open(&copied).expect("open copied main database");
+        let copied_identity = FileIdentity::from_file(&copied_file)
+            .expect("query copied main identity")
+            .expect("native copied main identity");
+
+        let rebound = PendingNamespaceOpen::begin(&copied, NamespaceOpenIntent::Shared)
+            .expect("admit copied completed namespace")
+            .bind_replacing_quiescent_record(copied_identity)
+            .expect("collapse terminal copied transition history");
+        rebound
+            .finish_bootstrap()
+            .expect("publish copied generation");
+        assert_eq!(
+            fs::metadata(sidecar_path(&copied, USE_SUFFIX))
+                .unwrap()
+                .len(),
+            RECORD_BYTES as u64,
+            "copied terminal history should collapse to one current base record"
+        );
+    }
+
+    #[test]
+    fn live_generation_rejects_replacement_identity_then_requires_guarded_transition() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("replace.db");
+        let displaced = dir.path().join("replace.displaced.db");
+        let first_identity = create_database(&database, b"first");
+        let first = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit first")
+            .bind(first_identity)
+            .expect("bind first");
+        first.finish_bootstrap().expect("finish first bootstrap");
+
+        fs::rename(&database, &displaced).expect("displace main path");
+        let replacement_identity = create_database(&database, b"replacement");
+        assert!(matches!(
+            first.validate_path_identity(),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+
+        let stale_join = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admission reads live record");
+        assert_eq!(stale_join.expected_identity(), Some(first_identity));
+        assert!(matches!(
+            stale_join.bind(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+
+        drop(first);
+        let replacement_staging = dir.path().join("replace.replacement.db");
+        fs::rename(&database, &replacement_staging).expect("stage replacement");
+        fs::rename(&displaced, &database).expect("restore first generation");
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, first_identity)
+                .expect("guard first generation");
+        fs::rename(&database, &displaced).expect("quarantine first generation under guard");
+        fs::rename(&replacement_staging, &database).expect("activate replacement under guard");
+        transition
+            .publish_replacement(replacement_identity)
+            .expect("publish replacement generation");
+        transition.finish().expect("finish guarded transition");
+
+        let replacement = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit published replacement")
+            .bind(replacement_identity)
+            .expect("bind published replacement");
+        replacement
+            .finish_bootstrap()
+            .expect("finish replacement bootstrap");
+        replacement
+            .validate_path_identity()
+            .expect("replacement remains bound");
+    }
+
+    #[test]
+    fn guarded_generation_transition_reopens_replacement_and_supports_exact_rollback() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("recover.db");
+        let quarantine = dir.path().join("recover.db.corrupt");
+        let replacement_staging = dir.path().join("recover.db.replacement");
+        let old_identity = create_database(&database, b"corrupt generation");
+        publish_generation(&database, old_identity);
+        let replacement_identity =
+            create_database(&replacement_staging, b"reconstructed generation");
+
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, old_identity)
+                .expect("guard old namespace generation");
+        fs::rename(&database, &quarantine).expect("quarantine old generation");
+        fs::rename(&replacement_staging, &database).expect("activate replacement");
+
+        assert_eq!(
+            transition
+                .publish_replacement(replacement_identity)
+                .expect("publish replacement namespace generation"),
+            NamespaceGenerationTransitionOutcome::Published
+        );
+        assert_eq!(
+            transition
+                .publish_replacement(replacement_identity)
+                .expect("classify same-guard exact retry"),
+            NamespaceGenerationTransitionOutcome::AlreadyPublished
+        );
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+
+        fs::rename(&database, &replacement_staging).expect("stage replacement for rollback");
+        fs::rename(&quarantine, &database).expect("restore old generation under guard");
+        assert_eq!(
+            transition
+                .publish_replacement(old_identity)
+                .expect("publish exact rollback"),
+            NamespaceGenerationTransitionOutcome::Published
+        );
+        assert_eq!(transition.current_identity(), old_identity);
+
+        fs::rename(&database, &quarantine).expect("requarantine old generation");
+        fs::rename(&replacement_staging, &database).expect("reactivate replacement");
+        assert_eq!(
+            transition
+                .publish_replacement(replacement_identity)
+                .expect("republish replacement after rollback"),
+            NamespaceGenerationTransitionOutcome::Published
+        );
+        assert_eq!(
+            transition.finish().expect("finish replacement publication"),
+            replacement_identity
+        );
+
+        let pending = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+            .expect("read-only reopen of replacement");
+        assert_eq!(pending.expected_identity(), Some(replacement_identity));
+        let replacement = pending
+            .bind(replacement_identity)
+            .expect("bind replacement identity");
+        replacement
+            .validate_path_identity()
+            .expect("replacement path remains exact");
+        drop(replacement);
+
+        let ordinary = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("ordinary reopen after transition");
+        assert_eq!(ordinary.expected_identity(), None);
+        ordinary
+            .bind(replacement_identity)
+            .expect("bind ordinary replacement reopen")
+            .finish_bootstrap()
+            .expect("publish replacement reopen");
+        assert_eq!(
+            fs::read(&quarantine).expect("read quarantined generation"),
+            b"corrupt generation"
+        );
+        assert!(sidecar_path(&database, GATE_SUFFIX).exists());
+        assert!(sidecar_path(&database, USE_SUFFIX).exists());
+    }
+
+    #[test]
+    fn generation_transition_rejects_live_peer_and_wrong_identities() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("exact.db");
+        let unrelated = dir.path().join("unrelated.db");
+        let old_identity = create_database(&database, b"old");
+        let live = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit old generation")
+            .bind(old_identity)
+            .expect("bind old generation");
+        live.finish_bootstrap().expect("publish old generation");
+        let unrelated_identity = create_database(&unrelated, b"unrelated");
+
+        assert!(matches!(
+            begin_database_namespace_generation_transition(&database, old_identity),
+            Err(FrankenError::Busy)
+        ));
+        drop(live);
+
+        assert!(matches!(
+            begin_database_namespace_generation_transition(&database, unrelated_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+
+        let mut use_file =
+            open_existing_transition_lock_file(&database, &sidecar_path(&database, USE_SUFFIX))
+                .expect("open unchanged namespace record");
+        assert_eq!(
+            read_identity_record(&mut use_file, &database).expect("read unchanged generation"),
+            old_identity
+        );
+    }
+
+    #[test]
+    fn generation_transition_excludes_shared_admission_for_entire_mutation_window() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("admission-race.db");
+        let quarantine = dir.path().join("admission-race.db.corrupt");
+        let replacement_staging = dir.path().join("admission-race.db.replacement");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let replacement_identity = create_database(&replacement_staging, b"replacement");
+
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, old_identity)
+                .expect("guard before caller-owned mutation");
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+
+        fs::rename(&database, &quarantine).expect("quarantine old generation");
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+        fs::rename(&replacement_staging, &database).expect("activate replacement");
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+        transition
+            .publish_replacement(replacement_identity)
+            .expect("publish replacement while still exclusive");
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+        transition.finish().expect("finish transition");
+
+        let pending = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+            .expect("replacement generation remains readable");
+        assert_eq!(pending.expected_identity(), Some(replacement_identity));
+        pending
+            .bind(replacement_identity)
+            .expect("finished transition admits exact replacement");
+    }
+
+    #[test]
+    fn generation_transition_rejects_missing_and_malformed_records() {
+        let dir = tempdir().expect("tempdir");
+        let missing_database = dir.path().join("missing.db");
+        let missing_old_identity = create_database(&missing_database, b"old");
+        assert!(matches!(
+            begin_database_namespace_generation_transition(&missing_database, missing_old_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert!(!sidecar_path(&missing_database, GATE_SUFFIX).exists());
+        assert!(!sidecar_path(&missing_database, USE_SUFFIX).exists());
+
+        let database = dir.path().join("malformed.db");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        fs::write(&use_path, b"malformed namespace record").expect("corrupt namespace record");
+        let malformed_before = fs::read(&use_path).expect("snapshot malformed record");
+
+        assert!(matches!(
+            begin_database_namespace_generation_transition(&database, old_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(&use_path).expect("read refused malformed record"),
+            malformed_before
+        );
+    }
+
+    #[test]
+    fn generation_transition_detects_path_replacement_before_publication() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("race.db");
+        let quarantine = dir.path().join("race.db.corrupt");
+        let replacement_staging = dir.path().join("race.db.replacement");
+        let displaced_replacement = dir.path().join("race.db.displaced");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let replacement_identity = create_database(&replacement_staging, b"replacement");
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, old_identity)
+                .expect("guard old generation");
+        fs::rename(&database, &quarantine).expect("quarantine old generation");
+        fs::rename(&replacement_staging, &database).expect("activate replacement");
+
+        let result = transition.publish_replacement_inner(replacement_identity, || {
+            fs::rename(&database, &displaced_replacement)
+                .expect("displace replacement during transition");
+            create_database(&database, b"racing replacement");
+            Ok(())
+        });
+        assert!(matches!(result, Err(FrankenError::CannotOpen { .. })));
+        assert!(matches!(
+            transition.finish(),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+
+        drop(transition);
+        let racing_identity =
+            FileIdentity::from_file(&File::open(&database).expect("open racing replacement"))
+                .expect("query racing replacement identity")
+                .expect("native racing identity");
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+                .expect("admission reaches fail-closed record validation")
+                .bind(racing_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(displaced_replacement).expect("read displaced replacement"),
+            b"replacement"
+        );
+    }
+
+    #[test]
+    fn interrupted_generation_transition_releases_locks_and_retries_exactly() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("interrupt.db");
+        let quarantine = dir.path().join("interrupt.db.corrupt");
+        let replacement_staging = dir.path().join("interrupt.db.replacement");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let replacement_identity = create_database(&replacement_staging, b"replacement");
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, old_identity)
+                .expect("guard old generation");
+        fs::rename(&database, &quarantine).expect("quarantine old generation");
+        fs::rename(&replacement_staging, &database).expect("activate replacement");
+
+        let interrupted = transition.publish_replacement_inner(replacement_identity, || {
+            Err(FrankenError::internal(
+                "injected pre-publication interruption",
+            ))
+        });
+        assert!(matches!(interrupted, Err(FrankenError::Internal(_))));
+        drop(transition);
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+                .expect("admission reaches fail-closed record validation")
+                .bind(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+
+        let mut retry = begin_database_namespace_generation_transition(&database, old_identity)
+            .expect("resume prepared transition with replacement already installed");
+        assert_eq!(
+            retry
+                .publish_replacement(replacement_identity)
+                .expect("retry interrupted transition"),
+            NamespaceGenerationTransitionOutcome::Published
+        );
+        retry.finish().expect("finish retried transition");
+    }
+
+    #[test]
+    fn prepared_transition_resumes_while_main_path_is_absent() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("absent.db");
+        let quarantine = dir.path().join("absent.db.quarantined");
+        let replacement_staging = dir.path().join("absent.db.replacement");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let replacement_identity = create_database(&replacement_staging, b"replacement");
+
+        let transition = begin_database_namespace_generation_transition(&database, old_identity)
+            .expect("prepare transition before quarantine");
+        fs::rename(&database, &quarantine).expect("quarantine old generation");
+        drop(transition);
+        assert!(!database.exists());
+
+        let mut resumed = begin_database_namespace_generation_transition(&database, old_identity)
+            .expect("resume exact durable prepare while main path is absent");
+        fs::rename(&replacement_staging, &database).expect("activate replacement after resume");
+        resumed
+            .publish_replacement(replacement_identity)
+            .expect("publish replacement after absent-path resume");
+        resumed.finish().expect("finish resumed transition");
+    }
+
+    #[test]
+    fn partial_transition_and_prepare_writes_resume_exactly() {
+        for (name, transition_prefix, prepare_prefix) in [
+            ("partial-transition", 37_usize, 0_usize),
+            ("complete-transition", TRANSITION_BYTES, 0_usize),
+            ("partial-next-prepare", TRANSITION_BYTES, 37_usize),
+        ] {
+            let dir = tempdir().expect("tempdir");
+            let database = dir.path().join(format!("{name}.db"));
+            let quarantine = dir.path().join(format!("{name}.db.quarantined"));
+            let replacement_staging = dir.path().join(format!("{name}.db.replacement"));
+            let old_identity = create_database(&database, b"old");
+            publish_generation(&database, old_identity);
+            let replacement_identity = create_database(&replacement_staging, b"replacement");
+            let mut transition =
+                begin_database_namespace_generation_transition(&database, old_identity)
+                    .expect("prepare exact transition");
+            fs::rename(&database, &quarantine).expect("quarantine old generation");
+            fs::rename(&replacement_staging, &database).expect("activate replacement");
+
+            let record = encode_transition_record(1, old_identity, replacement_identity);
+            let next_prepare = encode_prepare_record(2, replacement_identity);
+            let append_offset = transition.append_offset;
+            let use_file = transition
+                .use_file
+                .as_mut()
+                .expect("transition retains use-sidecar descriptor");
+            use_file
+                .seek(SeekFrom::Start(append_offset))
+                .expect("seek interrupted publication offset");
+            use_file
+                .write_all(&record[..transition_prefix])
+                .expect("write requested transition prefix");
+            use_file
+                .write_all(&next_prepare[..prepare_prefix])
+                .expect("write requested next-prepare prefix");
+            use_file
+                .sync_data()
+                .expect("durably inject interrupted publication");
+            drop(transition);
+
+            let expected_recorded_identity = if transition_prefix == TRANSITION_BYTES {
+                replacement_identity
+            } else {
+                old_identity
+            };
+            let mut resumed = begin_database_namespace_generation_transition(
+                &database,
+                expected_recorded_identity,
+            )
+            .expect("resume exact interrupted ledger state");
+            if expected_recorded_identity == old_identity {
+                assert_eq!(
+                    resumed
+                        .publish_replacement(replacement_identity)
+                        .expect("complete exact interrupted transition"),
+                    NamespaceGenerationTransitionOutcome::Published
+                );
+            }
+            resumed.finish().expect("finish resumed publication");
+
+            let pending =
+                PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+                    .expect("admit completed replacement");
+            assert_eq!(pending.expected_identity(), Some(replacement_identity));
+        }
+    }
+
+    #[test]
+    fn finish_error_retains_exclusive_retryable_guard() {
+        const POISONED_DROP_CHILD_DATABASE: &str = "FSQLITE_NS_POISONED_DROP_CHILD_DATABASE";
+
+        if let Some(database) = std::env::var_os(POISONED_DROP_CHILD_DATABASE) {
+            let database = PathBuf::from(database);
+            let identity =
+                FileIdentity::from_file(&File::open(&database).expect("open child generation"))
+                    .expect("query child generation identity")
+                    .expect("native child generation identity");
+            let mut dropped = begin_database_namespace_generation_transition(&database, identity)
+                .expect("prepare transition for poisoned-drop proof");
+            assert!(matches!(
+                dropped.finish_inner(|| {
+                    Err(FrankenError::internal(
+                        "injected failure after complete finish bytes",
+                    ))
+                }),
+                Err(FrankenError::Internal(_))
+            ));
+            drop(dropped);
+            assert!(matches!(
+                PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+                Err(FrankenError::Busy)
+            ));
+            return;
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("finish-retry.db");
+        let identity = create_database(&database, b"generation");
+        publish_generation(&database, identity);
+        let mut transition = begin_database_namespace_generation_transition(&database, identity)
+            .expect("prepare transition");
+
+        let result = transition.finish_inner(|| {
+            Err(FrankenError::internal(
+                "injected failure after finish write before sync",
+            ))
+        });
+        assert!(matches!(result, Err(FrankenError::Internal(_))));
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+        assert_eq!(transition.finish().expect("retry exact finish"), identity);
+        drop(transition);
+        PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admission resumes after confirmed finish");
+
+        let dropped_database = dir.path().join("finish-drop.db");
+        let dropped_identity = create_database(&dropped_database, b"generation");
+        publish_generation(&dropped_database, dropped_identity);
+        let output = Command::new(std::env::current_exe().expect("resolve test executable"))
+            .arg("--exact")
+            .arg("namespace::tests::finish_error_retains_exclusive_retryable_guard")
+            .arg("--nocapture")
+            .env(POISONED_DROP_CHILD_DATABASE, &dropped_database)
+            .output()
+            .expect("run poisoned-drop child");
+        assert!(
+            output.status.success(),
+            "poisoned-drop child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        PendingNamespaceOpen::begin(&dropped_database, NamespaceOpenIntent::Shared)
+            .expect("process exit releases intentionally leaked fail-stop locks");
+    }
+
+    #[test]
+    fn partial_finish_resumes_exactly_and_foreign_finish_tail_is_rejected() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("partial-finish.db");
+        let identity = create_database(&database, b"generation");
+        publish_generation(&database, identity);
+        let mut transition = begin_database_namespace_generation_transition(&database, identity)
+            .expect("prepare finish interruption");
+        let finish = encode_finish_record(1, identity);
+        let append_offset = transition.append_offset;
+        let use_file = transition
+            .use_file
+            .as_mut()
+            .expect("transition retains use-sidecar descriptor");
+        use_file
+            .seek(SeekFrom::Start(append_offset))
+            .expect("seek finish offset");
+        use_file
+            .write_all(&finish[..37])
+            .expect("write exact partial finish");
+        use_file.sync_data().expect("sync exact partial finish");
+        drop(transition);
+
+        let mut resumed = begin_database_namespace_generation_transition(&database, identity)
+            .expect("reacquire prepared transition with partial finish");
+        resumed.finish().expect("complete exact partial finish");
+        drop(resumed);
+        PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit after completed finish");
+
+        let foreign_database = dir.path().join("foreign-finish.db");
+        let foreign_identity = create_database(&foreign_database, b"generation");
+        publish_generation(&foreign_database, foreign_identity);
+        let mut foreign =
+            begin_database_namespace_generation_transition(&foreign_database, foreign_identity)
+                .expect("prepare foreign-tail proof");
+        let foreign_append_offset = foreign.append_offset;
+        let foreign_file = foreign
+            .use_file
+            .as_mut()
+            .expect("transition retains use-sidecar descriptor");
+        foreign_file
+            .seek(SeekFrom::Start(foreign_append_offset))
+            .expect("seek foreign finish offset");
+        foreign_file
+            .write_all(b"foreign finish tail")
+            .expect("write foreign finish tail");
+        foreign_file.sync_data().expect("sync foreign tail");
+        drop(foreign);
+
+        let mut refused =
+            begin_database_namespace_generation_transition(&foreign_database, foreign_identity)
+                .expect("reacquire guarded foreign tail");
+        assert!(matches!(
+            refused.finish(),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        drop(refused);
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&foreign_database, NamespaceOpenIntent::Shared)
+                .expect("ordinary admission reaches fail-closed validation")
+                .bind(foreign_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+    }
+
+    #[test]
+    fn transition_ledger_remains_usable_beyond_legacy_record_bound() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("long-lived.db");
+        let identity = create_database(&database, b"generation");
+        publish_generation(&database, identity);
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        let mut use_file = OpenOptions::new()
+            .append(true)
+            .open(&use_path)
+            .expect("open long-lived namespace ledger");
+        for sequence in 1..=1_025_u64 {
+            use_file
+                .write_all(&encode_prepare_record(sequence, identity))
+                .expect("append historical prepare");
+            use_file
+                .write_all(&encode_finish_record(sequence, identity))
+                .expect("append historical finish");
+        }
+        use_file.sync_data().expect("sync long-lived ledger");
+        drop(use_file);
+
+        let mut transition = begin_database_namespace_generation_transition(&database, identity)
+            .expect("begin after more than 1,024 historical records");
+        transition
+            .finish()
+            .expect("finish after legacy bound is exceeded");
+    }
+
+    #[test]
+    fn exact_partial_prepare_append_is_repaired_but_foreign_tail_is_rejected() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("partial.db");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        let prepare = encode_prepare_record(1, old_identity);
+        let mut use_file = OpenOptions::new()
+            .append(true)
+            .open(&use_path)
+            .expect("open namespace record for interrupted prepare");
+        use_file
+            .write_all(&prepare[..37])
+            .expect("write exact interrupted prefix");
+        use_file.sync_data().expect("sync interrupted prefix");
+        drop(use_file);
+
+        begin_database_namespace_generation_transition(&database, old_identity)
+            .expect("repair exact interrupted prepare")
+            .finish()
+            .expect("finish repaired no-op transition");
+
+        let second_database = dir.path().join("foreign-tail.db");
+        let second_old_identity = create_database(&second_database, b"second old");
+        publish_generation(&second_database, second_old_identity);
+        let second_use_path = sidecar_path(&second_database, USE_SUFFIX);
+        let mut second_use_file = OpenOptions::new()
+            .append(true)
+            .open(&second_use_path)
+            .expect("open second namespace record");
+        second_use_file
+            .write_all(b"foreign interrupted bytes")
+            .expect("write foreign partial tail");
+        second_use_file.sync_data().expect("sync foreign tail");
+        drop(second_use_file);
+        let foreign_before = fs::read(&second_use_path).expect("snapshot foreign tail");
+
+        assert!(matches!(
+            begin_database_namespace_generation_transition(&second_database, second_old_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(&second_use_path).expect("read refused foreign tail"),
+            foreign_before
+        );
+    }
+
+    #[test]
+    fn generation_transition_rejects_corrupt_or_unprepared_complete_transition_record() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("corrupt-transition.db");
+        let unrelated = dir.path().join("corrupt-transition.replacement.db");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let replacement_identity = create_database(&unrelated, b"replacement");
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+        let mut corrupt_transition =
+            encode_transition_record(1, old_identity, replacement_identity);
+        corrupt_transition[TRANSITION_CHECKSUM_OFFSET] ^= 0xff;
+        let mut use_file = OpenOptions::new()
+            .append(true)
+            .open(&use_path)
+            .expect("open namespace record");
+        use_file
+            .write_all(&corrupt_transition)
+            .expect("write corrupt complete transition");
+        use_file.sync_data().expect("sync corrupt transition");
+        drop(use_file);
+        let corrupt_before = fs::read(&use_path).expect("snapshot corrupt transition");
+
+        assert!(matches!(
+            begin_database_namespace_generation_transition(&database, old_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(
+            fs::read(&use_path).expect("read refused corrupt transition"),
+            corrupt_before
+        );
+
+        let unprepared_database = dir.path().join("unprepared-transition.db");
+        let unprepared_replacement = dir.path().join("unprepared-transition.replacement.db");
+        let unprepared_old_identity = create_database(&unprepared_database, b"old");
+        publish_generation(&unprepared_database, unprepared_old_identity);
+        let unprepared_replacement_identity =
+            create_database(&unprepared_replacement, b"replacement");
+        let unprepared_use_path = sidecar_path(&unprepared_database, USE_SUFFIX);
+        let mut unprepared_use_file = OpenOptions::new()
+            .append(true)
+            .open(&unprepared_use_path)
+            .expect("open unprepared namespace ledger");
+        unprepared_use_file
+            .write_all(&encode_transition_record(
+                1,
+                unprepared_old_identity,
+                unprepared_replacement_identity,
+            ))
+            .expect("write valid checksummed transition without prepare");
+        unprepared_use_file
+            .sync_data()
+            .expect("sync unprepared transition");
+        drop(unprepared_use_file);
+
+        assert!(matches!(
+            begin_database_namespace_generation_transition(
+                &unprepared_database,
+                unprepared_old_identity
+            ),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn generation_transition_rejects_hard_linked_replacement() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("hardlink.db");
+        let quarantine = dir.path().join("hardlink.db.corrupt");
+        let replacement_source = dir.path().join("hardlink-replacement.db");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, old_identity)
+                .expect("guard old generation");
+        fs::rename(&database, &quarantine).expect("quarantine old generation");
+        let replacement_identity = create_database(&replacement_source, b"replacement");
+        fs::hard_link(&replacement_source, &database).expect("hard-link replacement into place");
+
+        assert!(matches!(
+            transition.publish_replacement(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generation_transition_rejects_final_component_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("symlink.db");
+        let quarantine = dir.path().join("symlink.db.corrupt");
+        let replacement_source = dir.path().join("symlink-replacement.db");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, old_identity)
+                .expect("guard old generation");
+        fs::rename(&database, &quarantine).expect("quarantine old generation");
+        let replacement_identity = create_database(&replacement_source, b"replacement");
+        symlink(&replacement_source, &database).expect("symlink replacement into place");
+
+        assert!(matches!(
+            transition.publish_replacement(replacement_identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+    }
+
+    #[test]
+    fn generation_transition_cross_process_exclusion_then_finish_releases_locks() {
+        const CHILD_DATABASE: &str = "FSQLITE_NS_TRANSITION_CHILD_DATABASE";
+        const CHILD_EXPECT_OPEN: &str = "FSQLITE_NS_TRANSITION_CHILD_EXPECT_OPEN";
+
+        if let Some(database) = std::env::var_os(CHILD_DATABASE) {
+            let database = PathBuf::from(database);
+            let admission =
+                PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting);
+            if std::env::var_os(CHILD_EXPECT_OPEN).is_some() {
+                admission.expect("successful finish releases both locks cross-process");
+            } else {
+                assert!(matches!(admission, Err(FrankenError::Busy)));
+            }
+            return;
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("cross-process.db");
+        let quarantine = dir.path().join("cross-process.db.corrupt");
+        let replacement_staging = dir.path().join("cross-process.db.replacement");
+        let old_identity = create_database(&database, b"old");
+        publish_generation(&database, old_identity);
+        let replacement_identity = create_database(&replacement_staging, b"replacement");
+        let mut transition =
+            begin_database_namespace_generation_transition(&database, old_identity)
+                .expect("guard old generation before mutation");
+
+        let assert_child_admission = |expect_open: bool| {
+            let mut command =
+                Command::new(std::env::current_exe().expect("resolve test executable"));
+            command
+                .arg("--exact")
+                .arg(
+                    "namespace::tests::generation_transition_cross_process_exclusion_then_finish_releases_locks",
+                )
+                .arg("--nocapture")
+                .env(CHILD_DATABASE, &database);
+            if expect_open {
+                command.env(CHILD_EXPECT_OPEN, "1");
+            }
+            let output = command.output().expect("run namespace transition child");
+            assert!(
+                output.status.success(),
+                "child failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        assert_child_admission(false);
+        fs::rename(&database, &quarantine).expect("quarantine old generation");
+        assert_child_admission(false);
+        fs::rename(&replacement_staging, &database).expect("activate replacement");
+        assert_child_admission(false);
+        assert_eq!(
+            transition
+                .publish_replacement(replacement_identity)
+                .expect("publish while cross-process admissions remain excluded"),
+            NamespaceGenerationTransitionOutcome::Published
+        );
+        assert_child_admission(false);
+        transition.finish().expect("finish exact replacement");
+        assert_child_admission(true);
+    }
+
+    /// The permission policy in `sidecar_exposure_is_acceptable`: owner-only
+    /// always passes; a just-created file passes regardless (its bits came
+    /// from the mount, not from anyone loosening it); an existing sidecar
+    /// passes only when every principal class it grants is granted at least
+    /// as much by its database — which for group bits depends on the two
+    /// files sharing a group.
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_exposure_policy_is_bounded_by_the_database_file() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("policy.db");
+        let missing = dir.path().join("missing.db");
+        let existing = SidecarProvenance::Existing {
+            database_path: &database,
+        };
+        // The gid a sidecar created beside the database carries, and one it
+        // only carries once the owner regroups it. The policy compares gids,
+        // never memberships, so the second need not name a real group.
+        create_database(&database, b"policy");
+        let same_gid = fs::metadata(&database).expect("database gid").gid();
+        let other_gid = same_gid.wrapping_add(1);
+
+        assert!(sidecar_exposure_is_acceptable(
+            0o100_600, same_gid, existing
+        ));
+        assert!(sidecar_exposure_is_acceptable(
+            0o100_700, other_gid, existing
+        ));
+        // A fresh `O_EXCL` create that reads back as 0777 is the mount
+        // reporting a fixed mask (WSL drvfs without `metadata`, FAT/exFAT).
+        assert!(sidecar_exposure_is_acceptable(
+            0o100_777,
+            other_gid,
+            SidecarProvenance::CreatedNow
+        ));
+        // No database to bound the exposure: fail closed.
+        assert!(!sidecar_exposure_is_acceptable(
+            0o100_644,
+            same_gid,
+            SidecarProvenance::Existing {
+                database_path: &missing,
+            },
+        ));
+
+        // Same group: group bits bound group bits, other bits bound other bits.
+        for (database_mode, sidecar_mode, accepted) in [
+            (0o644, 0o644, true),
+            (0o644, 0o640, true),
+            (0o644, 0o664, false),
+            (0o664, 0o664, true),
+            (0o664, 0o666, false),
+            (0o600, 0o640, false),
+            (0o777, 0o777, true),
+            (0o777, 0o666, true),
+            // POSIX resolves one class per process: a group member of a 0604
+            // database is refused by its group class, so a 0640 sidecar would
+            // grant that member something the database does not.
+            (0o604, 0o640, false),
+            (0o604, 0o604, true),
+            (0o640, 0o604, false),
+        ] {
+            fs::set_permissions(&database, fs::Permissions::from_mode(database_mode))
+                .expect("set database mode");
+            assert_eq!(
+                sidecar_exposure_is_acceptable(0o100_000 | sidecar_mode, same_gid, existing),
+                accepted,
+                "same group: database {database_mode:04o} sidecar {sidecar_mode:04o}"
+            );
+        }
+
+        // Different group: a sidecar-group member may be in the database's
+        // group or not, so a sidecar bit needs the database bit in both
+        // classes. (A sidecar in a group other than its database's arises only
+        // from the owner regrouping it, e.g. `chgrp` or a setgid directory
+        // plus a database moved in from elsewhere.)
+        for (database_mode, sidecar_mode, accepted) in [
+            (0o640, 0o640, false),
+            (0o604, 0o604, false),
+            (0o604, 0o640, false),
+            (0o644, 0o640, true),
+            (0o644, 0o604, true),
+            (0o644, 0o644, true),
+            (0o664, 0o640, true),
+            (0o664, 0o620, false),
+            (0o666, 0o666, true),
+            (0o777, 0o777, true),
+        ] {
+            fs::set_permissions(&database, fs::Permissions::from_mode(database_mode))
+                .expect("set database mode");
+            assert_eq!(
+                sidecar_exposure_is_acceptable(0o100_000 | sidecar_mode, other_gid, existing),
+                accepted,
+                "different group: database {database_mode:04o} sidecar {sidecar_mode:04o}"
+            );
+        }
+
+        // A symlinked database is not a baseline.
+        let link = dir.path().join("link.db");
+        std::os::unix::fs::symlink(&database, &link).expect("symlink database");
+        fs::set_permissions(&database, fs::Permissions::from_mode(0o777)).expect("loosen");
+        assert!(!sidecar_exposure_is_acceptable(
+            0o100_777,
+            same_gid,
+            SidecarProvenance::Existing {
+                database_path: &link,
+            },
+        ));
+    }
+
+    /// GH beads_rust#491 (re-open leg): sidecars that carry exactly the
+    /// database file's group/other bits — what a permission-less mount reports
+    /// for every file — admit shared, read-only, and transition opens; a
+    /// sidecar loosened beyond its database still fails closed.
+    #[cfg(unix)]
+    #[test]
+    fn sidecars_bounded_by_database_mode_admit_but_looser_ones_fail_closed() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("mask.db");
+        let identity = create_database(&database, b"generation");
+        publish_generation(&database, identity);
+        let gate_path = sidecar_path(&database, GATE_SUFFIX);
+        let use_path = sidecar_path(&database, USE_SUFFIX);
+
+        let set_mode = |path: &Path, mode: u32| {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set mode");
+        };
+        // Everything reports the mount mask.
+        for path in [&database, &gate_path, &use_path] {
+            set_mode(path, 0o777);
+        }
+        PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+            .expect("read-only admission under a mount mask")
+            .bind(identity)
+            .expect("bind read-only");
+        PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("shared admission under a mount mask")
+            .bind(identity)
+            .expect("bind shared");
+        // The transition and cleanup openers share the validator; exercise
+        // them without leaving a prepared-but-unfinished transition behind.
+        drop(
+            open_existing_transition_lock_file(&database, &gate_path)
+                .expect("transition open under a mount mask"),
+        );
+        assert!(
+            open_cleanup_lock_file(&database, &gate_path)
+                .expect("cleanup open under a mount mask")
+                .is_some()
+        );
+
+        // The database is owner-only again; the sidecars now grant more than
+        // it does and are refused, exactly as before this policy. Every
+        // refusal happens at the sidecar open, before any record is touched.
+        set_mode(&database, 0o600);
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert!(matches!(
+            open_existing_transition_lock_file(&database, &gate_path),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert!(matches!(
+            begin_database_namespace_generation_transition(&database, identity),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert!(matches!(
+            open_cleanup_lock_file(&database, &gate_path),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+
+        // Owner-only sidecars are always fine, whatever the database grants.
+        set_mode(&database, 0o664);
+        set_mode(&gate_path, 0o600);
+        set_mode(&use_path, 0o600);
+        PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("owner-only sidecars")
+            .bind(identity)
+            .expect("bind owner-only");
+    }
+
+    /// GH beads_rust#491 (creation leg), opt-in: point
+    /// `FSQLITE_PERMISSIONLESS_FS_DIR` at a writable directory on a mount that
+    /// does not persist POSIX permission bits (a WSL2 `/mnt/<drive>` without
+    /// `metadata`, or a FAT volume mounted with a `0777` mask) and a never
+    /// admitted database must bootstrap, re-open shared, and re-open read-only
+    /// there even though every sidecar reads back group/other-accessible.
+    #[cfg(unix)]
+    #[test]
+    fn permissionless_mount_admits_fresh_and_existing_sidecars() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let Some(root) = std::env::var_os("FSQLITE_PERMISSIONLESS_FS_DIR") else {
+            eprintln!("FSQLITE_PERMISSIONLESS_FS_DIR unset; skipping");
+            return;
+        };
+        let dir = tempfile::Builder::new()
+            .prefix("fsqlite-ns-mask-")
+            .tempdir_in(root)
+            .expect("tempdir on the permission-less mount");
+        let database = dir.path().join("mask.db");
+        let identity = create_database(&database, b"generation");
+        let created = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("bootstrap on a permission-less mount")
+            .bind(identity)
+            .expect("bind bootstrap");
+        created.finish_bootstrap().expect("publish");
+        drop(created);
+
+        let gate_mode = fs::metadata(sidecar_path(&database, GATE_SUFFIX))
+            .expect("gate metadata")
+            .permissions()
+            .mode();
+        assert_ne!(
+            gate_mode & 0o077,
+            0,
+            "{} does not look like a permission-less mount (gate mode {:04o})",
+            dir.path().display(),
+            gate_mode & 0o7777
+        );
+
+        PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("shared re-open")
+            .bind(identity)
+            .expect("bind shared");
+        PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReadOnlyExisting)
+            .expect("read-only re-open")
+            .bind(identity)
+            .expect("bind read-only");
+    }
+
+    /// GH#416: an identity captured from a zero-length main file is
+    /// provisional. Simulate the msdosfs placeholder inode by binding an
+    /// identity that is NOT the file's real one while the file is empty, then
+    /// materialize the file and validate with the descriptor's live identity.
+    #[cfg(unix)]
+    #[test]
+    fn provisional_zero_length_identity_is_adopted_once_the_file_materializes() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("placeholder.db");
+        let real = create_database(&database, b"");
+        let placeholder = FileIdentity::from_unix_parts(0x5EED, 999_999_999);
+        assert_ne!(placeholder, real);
+
+        let binding = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit fresh namespace")
+            .bind(placeholder)
+            .expect("bind placeholder identity");
+        assert!(binding.identity_is_provisional());
+        assert_eq!(binding.identity(), placeholder);
+        assert!(binding.validate_path_identity().is_err());
+
+        // Still zero-length: nothing materialized, so even a matching
+        // descriptor must not adopt (the path's inode may still move).
+        assert!(
+            binding
+                .validate_path_identity_with_descriptor(Some(real))
+                .is_err()
+        );
+        assert_eq!(binding.identity(), placeholder);
+
+        fs::write(&database, b"page one").expect("materialize the main file");
+
+        // The descriptor still reporting the placeholder means the path was
+        // rebound to a different file: no adoption, fail closed.
+        assert!(
+            binding
+                .validate_path_identity_with_descriptor(Some(placeholder))
+                .is_err()
+        );
+        assert!(
+            binding
+                .validate_path_identity_with_descriptor(None)
+                .is_err()
+        );
+        assert_eq!(binding.identity(), placeholder);
+        assert!(binding.identity_is_provisional());
+
+        // Path and descriptor agree on the materialized identity: adopt once.
+        binding
+            .validate_path_identity_with_descriptor(Some(real))
+            .expect("adopt the materialized identity");
+        assert_eq!(binding.identity(), real);
+        assert!(!binding.identity_is_provisional());
+        binding
+            .validate_path_identity()
+            .expect("plain validation passes after adoption");
+        binding
+            .guard_generation()
+            .expect("generation probe sees the adopted identity as current");
+
+        // The republished record is what a later peer admission reads.
+        binding.finish_bootstrap().expect("publish generation");
+        let peer = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("peer admission");
+        assert_eq!(peer.expected_identity(), Some(real));
+        peer.bind(real).expect("peer binds the adopted identity");
+
+        // A later mismatch on the now-durable identity is a real supersession.
+        let replacement = dir.path().join("replacement.db");
+        fs::write(&replacement, b"other generation").expect("write replacement");
+        let replacement_identity = FileIdentity::from_file(&File::open(&replacement).unwrap())
+            .unwrap()
+            .unwrap();
+        fs::rename(&replacement, &database).expect("rename over the main file");
+        assert!(
+            binding
+                .validate_path_identity_with_descriptor(Some(replacement_identity))
+                .is_err(),
+            "a durable identity must never be re-adopted"
+        );
+        assert_eq!(binding.identity(), real);
+    }
+
+    /// GH#416: a binding whose main file was already non-empty at bind time
+    /// is never provisional, so a replaced file stays a fail-closed mismatch
+    /// even when the descriptor identity the caller offers matches the path.
+    #[cfg(unix)]
+    #[test]
+    fn durable_identity_never_adopts_a_replacement() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("durable.db");
+        let identity = create_database(&database, b"generation");
+        let binding = PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("admit generation")
+            .bind(identity)
+            .expect("bind generation");
+        assert!(!binding.identity_is_provisional());
+        binding
+            .validate_path_identity_with_descriptor(Some(identity))
+            .expect("current generation validates");
+
+        let replacement = dir.path().join("replacement.db");
+        fs::write(&replacement, b"other generation").expect("write replacement");
+        let replacement_identity = FileIdentity::from_file(&File::open(&replacement).unwrap())
+            .unwrap()
+            .unwrap();
+        fs::rename(&replacement, &database).expect("rename over the main file");
+        assert!(
+            binding
+                .validate_path_identity_with_descriptor(Some(replacement_identity))
+                .is_err()
+        );
+        assert_eq!(binding.identity(), identity);
+        assert!(matches!(
+            binding.probe_generation(),
+            GenerationProbe::Superseded
+        ));
+    }
+
+    #[test]
+    fn reserved_bootstrap_and_pending_drop_are_raii_exclusive() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("reserved.db");
+        let identity = create_database(&database, b"");
+
+        let abandoned =
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReservedExclusive)
+                .expect("reserve namespace");
+        drop(abandoned);
+
+        let reserved =
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReservedExclusive)
+                .expect("reserve after unwind")
+                .bind(identity)
+                .expect("bind reservation");
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::Busy)
+        ));
+        reserved.finish_bootstrap().expect("finish reservation");
+        PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared)
+            .expect("shared admission after reservation")
+            .bind(identity)
+            .expect("join reserved generation");
+
+        assert!(sidecar_path(&database, GATE_SUFFIX).exists());
+        assert!(sidecar_path(&database, USE_SUFFIX).exists());
+    }
+
+    #[test]
+    fn abandoned_private_cleanup_requires_exclusive_namespace_and_removes_exact_artifacts() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("transient.db");
+        let identity = create_database(&database, b"candidate");
+        let binding =
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReservedExclusive)
+                .expect("reserve namespace")
+                .bind(identity)
+                .expect("bind reservation");
+        binding.finish_bootstrap().expect("finish bootstrap");
+        let companion_paths = cleanup_companion_paths(&database);
+        for path in &companion_paths {
+            fs::write(path, b"candidate artifact").expect("seed exact candidate companion");
+        }
+
+        #[cfg(windows)]
+        assert_eq!(
+            &companion_paths[9..],
+            [
+                sidecar_path(&database, "-wal-lock-shared"),
+                sidecar_path(&database, "-wal-lock-reserved"),
+                sidecar_path(&database, "-wal-lock-pending"),
+            ],
+            "the Windows fixed cleanup set must contain the exact WAL-lock triplet"
+        );
+
+        assert!(
+            cleanup_abandoned_private_database(&database, identity)
+                .expect("contention outcome")
+                .is_not_owned(),
+            "a live namespace binding must report NotOwned"
+        );
+        assert!(database.exists());
+        drop(binding);
+
+        assert!(
+            cleanup_abandoned_private_database(&database, identity)
+                .expect("exclusive abandoned-candidate cleanup")
+                .is_complete(),
+            "the exact abandoned candidate must be completely removed"
+        );
+        assert!(!database.exists());
+        for path in companion_paths {
+            assert!(
+                !path.exists(),
+                "cleanup left exact companion {}",
+                path.display()
+            );
+        }
+        assert!(!sidecar_path(&database, GATE_SUFFIX).exists());
+        assert!(!sidecar_path(&database, USE_SUFFIX).exists());
+    }
+
+    #[test]
+    fn cleanup_receipts_match_failures_before_and_after_every_ordinal() {
+        let entry_count = cleanup_companion_paths(Path::new("probe.db")).len() + 3;
+        for after_removal in [false, true] {
+            for ordinal in 0..entry_count {
+                let dir = tempdir().expect("matrix tempdir");
+                let database = dir
+                    .path()
+                    .join(format!("interrupted-{after_removal}-{ordinal}.db"));
+                let (identity, paths) = seed_cleanup_fixture(&database, None);
+                let at = if after_removal {
+                    CleanupInterruption::AfterRemoval(ordinal)
+                } else {
+                    CleanupInterruption::BeforeRemoval(ordinal)
+                };
+                let outcome = cleanup_abandoned_private_database_with_hooks(
+                    &database,
+                    identity,
+                    &mut InterruptCleanup { at },
+                )
+                .expect("injected interruption must return a typed receipt");
+                let (cause, entries, durability) = unwrap_partial_cleanup(outcome);
+
+                assert_eq!(entries.len(), entry_count);
+                assert_eq!(cause.path.as_deref(), Some(paths[ordinal].as_path()));
+                assert_eq!(
+                    cause.stage,
+                    if after_removal {
+                        PrivateDatabaseCleanupFailureStage::AfterRemoval
+                    } else {
+                        PrivateDatabaseCleanupFailureStage::BeforeRemoval
+                    }
+                );
+                assert_eq!(durability, PrivateDatabaseCleanupDurability::Unknown);
+
+                for (entry_ordinal, (entry, path)) in entries.iter().zip(&paths).enumerate() {
+                    let was_removed = if after_removal {
+                        entry_ordinal <= ordinal
+                    } else {
+                        entry_ordinal < ordinal
+                    };
+                    assert_eq!(entry.path, *path);
+                    assert_eq!(
+                        entry.state,
+                        if was_removed {
+                            PrivateDatabaseCleanupEntryState::RemovedOwned
+                        } else {
+                            PrivateDatabaseCleanupEntryState::RetainedOwned
+                        },
+                        "wrong receipt state at interruption {ordinal}, entry {entry_ordinal}"
+                    );
+                    assert_eq!(
+                        path.exists(),
+                        !was_removed,
+                        "receipt/filesystem disagreement at interruption {ordinal}, entry {entry_ordinal}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_reports_unknown_durability_after_directory_sync_interruption() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("sync-interrupted.db");
+        let (identity, paths) = seed_cleanup_fixture(&database, None);
+        let outcome = cleanup_abandoned_private_database_with_hooks(
+            &database,
+            identity,
+            &mut InterruptCleanup {
+                at: CleanupInterruption::BeforeDirectorySync,
+            },
+        )
+        .expect("directory-sync interruption must return a typed receipt");
+        let (cause, entries, durability) = unwrap_partial_cleanup(outcome);
+
+        assert_eq!(
+            cause.stage,
+            PrivateDatabaseCleanupFailureStage::DirectorySync
+        );
+        assert_eq!(durability, PrivateDatabaseCleanupDurability::Unknown);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.state == PrivateDatabaseCleanupEntryState::RemovedOwned)
+        );
+        assert!(paths.iter().all(|path| !path.exists()));
+    }
+
+    struct ReplaceCleanupEntry {
+        ordinal: usize,
+        displaced_path: PathBuf,
+    }
+
+    impl PrivateDatabaseCleanupHooks for ReplaceCleanupEntry {
+        fn before_remove(&mut self, ordinal: usize, path: &Path) -> io::Result<()> {
+            if ordinal == self.ordinal {
+                fs::rename(path, &self.displaced_path)?;
+                fs::write(path, b"unowned replacement")?;
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cleanup_preserves_replaced_companion_main_use_and_gate_entries() {
+        let probe_path = Path::new("probe.db");
+        let companion_count = cleanup_companion_paths(probe_path).len();
+        for ordinal in [0, companion_count, companion_count + 1, companion_count + 2] {
+            let dir = tempdir().expect("tempdir");
+            let database = dir.path().join(format!("replacement-{ordinal}.db"));
+            let (identity, paths) = seed_cleanup_fixture(&database, None);
+            let displaced_path = dir.path().join(format!("displaced-{ordinal}"));
+            let outcome = cleanup_abandoned_private_database_with_hooks(
+                &database,
+                identity,
+                &mut ReplaceCleanupEntry {
+                    ordinal,
+                    displaced_path: displaced_path.clone(),
+                },
+            )
+            .expect("replacement race must return a typed receipt");
+            let (cause, entries, durability) = unwrap_partial_cleanup(outcome);
+
+            assert_eq!(
+                cause.stage,
+                PrivateDatabaseCleanupFailureStage::OwnershipRecheck
+            );
+            assert_eq!(cause.path.as_deref(), Some(paths[ordinal].as_path()));
+            assert_eq!(durability, PrivateDatabaseCleanupDurability::Unknown);
+            assert_eq!(
+                entries[ordinal].state,
+                PrivateDatabaseCleanupEntryState::ReplacementDetected
+            );
+            assert_eq!(
+                fs::read(&paths[ordinal]).expect("read preserved replacement"),
+                b"unowned replacement"
+            );
+            assert!(displaced_path.exists(), "owned entry must remain displaced");
+            for (prior_ordinal, entry) in entries[..ordinal].iter().enumerate() {
+                assert_eq!(
+                    entry.state,
+                    PrivateDatabaseCleanupEntryState::RemovedOwned,
+                    "entry {prior_ordinal} must already be removed"
+                );
+            }
+            for (later_ordinal, entry) in entries[ordinal + 1..].iter().enumerate() {
+                assert_eq!(
+                    entry.state,
+                    PrivateDatabaseCleanupEntryState::RetainedOwned,
+                    "later entry {} must remain owned",
+                    later_ordinal + ordinal + 1
+                );
+            }
+        }
+    }
+
+    struct CreateCleanupEntry {
+        ordinal: usize,
+    }
+
+    impl PrivateDatabaseCleanupHooks for CreateCleanupEntry {
+        fn before_remove(&mut self, ordinal: usize, path: &Path) -> io::Result<()> {
+            if ordinal == self.ordinal {
+                fs::write(path, b"new unowned entry")?;
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cleanup_preserves_companion_created_after_absent_preflight() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("newly-present.db");
+        let ordinal = 1;
+        let (identity, paths) = seed_cleanup_fixture(&database, Some(ordinal));
+        let outcome = cleanup_abandoned_private_database_with_hooks(
+            &database,
+            identity,
+            &mut CreateCleanupEntry { ordinal },
+        )
+        .expect("newly present race must return a typed receipt");
+        let (cause, entries, durability) = unwrap_partial_cleanup(outcome);
+
+        assert_eq!(
+            cause.stage,
+            PrivateDatabaseCleanupFailureStage::OwnershipRecheck
+        );
+        assert_eq!(cause.path.as_deref(), Some(paths[ordinal].as_path()));
+        assert_eq!(durability, PrivateDatabaseCleanupDurability::Unknown);
+        assert_eq!(
+            entries[ordinal].state,
+            PrivateDatabaseCleanupEntryState::NewlyPresentUnowned
+        );
+        assert_eq!(
+            fs::read(&paths[ordinal]).expect("read newly present entry"),
+            b"new unowned entry"
+        );
+    }
+
+    struct RepopulateEarlierCleanupEntry {
+        after_ordinal: usize,
+        path: PathBuf,
+    }
+
+    impl PrivateDatabaseCleanupHooks for RepopulateEarlierCleanupEntry {
+        fn after_remove(&mut self, ordinal: usize, _path: &Path) -> io::Result<()> {
+            if ordinal == self.after_ordinal {
+                fs::write(&self.path, b"late unowned entry")?;
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cleanup_final_sweep_rejects_late_creation_and_post_removal_replacement() {
+        for absent_at_preflight in [true, false] {
+            let dir = tempdir().expect("tempdir");
+            let database = dir
+                .path()
+                .join(format!("late-repopulation-{absent_at_preflight}.db"));
+            let repopulated_ordinal = 0;
+            let after_ordinal = 1;
+            let (identity, paths) = seed_cleanup_fixture(
+                &database,
+                absent_at_preflight.then_some(repopulated_ordinal),
+            );
+            let outcome = cleanup_abandoned_private_database_with_hooks(
+                &database,
+                identity,
+                &mut RepopulateEarlierCleanupEntry {
+                    after_ordinal,
+                    path: paths[repopulated_ordinal].clone(),
+                },
+            )
+            .expect("late repopulation must return a typed receipt");
+            let (cause, entries, durability) = unwrap_partial_cleanup(outcome);
+
+            assert_eq!(
+                cause.stage,
+                PrivateDatabaseCleanupFailureStage::OwnershipRecheck
+            );
+            assert_eq!(
+                cause.path.as_deref(),
+                Some(paths[repopulated_ordinal].as_path())
+            );
+            assert_eq!(durability, PrivateDatabaseCleanupDurability::Unknown);
+            assert_eq!(
+                entries[repopulated_ordinal].state,
+                if absent_at_preflight {
+                    PrivateDatabaseCleanupEntryState::NewlyPresentUnowned
+                } else {
+                    PrivateDatabaseCleanupEntryState::ReplacementDetected
+                }
+            );
+            assert_eq!(
+                fs::read(&paths[repopulated_ordinal]).expect("read late unowned entry"),
+                b"late unowned entry"
+            );
+            assert!(
+                entries[1..]
+                    .iter()
+                    .all(|entry| { entry.state == PrivateDatabaseCleanupEntryState::RemovedOwned }),
+                "all remaining owned entries must already be removed"
+            );
+        }
+    }
+
+    struct ReplaceRemovedEntryAndInterrupt {
+        ordinal: usize,
+    }
+
+    impl PrivateDatabaseCleanupHooks for ReplaceRemovedEntryAndInterrupt {
+        fn after_remove(&mut self, ordinal: usize, path: &Path) -> io::Result<()> {
+            if ordinal == self.ordinal {
+                fs::write(path, b"replacement after successful removal")?;
+                return Err(io::Error::other("interrupt after replacement"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cleanup_partial_receipt_refreshes_post_removal_replacement() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("post-removal-replacement.db");
+        let ordinal = 0;
+        let (identity, paths) = seed_cleanup_fixture(&database, None);
+        let outcome = cleanup_abandoned_private_database_with_hooks(
+            &database,
+            identity,
+            &mut ReplaceRemovedEntryAndInterrupt { ordinal },
+        )
+        .expect("post-removal replacement must return a typed receipt");
+        let (cause, entries, durability) = unwrap_partial_cleanup(outcome);
+
+        assert_eq!(
+            cause.stage,
+            PrivateDatabaseCleanupFailureStage::AfterRemoval
+        );
+        assert_eq!(cause.path.as_deref(), Some(paths[ordinal].as_path()));
+        assert_eq!(durability, PrivateDatabaseCleanupDurability::Unknown);
+        assert_eq!(
+            entries[ordinal].state,
+            PrivateDatabaseCleanupEntryState::ReplacementDetected
+        );
+        assert_eq!(
+            fs::read(&paths[ordinal]).expect("read post-removal replacement"),
+            b"replacement after successful removal"
+        );
+    }
+
+    #[cfg(unix)]
+    struct RepopulateBeforeDirectorySync {
+        path: PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl PrivateDatabaseCleanupHooks for RepopulateBeforeDirectorySync {
+        fn before_directory_sync(&mut self, _parent: &Path) -> io::Result<()> {
+            fs::write(&self.path, b"late entry before directory sync")
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_final_sweep_follows_the_last_pre_sync_hook() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("pre-sync-repopulation.db");
+        let ordinal = 0;
+        let (identity, paths) = seed_cleanup_fixture(&database, Some(ordinal));
+        let outcome = cleanup_abandoned_private_database_with_hooks(
+            &database,
+            identity,
+            &mut RepopulateBeforeDirectorySync {
+                path: paths[ordinal].clone(),
+            },
+        )
+        .expect("pre-sync repopulation must return a typed receipt");
+        let (cause, entries, durability) = unwrap_partial_cleanup(outcome);
+
+        assert_eq!(
+            cause.stage,
+            PrivateDatabaseCleanupFailureStage::OwnershipRecheck
+        );
+        assert_eq!(cause.path.as_deref(), Some(paths[ordinal].as_path()));
+        assert_eq!(durability, PrivateDatabaseCleanupDurability::Unknown);
+        assert_eq!(
+            entries[ordinal].state,
+            PrivateDatabaseCleanupEntryState::NewlyPresentUnowned
+        );
+        assert_eq!(
+            fs::read(&paths[ordinal]).expect("read pre-sync repopulation"),
+            b"late entry before directory sync"
+        );
+    }
+
+    struct RemoveCleanupEntryBeforeRecheck {
+        ordinal: usize,
+    }
+
+    impl PrivateDatabaseCleanupHooks for RemoveCleanupEntryBeforeRecheck {
+        fn before_remove(&mut self, ordinal: usize, path: &Path) -> io::Result<()> {
+            if ordinal == self.ordinal {
+                fs::remove_file(path)?;
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cleanup_reports_operation_unknown_when_owned_path_vanishes_before_recheck() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("vanished.db");
+        let ordinal = 1;
+        let (identity, paths) = seed_cleanup_fixture(&database, None);
+        let outcome = cleanup_abandoned_private_database_with_hooks(
+            &database,
+            identity,
+            &mut RemoveCleanupEntryBeforeRecheck { ordinal },
+        )
+        .expect("vanished-path race must return a typed receipt");
+        let (cause, entries, durability) = unwrap_partial_cleanup(outcome);
+
+        assert_eq!(
+            cause.stage,
+            PrivateDatabaseCleanupFailureStage::OwnershipRecheck
+        );
+        assert_eq!(durability, PrivateDatabaseCleanupDurability::Unknown);
+        assert_eq!(
+            entries[ordinal].state,
+            PrivateDatabaseCleanupEntryState::OperationUnknown
+        );
+        assert!(!paths[ordinal].exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_releases_locks_while_duplicated_descriptors_remain_open() {
+        struct DuplicateCleanupLocks {
+            descriptors: Option<(File, File)>,
+        }
+
+        impl PrivateDatabaseCleanupHooks for DuplicateCleanupLocks {
+            fn after_namespace_locks(&mut self, gate: &File, use_file: &File) {
+                // dup and fork share the same open file description and flock.
+                // Keep real duplicates alive across the cleanup return without
+                // forking a multithreaded test process or relying on a race.
+                self.descriptors = Some((
+                    gate.try_clone().expect("duplicate acquired gate"),
+                    use_file.try_clone().expect("duplicate acquired use lock"),
+                ));
+            }
+
+            fn before_remove(&mut self, ordinal: usize, _path: &Path) -> io::Result<()> {
+                if ordinal == 1 {
+                    return Err(io::Error::other("interrupt after first companion removal"));
+                }
+                Ok(())
+            }
+        }
+
+        let directory = tempdir().expect("cleanup descriptor directory");
+        let database = directory.path().join("duplicated-cleanup.db");
+        let (identity, paths) = seed_cleanup_fixture(&database, None);
+        let main_guard = File::open(&database).expect("retain main ownership descriptor");
+        assert_eq!(
+            FileIdentity::from_file(&main_guard).unwrap(),
+            Some(identity)
+        );
+        let mut hooks = DuplicateCleanupLocks { descriptors: None };
+        let first = cleanup_abandoned_private_database_with_hooks(&database, identity, &mut hooks)
+            .expect("interrupted cleanup receipt");
+        let (cause, entries, durability) = unwrap_partial_cleanup(first);
+        assert_eq!(
+            cause.stage,
+            PrivateDatabaseCleanupFailureStage::BeforeRemoval
+        );
+        assert_eq!(cause.path.as_deref(), Some(paths[1].as_path()));
+        assert_eq!(
+            entries[0].state,
+            PrivateDatabaseCleanupEntryState::RemovedOwned
+        );
+        assert_eq!(durability, PrivateDatabaseCleanupDurability::Unknown);
+        let (gate_copy, use_copy) = hooks.descriptors.as_ref().expect("real locks duplicated");
+        for (suffix, held_copy) in [(GATE_SUFFIX, gate_copy), (USE_SUFFIX, use_copy)] {
+            let probe = File::open(sidecar_path(&database, suffix)).expect("open fresh lock probe");
+            assert_eq!(
+                FileIdentity::from_file(&probe).unwrap(),
+                FileIdentity::from_file(held_copy).unwrap(),
+                "probe must address the same retained lock file"
+            );
+            let result = AdvisoryFileLock::try_lock(&probe, FileLockMode::Exclusive);
+            assert!(
+                result.is_ok(),
+                "cleanup returned while its duplicated namespace descriptor retained an exclusive lock: {suffix}: {result:?}"
+            );
+            AdvisoryFileLock::unlock(&probe).expect("release independent probe");
+        }
+        let retry = cleanup_abandoned_private_database(&database, identity)
+            .expect("fresh ownership proof retry with duplicates still live");
+        assert!(retry.is_complete(), "fresh retry must complete: {retry:?}");
+        assert!(paths.iter().all(|path| !path.exists()));
+        assert!(gate_copy.metadata().is_ok());
+        assert!(use_copy.metadata().is_ok());
+    }
+
+    #[test]
+    fn cleanup_retry_requires_a_fresh_complete_ownership_proof() {
+        let retry_dir = tempdir().expect("retry tempdir");
+        let retry_database = retry_dir.path().join("retryable.db");
+        let (retry_identity, retry_paths) = seed_cleanup_fixture(&retry_database, None);
+        let first = cleanup_abandoned_private_database_with_hooks(
+            &retry_database,
+            retry_identity,
+            &mut InterruptCleanup {
+                at: CleanupInterruption::BeforeRemoval(1),
+            },
+        )
+        .expect("early interruption receipt");
+        assert!(matches!(
+            first,
+            PrivateDatabaseCleanupOutcome::Partial { .. }
+        ));
+        assert!(retry_database.exists(), "main ownership proof must remain");
+        assert!(
+            cleanup_abandoned_private_database(&retry_database, retry_identity)
+                .expect("fresh ownership proof retry")
+                .is_complete()
+        );
+        assert!(retry_paths.iter().all(|path| !path.exists()));
+
+        let stopped_dir = tempdir().expect("stopped tempdir");
+        let stopped_database = stopped_dir.path().join("non-resumable.db");
+        let (stopped_identity, stopped_paths) = seed_cleanup_fixture(&stopped_database, None);
+        let main_ordinal = cleanup_companion_paths(&stopped_database).len();
+        let first = cleanup_abandoned_private_database_with_hooks(
+            &stopped_database,
+            stopped_identity,
+            &mut InterruptCleanup {
+                at: CleanupInterruption::AfterRemoval(main_ordinal),
+            },
+        )
+        .expect("post-main interruption receipt");
+        assert!(matches!(
+            first,
+            PrivateDatabaseCleanupOutcome::Partial { .. }
+        ));
+        assert!(!stopped_database.exists());
+        assert!(
+            cleanup_abandoned_private_database(&stopped_database, stopped_identity)
+                .expect("retry without main proof must fail closed")
+                .is_not_owned()
+        );
+        assert!(
+            stopped_paths[main_ordinal + 1..]
+                .iter()
+                .all(|path| path.exists()),
+            "retry must preserve the namespace records without a fresh main proof"
+        );
+    }
+
+    #[test]
+    fn cleanup_rejects_symlink_or_reparse_companion_before_any_removal() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("linked-companion.db");
+        let linked_ordinal = 0;
+        let (identity, paths) = seed_cleanup_fixture(&database, Some(linked_ordinal));
+        let target = dir.path().join("unrelated-target");
+        fs::write(&target, b"unrelated").expect("seed symlink target");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &paths[linked_ordinal])
+            .expect("create companion symlink");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&target, &paths[linked_ordinal])
+            .expect("create companion reparse-point symlink");
+
+        assert!(
+            cleanup_abandoned_private_database(&database, identity).is_err(),
+            "unsafe companion preflight must fail closed"
+        );
+        assert_eq!(fs::read(&target).expect("read target"), b"unrelated");
+        assert!(
+            paths.iter().all(|path| path.exists()),
+            "preflight rejection must preserve every planned entry"
+        );
+    }
+
+    #[test]
+    fn abandoned_private_cleanup_preserves_replacement_and_namespace_on_identity_drift() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("drift.db");
+        let displaced = dir.path().join("drift-owned.db");
+        let identity = create_database(&database, b"owned candidate");
+        let binding =
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::ReservedExclusive)
+                .expect("reserve namespace")
+                .bind(identity)
+                .expect("bind reservation");
+        binding.finish_bootstrap().expect("finish bootstrap");
+        drop(binding);
+
+        fs::rename(&database, &displaced).expect("displace owned candidate");
+        fs::write(&database, b"replacement").expect("seed replacement");
+        assert!(
+            cleanup_abandoned_private_database(&database, identity)
+                .expect("identity drift must fail closed")
+                .is_not_owned()
+        );
+        assert_eq!(
+            fs::read(&database).expect("read replacement"),
+            b"replacement"
+        );
+        assert_eq!(
+            fs::read(&displaced).expect("read owned candidate"),
+            b"owned candidate"
+        );
+        assert!(sidecar_path(&database, GATE_SUFFIX).exists());
+        assert!(sidecar_path(&database, USE_SUFFIX).exists());
+    }
+
+    #[test]
+    fn artifact_validation_rejects_segments_and_wal_fec_rewrite_temp() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("artifacts.db");
+        create_database(&database, b"");
+        validate_reserved_database_artifacts(&database, WindowsLockSidecarPolicy::RejectAll, None)
+            .expect("artifact-free reservation");
+
+        fs::write(
+            dir.path().join("artifacts.db-wal-seg-not-an-epoch"),
+            b"segment",
+        )
+        .expect("seed segment");
+        assert!(matches!(
+            validate_reserved_database_artifacts(
+                &database,
+                WindowsLockSidecarPolicy::RejectAll,
+                None
+            ),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+
+        let second = dir.path().join("rewrite.db");
+        create_database(&second, b"");
+        let temp = sidecar_path(&second, "-wal-fec").with_extension("wal-fec.tmp");
+        fs::write(temp, b"partial rewrite").expect("seed WAL-FEC rewrite temp");
+        assert!(matches!(
+            validate_reserved_database_artifacts(
+                &second,
+                WindowsLockSidecarPolicy::RejectAll,
+                None
+            ),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+    }
+
+    #[test]
+    fn artifact_validation_preserves_existing_mvcc_authority() {
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("mvcc-reserved.db");
+        create_database(&database, b"");
+        validate_reserved_database_artifacts(&database, WindowsLockSidecarPolicy::RejectAll, None)
+            .expect("empty reservation without an authority");
+
+        let companion = sidecar_path(&database, ".fsqlite-shm");
+        let authority = b"existing generation and live ownership";
+        fs::write(&companion, authority).expect("seed existing authority");
+        for policy in [
+            WindowsLockSidecarPolicy::RejectAll,
+            WindowsLockSidecarPolicy::AllowExpected,
+        ] {
+            assert!(matches!(
+                validate_reserved_database_artifacts(&database, policy, None),
+                Err(FrankenError::CannotOpen { .. })
+            ));
+            assert_eq!(fs::read(&companion).unwrap(), authority);
+            assert_eq!(fs::read(&database).unwrap(), b"");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn namespace_lockfile_symlink_is_rejected_without_following_it() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let database = dir.path().join("nofollow.db");
+        create_database(&database, b"");
+        let target = dir.path().join("attacker-target");
+        fs::write(&target, b"unchanged").expect("seed target");
+        symlink(&target, sidecar_path(&database, GATE_SUFFIX)).expect("seed malicious symlink");
+
+        assert!(matches!(
+            PendingNamespaceOpen::begin(&database, NamespaceOpenIntent::Shared),
+            Err(FrankenError::CannotOpen { .. })
+        ));
+        assert_eq!(fs::read(target).expect("read target"), b"unchanged");
+    }
+}

@@ -158,6 +158,15 @@ impl AgentSoundOverrides {
             Some(Agent::ZCode) => self.zcode,
             Some(Agent::MiniMax) => self.minimax,
             Some(Agent::Trae) => self.trae,
+            // No per-agent override exists for these yet, so the global sound
+            // settings apply to them exactly as they do to an unconfigured one.
+            Some(
+                Agent::DevEco
+                | Agent::CodeWhale
+                | Agent::AtomCode
+                | Agent::OpenClaw
+                | Agent::OpenDesk,
+            ) => AgentSoundSetting::Default,
             None => AgentSoundSetting::Default,
         }
     }

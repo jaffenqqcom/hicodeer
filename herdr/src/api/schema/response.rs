@@ -60,6 +60,9 @@ pub struct RawSessionDto {
     /// `Some` = the space this session belongs to is open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
+    /// Whether the store this session came from can remove one entry. Decided
+    /// where the store is registered, so the panel never guesses from a path.
+    pub deletable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

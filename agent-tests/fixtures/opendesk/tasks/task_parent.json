@@ -1,0 +1,1 @@
+{"task_id":"task_parent","messages":[],"chat_context":{"system_prompt":{"role":"system","content":"你是名为 OpenDesk 的智能体。\n - 工作目录：/repo/demo\n - 用户家目录：/home/demo\n - 临时目录：/tmp\n"}}}

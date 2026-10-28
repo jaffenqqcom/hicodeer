@@ -39,3 +39,11 @@ libc = "0.2"
 # The vendored agent server patches portable-pty; `[patch]` is only read from
 # the top-level workspace manifest, so the same patch has to be restated here.
 portable-pty = { path = "../../../../../herdr/vendor/portable-pty" }
+# ===== [OHOS PORT BEGIN] =====
+# `fsqlite` (reached through the agent-history SQLite connectors) builds an
+# io_uring ring on Linux. On OpenHarmony `io_uring_register` (syscall 427) is
+# not in the app seccomp allow-list and terminates the process with SIGSYS
+# instead of failing the call, so the patched VFS skips the ring there and every
+# file falls back to the blocking Unix implementation.
+fsqlite-vfs = { path = "../../../../../patches/fsqlite-vfs" }
+# ===== [OHOS PORT END] =====

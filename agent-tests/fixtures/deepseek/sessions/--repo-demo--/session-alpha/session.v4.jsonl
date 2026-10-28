@@ -1,0 +1,5 @@
+{"type":"session","version":4,"id":"session-alpha","createdAt":1793081522419,"cwd":"/repo/demo","isSeeded":false,"delegationDepth":0}
+{"type":"permission/preset","seq":0,"time":1793081522431,"data":{"preset":"workspace-write"}}
+{"type":"sandbox/mode","seq":1,"time":1793081522436,"data":{"mode":"workspace-write"}}
+{"type":"agent/inbox/spliced","seq":3,"time":1793081522442,"data":{"target":"next-turn","start":0,"inserted":[{"content":[{"type":"text","text":"Fix the build"},{"type":"text","text":"and run the tests"}],"source":{"kind":"user"},"role":"user","id":"24bf9353-9442-4c9e-ac54-e7877fb23e10"}]}}
+{"type":"agent/inbox/spliced","seq":5,"time":1793081522446,"data":{"target":"next-turn","start":0,"removedCount":1,"inserted":[]}}

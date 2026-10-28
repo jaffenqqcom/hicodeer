@@ -1643,17 +1643,13 @@ impl From<io::Error> for FramingError {
     }
 }
 
-/// Serializes a message and writes it as a length-prefixed frame:
-/// `[u32LE length][bincode payload]`.
+/// Serializes a message into a length-prefixed frame: `[u32LE length][bincode
+/// payload]`.
 ///
-/// This is a blocking/synchronous write suitable for use with `std::os::unix::net::UnixStream`
-/// in blocking mode, or with any `Write` implementor.
-///
-/// # Errors
-///
-/// Returns `FramingError::Bincode` if the payload length exceeds `u32::MAX`
-/// (would be truncated by the length prefix cast).
-pub fn write_message<W: Write, M: Serialize>(writer: &mut W, msg: &M) -> Result<(), FramingError> {
+/// Callers that own partial-write handling encode once and then write the
+/// returned bytes, so a retry never re-encodes or re-emits a frame that was
+/// already partly on the wire.
+pub fn encode_message<M: Serialize>(msg: &M) -> Result<Vec<u8>, FramingError> {
     let payload = bincode::serde::encode_to_vec(msg, bincode::config::standard())
         .map_err(|e| FramingError::Bincode(e.to_string()))?;
 
@@ -1665,8 +1661,25 @@ pub fn write_message<W: Write, M: Serialize>(writer: &mut W, msg: &M) -> Result<
         )));
     }
 
-    writer.write_all(&(len as u32).to_le_bytes())?;
-    writer.write_all(&payload)?;
+    let mut frame = Vec::with_capacity(LENGTH_PREFIX_BYTES + len);
+    frame.extend_from_slice(&(len as u32).to_le_bytes());
+    frame.extend_from_slice(&payload);
+    Ok(frame)
+}
+
+/// Serializes a message and writes it as a length-prefixed frame:
+/// `[u32LE length][bincode payload]`.
+///
+/// This is a blocking/synchronous write suitable for use with `std::os::unix::net::UnixStream`
+/// in blocking mode, or with any `Write` implementor.
+///
+/// # Errors
+///
+/// Returns `FramingError::Bincode` if the payload length exceeds `u32::MAX`
+/// (would be truncated by the length prefix cast).
+pub fn write_message<W: Write, M: Serialize>(writer: &mut W, msg: &M) -> Result<(), FramingError> {
+    let frame = encode_message(msg)?;
+    writer.write_all(&frame)?;
     writer.flush()?;
     Ok(())
 }

@@ -53,11 +53,6 @@ use crate::snapshot::{Agent, AgentStatus, Snapshot, Space};
 /// agent status, so the tree is re-read at this interval: fast enough that a
 /// status change reads as live, slow enough to be two idle requests.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(1000);
-/// Refresh failures in a row that mean this panel is disconnected from the
-/// server, rather than having seen one dropped request. At the refresh cadence
-/// this is about three seconds, which outlasts a daemon restart or a device that
-/// was briefly frozen.
-const DISCONNECT_CLOSE_THRESHOLD: usize = 3;
 /// Minimum gap between two attempts to add the Agent terminal. Deploying is
 /// asynchronous, so without this a refresh that lands mid-deploy would start a
 /// second terminal while the first is still being placed.
@@ -324,13 +319,14 @@ pub struct AgentPanel {
     fs: Arc<dyn Fs>,
     spaces: Vec<Space>,
     unavailable: Option<Unavailable>,
-    /// Refresh failures in a row. One is not a disconnection: a daemon restart
-    /// or a frozen device drops a request and answers the next one.
+    /// Refresh failures in a row, used to log one line per outage instead of
+    /// one per second.
     consecutive_failures: usize,
     /// When the terminal was last added, so a refresh during the add does not
     /// start another one.
     last_deploy_attempt: Option<std::time::Instant>,
-    /// Whether the terminal should exist, as last decided by a refresh.
+    /// Whether the terminal should exist, as last decided by a refresh: on as
+    /// soon as a refresh reads the server, off as soon as one fails to.
     wanted: bool,
     /// Daemon token the Agent terminal was last started against, or `None` when
     /// the panel has not started one in this run.
@@ -516,38 +512,41 @@ impl AgentPanel {
                     self.refresh_history(cx);
                 }
             }
-            Err(ClientError::NotReady) => {
-                // No endpoint at all: the daemon went away and the bootstrap
-                // cleared what it had reported. That is a disconnection just as
-                // much as a refused connection is, and the terminal it left
-                // behind is a dead tab, so it counts the same way.
-                #[cfg(target_env = "ohos")]
-                {
-                    self.status_recorded = false;
+            Err(error) => {
+                // Only the endpoint status differs per kind.
+                match &error {
+                    ClientError::NotReady => {
+                        // No endpoint at all: the daemon went away and the
+                        // bootstrap cleared what it had reported.
+                        #[cfg(target_env = "ohos")]
+                        {
+                            self.status_recorded = false;
+                        }
+                        self.unavailable = Some(Unavailable::WaitingForServer);
+                    }
+                    ClientError::Failed(message) => {
+                        // One line per outage: the refresh runs once a second, so
+                        // logging every failure would bury the first, useful error.
+                        if self.consecutive_failures == 0 {
+                            log::warn!("agent panel: refresh failed: {message}");
+                        }
+                        // Whatever changed while the endpoint was unreachable is
+                        // not news the user needs one toast per agent for.
+                        #[cfg(target_env = "ohos")]
+                        {
+                            self.status_recorded = false;
+                        }
+                        self.unavailable = Some(Unavailable::ServerUnavailable);
+                    }
                 }
-                self.unavailable = Some(Unavailable::WaitingForServer);
-                self.note_disconnect();
-                self.clear_history();
-            }
-            Err(ClientError::Failed(message)) => {
-                // One line per outage: the refresh runs once a second, so
-                // logging every failure would bury the first, useful error.
-                if self.consecutive_failures == 0 {
-                    log::warn!("agent panel: refresh failed: {message}");
-                }
-                // Whatever changed while the endpoint was unreachable is not
-                // news the user needs one toast per agent for.
-                #[cfg(target_env = "ohos")]
-                {
-                    self.status_recorded = false;
-                }
-                self.unavailable = Some(Unavailable::ServerUnavailable);
-                // A failed request is not a disconnection: the daemon can be
-                // busy (a history scan holds its main loop) or one read can
-                // time out. Counting it here would close the agent terminal —
-                // and kill the TUI running in it — because a request was slow,
-                // so only `NotReady` counts toward that.
                 self.consecutive_failures += 1;
+                // Showing that message means the panel can read nothing from
+                // the server: the Agent terminal has nothing left to attach to,
+                // so it is closed in the same refresh. There is no separate
+                // disconnection rule to fall behind this one; a successful
+                // refresh flips `wanted` back on and the terminal is reopened.
+                self.wanted = false;
+                self.needs_sync = true;
                 self.clear_history();
             }
         }
@@ -736,23 +735,6 @@ impl AgentPanel {
         }
     }
 
-    /// Counts one refresh that found no endpoint at all, closing the terminal
-    /// once those form a run long enough to call it a disconnection.
-    ///
-    /// Only `NotReady` calls this: a request that merely failed or timed out is
-    /// a busy server, not a gone one, and closing the tab over it would take a
-    /// running TUI down with it.
-    fn note_disconnect(&mut self) {
-        self.consecutive_failures += 1;
-        // Exactly at the threshold, not beyond it: the terminal is gone after
-        // this, and repeating the close every second would only walk the panes
-        // for nothing.
-        if self.consecutive_failures == DISCONNECT_CLOSE_THRESHOLD {
-            self.wanted = false;
-            self.needs_sync = true;
-        }
-    }
-
     /// Hands the pending agent-terminal change to the next turn of the event
     /// loop.
     ///
@@ -795,20 +777,24 @@ impl AgentPanel {
             return;
         };
 
-        // A daemon restart invalidates every client it was serving: a client
-        // exits on the shutdown notice rather than reconnecting, and the pinned
-        // tab it ran in stays behind looking exactly like a live one. The daemon
-        // issues a new token on every run, so comparing it against the run the
-        // terminal was started with is what detects that leftover.
-        let Some(control) = cmd_client::agent_control() else {
-            return;
-        };
-
+        let control = cmd_client::agent_control();
         let present = workspace_has_agent_terminal(workspace.read(cx), cx);
-        if present && self.deployed_agent_token.as_deref() != Some(control.token.as_str()) {
-            // The tab outlived the daemon that started it. Close it whichever way
-            // `wanted` points: leaving it would either block the replacement or
-            // keep a dead tab around when the panel wants no terminal at all.
+
+        // One decision covers every way the connection can stop backing the
+        // tab: a refresh failed (`wanted` is off, the same state that draws the
+        // "start the daemon" message), or the daemon was replaced under it (a
+        // new run issues a new token, so the pinned tab outlived its owner).
+        // Both leave a dead tab, and both close here rather than in a second
+        // place.
+        let owned_by_current_daemon = match (&control, &self.deployed_agent_token) {
+            (Some(control), Some(token)) => control.token == *token,
+            _ => false,
+        };
+        let replaced_daemon = control.is_some() && !owned_by_current_daemon;
+
+        if present && (!self.wanted || replaced_daemon) {
+            // Closing is idempotent: `close_agent_terminals` walks whatever
+            // Agent terminals are there, so an already-closed tab is a no-op.
             self.deployed_agent_token = None;
             workspace.update(cx, |workspace, cx| {
                 close_agent_terminals(workspace, window, cx);
@@ -819,51 +805,48 @@ impl AgentPanel {
             return;
         }
 
-        if self.wanted == present {
+        if !self.wanted || present {
             return;
         }
 
-        if self.wanted {
-            // Already started one for this daemon run: wait for it to land
-            // instead of adding a second tab beside it.
-            let deploy_still_settling = self.deployed_agent_token.as_deref()
-                == Some(control.token.as_str())
-                && self
-                    .last_deploy_attempt
-                    .is_some_and(|at| at.elapsed() < DEPLOY_SETTLE_TIMEOUT);
-            if deploy_still_settling {
-                self.needs_sync = true;
-                return;
-            }
-            if let Some(last_attempt) = self.last_deploy_attempt
-                && last_attempt.elapsed() < DEPLOY_RETRY_INTERVAL
-            {
-                // Let the next refresh try again rather than spinning here.
-                self.needs_sync = true;
-                return;
-            }
-            self.last_deploy_attempt = Some(std::time::Instant::now());
-            self.deployed_agent_token = Some(control.token.clone());
-            workspace.update(cx, |workspace, cx| {
-                // The leftover tab keeps its pinned title, so the panel closes it
-                // itself before adding the replacement; otherwise the pane would
-                // hold two Agent terminals and only the new one would be live.
-                close_agent_terminals(workspace, window, cx);
-                TerminalView::deploy_agent_terminal(
-                    workspace,
-                    control.socket_path,
-                    control.config_path,
-                    window,
-                    cx,
-                )
-                .detach_and_log_err(cx);
-            });
-        } else {
-            self.deployed_agent_token = None;
-            workspace.update(cx, |workspace, cx| {
-                close_agent_terminals(workspace, window, cx);
-            });
+        let Some(control) = control else {
+            return;
+        };
+
+        // Already started one for this daemon run: wait for it to land instead
+        // of adding a second tab beside it.
+        let deploy_still_settling = self.deployed_agent_token.as_deref()
+            == Some(control.token.as_str())
+            && self
+                .last_deploy_attempt
+                .is_some_and(|at| at.elapsed() < DEPLOY_SETTLE_TIMEOUT);
+        if deploy_still_settling {
+            self.needs_sync = true;
+            return;
         }
+        if let Some(last_attempt) = self.last_deploy_attempt
+            && last_attempt.elapsed() < DEPLOY_RETRY_INTERVAL
+        {
+            // Let the next refresh try again rather than spinning here.
+            self.needs_sync = true;
+            return;
+        }
+        self.last_deploy_attempt = Some(std::time::Instant::now());
+        self.deployed_agent_token = Some(control.token.clone());
+        workspace.update(cx, |workspace, cx| {
+            // The leftover tab keeps its pinned title, so the panel closes it
+            // itself before adding the replacement; otherwise the pane would
+            // hold two Agent terminals and only the new one would be live.
+            close_agent_terminals(workspace, window, cx);
+            TerminalView::deploy_agent_terminal(
+                workspace,
+                control.socket_path,
+                control.config_path,
+                window,
+                cx,
+            )
+            .detach_and_log_err(cx);
+        });
     }
 
     /// Creates a space and focuses it, the way the server's own `new` entry does.
@@ -2277,6 +2260,10 @@ impl AgentPanel {
     /// therefore has to name the command to run instead of only reporting that
     /// the tree is missing, and it centres the message so it reads as the state
     /// of the whole panel rather than a stray line at the top.
+    ///
+    /// The same flag decides whether the Agent terminal should exist: the
+    /// failed refresh that sets `unavailable` also turns `wanted` off, so this
+    /// message and the closed terminal cannot disagree.
     fn render_disconnected(&self, _cx: &mut Context<Self>) -> AnyElement {
         // One sentence, no heading: there is nothing to name here beyond the
         // command, and the panel is narrow enough that a heading would wrap and

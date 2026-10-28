@@ -24,8 +24,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(3);
 /// Bound on the history list. It is the one request that walks every agent
 /// store on disk, so the in-memory bound above would time it out on a cold
-/// daemon and the panel would look disconnected from a server that is merely
-/// reading session files.
+/// daemon; a failed refresh now counts as a disconnection, so that would close
+/// the Agent terminal over a server that is merely reading session files.
 const SESSIONS_READ_TIMEOUT: Duration = Duration::from_secs(20);
 /// Bound on an integration install. Installing writes files under the agent's
 /// own directory, so it is not an in-memory answer like the rest.

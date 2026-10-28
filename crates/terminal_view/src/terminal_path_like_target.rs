@@ -202,6 +202,16 @@ fn possibly_open_target(
                 continue;
             };
 
+            // A directory belongs to the system file manager, not to the editor:
+            // opening it through the workspace would only focus the project
+            // panel. Route it through gpui's platform abstraction so the choice
+            // of file manager stays in the platform layer.
+            if open_target.is_dir() {
+                let path = open_target.path().path.clone();
+                cx.update(|_, cx| cx.reveal_path(&path))?;
+                return Ok(Some(open_target));
+            }
+
             let opened = open_resolved_target(&workspace, &open_target, cx).await?;
             return Ok(opened.then_some(open_target));
         }

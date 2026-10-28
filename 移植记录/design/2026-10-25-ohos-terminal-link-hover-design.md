@@ -14,6 +14,8 @@
 - 指针移出链接（含移出终端）后，手型恢复、下划线和提示同时立刻消失
 - 不按 Ctrl 的点击或拖动仍然是选词/拖选/复制，不能误打开
 - 不提供长按打开
+- 下划线出现时文字同时变成终端调色板里的亮蓝色，便于在长路径中辨认
+- Ctrl+点击目录时交给系统文件管理器打开，不再切到 hicodeer 项目面板（所有平台一致）
 
 ## 2. 现状与约束
 
@@ -113,6 +115,22 @@ let cursor_over_link = (cfg!(target_env = "ohos") || window.modifiers().secondar
 
 路径类目标另有一处约束：`crates/terminal_view/src/terminal_path_like_target.rs:118` 原本在 `hover` 为空时直接放弃打开。指针可能在异步解析完成前就按下，OHOS 下跳过这条守卫，文件是否存在仍由 `resolve_open_target` 校验。
 
+### 3.7 悬停文字改为亮蓝色
+
+`crates/terminal_view/src/terminal_element.rs:1307` 的 `link_style` 原来只设置下划线、不改文字颜色（避免长路径染色后难读）。现在悬停命中链接时，文字与下划线一起变色：
+
+```rust
+color: Some(theme.colors().terminal_ansi_bright_blue),
+```
+
+取色用终端调色板的 bright blue，而不是固定的暗蓝：深色主题下是 `#3b9eff` 这类高亮蓝，在 `terminal_ansi_background` 上对比度足够，也跟随用户切换的终端主题。下划线仍用 `link_text_hover`。
+
+### 3.8 目录交给系统文件管理器
+
+`crates/terminal_view/src/terminal_path_like_target.rs:209` 在 `open_resolved_target` 之前分流：只要目标是目录，就直接调用 gpui 的平台抽象 `cx.reveal_path(&path)`，不再经 workspace 打开（之前会激活项目面板）。所有平台一致，不按 OHOS 门控。
+
+`reveal_path` 是 `App::reveal_path` → `Platform::reveal_path`，OHOS 实现落在 `crates/gpui_ohos/src/ohos/platform.rs:766`，内部转成 `reveal_in_file_manager`。终端侧不出现任何 `@ohos.*` 或文件管理器专用调用，具体用哪个文件管理器由各平台的 `Platform::reveal_path` 实现决定。
+
 ## 4. 取舍
 
 **为什么不用 gpui tooltip 加 0 延迟**
@@ -139,15 +157,17 @@ OSC 8 是程序显式标记的链接（单元格自带 URI），上游语义就�
 - `crates/terminal_view/src/terminal_element.rs:1488` — 自绘提示浮层
 - `crates/terminal_view/src/terminal_element.rs:1792` — 指针悬停显示手型
 - `crates/terminal_view/src/terminal_path_like_target.rs:118` — 打开路径不依赖已解析的 hover
+- `crates/terminal_view/src/terminal_element.rs:1307` — 悬停链接文字改为亮蓝色
+- `crates/terminal_view/src/terminal_path_like_target.rs:209` — 目录交给系统文件管理器（全平台）
 
-全部为 `cfg!(target_env = "ohos")` 或 `#[cfg(target_env = "ohos")]`，macOS / Linux 仍走「Ctrl+悬停 + gpui tooltip」。
+前六项均为 `cfg!(target_env = "ohos")` 或 `#[cfg(target_env = "ohos")]`，macOS / Linux 仍走「Ctrl+悬停 + gpui tooltip」。文字颜色与目录分流两项不做 OHOS 门控：前者是终端链接的通用视觉，后者对所有平台都改用 `Platform::reveal_path`。
 
 ## 6. 验证记录
 
 设备实测（`./script/bundle-ohos` → `--hap-only` → `install-local.sh` 覆盖安装）：
 
-- 指针移入 URL、文件名、目录名：立即出现手型、下划线与提示，无需按键
+- 指针移入 URL、文件名、目录名：立即出现手型、亮蓝色文字、下划线与提示，无需按键
 - 在链接内移动：提示保持显示
-- 移出链接、移出终端：三者同时消失，光标恢复 I 形
-- Ctrl+点击：URL 进浏览器，文件在编辑器中打开并跳到指定行，目录打开文件夹
+- 移出链接、移出终端：文字颜色、下划线与提示同时消失，光标恢复 I 形
+- Ctrl+点击：URL 进浏览器，文件在编辑器中打开并跳到指定行，目录在系统文件管理器中打开
 - 普通单击、拖动、双击：选词与复制正常

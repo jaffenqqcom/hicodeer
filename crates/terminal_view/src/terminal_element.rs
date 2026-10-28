@@ -1305,10 +1305,10 @@ impl Element for TerminalElement {
                 let theme = cx.theme().clone();
 
                 let link_style = HighlightStyle {
-                    // A hovered link is marked by the underline alone; recoloring
-                    // the text makes long path runs hard to read against the
-                    // terminal palette. Applies to every platform.
-                    color: None,
+                    // A hovered link is underlined and recolored to the palette's
+                    // bright blue, which stays legible on the terminal background.
+                    // Applies to every platform.
+                    color: Some(theme.colors().terminal_ansi_bright_blue),
                     font_weight: Some(font_weight),
                     font_style: None,
                     background_color: None,

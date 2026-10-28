@@ -5200,3 +5200,697 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
 }
+
+#[test]
+fn install_zcode_writes_hook_and_keeps_unrelated_settings() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let settings_dir = home.join(".zcode").join("cli");
+    fs::create_dir_all(&settings_dir).unwrap();
+    fs::write(
+        settings_dir.join("setting.json"),
+        r#"{"permission":{"mode":"build"},"hooks":{"enabled":false}}"#,
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_zcode().unwrap();
+    let hook_content = fs::read_to_string(&installed.hook_path).unwrap();
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.settings_path).unwrap()).unwrap();
+
+    assert_eq!(
+        installed.hook_path,
+        settings_dir.join("hooks").join(ZCODE_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(hook_content, ZCODE_HOOK_ASSET);
+    assert_eq!(settings["permission"]["mode"], "build");
+    assert_eq!(settings["hooks"]["enabled"], true);
+    assert!(settings["hooks"]["events"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" session"));
+    assert!(settings["hooks"]["events"]["PermissionRequest"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" blocked"));
+    assert!(settings["hooks"]["events"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" idle"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_zcode_is_idempotent() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let settings_dir = home.join(".zcode").join("cli");
+    fs::create_dir_all(&settings_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let first = install_zcode().unwrap();
+    let after_first = fs::read_to_string(&first.settings_path).unwrap();
+    let second = install_zcode().unwrap();
+    let after_second = fs::read_to_string(&second.settings_path).unwrap();
+
+    assert_eq!(after_first, after_second);
+    let settings: Value = serde_json::from_str(&after_second).unwrap();
+    assert_eq!(
+        settings["hooks"]["events"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_zcode_removes_only_herdr_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let settings_dir = home.join(".zcode").join("cli");
+    fs::create_dir_all(&settings_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_zcode().unwrap();
+    let settings_path = settings_dir.join("setting.json");
+    let mut settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    settings["hooks"]["events"]["Stop"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"hooks": [{"type": "command", "command": "echo mine"}]}));
+    fs::write(&settings_path, serde_json::to_string_pretty(&settings).unwrap()).unwrap();
+
+    let result = uninstall_zcode().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(result.updated_settings);
+
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    let stop_entries = settings["hooks"]["events"]["Stop"].as_array().unwrap();
+    assert_eq!(stop_entries.len(), 1);
+    assert_eq!(stop_entries[0]["hooks"][0]["command"], "echo mine");
+    assert!(settings["hooks"]["events"]
+        .get("UserPromptSubmit")
+        .map(|value| value.as_array().unwrap().is_empty())
+        .unwrap_or(true));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_zcode_follows_the_settings_file_override() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let custom_dir = base.join("custom-zcode");
+    fs::create_dir_all(&custom_dir).unwrap();
+    std::env::set_var(ZCODE_CLI_SETTINGS_FILE_ENV_VAR, custom_dir.join("setting.json"));
+
+    let installed = install_zcode().unwrap();
+
+    assert_eq!(installed.settings_path, custom_dir.join("setting.json"));
+    assert_eq!(
+        installed.hook_path,
+        custom_dir.join("hooks").join(ZCODE_HOOK_INSTALL_NAME)
+    );
+
+    std::env::remove_var(ZCODE_CLI_SETTINGS_FILE_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_zcode_errors_when_settings_directory_is_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(&home).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let error = install_zcode().unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("zcode settings directory not found"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_codewhale_writes_hook_and_keeps_comments() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let config_dir = home.join(".codewhale");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("config.toml"),
+        "# keep this note\n[providers.deepseek]\ntype = \"openai\"\n",
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_codewhale().unwrap();
+    let hook_content = fs::read_to_string(&installed.hook_path).unwrap();
+    let config = fs::read_to_string(&installed.config_path).unwrap();
+
+    assert_eq!(
+        installed.hook_path,
+        config_dir.join("hooks").join(CODEWHALE_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(hook_content, CODEWHALE_HOOK_ASSET);
+    assert!(config.contains("# keep this note"));
+    assert!(config.contains("[providers.deepseek]"));
+    let document: toml::Value = toml::from_str(&config).unwrap();
+    assert_eq!(document["hooks"]["enabled"], toml::Value::Boolean(true));
+    let entries = document["hooks"]["hooks"].as_array().unwrap();
+    assert_eq!(entries.len(), 8);
+    assert!(entries.iter().any(|entry| {
+        entry["event"].as_str() == Some("session_busy") && entry["command"].as_str().unwrap().ends_with(" blocked")
+    }));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_codewhale_is_idempotent() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let config_dir = home.join(".codewhale");
+    fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let first = install_codewhale().unwrap();
+    let after_first = fs::read_to_string(&first.config_path).unwrap();
+    let second = install_codewhale().unwrap();
+    let after_second = fs::read_to_string(&second.config_path).unwrap();
+
+    assert_eq!(after_first, after_second);
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_codewhale_removes_only_herdr_entries() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let config_dir = home.join(".codewhale");
+    fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_codewhale().unwrap();
+    let config_path = config_dir.join("config.toml");
+    let mut config = fs::read_to_string(&config_path).unwrap();
+    config.push_str("\n[[hooks.hooks]]\nname = \"mine\"\nevent = \"session_start\"\ncommand = \"echo mine\"\n");
+    fs::write(&config_path, config).unwrap();
+
+    let result = uninstall_codewhale().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(result.updated_config);
+
+    let config = fs::read_to_string(&config_path).unwrap();
+    let document: toml::Value = toml::from_str(&config).unwrap();
+    let entries = document["hooks"]["hooks"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["command"], toml::Value::String("echo mine".into()));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_codewhale_follows_the_home_override() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let custom_home = base.join("custom-codewhale");
+    fs::create_dir_all(&custom_home).unwrap();
+    std::env::set_var(CODEWHALE_HOME_ENV_VAR, &custom_home);
+
+    let installed = install_codewhale().unwrap();
+
+    assert_eq!(installed.config_path, custom_home.join("config.toml"));
+    assert_eq!(
+        installed.hook_path,
+        custom_home.join("hooks").join(CODEWHALE_HOOK_INSTALL_NAME)
+    );
+
+    std::env::remove_var(CODEWHALE_HOME_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_atomcode_writes_hook_and_keeps_user_entries() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let config_dir = home.join(".atomcode");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("hooks.json"),
+        r#"{"hooks":{"mine":{"event":"PreToolUse","command":"echo mine"}}}"#,
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_atomcode().unwrap();
+    let hook_content = fs::read_to_string(&installed.hook_path).unwrap();
+    let hooks: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.hooks_path).unwrap()).unwrap();
+
+    assert_eq!(
+        installed.hook_path,
+        config_dir.join(ATOMCODE_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(hook_content, ATOMCODE_HOOK_ASSET);
+    assert_eq!(hooks["hooks"]["mine"]["command"], "echo mine");
+    assert_eq!(
+        hooks["hooks"]["hicodeer-agent-state-session-start"]["event"],
+        "SessionStart"
+    );
+    assert_eq!(
+        hooks["hooks"]["hicodeer-agent-state-stop"]["event"],
+        "Stop"
+    );
+    assert!(hooks["hooks"]["hicodeer-agent-state-stop"]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with(" idle"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_atomcode_is_idempotent() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let config_dir = home.join(".atomcode");
+    fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let first = install_atomcode().unwrap();
+    let after_first = fs::read_to_string(&first.hooks_path).unwrap();
+    let second = install_atomcode().unwrap();
+    let after_second = fs::read_to_string(&second.hooks_path).unwrap();
+
+    assert_eq!(after_first, after_second);
+    let hooks: Value = serde_json::from_str(&after_second).unwrap();
+    assert_eq!(hooks["hooks"].as_object().unwrap().len(), 7);
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_atomcode_removes_only_herdr_entries() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let config_dir = home.join(".atomcode");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("hooks.json"),
+        r#"{"hooks":{"mine":{"event":"PreToolUse","command":"echo mine"}}}"#,
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_atomcode().unwrap();
+    let result = uninstall_atomcode().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(result.updated_hooks);
+
+    let hooks: Value =
+        serde_json::from_str(&fs::read_to_string(&result.hooks_path).unwrap()).unwrap();
+    let entries = hooks["hooks"].as_object().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries["mine"]["command"], "echo mine");
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_atomcode_follows_the_home_override() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let custom_home = base.join("custom-atomcode");
+    fs::create_dir_all(&custom_home).unwrap();
+    std::env::set_var(ATOMCODE_HOME_ENV_VAR, &custom_home);
+
+    let installed = install_atomcode().unwrap();
+
+    assert_eq!(installed.hooks_path, custom_home.join("hooks.json"));
+    assert_eq!(
+        installed.hook_path,
+        custom_home.join(ATOMCODE_HOOK_INSTALL_NAME)
+    );
+
+    std::env::remove_var(ATOMCODE_HOME_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_deveco_writes_plugin_and_registers_it() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let config_dir = base.join("deveco");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("deveco.jsonc"),
+        "{\n  // keep this note\n  \"provider\": {\"deepseek\": {}},\n  \"plugin\": [\"mine.js\"]\n}\n",
+    )
+    .unwrap();
+    std::env::set_var(DEVECO_CONFIG_DIR_ENV_VAR, &config_dir);
+
+    let installed = install_deveco().unwrap();
+    let plugin = fs::read_to_string(&installed.plugin_path).unwrap();
+    let config = fs::read_to_string(&installed.config_path).unwrap();
+
+    assert_eq!(
+        installed.plugin_path,
+        config_dir.join("plugins").join(DEVECO_PLUGIN_INSTALL_NAME)
+    );
+    assert_eq!(plugin, DEVECO_PLUGIN_ASSET);
+    assert!(config.contains("// keep this note"));
+    assert!(config.contains("\"mine.js\""));
+    assert!(config.contains(&installed.plugin_path.display().to_string()));
+
+    assert_eq!(
+        installed.tui_plugin_path,
+        config_dir.join(DEVECO_TUI_PLUGIN_INSTALL_NAME)
+    );
+    assert_eq!(
+        fs::read_to_string(&installed.tui_plugin_path).unwrap(),
+        DEVECO_TUI_PLUGIN_ASSET
+    );
+    assert_eq!(installed.tui_config_path, config_dir.join("tui.json"));
+    let tui_config = fs::read_to_string(&installed.tui_config_path).unwrap();
+    assert!(tui_config.contains(DEVECO_TUI_PLUGIN_SPEC));
+
+    std::env::remove_var(DEVECO_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_deveco_is_idempotent() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let config_dir = base.join("deveco");
+    fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var(DEVECO_CONFIG_DIR_ENV_VAR, &config_dir);
+
+    let first = install_deveco().unwrap();
+    let after_first = fs::read_to_string(&first.config_path).unwrap();
+    let second = install_deveco().unwrap();
+    let after_second = fs::read_to_string(&second.config_path).unwrap();
+
+    assert_eq!(after_first, after_second);
+
+    std::env::remove_var(DEVECO_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_deveco_removes_registration_and_keeps_other_plugins() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let config_dir = base.join("deveco");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("deveco.jsonc"),
+        "{\n  \"plugin\": [\"mine.js\"]\n}\n",
+    )
+    .unwrap();
+    std::env::set_var(DEVECO_CONFIG_DIR_ENV_VAR, &config_dir);
+
+    install_deveco().unwrap();
+    let result = uninstall_deveco().unwrap();
+    assert!(result.removed_plugin);
+    assert!(result.updated_config);
+    assert!(result.removed_tui_plugin);
+    assert!(result.updated_tui_config);
+
+    let config = fs::read_to_string(&result.config_path).unwrap();
+    assert!(config.contains("\"mine.js\""));
+    assert!(!config.contains("hicodeer-agent-state.js"));
+
+    assert!(!result.tui_plugin_path.exists());
+    let tui_config = fs::read_to_string(&result.tui_config_path).unwrap();
+    assert!(!tui_config.contains(DEVECO_TUI_PLUGIN_SPEC));
+
+    std::env::remove_var(DEVECO_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_deveco_keeps_existing_tui_config_entries() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let config_dir = base.join("deveco");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("tui.json"),
+        "{\n  // keep tui note\n  \"theme\": \"dark\",\n  \"plugin\": [\"./mine.js\"]\n}\n",
+    )
+    .unwrap();
+    std::env::set_var(DEVECO_CONFIG_DIR_ENV_VAR, &config_dir);
+
+    let installed = install_deveco().unwrap();
+    let tui_config = fs::read_to_string(&installed.tui_config_path).unwrap();
+    assert!(tui_config.contains("// keep tui note"));
+    assert!(tui_config.contains("\"theme\": \"dark\""));
+    assert!(tui_config.contains("\"./mine.js\""));
+    assert!(tui_config.contains(DEVECO_TUI_PLUGIN_SPEC));
+
+    // The TUI plugin file must stay out of `plugins/`, which DevEco Code loads
+    // as server plugins.
+    let tui_plugin_under_plugins = config_dir
+        .join("plugins")
+        .join(DEVECO_TUI_PLUGIN_INSTALL_NAME);
+    assert!(!tui_plugin_under_plugins.exists());
+
+    std::env::remove_var(DEVECO_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn deveco_reports_outdated_when_the_tui_plugin_is_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let config_dir = base.join("deveco");
+    fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var(DEVECO_CONFIG_DIR_ENV_VAR, &config_dir);
+
+    let installed = install_deveco().unwrap();
+    let status = || {
+        integration_status_at(
+            crate::api::schema::IntegrationTarget::Deveco,
+            installed.plugin_path.clone(),
+            DEVECO_INTEGRATION_VERSION,
+        )
+        .state
+    };
+    assert_eq!(status(), IntegrationStatusKind::Current);
+
+    fs::remove_file(&installed.tui_plugin_path).unwrap();
+    assert_eq!(status(), IntegrationStatusKind::Outdated);
+
+    install_deveco().unwrap();
+    assert_eq!(status(), IntegrationStatusKind::Current);
+
+    super::opencode_config::remove_plugin_from(
+        &installed.tui_config_path,
+        "plugin",
+        DEVECO_TUI_PLUGIN_SPEC,
+    )
+    .unwrap();
+    assert_eq!(status(), IntegrationStatusKind::Outdated);
+
+    std::env::remove_var(DEVECO_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_deveco_errors_when_config_directory_is_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    std::env::set_var(DEVECO_CONFIG_DIR_ENV_VAR, base.join("missing"));
+
+    let error = install_deveco().unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("deveco config directory not found"));
+
+    std::env::remove_var(DEVECO_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_zcode_removes_our_hook_from_an_entry_that_keeps_a_user_hook() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let settings_dir = home.join(".zcode").join("cli");
+    fs::create_dir_all(&settings_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_zcode().unwrap();
+    let settings_path = settings_dir.join("setting.json");
+    let mut settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    settings["hooks"]["events"]["Stop"][0]["hooks"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type": "command", "command": "echo user"}));
+    fs::write(&settings_path, serde_json::to_string_pretty(&settings).unwrap()).unwrap();
+
+    let result = uninstall_zcode().unwrap();
+    assert!(result.updated_settings);
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    let stop_hooks = settings["hooks"]["events"]["Stop"][0]["hooks"]
+        .as_array()
+        .unwrap();
+    assert_eq!(stop_hooks.len(), 1);
+    assert_eq!(stop_hooks[0]["command"], "echo user");
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_zcode_drops_the_events_container_it_created() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let settings_dir = home.join(".zcode").join("cli");
+    fs::create_dir_all(&settings_dir).unwrap();
+    fs::write(settings_dir.join("setting.json"), "{\"permission\":{\"mode\":\"build\"}}\n").unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_zcode().unwrap();
+    let result = uninstall_zcode().unwrap();
+    assert!(result.updated_settings);
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&result.settings_path).unwrap()).unwrap();
+    assert_eq!(settings["permission"]["mode"], "build");
+    assert!(settings["hooks"].get("events").is_none());
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_codewhale_drops_the_empty_hook_array() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let config_dir = home.join(".codewhale");
+    fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_codewhale().unwrap();
+    let result = uninstall_codewhale().unwrap();
+    assert!(result.updated_config);
+    let config = fs::read_to_string(&result.config_path).unwrap();
+    assert!(!config.contains("[[hooks.hooks]]"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_atomcode_drops_the_hooks_object_it_created() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let config_dir = home.join(".atomcode");
+    fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_atomcode().unwrap();
+    let result = uninstall_atomcode().unwrap();
+    assert!(result.updated_hooks);
+    let document: Value =
+        serde_json::from_str(&fs::read_to_string(&result.hooks_path).unwrap()).unwrap();
+    assert!(document.get("hooks").is_none());
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn deveco_dir_follows_a_custom_xdg_home() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let custom = base.join("xdg");
+    fs::create_dir_all(&custom).unwrap();
+    std::env::set_var(XDG_CONFIG_HOME_ENV_VAR, &custom);
+
+    assert_eq!(deveco_dir().unwrap(), custom.join("deveco"));
+    assert!(install_deveco()
+        .unwrap_err()
+        .to_string()
+        .contains("deveco config directory not found"));
+
+    std::env::remove_var(XDG_CONFIG_HOME_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn deveco_dir_ignores_the_ohos_sandbox_xdg_value() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(&home).unwrap();
+    std::env::set_var("HOME", &home);
+    std::env::set_var(
+        XDG_CONFIG_HOME_ENV_VAR,
+        "/data/storage/el2/base/haps/entry/files",
+    );
+
+    assert_eq!(deveco_dir().unwrap(), home.join(".config").join("deveco"));
+
+    std::env::remove_var(XDG_CONFIG_HOME_ENV_VAR);
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn command_available_falls_back_to_the_user_npm_bin() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let npm_bin = home.join("npm").join("bin");
+    fs::create_dir_all(&npm_bin).unwrap();
+    let executable = npm_bin.join("probe-agent");
+    fs::write(&executable, "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::env::set_var("HOME", &home);
+
+    assert!(command_available("probe-agent"));
+    assert!(!command_available("another-probe-agent"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}

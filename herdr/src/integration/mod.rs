@@ -1,5 +1,7 @@
 mod actions;
+mod atomcode_settings;
 mod claude_settings;
+mod codewhale_settings;
 mod command;
 mod config_edit;
 mod config_file;
@@ -10,6 +12,7 @@ mod registry;
 mod targets;
 mod types;
 mod version;
+mod zcode_settings;
 
 pub(crate) use actions::{
     install_experimental_letta, install_target, uninstall_experimental_letta, uninstall_target,
@@ -80,6 +83,48 @@ const CLAUDE_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/claude/hicodeer-agent-state.sh")
 };
 const CLAUDE_INTEGRATION_VERSION: u32 = 15;
+const ZCODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
+    "hicodeer-agent-state.ps1"
+} else {
+    "hicodeer-agent-state.sh"
+};
+const ZCODE_HOOK_ASSET: &str = if cfg!(windows) {
+    include_str!("assets/zcode/hicodeer-agent-state.ps1")
+} else {
+    include_str!("assets/zcode/hicodeer-agent-state.sh")
+};
+const ZCODE_INTEGRATION_VERSION: u32 = 1;
+const CODEWHALE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
+    "hicodeer-agent-state.ps1"
+} else {
+    "hicodeer-agent-state.sh"
+};
+const CODEWHALE_HOOK_ASSET: &str = if cfg!(windows) {
+    include_str!("assets/codewhale/hicodeer-agent-state.ps1")
+} else {
+    include_str!("assets/codewhale/hicodeer-agent-state.sh")
+};
+const CODEWHALE_INTEGRATION_VERSION: u32 = 1;
+const ATOMCODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
+    "hicodeer-agent-state.ps1"
+} else {
+    "hicodeer-agent-state.sh"
+};
+const ATOMCODE_HOOK_ASSET: &str = if cfg!(windows) {
+    include_str!("assets/atomcode/hicodeer-agent-state.ps1")
+} else {
+    include_str!("assets/atomcode/hicodeer-agent-state.sh")
+};
+const ATOMCODE_INTEGRATION_VERSION: u32 = 1;
+const DEVECO_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
+const DEVECO_PLUGIN_ASSET: &str = include_str!("assets/deveco/hicodeer-agent-state.js");
+/// DevEco Code runs its TUI as a separate plugin host: `tui.json` plugins only
+/// load in the terminal UI, while `deveco.jsonc` plugins only load in the
+/// headless server. Both are installed so either entry point reports state.
+const DEVECO_TUI_PLUGIN_INSTALL_NAME: &str = "hicodeer-tui-session.js";
+const DEVECO_TUI_PLUGIN_SPEC: &str = "./hicodeer-tui-session.js";
+const DEVECO_TUI_PLUGIN_ASSET: &str = include_str!("assets/deveco/hicodeer-tui-session.js");
+const DEVECO_INTEGRATION_VERSION: u32 = 2;
 const CODEBUDDY_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {

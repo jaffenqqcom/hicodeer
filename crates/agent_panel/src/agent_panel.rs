@@ -62,6 +62,12 @@ const DISCONNECT_CLOSE_THRESHOLD: usize = 3;
 /// asynchronous, so without this a refresh that lands mid-deploy would start a
 /// second terminal while the first is still being placed.
 const DEPLOY_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+/// How long a started deploy may take to show up as a terminal before another
+/// one is attempted. Adding the terminal goes through the project's terminal
+/// task, which spawns the client process; on a slow device that can outlast the
+/// retry interval, and retrying then would place a second tab next to one that
+/// is still coming up.
+const DEPLOY_SETTLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How often the panel re-reads the server's launch state while a resumed
 /// session is starting. The server reports `launch_pending` / `interactive_ready`
 /// itself; this is only the poll cadence, not a deadline.
@@ -207,6 +213,10 @@ pub struct AgentPanelSettings {
     /// Whether agent integrations are installed as soon as the endpoint can
     /// answer for them. Written by the settings page.
     pub auto_install_integrations: bool,
+    /// Whether the history view lists sessions scanned from the agents this
+    /// build reads. Written by the settings page; the scan itself is skipped
+    /// while this is off, so the daemon is not asked for a list nobody shows.
+    pub show_history: bool,
 }
 
 impl Settings for AgentPanelSettings {
@@ -221,6 +231,7 @@ impl Settings for AgentPanelSettings {
                 .unwrap_or(DEFAULT_PANEL_WIDTH),
             starts_open: panel.starts_open.unwrap_or(true),
             auto_install_integrations: panel.auto_install_integrations.unwrap_or(true),
+            show_history: panel.show_history.unwrap_or(true),
         }
     }
 }
@@ -268,6 +279,36 @@ fn workspace_has_agent_terminal(workspace: &Workspace, cx: &App) -> bool {
     })
 }
 
+/// Closes every Agent terminal in the workspace, whether its client is still
+/// running or the tab was left behind by a client that already exited.
+fn close_agent_terminals(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let targets: Vec<_> = workspace
+        .panes()
+        .iter()
+        .flat_map(|pane| {
+            pane.read(cx)
+                .items_of_type::<TerminalView>()
+                .filter(|view| view.read(cx).is_agent_terminal())
+                .map(|view| (pane.clone(), view))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (pane, view) in targets {
+        // The tab refuses to close while it is pinned, which is what stops the
+        // user from closing it; clearing the title is how its owner closes it.
+        view.update(cx, |view, cx| view.clear_pinned_title(cx));
+        let item_id = view.entity_id();
+        pane.update(cx, |pane, cx| {
+            pane.close_item_by_id(item_id, SaveIntent::Close, window, cx)
+                .detach_and_log_err(cx);
+        });
+    }
+}
+
 /// A session this panel opened and is hiding from history until the server's
 /// snapshot catches up. Tied to the pane that runs it, so the entry cannot
 /// outlive the launch it describes.
@@ -291,6 +332,15 @@ pub struct AgentPanel {
     last_deploy_attempt: Option<std::time::Instant>,
     /// Whether the terminal should exist, as last decided by a refresh.
     wanted: bool,
+    /// Daemon token the Agent terminal was last started against, or `None` when
+    /// the panel has not started one in this run.
+    ///
+    /// The client is bound to the daemon run that started it: a daemon issues a
+    /// new token every time it starts, and a client that outlives its daemon
+    /// exits on the shutdown notice instead of reconnecting. Comparing the token
+    /// is therefore what tells a live tab from one whose process is gone -- the
+    /// tab itself still looks present, so nothing else in the workspace says so.
+    deployed_agent_token: Option<String>,
     /// Whether the workspace has to be brought in line with `wanted`. Set by a
     /// refresh and acted on during render, which is where a window is available:
     /// an entity update also needs a window, and a workspace is not a window's
@@ -402,6 +452,7 @@ impl AgentPanel {
             consecutive_failures: 0,
             last_deploy_attempt: None,
             wanted: false,
+            deployed_agent_token: None,
             needs_sync: false,
             pending_agent: None,
             renaming: None,
@@ -743,16 +794,47 @@ impl AgentPanel {
         let Some(workspace) = self.workspace.upgrade() else {
             return;
         };
+
+        // A daemon restart invalidates every client it was serving: a client
+        // exits on the shutdown notice rather than reconnecting, and the pinned
+        // tab it ran in stays behind looking exactly like a live one. The daemon
+        // issues a new token on every run, so comparing it against the run the
+        // terminal was started with is what detects that leftover.
+        let Some(control) = cmd_client::agent_control() else {
+            return;
+        };
+
         let present = workspace_has_agent_terminal(workspace.read(cx), cx);
+        if present && self.deployed_agent_token.as_deref() != Some(control.token.as_str()) {
+            // The tab outlived the daemon that started it. Close it whichever way
+            // `wanted` points: leaving it would either block the replacement or
+            // keep a dead tab around when the panel wants no terminal at all.
+            self.deployed_agent_token = None;
+            workspace.update(cx, |workspace, cx| {
+                close_agent_terminals(workspace, window, cx);
+            });
+            if self.wanted {
+                self.needs_sync = true;
+            }
+            return;
+        }
 
         if self.wanted == present {
             return;
         }
 
         if self.wanted {
-            let Some(control) = cmd_client::agent_control() else {
+            // Already started one for this daemon run: wait for it to land
+            // instead of adding a second tab beside it.
+            let deploy_still_settling = self.deployed_agent_token.as_deref()
+                == Some(control.token.as_str())
+                && self
+                    .last_deploy_attempt
+                    .is_some_and(|at| at.elapsed() < DEPLOY_SETTLE_TIMEOUT);
+            if deploy_still_settling {
+                self.needs_sync = true;
                 return;
-            };
+            }
             if let Some(last_attempt) = self.last_deploy_attempt
                 && last_attempt.elapsed() < DEPLOY_RETRY_INTERVAL
             {
@@ -761,7 +843,12 @@ impl AgentPanel {
                 return;
             }
             self.last_deploy_attempt = Some(std::time::Instant::now());
+            self.deployed_agent_token = Some(control.token.clone());
             workspace.update(cx, |workspace, cx| {
+                // The leftover tab keeps its pinned title, so the panel closes it
+                // itself before adding the replacement; otherwise the pane would
+                // hold two Agent terminals and only the new one would be live.
+                close_agent_terminals(workspace, window, cx);
                 TerminalView::deploy_agent_terminal(
                     workspace,
                     control.socket_path,
@@ -772,29 +859,9 @@ impl AgentPanel {
                 .detach_and_log_err(cx);
             });
         } else {
+            self.deployed_agent_token = None;
             workspace.update(cx, |workspace, cx| {
-                let targets: Vec<_> = workspace
-                    .panes()
-                    .iter()
-                    .filter_map(|pane| {
-                        let agent = pane
-                            .read(cx)
-                            .items_of_type::<TerminalView>()
-                            .find(|view| view.read(cx).is_agent_terminal())?;
-                        Some((pane.clone(), agent))
-                    })
-                    .collect();
-                for (pane, view) in targets {
-                    // The tab refuses to close while it is pinned, which is what
-                    // stops the user from closing it; clearing the title is how
-                    // its owner closes it.
-                    view.update(cx, |view, cx| view.clear_pinned_title(cx));
-                    let item_id = view.entity_id();
-                    pane.update(cx, |pane, cx| {
-                        pane.close_item_by_id(item_id, SaveIntent::Close, window, cx)
-                            .detach_and_log_err(cx);
-                    });
-                }
+                close_agent_terminals(workspace, window, cx);
             });
         }
     }
@@ -1247,7 +1314,10 @@ impl AgentPanel {
     /// session file, not while the panel sits open. The scan itself is cheap on
     /// the daemon side (an indexed stat walk unless a file changed).
     fn refresh_history(&mut self, cx: &mut Context<Self>) {
-        if self.history_loading || cmd_client::agent_control().is_none() {
+        if self.history_loading
+            || cmd_client::agent_control().is_none()
+            || !AgentPanelSettings::get_global(cx).show_history
+        {
             return;
         }
         self.history_loading = true;
@@ -1638,6 +1708,11 @@ impl AgentPanel {
     /// The history area: separator, groups, rows. Rendered under the tree of
     /// open spaces inside the same scroll region.
     fn render_history(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        // The settings page can take the whole history view away. Checked before
+        // the cached view so a stale scan cannot draw after the switch is off.
+        if !AgentPanelSettings::get_global(cx).show_history {
+            return div().into_any_element();
+        }
         // Cloned so the per-group renderers can take `&mut self`.
         let Some(view) = self.history.clone() else {
             // No scan has landed yet. A failure is the only thing worth saying

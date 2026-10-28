@@ -6596,19 +6596,19 @@ mod ohos_agent_settings {
         localization::localized_str!("Sound Alerts")
     }
     fn sound_description() -> &'static str {
-        localization::localized_str!("Play sounds when agents change state in background.")
+        localization::localized_str!("Play sounds when agents change state in background")
     }
     fn toast_title() -> &'static str {
         localization::localized_str!("Notification Popups")
     }
     fn toast_description() -> &'static str {
-        localization::localized_str!("Show agent notifications outside the terminal.")
+        localization::localized_str!("Show agent notifications outside the terminal")
     }
     fn integrations_title() -> &'static str {
         localization::localized_str!("Agent Integrations")
     }
     fn integrations_description() -> &'static str {
-        localization::localized_str!("Enable session restore and, where supported, direct status updates.")
+        localization::localized_str!("Enable session restore and, where supported, direct status updates")
     }
     fn check_title() -> &'static str {
         localization::localized_str!("Check Now")
@@ -6620,7 +6620,13 @@ mod ohos_agent_settings {
         localization::localized_str!("Install Automatically")
     }
     fn auto_install_description() -> &'static str {
-        localization::localized_str!("Install an integration as soon as its agent command is present.")
+        localization::localized_str!("Install an integration as soon as its agent command is present")
+    }
+    fn show_history_title() -> &'static str {
+        localization::localized_str!("Show History")
+    }
+    fn show_history_description() -> &'static str {
+        localization::localized_str!("List past sessions from the agents below. Turning this off only hides them")
     }
     /// Height of one grid cell, matching the medium button height the base
     /// keymap selector uses.
@@ -6636,17 +6642,26 @@ mod ohos_agent_settings {
     /// Mark shown for an installed integration.
     const INSTALLED_MARK: &str = "✓";
 
-    /// Builds the page. The controls are a custom block rather than settings
-    /// rows because they live in the terminal's file, not in settings.json.
-    pub(crate) fn page() -> SettingsPage {
-        SettingsPage {
-            title: localization::localized_str!("Agent Terminal"),
-            items: vec![SettingsPageItem::Custom(CustomItem {
+    /// The controls this module contributes: one section header plus a custom
+    /// block. They live in the Panels page as its last section rather than on a
+    /// page of their own, because they configure a panel. The block is custom
+    /// rather than settings rows because part of it (sound, notifications)
+    /// lives in the terminal's file, not in settings.json.
+    pub(crate) fn items() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader(localization::localized_str!("Agent Panel")),
+            SettingsPageItem::Custom(CustomItem {
                 render: render_page,
-                keywords: &["sound", "notification", "toast", "integration", "agent"],
-            })]
-            .into_boxed_slice(),
-        }
+                keywords: &[
+                    "sound",
+                    "notification",
+                    "toast",
+                    "integration",
+                    "agent",
+                    "history",
+                ],
+            }),
+        ]
     }
 
     fn render_page(
@@ -6772,6 +6787,38 @@ mod ohos_agent_settings {
 
         let agents = agent_grid(&settings.integrations, cx.theme().colors().border, cx.theme().colors().element_hover);
 
+        let show_history = Switch::new(
+            "agent-terminal-show-history",
+            if settings.show_history {
+                ToggleState::Selected
+            } else {
+                ToggleState::Unselected
+            },
+        )
+        .tab_index(0_isize)
+        .aria_label(show_history_title())
+        .aria_description(show_history_description())
+        .on_click(move |state, window, cx| {
+            let enabled = *state == ToggleState::Selected;
+            if let Err(error) = update_settings_file(
+                SettingsUiFile::User,
+                None,
+                window,
+                cx,
+                move |settings, _| {
+                    settings
+                        .agent_panel
+                        .get_or_insert_with(Default::default)
+                        .show_history = Some(enabled);
+                },
+            ) {
+                log::warn!("agent settings: cannot save show history: {error}");
+            }
+        })
+        .into_any_element();
+
+        let scannable = scannable_grid(cx.theme().colors().border);
+
         let mut content = v_flex()
             .id("agent-terminal-settings")
             .w_full()
@@ -6807,25 +6854,101 @@ mod ohos_agent_settings {
             content = content.child(block(agents.into_any_element()));
         }
 
+        content = content
+            .child(divider())
+            .child(block(setting_row(
+                show_history_title(),
+                show_history_description(),
+                show_history,
+            )))
+            .child(divider())
+            .child(block(scannable));
+
         content.into_any_element()
     }
 
-    /// The agent grid: one square-cornered cell per target, sharing its borders
-    /// with its neighbours so the block reads as a table. Cells wrap instead of
-    /// stretching, so a narrow pane shows fewer columns rather than drawing the
-    /// table past its right edge.
-    fn agent_grid(
-        integrations: &[herdr_settings::Integration],
-        border: gpui::Hsla,
-        hover: gpui::Hsla,
-    ) -> AnyElement {
+    /// The agents whose history this build reads, drawn with the same cells the
+    /// integration list uses. Read-only: it says what "Show History" covers,
+    /// so it follows the switch instead of duplicating it.
+    fn scannable_grid(border: gpui::Hsla) -> AnyElement {
         let mut grid = h_flex()
             .w_full()
             .flex_wrap()
             .border_t_1()
             .border_l_1()
             .border_color(border);
-        for (cell_index, integration) in integrations.iter().enumerate() {
+        for (cell_index, agent) in agent_panel::agent_display::SCANNABLE_AGENTS
+            .iter()
+            .enumerate()
+        {
+            grid = grid.child(scannable_cell(agent, cell_index, border));
+        }
+        grid.into_any_element()
+    }
+
+    /// One read-only cell. Same shape as an integration cell minus the installed
+    /// check, because there is no per-agent state to report here.
+    fn scannable_cell(agent: &str, cell_index: usize, border: gpui::Hsla) -> AnyElement {
+        h_flex()
+            .id(("scannable-agent", cell_index))
+            .flex_none()
+            .w(rems_from_px(AGENT_CELL_WIDTH_PX))
+            .items_center()
+            .justify_start()
+            .gap_1p5()
+            .h(rems_from_px(AGENT_CELL_HEIGHT_PX))
+            .px(rems_from_px(AGENT_CELL_INSET_PX))
+            .min_w_0()
+            .overflow_hidden()
+            .border_b_1()
+            .border_r_1()
+            .border_color(border)
+            .child(
+                Icon::new(agent_panel::agent_display::agent_icon(agent))
+                    .size(IconSize::XSmall)
+                    .color(Color::Muted),
+            )
+            .child(
+                div()
+                    .w(rems_from_px(AGENT_NAME_WIDTH_PX))
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(
+                        Label::new(agent_panel::agent_display::integration_name(agent))
+                            .size(LabelSize::Small)
+                            .truncate(),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// The agent grid: one square-cornered cell per target, sharing its borders
+    /// with its neighbours so the block reads as a table. Cells wrap instead of
+    /// stretching, so a narrow pane shows fewer columns rather than drawing the
+    /// table past its right edge.
+    ///
+    /// Cells are ordered by display name, the same order the history grid uses,
+    /// so one agent sits in the same place in both lists. The daemon answers in
+    /// its own order, which is why the sort happens here rather than upstream.
+    fn agent_grid(
+        integrations: &[herdr_settings::Integration],
+        border: gpui::Hsla,
+        hover: gpui::Hsla,
+    ) -> AnyElement {
+        let mut ordered_integrations: Vec<&herdr_settings::Integration> =
+            integrations.iter().collect();
+        // Case-insensitive, and stable so targets sharing a display name keep
+        // the order the daemon reported.
+        ordered_integrations.sort_by_cached_key(|integration| {
+            agent_panel::agent_display::integration_name(&integration.label).to_lowercase()
+        });
+        let mut grid = h_flex()
+            .w_full()
+            .flex_wrap()
+            .border_t_1()
+            .border_l_1()
+            .border_color(border);
+        for (cell_index, integration) in ordered_integrations.into_iter().enumerate() {
             grid = grid.child(agent_cell(integration, cell_index, border, hover));
         }
         grid.into_any_element()

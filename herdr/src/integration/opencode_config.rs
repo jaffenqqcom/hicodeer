@@ -73,6 +73,27 @@ fn cli_migration_pending(config_dir: &Path, state_dir: &Path) -> bool {
     config_dir.join("tui.json").is_file() || state_dir.join("kv.json").is_file()
 }
 
+/// Adds `plugin_spec` to the `key` array of an OpenCode-shaped config file.
+///
+/// DevEco Code keeps OpenCode's plugin list in `deveco.jsonc`, so it reuses the
+/// same edit while naming a different file and key.
+pub(crate) fn add_plugin_to(
+    config_path: &Path,
+    key: &str,
+    plugin_spec: &str,
+) -> io::Result<PathBuf> {
+    add_plugin(config_path.to_path_buf(), key, plugin_spec)
+}
+
+/// Removes `plugin_spec` from the `key` array, reporting whether it changed.
+pub(crate) fn remove_plugin_from(
+    config_path: &Path,
+    key: &str,
+    plugin_spec: &str,
+) -> io::Result<bool> {
+    remove_plugin(config_path, key, plugin_spec)
+}
+
 fn add_plugin(config_path: PathBuf, key: &str, plugin_spec: &str) -> io::Result<PathBuf> {
     check_config_target(&config_path)?;
     let content = if config_path.is_file() {
@@ -176,7 +197,12 @@ pub(crate) fn cli_plugin_is_configured(config_dir: &Path, plugin_spec: &str) -> 
     plugin_is_configured(&config_dir.join("cli.json"), "plugins", plugin_spec)
 }
 
-fn plugin_is_configured(config_path: &Path, key: &str, plugin_spec: &str) -> bool {
+/// Whether `plugin_spec` is listed under `key` in one specific config file.
+///
+/// Callers that install into a single known file use this instead of a
+/// directory-wide check, so a spec left in the other candidate file cannot make
+/// a half install look current.
+pub(crate) fn plugin_is_configured(config_path: &Path, key: &str, plugin_spec: &str) -> bool {
     let Ok(content) = fs::read_to_string(config_path) else {
         return false;
     };

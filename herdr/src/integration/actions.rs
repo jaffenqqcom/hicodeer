@@ -5,11 +5,11 @@ use super::targets::{
     install_antigravity_cli, install_claude, install_codebuddy, install_codex, install_copilot,
     install_cursor, install_devin, install_droid, install_grok, install_hermes, install_kilo,
     install_kimi, install_letta, install_mastracode, install_omp, install_opencode, install_pi,
-    install_qodercli, install_qwen, uninstall_antigravity_cli, uninstall_claude,
+    install_atomcode, install_codewhale, install_deveco, install_qodercli, install_qwen, install_zcode, uninstall_antigravity_cli, uninstall_claude,
     uninstall_codebuddy, uninstall_codex, uninstall_copilot, uninstall_cursor, uninstall_devin,
     uninstall_droid, uninstall_grok, uninstall_hermes, uninstall_kilo, uninstall_kimi,
     uninstall_letta, uninstall_mastracode, uninstall_omp, uninstall_opencode, uninstall_pi,
-    uninstall_qodercli, uninstall_qwen,
+    uninstall_atomcode, uninstall_codewhale, uninstall_deveco, uninstall_qodercli, uninstall_qwen, uninstall_zcode,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
 use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};
@@ -325,6 +325,66 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                 format!(
                     "registered grok hook config at {}",
                     installed.config_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Deveco => {
+            let installed = install_deveco()?;
+            vec![
+                format!(
+                    "installed deveco integration plugin to {}",
+                    installed.plugin_path.display()
+                ),
+                format!(
+                    "registered deveco plugin in {}",
+                    installed.config_path.display()
+                ),
+                format!(
+                    "installed deveco tui plugin to {}",
+                    installed.tui_plugin_path.display()
+                ),
+                format!(
+                    "registered deveco tui plugin in {}",
+                    installed.tui_config_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Atomcode => {
+            let installed = install_atomcode()?;
+            vec![
+                format!(
+                    "installed atomcode integration hook to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "ensured atomcode hooks at {}",
+                    installed.hooks_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Codewhale => {
+            let installed = install_codewhale()?;
+            vec![
+                format!(
+                    "installed codewhale integration hook to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "ensured codewhale config at {}",
+                    installed.config_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Zcode => {
+            let installed = install_zcode()?;
+            vec![
+                format!(
+                    "installed zcode integration hook to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "ensured zcode settings at {}",
+                    installed.settings_path.display()
                 ),
             ]
         }
@@ -804,6 +864,136 @@ pub(crate) fn uninstall_target(
                 messages.push(format!(
                     "no grok hook config found at {}",
                     result.config_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Deveco => {
+            let result = uninstall_deveco()?;
+            let mut messages = Vec::new();
+            if result.removed_plugin {
+                messages.push(format!(
+                    "removed deveco integration plugin at {}",
+                    result.plugin_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no deveco integration plugin found at {}",
+                    result.plugin_path.display()
+                ));
+            }
+            if result.updated_config {
+                messages.push(format!(
+                    "removed herdr deveco plugin entry from {}",
+                    result.config_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no herdr deveco plugin entry found in {}",
+                    result.config_path.display()
+                ));
+            }
+            if result.removed_tui_plugin {
+                messages.push(format!(
+                    "removed deveco tui plugin at {}",
+                    result.tui_plugin_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no deveco tui plugin found at {}",
+                    result.tui_plugin_path.display()
+                ));
+            }
+            if result.updated_tui_config {
+                messages.push(format!(
+                    "removed herdr deveco tui plugin entry from {}",
+                    result.tui_config_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no herdr deveco tui plugin entry found in {}",
+                    result.tui_config_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Atomcode => {
+            let result = uninstall_atomcode()?;
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed atomcode hook at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no atomcode hook found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.updated_hooks {
+                messages.push(format!(
+                    "removed herdr atomcode hook entries from {}",
+                    result.hooks_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no herdr atomcode hook entries found in {}",
+                    result.hooks_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Codewhale => {
+            let result = uninstall_codewhale()?;
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed codewhale hook at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no codewhale hook found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.updated_config {
+                messages.push(format!(
+                    "removed herdr codewhale hook entries from {}",
+                    result.config_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no herdr codewhale hook entries found in {}",
+                    result.config_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Zcode => {
+            let result = uninstall_zcode()?;
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed zcode hook at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no zcode hook found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.updated_settings {
+                messages.push(format!(
+                    "removed herdr zcode hook entries from {}",
+                    result.settings_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no herdr zcode hook entries found in {}",
+                    result.settings_path.display()
                 ));
             }
             messages

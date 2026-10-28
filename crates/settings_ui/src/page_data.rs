@@ -64,11 +64,9 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         panels_page(),
         terminal_page(),
     ];
-    // [OHOS PORT] The agent terminal's settings have no upstream counterpart.
-    // The page sits right after Terminal because it configures that panel's
-    // terminal.
-    #[cfg(target_env = "ohos")]
-    pages.push(crate::ohos_agent_settings::page());
+    // [OHOS PORT] The agent panel's settings have no upstream counterpart. They
+    // are appended to the Panels page as its last section (see `panels_page`),
+    // because they configure a panel rather than being a page of their own.
     pages.extend([
         version_control_page(),
         network_page(),
@@ -6730,14 +6728,20 @@ fn panels_page() -> SettingsPage {
 
 
 
+    let mut items = concat_sections![
+        project_panel_section(),
+        terminal_panel_section(),
+        outline_panel_section(),
+        git_panel_section(),
+    ]
+    .into_vec();
+    // [OHOS PORT] Last section of this page: the agent panel's own controls.
+    #[cfg(target_env = "ohos")]
+    items.extend(crate::ohos_agent_settings::items());
+
     SettingsPage {
         title: localization::localized_str!("Panels"),
-        items: concat_sections![
-            project_panel_section(),
-            terminal_panel_section(),
-            outline_panel_section(),
-            git_panel_section(),
-        ],
+        items: items.into_boxed_slice(),
     }
 }
 

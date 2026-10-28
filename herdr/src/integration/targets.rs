@@ -7,6 +7,12 @@ use serde_json::{json, Map, Value};
 use super::claude_settings::{
     install as install_claude_settings, uninstall as uninstall_claude_settings,
 };
+use super::atomcode_settings::{
+    install as install_atomcode_settings, uninstall as uninstall_atomcode_settings,
+};
+use super::codewhale_settings::{
+    install as install_codewhale_settings, uninstall as uninstall_codewhale_settings,
+};
 use super::command::hook_command;
 #[cfg(windows)]
 use super::command::powershell_encoded_hook_command;
@@ -22,21 +28,27 @@ use super::config_edit::{
 };
 use super::config_file::{check_config_targets, write_config};
 use super::env::{
-    antigravity_cli_dir, claude_dir, codebuddy_dir, codex_dir, copilot_dir, cursor_dir, devin_dir,
-    droid_dir, grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, letta_dir,
-    mastracode_dir, omp_extension_dir, opencode_dir, opencode_state_dir, pi_extension_dir,
-    qodercli_dir, qwen_dir,
+    antigravity_cli_dir, atomcode_hooks_path, claude_dir, codebuddy_dir, codewhale_config_path,
+    codex_dir, copilot_dir, deveco_dir,
+    cursor_dir, devin_dir, droid_dir, grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir,
+    letta_dir, mastracode_dir, omp_extension_dir, opencode_dir, opencode_state_dir,
+    pi_extension_dir, qodercli_dir, qwen_dir, zcode_settings_path,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
 };
+use super::zcode_settings::{
+    install as install_zcode_settings, uninstall as uninstall_zcode_settings,
+};
 use super::opencode_config::{
-    add_cli_plugin, add_tui_plugin, remove_cli_plugin, remove_tui_plugin,
-    validate_tui_plugin_config,
+    add_cli_plugin, add_plugin_to, add_tui_plugin, remove_cli_plugin, remove_plugin_from,
+    remove_tui_plugin, validate_tui_plugin_config,
 };
 use super::types::{
-    AntigravityCliInstallPaths, AntigravityCliUninstallResult, ClaudeInstallPaths,
-    ClaudeUninstallResult, CodexInstallPaths, CodexUninstallResult, CopilotInstallPaths,
+    AntigravityCliInstallPaths, AntigravityCliUninstallResult, AtomcodeInstallPaths,
+    AtomcodeUninstallResult, ClaudeInstallPaths, DevecoInstallPaths, DevecoUninstallResult,
+    ClaudeUninstallResult, CodewhaleInstallPaths, CodewhaleUninstallResult, CodexInstallPaths,
+    CodexUninstallResult, CopilotInstallPaths,
     CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult, DevinInstallPaths,
     DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, GrokInstallPaths,
     GrokUninstallResult, HermesInstallPaths, HermesUninstallResult, KiloInstallPaths,
@@ -44,11 +56,16 @@ use super::types::{
     LettaUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
     OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
     QodercliInstallPaths, QodercliUninstallResult, QwenInstallPaths, QwenUninstallResult,
+    ZcodeInstallPaths, ZcodeUninstallResult,
 };
 use super::{
     ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
     ANTIGRAVITY_CLI_HOOK_INSTALL_NAME, ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC, CLAUDE_HOOK_ASSET,
-    CLAUDE_HOOK_INSTALL_NAME, CODEBUDDY_HOOK_ASSET, CODEBUDDY_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET,
+    CLAUDE_HOOK_INSTALL_NAME, CODEBUDDY_HOOK_ASSET, CODEBUDDY_HOOK_INSTALL_NAME,
+    ATOMCODE_HOOK_ASSET, ATOMCODE_HOOK_INSTALL_NAME, CODEWHALE_HOOK_ASSET,
+    DEVECO_PLUGIN_ASSET, DEVECO_PLUGIN_INSTALL_NAME, DEVECO_TUI_PLUGIN_ASSET,
+    DEVECO_TUI_PLUGIN_INSTALL_NAME, DEVECO_TUI_PLUGIN_SPEC,
+    CODEWHALE_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET,
     CODEX_HOOK_INSTALL_NAME, COPILOT_HOOK_ASSET, COPILOT_HOOK_EVENTS, COPILOT_HOOK_INSTALL_NAME,
     COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS, CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME,
     DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS, DEVIN_HOOK_INSTALL_NAME,
@@ -69,7 +86,8 @@ use super::{
     OPENCODE_PLUGIN_INSTALL_NAME, OPENCODE_TUI_PLUGIN_ASSET, OPENCODE_TUI_PLUGIN_INSTALL_NAME,
     OPENCODE_TUI_PLUGIN_SPEC, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET,
     QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
-    QWEN_HOOK_ASSET, QWEN_HOOK_EVENTS, QWEN_HOOK_INSTALL_NAME,
+    QWEN_HOOK_ASSET, QWEN_HOOK_EVENTS, QWEN_HOOK_INSTALL_NAME, ZCODE_HOOK_ASSET,
+    ZCODE_HOOK_INSTALL_NAME,
 };
 
 fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
@@ -165,6 +183,147 @@ pub(crate) fn remove_legacy_pi_extension_from_omp_dir(dir: &Path) -> io::Result<
     Ok(false)
 }
 
+pub(crate) fn install_deveco() -> io::Result<DevecoInstallPaths> {
+    let dir = deveco_dir()?;
+    check_config_targets(&dir, &["deveco.jsonc", "tui.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "deveco config directory not found at {}. start deveco once first",
+            dir.display()
+        )));
+    }
+
+    let plugins_dir = dir.join("plugins");
+    fs::create_dir_all(&plugins_dir)?;
+    let plugin_path = plugins_dir.join(DEVECO_PLUGIN_INSTALL_NAME);
+    fs::write(&plugin_path, DEVECO_PLUGIN_ASSET)?;
+
+    let plugin_spec = plugin_path.display().to_string();
+    let config_path = add_plugin_to(&dir.join("deveco.jsonc"), "plugin", &plugin_spec)?;
+
+    // The TUI plugin lives beside the config directory instead of `plugins/`,
+    // because DevEco Code loads every file in `plugins/` as a server plugin and
+    // rejects one that does not export `server()`.
+    let tui_plugin_path = dir.join(DEVECO_TUI_PLUGIN_INSTALL_NAME);
+    fs::write(&tui_plugin_path, DEVECO_TUI_PLUGIN_ASSET)?;
+    let tui_config_path = add_plugin_to(&dir.join("tui.json"), "plugin", DEVECO_TUI_PLUGIN_SPEC)?;
+
+    Ok(DevecoInstallPaths {
+        plugin_path,
+        config_path,
+        tui_plugin_path,
+        tui_config_path,
+    })
+}
+
+pub(crate) fn uninstall_deveco() -> io::Result<DevecoUninstallResult> {
+    let dir = deveco_dir()?;
+    let plugin_path = dir.join("plugins").join(DEVECO_PLUGIN_INSTALL_NAME);
+    let config_path = dir.join("deveco.jsonc");
+    let plugin_spec = plugin_path.display().to_string();
+
+    let updated_config = if config_path.is_file() {
+        remove_plugin_from(&config_path, "plugin", &plugin_spec)?
+    } else {
+        false
+    };
+    let removed_plugin = remove_file_if_exists(&plugin_path)?;
+
+    let tui_plugin_path = dir.join(DEVECO_TUI_PLUGIN_INSTALL_NAME);
+    let tui_config_path = dir.join("tui.json");
+    let updated_tui_config = if tui_config_path.is_file() {
+        remove_plugin_from(&tui_config_path, "plugin", DEVECO_TUI_PLUGIN_SPEC)?
+    } else {
+        false
+    };
+    let removed_tui_plugin = remove_file_if_exists(&tui_plugin_path)?;
+
+    Ok(DevecoUninstallResult {
+        plugin_path,
+        config_path,
+        tui_plugin_path,
+        tui_config_path,
+        removed_plugin,
+        updated_config,
+        removed_tui_plugin,
+        updated_tui_config,
+    })
+}
+
+pub(crate) fn install_atomcode() -> io::Result<AtomcodeInstallPaths> {
+    let hooks_path = atomcode_hooks_path()?;
+    let hooks_dir = hooks_path.parent().ok_or_else(|| {
+        io::Error::other(format!(
+            "atomcode hooks path has no parent: {}",
+            hooks_path.display()
+        ))
+    })?;
+    check_config_targets(hooks_dir, &["hooks.json"])?;
+    if !hooks_dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "atomcode config directory not found at {}. start atomcode once first",
+            hooks_dir.display()
+        )));
+    }
+
+    let hook_path = hooks_dir.join(ATOMCODE_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, ATOMCODE_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    let existing_hooks = if hooks_path.is_file() {
+        fs::read_to_string(&hooks_path)?
+    } else {
+        String::new()
+    };
+    let updated_hooks = install_atomcode_settings(&existing_hooks, &hooks_path, &hook_path)?;
+    if updated_hooks != existing_hooks {
+        write_config(&hooks_path, updated_hooks)?;
+    }
+
+    Ok(AtomcodeInstallPaths {
+        hook_path,
+        hooks_path,
+    })
+}
+
+pub(crate) fn uninstall_atomcode() -> io::Result<AtomcodeUninstallResult> {
+    let hooks_path = atomcode_hooks_path()?;
+    let hook_path = hooks_path
+        .parent()
+        .map(|dir| dir.join(ATOMCODE_HOOK_INSTALL_NAME))
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "atomcode hooks path has no parent: {}",
+                hooks_path.display()
+            ))
+        })?;
+
+    let existing_hooks = if hooks_path.is_file() {
+        fs::read_to_string(&hooks_path)?
+    } else {
+        String::new()
+    };
+    let updated_hooks = if existing_hooks.trim().is_empty() {
+        false
+    } else {
+        let (updated, changed) =
+            uninstall_atomcode_settings(&existing_hooks, &hooks_path, &hook_path)?;
+        if changed {
+            write_config(&hooks_path, updated)?;
+        }
+        changed
+    };
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(AtomcodeUninstallResult {
+        hook_path,
+        hooks_path,
+        removed_hook_file,
+        updated_hooks,
+    })
+}
+
 pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
     let dir = claude_dir()?;
     check_config_targets(&dir, &["settings.json"])?;
@@ -198,6 +357,159 @@ pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
     Ok(ClaudeInstallPaths {
         hook_path,
         settings_path,
+    })
+}
+
+pub(crate) fn install_zcode() -> io::Result<ZcodeInstallPaths> {
+    let settings_path = zcode_settings_path()?;
+    let settings_dir = settings_path.parent().ok_or_else(|| {
+        io::Error::other(format!(
+            "zcode settings path has no parent: {}",
+            settings_path.display()
+        ))
+    })?;
+    check_config_targets(settings_dir, &["setting.json"])?;
+    if !settings_dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "zcode settings directory not found at {}. start zcode once first",
+            settings_dir.display()
+        )));
+    }
+
+    let hooks_dir = settings_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+    let hook_path = hooks_dir.join(ZCODE_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, ZCODE_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    let existing_settings = if settings_path.is_file() {
+        fs::read_to_string(&settings_path)?
+    } else {
+        "{}".to_string()
+    };
+    let updated_settings =
+        install_zcode_settings(&existing_settings, &settings_path, &hook_path)?;
+    if updated_settings != existing_settings {
+        write_config(&settings_path, updated_settings)?;
+    }
+
+    Ok(ZcodeInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
+pub(crate) fn uninstall_zcode() -> io::Result<ZcodeUninstallResult> {
+    let settings_path = zcode_settings_path()?;
+    let hook_path = settings_path
+        .parent()
+        .map(|dir| dir.join("hooks").join(ZCODE_HOOK_INSTALL_NAME))
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "zcode settings path has no parent: {}",
+                settings_path.display()
+            ))
+        })?;
+
+    let existing_settings = if settings_path.is_file() {
+        fs::read_to_string(&settings_path)?
+    } else {
+        String::new()
+    };
+    let updated_settings = if existing_settings.trim().is_empty() {
+        false
+    } else {
+        let (updated, changed) =
+            uninstall_zcode_settings(&existing_settings, &settings_path, &hook_path)?;
+        if changed {
+            write_config(&settings_path, updated)?;
+        }
+        changed
+    };
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(ZcodeUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
+    })
+}
+
+pub(crate) fn install_codewhale() -> io::Result<CodewhaleInstallPaths> {
+    let config_path = codewhale_config_path()?;
+    let config_dir = config_path.parent().ok_or_else(|| {
+        io::Error::other(format!(
+            "codewhale config path has no parent: {}",
+            config_path.display()
+        ))
+    })?;
+    check_config_targets(config_dir, &["config.toml"])?;
+    if !config_dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "codewhale config directory not found at {}. start codewhale once first",
+            config_dir.display()
+        )));
+    }
+
+    let hooks_dir = config_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+    let hook_path = hooks_dir.join(CODEWHALE_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, CODEWHALE_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    let existing_config = if config_path.is_file() {
+        fs::read_to_string(&config_path)?
+    } else {
+        String::new()
+    };
+    let updated_config = install_codewhale_settings(&existing_config, &config_path, &hook_path)?;
+    if updated_config != existing_config {
+        write_config(&config_path, updated_config)?;
+    }
+
+    Ok(CodewhaleInstallPaths {
+        hook_path,
+        config_path,
+    })
+}
+
+pub(crate) fn uninstall_codewhale() -> io::Result<CodewhaleUninstallResult> {
+    let config_path = codewhale_config_path()?;
+    let hook_path = config_path
+        .parent()
+        .map(|dir| dir.join("hooks").join(CODEWHALE_HOOK_INSTALL_NAME))
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "codewhale config path has no parent: {}",
+                config_path.display()
+            ))
+        })?;
+
+    let existing_config = if config_path.is_file() {
+        fs::read_to_string(&config_path)?
+    } else {
+        String::new()
+    };
+    let updated_config = if existing_config.trim().is_empty() {
+        false
+    } else {
+        let (updated, changed) =
+            uninstall_codewhale_settings(&existing_config, &config_path, &hook_path)?;
+        if changed {
+            write_config(&config_path, updated)?;
+        }
+        changed
+    };
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(CodewhaleUninstallResult {
+        hook_path,
+        config_path,
+        removed_hook_file,
+        updated_config,
     })
 }
 

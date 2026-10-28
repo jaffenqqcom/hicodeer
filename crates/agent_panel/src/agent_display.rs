@@ -235,6 +235,37 @@ pub fn agent_icon(kind: &str) -> IconName {
     presentation_of(kind).map_or(IconName::Sparkle, |presentation| presentation.icon)
 }
 
+/// The agents this build reads history from, in the spelling the daemon
+/// reports as `agent.sessions[].agent`.
+///
+/// The settings page lists these under "Show History" so the user can see what
+/// is being scanned. The daemon owns the real set (`sessions/fad.rs::fad_stores`
+/// plus the stores written here); this list is the display side of the same
+/// agreement and has to be updated with it.
+///
+/// Ordered alphabetically by display name, the same order the settings page's
+/// integration grid sorts itself into, so one agent sits in the same place in
+/// both grids. Keep a new entry in that order instead of appending it.
+pub const SCANNABLE_AGENTS: &[&str] = &[
+    "atomcode",
+    "claude",
+    "codebuddy",
+    "codewhale",
+    "codex",
+    "deepseek",
+    "deveco",
+    "gemini",
+    "hermes",
+    "kimi",
+    "minimax",
+    "openclaw",
+    "opencode",
+    "opendesk",
+    "pi",
+    "qwen",
+    "zcode",
+];
+
 /// Raises the first letter of an agent's name.
 ///
 /// The detector reports type names in lower case (`claude`, `qodercli`), and

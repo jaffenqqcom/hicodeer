@@ -155,6 +155,68 @@ python3 test_resume.py --agent openclaw --session <id> --expect-known-failure
 
 `opendesk` 现在也能走正常恢复：`sessions/opendesk.rs::workspace_of` 会从 task 的系统提示里读出工作目录（` - 工作目录：<path>`），所以 `workspace_root` 不再恒为 None。脚本没有为它保留任何特判，遇到个别旧会话仍缺 `workspace_root` 时按环境不满足处理（退出码 2）。
 
+### `deveco` TUI 插件单测（bun test）
+
+```bash
+cd herdr/src/integration/assets/deveco && bun test ./hicodeer-tui-session.test.ts
+```
+
+覆盖 8 项：无会话时不发请求、选中会话后上报会话与 working 转换、子会话活动归到根会话、`streaming` 映射成 working、permission 出现时 blocked、dispose 后不再上报、投递失败会重发、缺 TUI API 时不安装并报错一次。
+
+### `test_hooks.py` — hook 集成校验（安装 + 上报）
+
+```bash
+python3 test_hooks.py --all                  # 四个有 hook 的 agent 全跑：安装自检 + 真发一轮提示
+python3 test_hooks.py --agents deveco        # 只跑一个（deveco 默认附带 blocked 校验）
+python3 test_hooks.py --all --no-install     # 只校验，未安装就判失败
+python3 test_hooks.py --all --no-blocked     # 跳过「等审批」校验
+python3 test_hooks.py --all --keep           # 跑完不关本轮新建的 space
+```
+
+覆盖 `HOOK_AGENTS`：`deveco` / `atomcode` / `codewhale` / `zcode`。
+
+每个 agent 的检查链：
+
+1. `integration.list` 找到该 target，断言 `available`；除非 `--no-install`，否则 `integration.install` 后断言 `state == current`。
+2. 新建独立 space，`agent.start` 起 TUI，断言返回了 `argv`。
+3. 处理启动提示（见下），等 pane 的 `agent` 字段等于目标 agent。
+4. `pane.send_text` + `pane.send_keys(["enter"])` 发一轮提示，轮询 `pane.get`：
+   - 必须至少出现过一次 `agent_status == "working"`；
+   - working 之后必须回到 `idle`（`done` 也算收尾）。
+5. 断言 `agent.list` 里该 pane 的 `completion_seq` 非空——这是服务端对「这次空闲是真完成、而不是被 Esc 打断」的判定（`herdr/src/app/actions.rs` 的 `is_completion_transition` + `suppress_completion`），属 herdr 内部事实。
+6. 断言 `agent_session.source == "herdr:<agent>"`、`agent_session.agent == <agent>`——即状态确实来自我们装的 hook，而不是屏幕识别兜底。
+
+覆盖范围只到 herdr 服务端：脚本读的都是 `integration.list` / `pane.get` / `agent.list`，断言服务端记录的状态、会话与完成标记。面板侧的表现（侧栏行标记、提示音、应用内 toast，即 `agent_panel.rs` 的 `attention_agents` 与 `toast_is_silent`）**不在本脚本范围内**，也不为了它往协议里加字段。`completion_seq` 之所以要断言，是因为它是服务端对「这次空闲是真完成而不是被打断」的判定，属于 herdr 内部事实。
+
+`BLOCKED_AGENTS`（`deveco` / `zcode`）额外跑一轮「等审批」校验，断言 `agent_status == "blocked"`，走的是 agent 自己的审批链路：
+
+- `deveco`：把 `deveco.jsonc` 临时插一条 `"permission": {"bash": "ask"}`（文本级插入，退出时按原字节还原），再让它执行 bash 命令；插件收到 permission 事件后上报 blocked。
+- `zcode`：给它一条它自己会拦下来确认的命令（`BLOCKED_PROMPTS`，默认 `rm -rf <不存在路径>`），触发 `PermissionRequest` 事件。
+
+`codewhale` 不在 `BLOCKED_AGENTS`：它的 hook 事件集只有 `SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop` / `SubagentStart` / `SubagentComplete`，**没有审批类事件**，审批框期间状态只能停在 `working`。脚本在 `PROMPT_APPROVALS` 里登记了它的审批框（按 `1` 授权一次），否则那一轮会一直等到超时。`atomcode` 同理：hooks.json 里虽然有 blocked 分支，但 7 个事件都没有审批语义，实际报不出来。
+
+参数：
+
+- `--agents`：逗号分隔名单；`--all` 为四个全跑。两者都不给直接判失败。
+- `--no-install`：不装，只校验。
+- `--prompt`：默认「用 bash 执行 echo hi，然后只回复两个字：成功」——带一次工具调用，能覆盖 `working` 到 `idle` 的完整往返。
+- `--wait-seconds`（默认 180）/ `--start-timeout-ms`（默认 60000）/ `--startup-prompt-seconds`（默认 30）。
+- `--no-blocked` / `--blocked-prompt`：关掉或改写「等审批」那一轮。
+
+blocked 那一轮会先确认权限注入成功：配置不存在、读不了、或者已经带 `permission` 键时直接判失败，不会在「根本没有 ask」的前提下跑完再说通过。断言除 `agent_status == "blocked"` 之外还校验 `agent_session.source == "herdr:<agent>"`，防止被其它来源的 blocked 蒙过。
+- `--cwd`：workspace 目录，默认沿用 daemon 当前目录。
+- `--keep`：保留本轮 space。
+
+环境上的硬事实（按踩坑顺序）：
+
+- **TUI 会把启动后的第一个回车吞掉**。提示文字已经进了输入框，但窗口还在排版，回车被丢弃，状态停在 `idle`。脚本的做法是：送完文字先等 `TUI_READY_DELAY_SECONDS`，再按回车；之后 `PROMPT_CONFIRM_SECONDS` 内状态没离开起始值就再按一次（最多 `PROMPT_SUBMIT_ATTEMPTS` 次）。atomcode 每次启动都会撞上这个。
+- **deveco 每次 TUI 启动都问一次目录信任**（`Safety Check:` 提示，只有 session 级选项，没有持久化开关）。脚本在 `STARTUP_PROMPTS` 里登记了 `down` + `enter` 自动应答，只对 deveco 生效。不处理的话会一直停在提示上，`agent.start` 之后的断言全部拿不到数据。
+- **deveco 还有第二个迟到的提示**：启动几秒后会弹「Update Available」，同样挡住输入框。所以脚本在开始输入之前会再扫一次启动提示，而不是只在启动时扫一次。
+- **deveco 有两套插件、两个落点**：`deveco.jsonc` 的 `plugin` 只在 headless server 生效，`tui.json` 的 `plugin` 只在 TUI 生效；而 `plugins/` 目录下的每个文件都会被当成 server 插件加载，所以 TUI 插件放在配置目录根下（`hicodeer-tui-session.js`），不能放进 `plugins/`。
+- **zcode 需要 `TMPDIR` 指到 `/data`**（见 `test_resume.py` 同款说明），脚本用同一套 `ShellEnvironment` 托管块在跑 zcode 前后临时写入并删除。这个托管块必须覆盖**两轮**（正常轮 + blocked 轮）：少了它 zcode 会在 `listen EPERM` 上直接崩掉，pane 退回 shell、`agent` 变成 `None`。
+
+`openclaw` 不在覆盖范围：`agent --local` 下单进程直跑，两套 hook 都挂在 Gateway 生命周期上，实测都不触发（2026-10-28）。
+
 ## 退出码
 
 - `0` 全通过

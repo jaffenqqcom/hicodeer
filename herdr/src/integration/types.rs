@@ -205,6 +205,68 @@ pub(crate) struct OmpUninstallResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct DevecoInstallPaths {
+    pub plugin_path: PathBuf,
+    pub config_path: PathBuf,
+    pub tui_plugin_path: PathBuf,
+    pub tui_config_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct DevecoUninstallResult {
+    pub plugin_path: PathBuf,
+    pub config_path: PathBuf,
+    pub tui_plugin_path: PathBuf,
+    pub tui_config_path: PathBuf,
+    pub removed_plugin: bool,
+    pub updated_config: bool,
+    pub removed_tui_plugin: bool,
+    pub updated_tui_config: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct AtomcodeInstallPaths {
+    pub hook_path: PathBuf,
+    pub hooks_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct AtomcodeUninstallResult {
+    pub hook_path: PathBuf,
+    pub hooks_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub updated_hooks: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct CodewhaleInstallPaths {
+    pub hook_path: PathBuf,
+    pub config_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct CodewhaleUninstallResult {
+    pub hook_path: PathBuf,
+    pub config_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub updated_config: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct ZcodeInstallPaths {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct ZcodeUninstallResult {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub updated_settings: bool,
+}
+
+#[derive(Debug)]
 pub(crate) struct ClaudeUninstallResult {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,

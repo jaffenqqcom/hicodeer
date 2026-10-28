@@ -770,6 +770,12 @@ pub struct AgentPanelSettingsContent {
     ///
     /// Default: true
     pub auto_install_integrations: Option<bool>,
+    /// Whether the panel lists past sessions scanned from the agents it
+    /// supports. Turning this off hides the history view; it does not remove
+    /// any saved session.
+    ///
+    /// Default: true
+    pub show_history: Option<bool>,
 }
 // [OHOS PORT END]
 

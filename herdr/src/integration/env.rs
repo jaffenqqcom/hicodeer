@@ -25,6 +25,20 @@ pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
 pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
+/// Points one ZCode process at its own CLI settings file, which carries the
+/// hooks, MCP servers and tool permissions.
+pub(crate) const ZCODE_CLI_SETTINGS_FILE_ENV_VAR: &str = "ZCODE_CLI_SETTINGS_FILE";
+/// Codewhale's config-file override and its config-directory override.
+pub(crate) const CODEWHALE_CONFIG_PATH_ENV_VAR: &str = "CODEWHALE_CONFIG_PATH";
+pub(crate) const CODEWHALE_HOME_ENV_VAR: &str = "CODEWHALE_HOME";
+/// AtomCode's config-directory override (`atomcode hooks paths`).
+pub(crate) const ATOMCODE_HOME_ENV_VAR: &str = "ATOMCODE_HOME";
+/// DevEco Code's config-directory override.
+pub(crate) const DEVECO_CONFIG_DIR_ENV_VAR: &str = "DEVECO_CONFIG_DIR";
+/// The directory tree DevEco treats as "inside the app sandbox" and replaces
+/// with `$HOME/.config` before resolving its own paths.
+const OHOS_APP_SANDBOX_PREFIX: &str = "/data/storage/el2/base";
+pub(crate) const XDG_CONFIG_HOME_ENV_VAR: &str = "XDG_CONFIG_HOME";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
@@ -66,6 +80,68 @@ pub(crate) fn codebuddy_dir() -> io::Result<PathBuf> {
 
 pub(crate) fn codex_dir() -> io::Result<PathBuf> {
     config_dir_from_env_or_home(CODEX_HOME_ENV_VAR, &[".codex"])
+}
+
+/// ZCode's settings file. `ZCODE_CLI_SETTINGS_FILE` lets a host run one process
+/// on its own settings file (documented in its `HOST_INTEGRATION.md`), so the
+/// integration follows that override instead of writing the user's file.
+pub(crate) fn zcode_settings_path() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os(ZCODE_CLI_SETTINGS_FILE_ENV_VAR)
+        .filter(|value| !value.is_empty())
+    {
+        return expand_tilde_path(PathBuf::from(value));
+    }
+    Ok(home_dir()?.join(".zcode").join("cli").join("setting.json"))
+}
+
+/// Codewhale's config file. `CODEWHALE_CONFIG_PATH` names the file itself and
+/// `CODEWHALE_HOME` moves the whole directory; both are documented in its
+/// `config.toml` template.
+pub(crate) fn codewhale_config_path() -> io::Result<PathBuf> {
+    if let Some(value) =
+        std::env::var_os(CODEWHALE_CONFIG_PATH_ENV_VAR).filter(|value| !value.is_empty())
+    {
+        return expand_tilde_path(PathBuf::from(value));
+    }
+    if let Some(value) = std::env::var_os(CODEWHALE_HOME_ENV_VAR).filter(|value| !value.is_empty()) {
+        return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("config.toml"));
+    }
+    Ok(home_dir()?.join(".codewhale").join("config.toml"))
+}
+
+/// DevEco Code's config directory.
+///
+/// DevEco resolves `XDG_CONFIG_HOME` itself, but rewrites any value that points
+/// inside the OpenHarmony app sandbox back to `$HOME/.config`. Mirroring that
+/// rule keeps the integration in the same directory the CLI reads on every
+/// platform: a custom XDG value wins, the sandbox value does not.
+pub(crate) fn deveco_dir() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os(DEVECO_CONFIG_DIR_ENV_VAR)
+        .filter(|value| !value.is_empty())
+    {
+        return expand_tilde_path(PathBuf::from(value));
+    }
+
+    #[cfg(not(windows))]
+    if let Some(value) =
+        std::env::var_os(XDG_CONFIG_HOME_ENV_VAR).filter(|value| !value.is_empty())
+    {
+        let path = expand_tilde_path(PathBuf::from(value))?;
+        if !path.starts_with(OHOS_APP_SANDBOX_PREFIX) {
+            return Ok(path.join("deveco"));
+        }
+    }
+
+    Ok(home_dir()?.join(".config").join("deveco"))
+}
+
+/// AtomCode's global hooks file. `atomcode hooks paths` reports
+/// `$ATOMCODE_HOME/hooks.json`, defaulting to `~/.atomcode/hooks.json`.
+pub(crate) fn atomcode_hooks_path() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os(ATOMCODE_HOME_ENV_VAR).filter(|value| !value.is_empty()) {
+        return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("hooks.json"));
+    }
+    Ok(home_dir()?.join(".atomcode").join("hooks.json"))
 }
 
 pub(crate) fn kimi_dir() -> io::Result<PathBuf> {
@@ -129,6 +205,13 @@ pub(crate) fn expand_tilde_path(path: PathBuf) -> io::Result<PathBuf> {
 }
 
 pub(crate) fn opencode_dir() -> io::Result<PathBuf> {
+    // OpenCode resolves its config through XDG_CONFIG_HOME. On OpenHarmony the
+    // app points that at its sandbox (`.../entry/files`), so writing
+    // `~/.config/opencode` installs a plugin the CLI never loads — the hook
+    // looks installed and reports nothing.
+    if let Some(value) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("opencode"));
+    }
     Ok(home_dir()?.join(".config/opencode"))
 }
 

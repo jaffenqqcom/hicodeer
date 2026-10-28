@@ -48,10 +48,14 @@ pub enum IntegrationTarget {
     AntigravityCli,
     Grok,
     CodeBuddy,
+    Atomcode,
+    Deveco,
+    Codewhale,
+    Zcode,
 }
 
 impl IntegrationTarget {
-    pub(crate) const ALL: [Self; 18] = [
+    pub(crate) const ALL: [Self; 22] = [
         Self::Pi,
         Self::Omp,
         Self::Claude,
@@ -70,6 +74,10 @@ impl IntegrationTarget {
         Self::AntigravityCli,
         Self::Grok,
         Self::CodeBuddy,
+        Self::Atomcode,
+        Self::Deveco,
+        Self::Codewhale,
+        Self::Zcode,
     ];
 }
 

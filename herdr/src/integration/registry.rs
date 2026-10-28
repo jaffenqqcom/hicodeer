@@ -26,6 +26,10 @@ pub(crate) fn integration_target_label(
         crate::api::schema::IntegrationTarget::AntigravityCli => "antigravity-cli",
         crate::api::schema::IntegrationTarget::Grok => "grok",
         crate::api::schema::IntegrationTarget::CodeBuddy => "codebuddy",
+        crate::api::schema::IntegrationTarget::Atomcode => "atomcode",
+        crate::api::schema::IntegrationTarget::Deveco => "deveco",
+        crate::api::schema::IntegrationTarget::Codewhale => "codewhale",
+        crate::api::schema::IntegrationTarget::Zcode => "zcode",
     }
 }
 
@@ -57,6 +61,10 @@ pub(crate) fn integration_target_command_names(
         crate::api::schema::IntegrationTarget::AntigravityCli => &["agy"],
         crate::api::schema::IntegrationTarget::Grok => &["grok"],
         crate::api::schema::IntegrationTarget::CodeBuddy => &["codebuddy"],
+        crate::api::schema::IntegrationTarget::Atomcode => &["atomcode"],
+        crate::api::schema::IntegrationTarget::Deveco => &["deveco"],
+        crate::api::schema::IntegrationTarget::Codewhale => &["codewhale"],
+        crate::api::schema::IntegrationTarget::Zcode => &["zcode"],
     }
 }
 
@@ -128,14 +136,41 @@ pub(crate) fn integration_target_install_layout_available(
 }
 
 pub(crate) fn command_available(command: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| {
-        command_path_candidates(&dir, command)
+    path_directories()
+        .into_iter()
+        .any(|dir| command_in_directory(&dir, command))
+        || user_bin_directories()
             .into_iter()
-            .any(|path| executable_file_exists(&path))
-    })
+            .any(|dir| command_in_directory(&dir, command))
+}
+
+/// `PATH` as the daemon sees it.
+fn path_directories() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).collect())
+        .unwrap_or_default()
+}
+
+/// Per-user binary directories the daemon never inherits.
+///
+/// The daemon is started by the system, not from a login shell, so a directory
+/// the user appended in `.zshrc` (`~/npm/bin`, `~/.bun/bin`) is missing from its
+/// `PATH`. Without this fallback the panel reports npm-installed agents such as
+/// zcode and deveco as unavailable and never installs their integration.
+fn user_bin_directories() -> Vec<PathBuf> {
+    let Ok(home) = home_dir() else {
+        return Vec::new();
+    };
+    ["npm/bin", ".bun/bin", ".local/bin", ".harmonybrew/bin"]
+        .iter()
+        .map(|suffix| home.join(suffix))
+        .collect()
+}
+
+fn command_in_directory(dir: &Path, command: &str) -> bool {
+    command_path_candidates(dir, command)
+        .into_iter()
+        .any(|path| executable_file_exists(&path))
 }
 
 pub(crate) fn command_path_candidates(dir: &Path, command: &str) -> Vec<PathBuf> {
@@ -269,7 +304,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 18] {
+); 22] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -367,6 +402,37 @@ fn integration_specs() -> [(
             grok_dir().map(|dir| dir.join("hooks").join(super::GROK_HOOK_INSTALL_NAME)),
             super::GROK_INTEGRATION_VERSION,
         ),
+        (
+            crate::api::schema::IntegrationTarget::Deveco,
+            deveco_dir().map(|dir| dir.join("plugins").join(super::DEVECO_PLUGIN_INSTALL_NAME)),
+            super::DEVECO_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Atomcode,
+            atomcode_hooks_path()
+                .map(|path| path.parent().unwrap_or_else(|| Path::new(".")).join(super::ATOMCODE_HOOK_INSTALL_NAME)),
+            super::ATOMCODE_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Codewhale,
+            codewhale_config_path().map(|path| {
+                path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join("hooks")
+                    .join(super::CODEWHALE_HOOK_INSTALL_NAME)
+            }),
+            super::CODEWHALE_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Zcode,
+            zcode_settings_path().map(|path| {
+                path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join("hooks")
+                    .join(super::ZCODE_HOOK_INSTALL_NAME)
+            }),
+            super::ZCODE_INTEGRATION_VERSION,
+        ),
     ]
 }
 
@@ -448,6 +514,31 @@ fn opencode_tui_integration_is_valid(plugin_path: &Path, expected_version: u32) 
             .is_some_and(|version| version >= expected_version)))
 }
 
+/// DevEco Code loads `deveco.jsonc` plugins only in its headless server and
+/// `tui.json` plugins only in the terminal UI, so a server-only install reports
+/// no state in the pane. Treat that half-install as outdated so a reinstall
+/// writes the TUI plugin.
+///
+/// The check looks at `tui.json` alone because that is the file the install
+/// writes and the uninstall edits: accepting `tui.jsonc` here would let a stale
+/// entry in the other file report `current` while the pane stays silent.
+fn deveco_tui_integration_is_valid(plugin_path: &Path, expected_version: u32) -> bool {
+    let Some(config_dir) = plugin_path.parent().and_then(Path::parent) else {
+        return false;
+    };
+    let tui_plugin_path = config_dir.join(super::DEVECO_TUI_PLUGIN_INSTALL_NAME);
+    let tui_plugin_current = fs::read_to_string(tui_plugin_path)
+        .ok()
+        .and_then(|content| parse_integration_version(&content))
+        .is_some_and(|version| version >= expected_version);
+    tui_plugin_current
+        && super::opencode_config::plugin_is_configured(
+            &config_dir.join("tui.json"),
+            "plugin",
+            super::DEVECO_TUI_PLUGIN_SPEC,
+        )
+}
+
 fn integration_state_for_path(
     path: &Path,
     expected_version: u32,
@@ -488,6 +579,12 @@ pub(crate) fn integration_status_at(
     if target == crate::api::schema::IntegrationTarget::Opencode
         && state == super::IntegrationStatusKind::Current
         && !opencode_tui_integration_is_valid(&path, expected_version)
+    {
+        state = super::IntegrationStatusKind::Outdated;
+    }
+    if target == crate::api::schema::IntegrationTarget::Deveco
+        && state == super::IntegrationStatusKind::Current
+        && !deveco_tui_integration_is_valid(&path, expected_version)
     {
         state = super::IntegrationStatusKind::Outdated;
     }

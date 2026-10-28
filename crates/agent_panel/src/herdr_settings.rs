@@ -170,6 +170,7 @@ pub struct AgentSettings {
     pub sound_enabled: bool,
     pub toast: ToastDelivery,
     pub auto_install_integrations: bool,
+    pub show_history: bool,
     pub integrations: Vec<Integration>,
     pub integrations_checked: bool,
 }
@@ -181,6 +182,7 @@ impl Default for AgentSettings {
             sound_enabled: settings.sound_enabled,
             toast: settings.toast,
             auto_install_integrations: true,
+            show_history: true,
             integrations: Vec::new(),
             integrations_checked: false,
         }
@@ -572,6 +574,7 @@ pub fn snapshot(cx: &App) -> AgentSettings {
         toast: settings.toast,
         auto_install_integrations: crate::AgentPanelSettings::get_global(cx)
             .auto_install_integrations,
+        show_history: crate::AgentPanelSettings::get_global(cx).show_history,
         integrations: integrations.entries.clone(),
         integrations_checked: integrations.checked_at.is_some(),
     }

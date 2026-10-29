@@ -1070,6 +1070,7 @@ impl TerminalBuilder {
             is_remote_terminal: false,
             last_mouse_move_time: Instant::now(),
             last_hyperlink_search_position: None,
+            hover_retry_pending: false,
             mouse_down_hyperlink: None,
             #[cfg(windows)]
             shell_program: None,
@@ -1360,6 +1361,7 @@ impl TerminalBuilder {
                 is_remote_terminal,
                 last_mouse_move_time: Instant::now(),
                 last_hyperlink_search_position: None,
+                hover_retry_pending: false,
                 mouse_down_hyperlink: None,
                 #[cfg(windows)]
                 shell_program,
@@ -1566,6 +1568,9 @@ pub struct Terminal {
     is_remote_terminal: bool,
     last_mouse_move_time: Instant,
     last_hyperlink_search_position: Option<GpuiPoint<Pixels>>,
+    /// Whether a delayed re-probe for the link under a stationary pointer is
+    /// already waiting for the throttle to expire.
+    hover_retry_pending: bool,
     mouse_down_hyperlink: Option<HyperlinkMatch>,
     #[cfg(windows)]
     shell_program: Option<String>,
@@ -2526,9 +2531,15 @@ impl Terminal {
             self.process_terminal_event(&e, &mut terminal, window, cx)
         }
 
+        let had_hover_before = self.last_content.last_hovered_word.is_some();
         self.last_content = make_content(&terminal, &self.last_content);
         if self.last_content.grid_lines_change == GridLinesChange::Changed {
             debug_assert!(self.last_content.last_hovered_word.is_none());
+            // The view keeps painting the pointing hand and the tooltip from
+            // its own hover state, which only `NewNavigationTarget` resets.
+            if had_hover_before {
+                cx.emit(Event::NewNavigationTarget(None));
+            }
             self.refresh_hovered_word(window, cx);
 
             // Because refresh_hovered_word() may result
@@ -2634,12 +2645,14 @@ impl Terminal {
         cx.notify();
     }
 
+    /// Returns whether a probe was actually queued; callers that need a probe
+    /// to happen (content changes) retry when the throttle drops it.
     fn schedule_find_hyperlink(
         &mut self,
         position: GpuiPoint<Pixels>,
         skip_inside_link: bool,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         // Links are probed on plain hover so the underline, pointer cursor and
         // tooltip appear without a modifier, matching the other terminals this
         // one is modelled after.
@@ -2647,7 +2660,7 @@ impl Terminal {
             || !self.last_content.terminal_bounds.bounds.contains(&position)
         {
             self.clear_hyperlink(cx);
-            return;
+            return false;
         }
 
         // Path detection is meaningless inside a terminal editor: the grid is
@@ -2660,7 +2673,7 @@ impl Terminal {
             .is_some_and(is_terminal_editor_command)
         {
             self.clear_hyperlink(cx);
-            return;
+            return false;
         }
 
         // While the pointer stays inside the link that was already resolved
@@ -2680,7 +2693,7 @@ impl Terminal {
                 .as_ref()
                 .is_some_and(|word| word.word_match.contains(point))
             {
-                return;
+                return false;
             }
         }
 
@@ -2707,7 +2720,7 @@ impl Terminal {
         };
 
         if throttle {
-            return;
+            return false;
         }
 
         self.last_mouse_move_time = now;
@@ -2717,6 +2730,39 @@ impl Terminal {
             false,
         ));
         cx.notify();
+        true
+    }
+
+    /// Probes the link under the pointer once the hyperlink throttle expires.
+    ///
+    /// A content change under a stationary pointer cannot open the throttle on
+    /// its own, and no later sync retries it, so a link under the pointer would
+    /// lose its underline and pointer cursor for good. Only one retry is kept
+    /// in flight; further content changes before it fires are covered by it.
+    fn schedule_hyperlink_reprobe(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.hover_retry_pending {
+            return;
+        }
+        self.hover_retry_pending = true;
+
+        cx.spawn_in(window, async move |terminal, cx| {
+            cx.background_executor()
+                .timer(FIND_HYPERLINK_THROTTLE)
+                .await;
+
+            terminal
+                .update_in(cx, |terminal, window, cx| {
+                    terminal.hover_retry_pending = false;
+
+                    // The timer already waited the throttle out, but the gate
+                    // compares wall-clock instants, so clearing the previous
+                    // probe position is what lets this one through.
+                    terminal.last_hyperlink_search_position = None;
+                    terminal.schedule_find_hyperlink(window.mouse_position(), false, cx);
+                })
+                .ok();
+        })
+        .detach();
     }
 
     pub fn select_word_at_event_position(&mut self, e: &MouseDownEvent) {
@@ -3001,7 +3047,12 @@ impl Terminal {
     fn refresh_hovered_word(&mut self, window: &Window, cx: &mut Context<Self>) {
         // Content changed under the pointer, so re-probe even if the pointer
         // has not moved (`false` disables the inside-link shortcut).
-        self.schedule_find_hyperlink(window.mouse_position(), false, cx);
+        if self.schedule_find_hyperlink(window.mouse_position(), false, cx) {
+            return;
+        }
+        // The throttle dropped this probe and nothing else would retry it, so
+        // wait the throttle out instead of leaving the pointer with no link.
+        self.schedule_hyperlink_reprobe(window, cx);
     }
 
     fn determine_scroll_lines(
@@ -6074,6 +6125,153 @@ mod tests {
                 // visible lines unchanged
                 expected_hovered_word = expected_hovered_word.with_line(-4);
                 cx.assert_hovered_word(Some(&expected_hovered_word));
+                None
+            });
+        }
+
+        // Hovers the link at `ZED_DEV_PT` without asserting on wakeup counts,
+        // which the shared harness pins to a stale frame budget.
+        fn init_link_hover_test<'a>(
+            cx: &'a mut TestAppContext,
+        ) -> (TestEntities, &'a mut VisualTestContext) {
+            let (terminal, cx) = init_terminal_test_with_window(cx, b"");
+            let test_view = cx.new_window_entity(|window, cx| TestView::new(&terminal, window, cx));
+            let test_entities = TestEntities::new(&terminal, &test_view);
+            update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
+                cx.write_output_lines(OUTPUT_ZED_DEV, 1);
+                None
+            });
+            update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
+                cx.mouse_move_to(ZED_DEV_PT);
+                None
+            });
+            update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
+                let hovered_word = cx
+                    .terminal
+                    .last_content
+                    .last_hovered_word
+                    .as_ref()
+                    .map(|word| word.word.as_str());
+                assert_eq!(hovered_word, Some(ZED_DEV_STR), "hover setup failed");
+                None
+            });
+            (test_entities, cx)
+        }
+
+        #[gpui::test]
+        async fn test_hover_invalidated_when_row_is_rewritten_in_place(cx: &mut TestAppContext) {
+            let (test_entities, cx) = init_link_hover_test(cx);
+
+            let dropped_targets = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+            {
+                let dropped_targets = dropped_targets.clone();
+                let terminal = test_entities.terminal.clone();
+                cx.update(|_, cx| {
+                    cx.subscribe(&terminal, move |_, event, _| {
+                        if matches!(event, Event::NewNavigationTarget(None)) {
+                            *dropped_targets.borrow_mut() += 1;
+                        }
+                    })
+                })
+                .detach();
+            }
+
+            update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
+                // Rewrite the hovered row without scrolling it: the line count
+                // and the display offset both stay the same.
+                cx.terminal.write_output(b"\x1b[1;1H\x1b[K", cx.cx);
+                cx.terminal.write_output(OUTPUT_NONE.as_bytes(), cx.cx);
+                cx.sync();
+                cx.assert_display_offset(0);
+                cx.assert_hovered_word(None);
+                None
+            });
+
+            assert_eq!(
+                *dropped_targets.borrow(),
+                1,
+                "the view must be told that the hovered link is gone"
+            );
+        }
+
+        #[gpui::test]
+        async fn test_hover_reprobed_after_content_change_with_stationary_pointer(
+            cx: &mut TestAppContext,
+        ) {
+            let (test_entities, cx) = init_link_hover_test(cx);
+
+            update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
+                // Offer a different link on the row under the pointer.
+                cx.terminal.write_output(b"\x1b[1;1H\x1b[K", cx.cx);
+                cx.terminal
+                    .write_output(b"Visit https://example.com/ for more", cx.cx);
+                // The pointer did not move, so only the time gate can let the
+                // re-probe through: keep the throttle armed and pretend the
+                // last pointer movement was long ago.
+                cx.terminal.last_mouse_move_time = Instant::now() - FIND_HYPERLINK_THROTTLE * 2;
+                cx.terminal.suppress_hyperlink_throttle_once = false;
+                cx.terminal.sync(cx.window, cx.cx);
+                cx.assert_hovered_word(None);
+                None
+            });
+
+            update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
+                let hovered_word = cx
+                    .terminal
+                    .last_content
+                    .last_hovered_word
+                    .as_ref()
+                    .map(|word| word.word.as_str());
+                assert_eq!(
+                    hovered_word,
+                    Some("https://example.com/"),
+                    "a stationary pointer must be re-probed after the content changed"
+                );
+                None
+            });
+        }
+
+        #[gpui::test]
+        async fn test_hover_reprobed_after_throttled_content_change(cx: &mut TestAppContext) {
+            let (test_entities, cx) = init_link_hover_test(cx);
+
+            update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
+                cx.terminal.write_output(b"\x1b[1;1H\x1b[K", cx.cx);
+                cx.terminal
+                    .write_output(b"Visit https://example.com/ for more", cx.cx);
+                // Keep the throttle closed: the pointer was searched just now.
+                cx.terminal.last_mouse_move_time = Instant::now();
+                cx.terminal.suppress_hyperlink_throttle_once = false;
+                cx.terminal.sync(cx.window, cx.cx);
+                // The probe was dropped, so the link under the pointer is gone.
+                cx.assert_hovered_word(None);
+                assert!(
+                    cx.terminal.hover_retry_pending,
+                    "a dropped content-change probe must schedule a retry"
+                );
+                None
+            });
+
+            // Let the retry timer fire instead of sleeping.
+            cx.executor().advance_clock(FIND_HYPERLINK_THROTTLE);
+            cx.run_until_parked();
+
+            update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
+                let hovered_word = cx
+                    .terminal
+                    .last_content
+                    .last_hovered_word
+                    .as_ref()
+                    .map(|word| word.word.as_str());
+                assert_eq!(
+                    hovered_word,
+                    Some("https://example.com/"),
+                    "the retry must re-probe once the throttle expires"
+                );
+                assert!(
+                    !cx.terminal.hover_retry_pending,
+                    "the retry must clear its pending flag"
+                );
                 None
             });
         }

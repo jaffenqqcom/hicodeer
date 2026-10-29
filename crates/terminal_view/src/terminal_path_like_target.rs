@@ -124,21 +124,19 @@ fn possible_hover_target(
 
 pub(super) fn open_path_like_target(
     workspace: &WeakEntity<Workspace>,
-    terminal_view: &mut TerminalView,
     path_like_target: &PathLikeTarget,
     window: &mut Window,
     cx: &mut Context<TerminalView>,
 ) {
     #[cfg(not(test))]
     {
-        possibly_open_target(workspace, terminal_view, path_like_target, window, cx)
+        possibly_open_target(workspace, path_like_target, window, cx)
             .detach_and_log_err(cx)
     }
     #[cfg(test)]
     {
         possibly_open_target(
             workspace,
-            terminal_view,
             path_like_target,
             window,
             cx,
@@ -150,7 +148,6 @@ pub(super) fn open_path_like_target(
 
 fn possibly_open_target(
     workspace: &WeakEntity<Workspace>,
-    terminal_view: &mut TerminalView,
     path_like_target: &PathLikeTarget,
     window: &mut Window,
     cx: &mut Context<TerminalView>,

@@ -849,6 +849,37 @@ pub(super) fn used_lines(term: &Term<ZedListener>) -> usize {
     term.history_size() + last_occupied_line + 1
 }
 
+/// Whether the cells covered by `word_match` still hold the same characters.
+///
+/// The line count and the display offset can stay identical while the content
+/// under a stationary pointer changes, so the rendered cells of the previous
+/// frame are the only reliable record of what used to be there.
+fn hover_cells_match(
+    grid: &Grid<AlacCell>,
+    last_content: &Content,
+    word_match: &Range,
+) -> bool {
+    let topmost_line = -(grid.history_size() as i32);
+    let bottommost_line = grid.screen_lines() as i32 - 1;
+
+    // Cells arrive in display order, so the ones inside the match form a
+    // contiguous slice: jump straight to it rather than scanning the whole
+    // screen on every frame the pointer rests on a link.
+    let first = last_content
+        .cells
+        .partition_point(|cell| cell.point < word_match.start());
+
+    last_content.cells[first..]
+        .iter()
+        .take_while(|cell| cell.point <= word_match.end())
+        .all(|cell| {
+            let line = cell.point.line;
+            let column = cell.point.column;
+            (topmost_line..=bottommost_line).contains(&line)
+                && cell.cell.character() == grid[Line(line)][Column(column)].c
+        })
+}
+
 fn adjusted_last_hovered_word(
     grid: &Grid<AlacCell>,
     last_content: &Content,
@@ -872,11 +903,23 @@ fn adjusted_last_hovered_word(
 
     let grid_visible_lines_changed = total_lines_delta != display_offset_delta;
 
-    let grid_lines_change = if grid_size_changed || grid_visible_lines_changed {
-        GridLinesChange::Changed
-    } else {
-        GridLinesChange::Unchanged
-    };
+    // No line was added or removed, yet the row under the pointer can still
+    // read differently: alternate-screen programs and in-place redraws repaint
+    // the grid without changing the line count. A previous match may only be
+    // reused while the cells it covers still hold the same characters.
+    let hovered_content_changed = !grid_size_changed
+        && total_lines_delta == 0
+        && last_content
+            .last_hovered_word
+            .as_ref()
+            .is_some_and(|word| !hover_cells_match(grid, last_content, &word.word_match));
+
+    let grid_lines_change =
+        if grid_size_changed || grid_visible_lines_changed || hovered_content_changed {
+            GridLinesChange::Changed
+        } else {
+            GridLinesChange::Unchanged
+        };
 
     let hovered_word = if let Some(last_hovered_word) = last_content.last_hovered_word.as_ref()
         && grid_lines_change == GridLinesChange::Unchanged

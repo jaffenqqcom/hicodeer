@@ -8,11 +8,11 @@ use alacritty_terminal::{
         search::{Match, RegexIter, RegexSearch},
     },
 };
-use log::{info, warn};
+use log::warn;
 use regex::Regex;
 use std::{
     ops::{Index, Range as StdRange},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use url::Url;
 use util::paths::{PathStyle, UrlExt};

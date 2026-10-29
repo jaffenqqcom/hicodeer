@@ -447,6 +447,14 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
 };
 const GROK_INTEGRATION_VERSION: u32 = 5;
 
+/// The version an embedded asset declares for itself.
+///
+/// Checks use this when they must follow the asset rather than the target-wide
+/// constant, so bumping the asset is the only edit a version change needs.
+pub(crate) fn declared_version(asset: &str) -> u32 {
+    registry::parse_integration_version(asset).unwrap_or(0)
+}
+
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 
 #[cfg(test)]

@@ -511,7 +511,9 @@ fn opencode_tui_integration_is_valid(plugin_path: &Path, expected_version: u32) 
             )
             .ok()
             .and_then(|content| parse_integration_version(&content))
-            .is_some_and(|version| version >= expected_version)))
+            .is_some_and(|version| {
+                version >= super::declared_version(super::OPENCODE_V2_TUI_PLUGIN_ASSET)
+            })))
 }
 
 /// DevEco Code loads `deveco.jsonc` plugins only in its headless server and

@@ -636,10 +636,17 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
     let argv = process_allows_remote_memory_read(state, &name, running_inside_wsl())
         .then(|| process_argv(process_group_id))
         .flatten();
+    // The leader's argv0 must be filled in, not left None: agent lookup reads
+    // argv0 first and only falls back to comm, and comm is a kernel thread name
+    // ("node-MainThread") that matches no agent. On OHOS `foreground_job` never
+    // resolves at all (tpgid is reported as 0 for every process), so agent
+    // detection can only reach this leader job; with argv0 empty every wrapped
+    // agent (a node/bun script such as codebuddy) looks absent and `agent.prompt`
+    // is rejected with "no longer the pane foreground process".
     let mut processes = vec![ForegroundProcess {
         pid: process_group_id,
         name,
-        argv0: None,
+        argv0: argv.as_ref().and_then(|parts| parts.first().cloned()),
         cmdline: argv.as_ref().map(|parts| parts.join(" ")),
         argv,
     }];

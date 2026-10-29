@@ -538,7 +538,17 @@ impl App {
             return encode_error(id, "pane_not_found", "pane not found");
         };
         let shell_pid = runtime.child_pid();
-        let foreground_job = shell_pid.and_then(crate::detect::foreground_job);
+        // `foreground_job` needs the shell's tpgid, which OHOS reports as 0 for
+        // every process, so this used to return no foreground group at all.
+        // Fall back to the PTY's own foreground group - the path `app/agents.rs`
+        // already uses for prompts - so both report the same pane state.
+        let foreground_job = shell_pid
+            .and_then(crate::detect::foreground_job)
+            .or_else(|| {
+                runtime
+                    .pty_foreground_process_group_id()
+                    .and_then(crate::detect::foreground_group_leader_job)
+            });
         let foreground_process_group_id = foreground_job.as_ref().map(|job| job.process_group_id);
         let foreground_processes = foreground_job
             .map(|job| {

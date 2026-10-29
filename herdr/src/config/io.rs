@@ -20,10 +20,21 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
 ];
 
 pub fn app_dir_name() -> &'static str {
-    if cfg!(debug_assertions) {
-        "herdr-dev"
-    } else {
+    // HiCodeer ships one build to the device, so the debug/release split there
+    // only hides the sessions and layout the previous build wrote. Other
+    // platforms keep the upstream split between a development build and a
+    // release one, so the two never share state.
+    #[cfg(target_env = "ohos")]
+    {
         "herdr"
+    }
+    #[cfg(not(target_env = "ohos"))]
+    {
+        if cfg!(debug_assertions) {
+            "herdr-dev"
+        } else {
+            "herdr"
+        }
     }
 }
 

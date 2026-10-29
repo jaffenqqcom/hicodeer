@@ -48,7 +48,7 @@ mod tests {
     /// `state.json`, so a row gets the directory named there.
     #[test]
     fn adjust_reads_the_sibling_state_file() {
-        let store = std::env::temp_dir().join(format!("herdr-kimi-store-{}", std::process::id()));
+        let store = std::env::temp_dir().join(format!("hicodeer-agent-kimi-store-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&store);
         let wire = store.join("agents").join("main").join("wire.jsonl");
         std::fs::create_dir_all(wire.parent().unwrap()).expect("create the session directory");
@@ -67,7 +67,7 @@ mod tests {
     /// rather than failing the scan.
     #[test]
     fn adjust_tolerates_a_missing_state_file() {
-        let store = std::env::temp_dir().join(format!("herdr-kimi-empty-{}", std::process::id()));
+        let store = std::env::temp_dir().join(format!("hicodeer-agent-kimi-empty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&store);
         let wire = store.join("agents").join("main").join("wire.jsonl");
         std::fs::create_dir_all(wire.parent().unwrap()).expect("create the session directory");

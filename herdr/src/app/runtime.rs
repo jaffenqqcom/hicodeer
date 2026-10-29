@@ -114,7 +114,7 @@ impl App {
         }
 
         let update_tx = self.event_tx.clone();
-        if let Err(err) = crate::thread_spawn::spawn_named("herdr-update-check", move || {
+        if let Err(err) = crate::thread_spawn::spawn_named("hicodeer-update-check", move || {
             crate::update::auto_update(update_tx)
         }) {
             tracing::warn!(err = %err, "failed to spawn update check thread");
@@ -133,7 +133,7 @@ impl App {
         self.next_agent_manifest_update_check = Some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
 
         let manifest_update_tx = self.event_tx.clone();
-        if let Err(err) = crate::thread_spawn::spawn_named("herdr-manifest-check", move || {
+        if let Err(err) = crate::thread_spawn::spawn_named("hicodeer-manifest-check", move || {
             crate::detect::manifest_update::auto_update(manifest_update_tx)
         }) {
             tracing::warn!(err = %err, "failed to spawn agent manifest check thread");

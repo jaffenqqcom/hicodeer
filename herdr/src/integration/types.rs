@@ -55,7 +55,6 @@ pub(crate) struct KiloInstallPaths {
 #[derive(Debug)]
 pub(crate) struct OmpInstallPaths {
     pub extension_path: PathBuf,
-    pub removed_legacy_pi_extension: bool,
 }
 
 #[derive(Debug)]

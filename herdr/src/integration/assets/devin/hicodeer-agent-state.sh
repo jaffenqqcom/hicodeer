@@ -1,14 +1,14 @@
 #!/bin/sh
 # installed by HiCodeer
-# managed by herdr; reinstalling or updating the integration overwrites this file.
+# managed by HiCodeer; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
-# HERDR_INTEGRATION_ID=devin
-# HERDR_INTEGRATION_VERSION=4
+# HICODEER_AGENT_INTEGRATION_ID=devin
+# HICODEER_AGENT_INTEGRATION_VERSION=5
 
 set -eu
 
 action="${1:-}"
-hook_input_file="$(mktemp "${TMPDIR:-/tmp}/herdr-devin-hook.XXXXXX")" || exit 0
+hook_input_file="$(mktemp "${TMPDIR:-/tmp}/hicodeer-devin-hook.XXXXXX")" || exit 0
 trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
@@ -17,12 +17,12 @@ case "$action" in
   *) exit 0 ;;
 esac
 
-[ "${HERDR_ENV:-}" = "1" ] || exit 0
+[ "${HICODEER_AGENT_ENV:-}" = "1" ] || exit 0
 [ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || exit 0
-[ -n "${HERDR_PANE_ID:-}" ] || exit 0
+[ -n "${HICODEER_AGENT_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
-HERDR_HOOK_INPUT_FILE="$hook_input_file" python3 - <<'PY'
+HICODEER_AGENT_HOOK_INPUT_FILE="$hook_input_file" python3 - <<'PY'
 from __future__ import annotations
 
 import json
@@ -32,7 +32,7 @@ import socket
 import subprocess
 import time
 
-SOURCE = "herdr:devin"
+SOURCE = "hicodeer:devin"
 AGENT = "devin"
 
 
@@ -51,7 +51,7 @@ def load_hook_input(path: str | None) -> dict:
 
 
 def load_session_list(project_dir: str | None):
-    injected = os.environ.get("HERDR_DEVIN_LIST_JSON")
+    injected = os.environ.get("HICODEER_AGENT_DEVIN_LIST_JSON")
     if injected is not None:
         try:
             parsed = json.loads(injected)
@@ -134,10 +134,10 @@ def resolve_session_id(project_dir: str, hook_input: dict) -> str | None:
     return None
 
 
-pane_id = os.environ.get("HERDR_PANE_ID")
+pane_id = os.environ.get("HICODEER_AGENT_PANE_ID")
 socket_path = os.environ.get("HICODEER_AGENT_SOCKET_PATH")
 project_dir = os.environ.get("DEVIN_PROJECT_DIR") or os.getcwd()
-hook_input = load_hook_input(os.environ.get("HERDR_HOOK_INPUT_FILE"))
+hook_input = load_hook_input(os.environ.get("HICODEER_AGENT_HOOK_INPUT_FILE"))
 
 if not pane_id or not socket_path:
     raise SystemExit(0)

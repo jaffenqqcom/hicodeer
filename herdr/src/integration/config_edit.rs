@@ -4,11 +4,8 @@ use std::path::Path;
 use serde_json::{json, Map, Value};
 
 use super::command::{hook_command, legacy_bash_hook_command};
-#[cfg(windows)]
-use super::file_ops::legacy_bash_hook_path;
 use super::{
     HERMES_PLUGIN_INSTALL_NAME, KIMI_CONFIG_BLOCK_BEGIN, KIMI_CONFIG_BLOCK_END, KIMI_HOOK_EVENTS,
-    LEGACY_HERMES_PLUGIN_NAME,
 };
 
 pub(crate) fn ensure_hooks_object<'a>(
@@ -134,7 +131,7 @@ pub(crate) fn ensure_flat_command_hook(
         "type": "command",
         "command": command,
         "timeout": timeout_ms,
-        "description": "Report MastraCode agent state to Herdr",
+        "description": "Report MastraCode agent state to HiCodeer",
     }));
     Ok(())
 }
@@ -347,7 +344,7 @@ pub(crate) fn remove_hook_commands(
     action: Option<&str>,
 ) -> io::Result<bool> {
     let mut removed = false;
-    let paths = std::iter::once(hook_path.to_path_buf()).chain(super::legacy_hook_paths(hook_path));
+    let paths = std::iter::once(hook_path.to_path_buf());
     for path in paths {
         for command in hook_command_variants(&path, action) {
             removed |= remove_command_hook(hooks, event, &command)?;
@@ -363,7 +360,7 @@ pub(crate) fn remove_direct_hook_commands(
     action: Option<&str>,
 ) -> io::Result<bool> {
     let mut removed = false;
-    let paths = std::iter::once(hook_path.to_path_buf()).chain(super::legacy_hook_paths(hook_path));
+    let paths = std::iter::once(hook_path.to_path_buf());
     for path in paths {
         for command in hook_command_variants(&path, action) {
             removed |= remove_direct_command_hook(hooks, event, &command)?;
@@ -375,15 +372,6 @@ pub(crate) fn remove_direct_hook_commands(
 pub(crate) fn hook_command_variants(hook_path: &Path, action: Option<&str>) -> Vec<String> {
     let mut commands = vec![hook_command(hook_path, action)];
     push_unique_command(&mut commands, legacy_bash_hook_command(hook_path, action));
-
-    #[cfg(windows)]
-    {
-        push_unique_command(
-            &mut commands,
-            legacy_bash_hook_command(&legacy_bash_hook_path(hook_path), action),
-        );
-    }
-
     commands
 }
 
@@ -411,11 +399,6 @@ pub(crate) fn remove_hermes_plugin_enabled(content: &str) -> String {
 /// enable or disable operation leaves the result unchanged.
 pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> String {
     update_hermes_named_plugin(content, HERMES_PLUGIN_INSTALL_NAME, enabled)
-}
-
-/// Disables the plugin entry the integration used before it was renamed.
-pub(crate) fn remove_hermes_legacy_plugin(content: &str) -> String {
-    update_hermes_named_plugin(content, LEGACY_HERMES_PLUGIN_NAME, false)
 }
 
 fn update_hermes_named_plugin(content: &str, plugin_name: &str, enabled: bool) -> String {

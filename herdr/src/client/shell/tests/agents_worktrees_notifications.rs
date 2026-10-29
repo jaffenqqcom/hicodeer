@@ -961,7 +961,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
 #[test]
 fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
     let path = std::env::temp_dir().join(format!(
-        "herdr-shell-agent-sort-{}-{}.json",
+        "hicodeer-shell-agent-sort-{}-{}.json",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1261,7 +1261,7 @@ fn worktree_create_previews_the_endpoint_owned_checkout_path() {
         &state.overlay,
         Some(ClientShellOverlay::WorktreeCreate(create))
             if create.checkout_path
-                == "/tmp/herdr-worktrees/repo/feature-client-shell"
+                == "/tmp/hicodeer-worktrees/repo/feature-client-shell"
     ));
     let submit = state.handle_input_bytes(b"\r");
     let [ClientShellAction::Endpoint { request, .. }] = &submit.actions[..] else {
@@ -1318,7 +1318,7 @@ fn worktree_action_errors_expire_without_more_input() {
         crate::input::KeybindMatch::Action(crate::input::KeybindAction::RemoveWorktree),
         &mut guard,
     );
-    let message = "This workspace is not a Herdr-managed worktree checkout.";
+    let message = "This workspace is not a HiCodeer-managed worktree checkout.";
     assert_eq!(state.endpoint_error.as_deref(), Some(message));
 
     let deadline = state.endpoint_error_deadline.expect("deadline");
@@ -1357,7 +1357,7 @@ fn worktree_prepare_rejection_notice_expires() {
         &request_id,
         Err(ClientShellEndpointError {
             code: Some("not_git_worktree".into()),
-            message: "Herdr worktree actions require a workspace inside a Git work tree".into(),
+            message: "HiCodeer worktree actions require a workspace inside a Git work tree".into(),
         }),
     );
     let notice = state
@@ -1530,7 +1530,7 @@ fn worktree_remove_escalates_recoverable_failure_to_force_confirmation() {
 #[test]
 fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
     let mut config = ClientShellConfig::from_config(&Config::default());
-    config.toast_delivery = crate::config::ToastDelivery::Herdr;
+    config.toast_delivery = crate::config::ToastDelivery::InApp;
     config.toast_delay_seconds = 0;
     let mut state = ClientShellState::new(config);
     let mut projected = snapshot();

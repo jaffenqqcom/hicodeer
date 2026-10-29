@@ -121,22 +121,22 @@ fn windows_virtual_terminal_input_mode_sets_only_vti_bit() {
 fn windows_win32_input_mode_defaults_to_win32_and_honors_probe() {
     let _guard = env_lock().lock().unwrap();
     let _removed =
-        EnvVarsRemovedGuard::new(&["HERDR_WINDOWS_INPUT_PROBE", "SSH_CONNECTION", "SSH_TTY"]);
+        EnvVarsRemovedGuard::new(&["HICODEER_AGENT_WINDOWS_INPUT_PROBE", "SSH_CONNECTION", "SSH_TTY"]);
 
     assert!(windows_win32_input_mode_enabled());
     {
         let _ssh = EnvVarGuard::set("SSH_CONNECTION", "1 2 3 4");
         assert!(windows_win32_input_mode_enabled());
-        let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "WiN32");
+        let _probe = EnvVarGuard::set("HICODEER_AGENT_WINDOWS_INPUT_PROBE", "WiN32");
         assert!(windows_win32_input_mode_enabled());
     }
     {
         let _ssh = EnvVarGuard::set("SSH_TTY", "terminal");
         assert!(windows_win32_input_mode_enabled());
-        let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "vT");
+        let _probe = EnvVarGuard::set("HICODEER_AGENT_WINDOWS_INPUT_PROBE", "vT");
         assert!(!windows_win32_input_mode_enabled());
     }
-    let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "win32");
+    let _probe = EnvVarGuard::set("HICODEER_AGENT_WINDOWS_INPUT_PROBE", "win32");
     assert!(windows_win32_input_mode_enabled());
 }
 
@@ -273,7 +273,7 @@ impl TempImageFile {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "herdr-client-drop-{name_fragment}-{}-{nanos}.{extension}",
+            "hicodeer-client-drop-{name_fragment}-{}-{nanos}.{extension}",
             std::process::id()
         ));
         std::fs::write(&path, bytes).unwrap();
@@ -528,7 +528,7 @@ fn client_error_display_connection_failed() {
         "should mention connection failure: {msg}"
     );
     assert!(
-        msg.contains("herdr server"),
+        msg.contains("hicodeer-agent server"),
         "should suggest starting server: {msg}"
     );
 }
@@ -582,7 +582,7 @@ fn client_error_display_detached_default_session_reattach_hint() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `herdr` to reattach"),
+        msg.contains("Run `hicodeer-agent` to reattach"),
         "should suggest default reattach command: {msg}"
     );
 }
@@ -597,7 +597,7 @@ fn client_error_display_detached_named_session_reattach_hint() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `herdr session attach work` to reattach"),
+        msg.contains("Run `hicodeer-agent session attach work` to reattach"),
         "should suggest named session reattach command: {msg}"
     );
 }
@@ -607,7 +607,7 @@ fn client_error_display_detached_remote_reattach_hint_takes_precedence() {
     let _guard = env_lock().lock().unwrap();
     let _remote_env = EnvVarGuard::set(
         crate::remote::REATTACH_COMMAND_ENV_VAR,
-        "herdr --remote host --session work",
+        "hicodeer-agent --remote host --session work",
     );
     let _session_env = EnvVarGuard::set(crate::session::SESSION_ENV_VAR, "work");
     let err = ClientError::ServerShutdown {
@@ -615,7 +615,7 @@ fn client_error_display_detached_remote_reattach_hint_takes_precedence() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `herdr --remote host --session work` to reattach"),
+        msg.contains("Run `hicodeer-agent --remote host --session work` to reattach"),
         "should prefer remote reattach command: {msg}"
     );
 }
@@ -637,12 +637,12 @@ fn client_error_display_remote_connection_lost_has_reattach_hint() {
     let _guard = env_lock().lock().unwrap();
     let _remote_env = EnvVarGuard::set(
         crate::remote::REATTACH_COMMAND_ENV_VAR,
-        "herdr --remote host --session work",
+        "hicodeer-agent --remote host --session work",
     );
     let err = ClientError::ConnectionLost(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
     let msg = err.to_string();
     assert!(
-        msg.contains("lost connection to remote Herdr"),
+        msg.contains("lost connection to remote HiCodeer"),
         "should mention remote connection loss: {msg}"
     );
     assert!(
@@ -650,7 +650,7 @@ fn client_error_display_remote_connection_lost_has_reattach_hint() {
         "should explain possible persistence: {msg}"
     );
     assert!(
-        msg.contains("Run `herdr --remote host --session work` to reattach"),
+        msg.contains("Run `hicodeer-agent --remote host --session work` to reattach"),
         "should show remote reattach command: {msg}"
     );
 }
@@ -680,7 +680,7 @@ fn sound_from_notify_message_rejects_unknown_payloads() {
 fn reload_local_client_config_refreshes_local_client_presentation_state() {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
     let path = std::env::temp_dir().join(format!(
-        "herdr-client-config-reload-{}-{}.toml",
+        "hicodeer-client-config-reload-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -718,7 +718,7 @@ fn reload_local_client_config_refreshes_local_client_presentation_state() {
 fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
     let path = std::env::temp_dir().join(format!(
-        "herdr-client-invalid-ui-reload-{}-{}.toml",
+        "hicodeer-client-invalid-ui-reload-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

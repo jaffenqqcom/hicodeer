@@ -46,8 +46,8 @@ mock.module("node:net", () => ({
 beforeEach(() => {
   requests.length = 0;
   failConnections = false;
-  process.env.HERDR_ENV = "1";
-  process.env.HERDR_PANE_ID = "w1:p1";
+  process.env.HICODEER_AGENT_ENV = "1";
+  process.env.HICODEER_AGENT_PANE_ID = "w1:p1";
   process.env.HICODEER_AGENT_SOCKET_PATH = "/tmp/agent.sock";
 });
 

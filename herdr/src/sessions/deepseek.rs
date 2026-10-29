@@ -479,7 +479,7 @@ mod tests {
         let compressed = zstd::stream::encode_all(bytes.as_slice(), 0).expect("fixture should compress");
 
         let directory =
-            std::env::temp_dir().join(format!("herdr-deepseek-zstd-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-agent-deepseek-zstd-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("temp directory should be creatable");
         let path = directory.join("session.v4.jsonl.zstd");
         std::fs::write(&path, compressed).expect("transcript should be writable");
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn session_files_in_tolerates_a_missing_store() {
         let missing =
-            std::env::temp_dir().join(format!("herdr-deepseek-missing-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-agent-deepseek-missing-{}", std::process::id()));
         assert!(
             session_files_in(&missing).is_none(),
             "the store walk must return None for an unreachable directory"
@@ -549,7 +549,7 @@ mod tests {
     /// A directory this test owns, cleared before use so a previous run cannot
     /// make the assertions pass by accident.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("herdr-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hicodeer-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the scratch directory");
         dir

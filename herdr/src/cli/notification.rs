@@ -1,5 +1,5 @@
 use crate::api::schema::{Method, NotificationShowParams, NotificationShowSound, Request};
-use crate::config::ToastHerdrPosition;
+use crate::config::ToastInAppPosition;
 
 pub(super) fn run_notification_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
@@ -25,7 +25,7 @@ fn notification_show(args: &[String]) -> std::io::Result<i32> {
         Ok(params) => params,
         Err(NotificationShowArgError::Usage) => {
             eprintln!(
-                "usage: herdr notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]"
+                "usage: hicodeer-agent notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]"
             );
             return Ok(2);
         }
@@ -106,12 +106,12 @@ fn parse_notification_show_args(
     })
 }
 
-fn parse_toast_position(value: &str) -> Result<ToastHerdrPosition, NotificationShowArgError> {
+fn parse_toast_position(value: &str) -> Result<ToastInAppPosition, NotificationShowArgError> {
     match value {
-        "top-left" => Ok(ToastHerdrPosition::TopLeft),
-        "top-right" => Ok(ToastHerdrPosition::TopRight),
-        "bottom-left" => Ok(ToastHerdrPosition::BottomLeft),
-        "bottom-right" => Ok(ToastHerdrPosition::BottomRight),
+        "top-left" => Ok(ToastInAppPosition::TopLeft),
+        "top-right" => Ok(ToastInAppPosition::TopRight),
+        "bottom-left" => Ok(ToastInAppPosition::BottomLeft),
+        "bottom-right" => Ok(ToastInAppPosition::BottomRight),
         _ => Err(NotificationShowArgError::Message(format!(
             "invalid position: {value} (expected top-left, top-right, bottom-left, or bottom-right)"
         ))),
@@ -132,9 +132,9 @@ fn parse_notification_sound(
 }
 
 fn print_notification_help() {
-    eprintln!("herdr notification commands:");
+    eprintln!("hicodeer-agent notification commands:");
     eprintln!(
-        "  herdr notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]"
+        "  hicodeer-agent notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]"
     );
 }
 
@@ -164,7 +164,7 @@ mod tests {
             NotificationShowParams {
                 title: "build failed".into(),
                 body: Some("api workspace".into()),
-                position: Some(ToastHerdrPosition::TopRight),
+                position: Some(ToastInAppPosition::TopRight),
                 sound: NotificationShowSound::Request,
             }
         );

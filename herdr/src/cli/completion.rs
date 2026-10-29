@@ -31,7 +31,7 @@ pub(super) fn run_completion_command(args: &[String]) -> std::io::Result<i32> {
     let mut command = super::spec::command();
     if matches!(shell, Shell::Zsh) {
         let mut output = Vec::new();
-        generate(shell, &mut command, "herdr", &mut output);
+        generate(shell, &mut command, "hicodeer-agent", &mut output);
         let script = String::from_utf8(output).map_err(|err| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, err.utf8_error())
         })?;
@@ -39,7 +39,7 @@ pub(super) fn run_completion_command(args: &[String]) -> std::io::Result<i32> {
         std::io::stdout().write_all(space_separated_zsh_long_options(&script).as_bytes())?;
     } else {
         crate::platform::begin_cli_output();
-        generate(shell, &mut command, "herdr", &mut std::io::stdout());
+        generate(shell, &mut command, "hicodeer-agent", &mut std::io::stdout());
     }
     Ok(0)
 }
@@ -83,7 +83,7 @@ fn parse_shell(shell: &str) -> Option<Shell> {
 }
 
 fn print_completion_help() {
-    eprintln!("usage: herdr completion <{}>", supported_shells_usage());
+    eprintln!("usage: hicodeer-agent completion <{}>", supported_shells_usage());
 }
 
 #[cfg(test)]

@@ -1,9 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$Channel = $env:HERDR_CHANNEL,
-    [string]$ManifestUrl = $env:HERDR_MANIFEST_URL,
-    [string]$InstallDir = $env:HERDR_INSTALL_DIR,
-    [string]$ExpectedBuildId = $env:HERDR_EXPECTED_BUILD_ID,
+    [string]$Channel = $env:HICODEER_AGENT_CHANNEL,
+    [string]$ManifestUrl = $env:HICODEER_AGENT_MANIFEST_URL,
+    [string]$InstallDir = $env:HICODEER_AGENT_INSTALL_DIR,
+    [string]$ExpectedBuildId = $env:HICODEER_AGENT_EXPECTED_BUILD_ID,
     [int]$Retain = 3,
     [string]$LocalPackagePath,
     [string]$LocalPackageFormat,
@@ -17,7 +17,7 @@ $ProgressPreference = "SilentlyContinue"
 
 $channelWasExplicit = -not [string]::IsNullOrWhiteSpace($Channel)
 if ($channelWasExplicit -and $Channel -notin @("stable", "preview")) {
-    Write-Error "Invalid Herdr channel '$Channel'. Use 'stable' or 'preview'."
+    Write-Error "Invalid HiCodeer channel '$Channel'. Use 'stable' or 'preview'."
     exit 1
 }
 
@@ -33,7 +33,7 @@ if ($localPackageValueCount -notin @(0, 4)) {
 }
 $useLocalPackage = $localPackageValueCount -eq 4
 if ($useLocalPackage -and $LocalPackageFormat -notin @("zip", "exe")) {
-    throw "Local Herdr package has unsupported format '$LocalPackageFormat'."
+    throw "Local HiCodeer package has unsupported format '$LocalPackageFormat'."
 }
 
 function Write-Step {
@@ -46,8 +46,8 @@ function Write-WarningStep {
     Write-Warning $Message
 }
 
-function Get-HerdrCommandSource {
-    $existing = Get-Command herdr -ErrorAction SilentlyContinue
+function Get-HiCodeerCommandSource {
+    $existing = Get-Command hicodeer-agent -ErrorAction SilentlyContinue
     if ($null -eq $existing) {
         return $null
     }
@@ -55,12 +55,12 @@ function Get-HerdrCommandSource {
     return $existing.Source
 }
 
-function Get-HerdrMigrationFallback {
+function Get-HiCodeerMigrationFallback {
     param([string]$CurrentDir)
 
     if (Test-IsJunction -Path $CurrentDir) {
         $target = [string](Get-Item -LiteralPath $CurrentDir -Force).Target
-        $candidate = Join-Path $target "herdr.exe"
+        $candidate = Join-Path $target "hicodeer-agent.exe"
         if (Test-RegularFile -Path $candidate) {
             return $candidate
         }
@@ -69,7 +69,7 @@ function Get-HerdrMigrationFallback {
     return $null
 }
 
-function Get-HerdrExecutableKind {
+function Get-HiCodeerExecutableKind {
     param(
         [string]$Path,
         [string]$ReleasesDir,
@@ -78,15 +78,15 @@ function Get-HerdrExecutableKind {
     )
 
     if ([string]::IsNullOrWhiteSpace($Path) -or
-        -not [System.IO.Path]::GetFileName($Path).Equals("herdr.exe", [System.StringComparison]::OrdinalIgnoreCase)) {
+        -not [System.IO.Path]::GetFileName($Path).Equals("hicodeer-agent.exe", [System.StringComparison]::OrdinalIgnoreCase)) {
         return $null
     }
 
     try {
         $fullPath = [System.IO.Path]::GetFullPath($Path)
         foreach ($alias in @($CurrentDir, $VisibleBinDir)) {
-            $aliasHerdr = [System.IO.Path]::GetFullPath((Join-Path $alias "herdr.exe"))
-            if ($fullPath.Equals($aliasHerdr, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $aliasHiCodeer = [System.IO.Path]::GetFullPath((Join-Path $alias "hicodeer-agent.exe"))
+            if ($fullPath.Equals($aliasHiCodeer, [System.StringComparison]::OrdinalIgnoreCase)) {
                 return "alias"
             }
         }
@@ -169,8 +169,8 @@ function Update-PathRegistryEntry {
 }
 
 function Publish-EnvironmentChange {
-    if (-not ("HerdrInstaller.EnvironmentNativeMethods" -as [type])) {
-        Add-Type -Namespace HerdrInstaller -Name EnvironmentNativeMethods -MemberDefinition @'
+    if (-not ("HiCodeerInstaller.EnvironmentNativeMethods" -as [type])) {
+        Add-Type -Namespace HiCodeerInstaller -Name EnvironmentNativeMethods -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
 public static extern System.IntPtr SendMessageTimeout(
     System.IntPtr hWnd,
@@ -184,7 +184,7 @@ public static extern System.IntPtr SendMessageTimeout(
     }
 
     $result = [UIntPtr]::Zero
-    [HerdrInstaller.EnvironmentNativeMethods]::SendMessageTimeout(
+    [HiCodeerInstaller.EnvironmentNativeMethods]::SendMessageTimeout(
         [IntPtr]0xffff,
         0x1a,
         [UIntPtr]::Zero,
@@ -261,13 +261,13 @@ function Invoke-CurlDownload {
     $parsedUri = $null
     if (-not [System.Uri]::TryCreate($Uri, [System.UriKind]::Absolute, [ref]$parsedUri) -or
         $parsedUri.Scheme -notin @("http", "https")) {
-        throw "Herdr download URL must use HTTP or HTTPS: $Uri"
+        throw "HiCodeer download URL must use HTTP or HTTPS: $Uri"
     }
 
     $curl = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if ($null -eq $curl) {
-        throw "Herdr installation requires curl.exe, which is included with supported Windows versions."
+        throw "HiCodeer installation requires curl.exe, which is included with supported Windows versions."
     }
 
     $arguments = @(
@@ -315,7 +315,7 @@ function ConvertTo-ManifestObject {
 function Get-RemoteManifest {
     param([string]$Uri)
 
-    $manifestPath = Join-Path ([System.IO.Path]::GetTempPath()) ("herdr-manifest-" + [System.Guid]::NewGuid().ToString("N") + ".json")
+    $manifestPath = Join-Path ([System.IO.Path]::GetTempPath()) ("hicodeer-manifest-" + [System.Guid]::NewGuid().ToString("N") + ".json")
     try {
         Invoke-CurlDownload -Uri $Uri -Destination $manifestPath
         return ConvertTo-ManifestObject -Manifest ([System.IO.File]::ReadAllText($manifestPath))
@@ -345,7 +345,7 @@ function Test-FileDigest {
         $sha256.Dispose()
     }
     if ($actual -ne $ExpectedDigest.ToLowerInvariant()) {
-        throw "Downloaded Herdr checksum did not match. Expected $ExpectedDigest but got $actual."
+        throw "Downloaded HiCodeer checksum did not match. Expected $ExpectedDigest but got $actual."
     }
 }
 
@@ -369,7 +369,7 @@ function Test-RegularDirectory {
     return -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
 }
 
-function Test-HerdrReleaseComplete {
+function Test-HiCodeerReleaseComplete {
     param(
         [string]$ReleaseDir,
         [string]$Format
@@ -378,8 +378,8 @@ function Test-HerdrReleaseComplete {
     if (-not (Test-RegularDirectory -Path $ReleaseDir)) {
         return $false
     }
-    $herdrExe = Join-Path $ReleaseDir "herdr.exe"
-    if (-not (Test-RegularFile -Path $herdrExe)) {
+    $hicodeer-agentExe = Join-Path $ReleaseDir "hicodeer-agent.exe"
+    if (-not (Test-RegularFile -Path $hicodeer-agentExe)) {
         return $false
     }
     if ($Format -eq "exe") {
@@ -392,7 +392,7 @@ function Test-HerdrReleaseComplete {
         -not (Test-RegularDirectory -Path (Join-Path $conptyRoot "arm64"))) {
         return $false
     }
-    $markerPath = Join-Path $conptyRoot "herdr-conpty.json"
+    $markerPath = Join-Path $conptyRoot "hicodeer-conpty.json"
     $required = @(
         "conpty/conpty.dll",
         "conpty/x64/OpenConsole.exe",
@@ -444,7 +444,7 @@ function Test-HerdrReleaseComplete {
         $actualBundleFiles = @($bundleEntries | Where-Object { -not $_.PSIsContainer } | ForEach-Object {
             $_.FullName.Substring($releaseRoot.Length + 1).Replace('\', '/')
         })
-        $expectedBundleFiles = @($expectedConptyFiles) + "conpty/herdr-conpty.json"
+        $expectedBundleFiles = @($expectedConptyFiles) + "conpty/hicodeer-conpty.json"
         if (@(Compare-Object $expectedBundleFiles $actualBundleFiles).Count -ne 0) {
             return $false
         }
@@ -514,7 +514,7 @@ function Remove-DirectoryWithRetry {
             return
         } catch {
             if ([DateTime]::UtcNow -ge $deadline) {
-                Write-WarningStep "Herdr installed successfully but could not remove a temporary release backup at $Path."
+                Write-WarningStep "HiCodeer installed successfully but could not remove a temporary release backup at $Path."
                 return
             }
             Start-Sleep -Milliseconds 100
@@ -566,7 +566,7 @@ function Set-ManagedJunction {
         [string]$LinkPath,
         [string]$TargetPath,
         [string]$ManagedTargetPrefix,
-        [bool]$AllowLegacyHerdrBinMigration = $false
+        [bool]$AllowLegacyHiCodeerBinMigration = $false
     )
 
     if (Test-Path -LiteralPath $LinkPath) {
@@ -585,7 +585,7 @@ function Set-ManagedJunction {
             Remove-Item -LiteralPath $LinkPath -Recurse -Force
         } elseif ($item.PSIsContainer) {
             if ((Get-ChildItem -LiteralPath $LinkPath -Force | Select-Object -First 1) -ne $null) {
-                if (-not (Move-LegacyHerdrBinDirectory -Path $LinkPath -AllowMigration $AllowLegacyHerdrBinMigration)) {
+                if (-not (Move-LegacyHiCodeerBinDirectory -Path $LinkPath -AllowMigration $AllowLegacyHiCodeerBinMigration)) {
                     throw "Refusing to replace non-empty directory at $LinkPath with a junction."
                 }
             } else {
@@ -600,7 +600,7 @@ function Set-ManagedJunction {
     New-Item -ItemType Junction -Path $LinkPath -Target $TargetPath | Out-Null
 }
 
-function Move-LegacyHerdrBinDirectory {
+function Move-LegacyHiCodeerBinDirectory {
     param(
         [string]$Path,
         [bool]$AllowMigration
@@ -615,13 +615,13 @@ function Move-LegacyHerdrBinDirectory {
         return $false
     }
 
-    if (($entries | Where-Object { $_.Name -ieq "herdr.exe" } | Select-Object -First 1) -eq $null) {
+    if (($entries | Where-Object { $_.Name -ieq "hicodeer-agent.exe" } | Select-Object -First 1) -eq $null) {
         return $false
     }
 
     $legacyPath = "$Path.legacy.$([System.Guid]::NewGuid().ToString("N"))"
     Move-Item -LiteralPath $Path -Destination $legacyPath
-    Write-Step "Moved legacy Herdr bin directory to $legacyPath."
+    Write-Step "Moved legacy HiCodeer bin directory to $legacyPath."
     return $true
 }
 
@@ -666,7 +666,7 @@ function Remove-OldReleases {
     }
 }
 
-function Resolve-HerdrVersion {
+function Resolve-HiCodeerVersion {
     param(
         [object]$Manifest,
         [string]$SelectedChannel
@@ -691,7 +691,7 @@ if ($env:OS -ne "Windows_NT") {
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) {
-    Write-Error "Herdr requires 64-bit Windows."
+    Write-Error "HiCodeer requires 64-bit Windows."
     exit 1
 }
 
@@ -712,18 +712,18 @@ switch ($architecture) {
     }
 }
 
-$herdrHome = if ([string]::IsNullOrWhiteSpace($env:HERDR_HOME)) {
-    Join-Path $env:USERPROFILE ".herdr"
+$hicodeer-agentHome = if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_HOME)) {
+    Join-Path $env:USERPROFILE ".hicodeer"
 } else {
-    $env:HERDR_HOME
+    $env:HICODEER_AGENT_HOME
 }
-$herdrHome = [System.IO.Path]::GetFullPath($herdrHome)
-$standaloneRoot = Join-Path $herdrHome "packages\standalone"
+$hicodeer-agentHome = [System.IO.Path]::GetFullPath($hicodeer-agentHome)
+$standaloneRoot = Join-Path $hicodeer-agentHome "packages\standalone"
 $releasesDir = Join-Path $standaloneRoot "releases"
 $currentDir = Join-Path $standaloneRoot "current"
 $lockPath = Join-Path $standaloneRoot "install.lock"
 
-$defaultVisibleBinDir = Join-Path $env:LOCALAPPDATA "Programs\Herdr\bin"
+$defaultVisibleBinDir = Join-Path $env:LOCALAPPDATA "Programs\HiCodeer\bin"
 $visibleBinDir = if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     $defaultVisibleBinDir
 } else {
@@ -739,17 +739,17 @@ try {
     $allowLegacyVisibleBinMigration = $false
 }
 
-$commandHerdr = Get-HerdrCommandSource
-$channelHerdr = $commandHerdr
-if ([string]::IsNullOrWhiteSpace($channelHerdr)) { $channelHerdr = Get-HerdrMigrationFallback -CurrentDir $currentDir }
-$existingHerdrKind = Get-HerdrExecutableKind `
-    -Path $channelHerdr `
+$commandHiCodeer = Get-HiCodeerCommandSource
+$channelHiCodeer = $commandHiCodeer
+if ([string]::IsNullOrWhiteSpace($channelHiCodeer)) { $channelHiCodeer = Get-HiCodeerMigrationFallback -CurrentDir $currentDir }
+$existingHiCodeerKind = Get-HiCodeerExecutableKind `
+    -Path $channelHiCodeer `
     -ReleasesDir $releasesDir `
     -CurrentDir $currentDir `
     -VisibleBinDir $visibleBinDir
-if (-not [string]::IsNullOrWhiteSpace($commandHerdr) -and $null -eq $existingHerdrKind) {
-    Write-Step "Detected existing Herdr command at $commandHerdr"
-    Write-WarningStep "PATH order decides which Herdr runs. This installer will put the active versioned release first for future and current PowerShell sessions."
+if (-not [string]::IsNullOrWhiteSpace($commandHiCodeer) -and $null -eq $existingHiCodeerKind) {
+    Write-Step "Detected existing HiCodeer command at $commandHiCodeer"
+    Write-WarningStep "PATH order decides which HiCodeer runs. This installer will put the active versioned release first for future and current PowerShell sessions."
 }
 
 if ($useLocalPackage) {
@@ -760,17 +760,17 @@ if ($useLocalPackage) {
     }
 } else {
     if (-not $channelWasExplicit) {
-        if (-not [string]::IsNullOrWhiteSpace($channelHerdr) -and $null -eq $existingHerdrKind) {
-            throw "Refusing to run unrecognized Herdr command at $channelHerdr to detect its update channel. Rerun with -Channel stable or -Channel preview."
+        if (-not [string]::IsNullOrWhiteSpace($channelHiCodeer) -and $null -eq $existingHiCodeerKind) {
+            throw "Refusing to run unrecognized HiCodeer command at $channelHiCodeer to detect its update channel. Rerun with -Channel stable or -Channel preview."
         }
-        if (-not [string]::IsNullOrWhiteSpace($channelHerdr)) {
-            $detectedChannel = [string](& $channelHerdr channel show 2>$null | Select-Object -Last 1)
+        if (-not [string]::IsNullOrWhiteSpace($channelHiCodeer)) {
+            $detectedChannel = [string](& $channelHiCodeer channel show 2>$null | Select-Object -Last 1)
             $detectedChannel = $detectedChannel.Trim()
             if ($LASTEXITCODE -ne 0 -or $detectedChannel -notin @("stable", "preview")) {
-                throw "Could not determine the existing Herdr update channel. Rerun with -Channel stable or -Channel preview."
+                throw "Could not determine the existing HiCodeer update channel. Rerun with -Channel stable or -Channel preview."
             }
             $Channel = $detectedChannel
-            Write-Step "Preserving existing Herdr $Channel channel"
+            Write-Step "Preserving existing HiCodeer $Channel channel"
         } elseif (-not [string]::IsNullOrWhiteSpace($ManifestUrl) -and $ManifestUrl -match "/preview\.json$") {
             $Channel = "preview"
         } else {
@@ -780,13 +780,13 @@ if ($useLocalPackage) {
 
     if ([string]::IsNullOrWhiteSpace($ManifestUrl)) {
         $ManifestUrl = if ($Channel -eq "preview") {
-            "https://herdr.dev/preview.json"
+            "https://hicodeer-agent.dev/preview.json"
         } else {
-            "https://herdr.dev/latest.json"
+            "https://hicodeer-agent.dev/latest.json"
         }
     }
 
-    Write-Step "Fetching Herdr $Channel manifest"
+    Write-Step "Fetching HiCodeer $Channel manifest"
     $manifest = Get-RemoteManifest -Uri $ManifestUrl
     $manifestChannelProperty = $manifest.PSObject.Properties["channel"]
     if (-not $channelWasExplicit -and $null -ne $manifestChannelProperty -and [string]$manifestChannelProperty.Value -eq "preview") {
@@ -805,21 +805,21 @@ if ($useLocalPackage) {
         Write-WarningStep "The stable manifest does not include Windows yet; using preview during the stable-channel rollout."
         $Channel = "preview"
         $ManifestUrl = $ManifestUrl.Substring(0, $ManifestUrl.Length - "latest.json".Length) + "preview.json"
-        Write-Step "Fetching Herdr preview manifest"
+        Write-Step "Fetching HiCodeer preview manifest"
         $manifest = Get-RemoteManifest -Uri $ManifestUrl
     }
     $asset = Get-ManifestAsset -Manifest $manifest -Target $target
     if (-not [string]::IsNullOrWhiteSpace($ExpectedBuildId) -and [string]$manifest.build_id -ne $ExpectedBuildId) {
-        throw "Preview manifest changed while updating. Expected build $ExpectedBuildId but found $($manifest.build_id). Run herdr update again."
+        throw "Preview manifest changed while updating. Expected build $ExpectedBuildId but found $($manifest.build_id). Run hicodeer-agent update again."
     }
-    $versionIdentity = Resolve-HerdrVersion -Manifest $manifest -SelectedChannel $Channel
+    $versionIdentity = Resolve-HiCodeerVersion -Manifest $manifest -SelectedChannel $Channel
 }
 $safeVersionIdentity = $versionIdentity -replace '[^0-9A-Za-z._-]', '-'
 $releaseName = "$safeVersionIdentity-$targetTriple"
 $releaseDir = Join-Path $releasesDir $releaseName
 
-Write-Step "Installing Herdr $versionIdentity for $targetTriple"
-$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("herdr-install-" + [System.Guid]::NewGuid().ToString("N"))
+Write-Step "Installing HiCodeer $versionIdentity for $targetTriple"
+$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("hicodeer-agent-install-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
 $userPathChanged = $false
@@ -827,15 +827,15 @@ try {
     $userPathChanged = Invoke-WithInstallLock -LockPath $lockPath -Script {
         Remove-StaleInstallArtifacts -ReleasesDir $releasesDir
 
-        if (-not (Test-HerdrReleaseComplete -ReleaseDir $releaseDir -Format $asset.Format)) {
+        if (-not (Test-HiCodeerReleaseComplete -ReleaseDir $releaseDir -Format $asset.Format)) {
             $downloadPath = if ($useLocalPackage) {
                 $LocalPackagePath
             } else {
-                Join-Path $tempDir "herdr-download.$($asset.Format)"
+                Join-Path $tempDir "hicodeer-agent-download.$($asset.Format)"
             }
             $stagingDir = Join-Path $releasesDir ".staging.$releaseName.$PID"
             if (-not $useLocalPackage) {
-                Write-Step "Downloading Herdr"
+                Write-Step "Downloading HiCodeer"
                 Invoke-CurlDownload -Uri $asset.Url -Destination $downloadPath
             }
             Test-FileDigest -Path $downloadPath -ExpectedDigest $asset.Sha256
@@ -844,15 +844,15 @@ try {
                 Expand-Archive -LiteralPath $downloadPath -DestinationPath $stagingDir
             } else {
                 New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
-                Copy-Item -LiteralPath $downloadPath -Destination (Join-Path $stagingDir "herdr.exe")
+                Copy-Item -LiteralPath $downloadPath -Destination (Join-Path $stagingDir "hicodeer-agent.exe")
             }
-            if (-not (Test-HerdrReleaseComplete -ReleaseDir $stagingDir -Format $asset.Format)) {
-                throw "Downloaded Herdr package is incomplete or failed ConPTY verification."
+            if (-not (Test-HiCodeerReleaseComplete -ReleaseDir $stagingDir -Format $asset.Format)) {
+                throw "Downloaded HiCodeer package is incomplete or failed ConPTY verification."
             }
-            $stagedHerdr = Join-Path $stagingDir "herdr.exe"
-            & $stagedHerdr --version *> $null
+            $stagedHiCodeer = Join-Path $stagingDir "hicodeer-agent.exe"
+            & $stagedHiCodeer --version *> $null
             if ($LASTEXITCODE -ne 0) {
-                throw "Downloaded Herdr command failed verification: $stagedHerdr --version"
+                throw "Downloaded HiCodeer command failed verification: $stagedHiCodeer --version"
             }
             $backupDir = $null
             if (Test-Path -LiteralPath $releaseDir) {
@@ -865,21 +865,21 @@ try {
                 if ($null -ne $backupDir -and -not (Test-Path -LiteralPath $releaseDir)) {
                     [System.IO.Directory]::Move($backupDir, $releaseDir)
                 }
-                Write-WarningStep "Windows could not activate the downloaded release. Another process may have a package file open, such as antivirus or indexing. No incomplete release was activated. Run herdr update again."
+                Write-WarningStep "Windows could not activate the downloaded release. Another process may have a package file open, such as antivirus or indexing. No incomplete release was activated. Run hicodeer-agent update again."
                 throw
             }
         }
 
-        $releaseHerdr = Join-Path $releaseDir "herdr.exe"
-        & $releaseHerdr --version *> $null
+        $releaseHiCodeer = Join-Path $releaseDir "hicodeer-agent.exe"
+        & $releaseHiCodeer --version *> $null
         if ($LASTEXITCODE -ne 0) {
-            throw "Installed Herdr command failed verification: $releaseHerdr --version"
+            throw "Installed HiCodeer command failed verification: $releaseHiCodeer --version"
         }
         Get-ChildItem -LiteralPath $releasesDir -Force -Directory -Filter ".backup.$releaseName.*" -ErrorAction SilentlyContinue |
             ForEach-Object { Remove-DirectoryWithRetry -Path $_.FullName }
 
         Set-ManagedJunction -LinkPath $currentDir -TargetPath $releaseDir -ManagedTargetPrefix $releasesDir
-        Set-ManagedJunction -LinkPath $visibleBinDir -TargetPath $releaseDir -ManagedTargetPrefix $standaloneRoot -AllowLegacyHerdrBinMigration $allowLegacyVisibleBinMigration
+        Set-ManagedJunction -LinkPath $visibleBinDir -TargetPath $releaseDir -ManagedTargetPrefix $standaloneRoot -AllowLegacyHiCodeerBinMigration $allowLegacyVisibleBinMigration
 
         $ownedPathEntries = @($visibleBinDir, $currentDir)
         $userEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
@@ -915,21 +915,21 @@ if ($userPathChanged) {
     Write-Step "$releaseDir is already first on PATH."
 }
 
-$resolvedHerdr = Get-HerdrCommandSource
-$resolvedHerdrKind = Get-HerdrExecutableKind `
-    -Path $resolvedHerdr `
+$resolvedHiCodeer = Get-HiCodeerCommandSource
+$resolvedHiCodeerKind = Get-HiCodeerExecutableKind `
+    -Path $resolvedHiCodeer `
     -ReleasesDir $releasesDir `
     -CurrentDir $currentDir `
     -VisibleBinDir $visibleBinDir
-$releaseHerdr = Join-Path $releaseDir "herdr.exe"
-if ($resolvedHerdrKind -ne "release" -or
-    -not [System.IO.Path]::GetFullPath($resolvedHerdr).Equals(
-        [System.IO.Path]::GetFullPath($releaseHerdr),
+$releaseHiCodeer = Join-Path $releaseDir "hicodeer-agent.exe"
+if ($resolvedHiCodeerKind -ne "release" -or
+    -not [System.IO.Path]::GetFullPath($resolvedHiCodeer).Equals(
+        [System.IO.Path]::GetFullPath($releaseHiCodeer),
         [System.StringComparison]::OrdinalIgnoreCase
     )) {
-    Write-WarningStep "PowerShell still resolves herdr to $resolvedHerdr. Open a new PowerShell window or inspect PATH order manually."
+    Write-WarningStep "PowerShell still resolves hicodeer-agent to $resolvedHiCodeer. Open a new PowerShell window or inspect PATH order manually."
 }
 
-Write-Step "Current PowerShell session: herdr"
-Write-Step "Future PowerShell windows: open a new PowerShell window and run: herdr"
-Write-Host "Herdr $versionIdentity installed successfully."
+Write-Step "Current PowerShell session: hicodeer-agent"
+Write-Step "Future PowerShell windows: open a new PowerShell window and run: hicodeer-agent"
+Write-Host "HiCodeer $versionIdentity installed successfully."

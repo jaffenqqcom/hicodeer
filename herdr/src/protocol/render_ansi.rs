@@ -984,7 +984,11 @@ fn write_cell(
     }
 
     write_hyperlink_if_changed(writer, active_hyperlink, cell_hyperlink_uri(frame, cell));
-    let _ = writer.write_all(cell.symbol.as_bytes());
+    // The symbol travels straight to a terminal here, so a control character
+    // would be interpreted as an escape sequence rather than drawn.
+    let _ = writer.write_all(
+        crate::protocol::sanitize_cell_symbol(cell.symbol.as_str()).as_bytes(),
+    );
 }
 
 /// Writes only the cells that changed between the previous and current frame.
@@ -1013,7 +1017,7 @@ fn write_changed_cells(writer: &mut impl Write, frame: &FrameData, prev: &FrameD
     for row in 0..frame.height {
         let mut invalidated = 0usize;
         let mut to_skip = 0usize;
-        // Herdr clients disable host autowrap, so safe cells can advance inline
+        // HiCodeer clients disable host autowrap, so safe cells can advance inline
         // without spilling into adjacent rows during a resize race.
         let mut next_inline_col = None;
 

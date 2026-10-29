@@ -69,7 +69,7 @@ impl ClientContextMenuOverlay {
                     item("Zoom", Action::Zoom),
                     item(
                         if *right_click_passthrough {
-                            "Use Herdr right-click menu"
+                            "Use HiCodeer right-click menu"
                         } else {
                             "Send right-clicks to pane"
                         },
@@ -440,7 +440,7 @@ impl ClientShellState {
                 Method::PaneInputSet(PaneInputSetParams {
                     pane_id,
                     right_click: if right_click_passthrough {
-                        PaneRightClickTarget::Herdr
+                        PaneRightClickTarget::InApp
                     } else {
                         PaneRightClickTarget::Pane
                     },

@@ -1,17 +1,17 @@
 // installed by HiCodeer
-// managed by herdr; reinstalling or updating the integration overwrites this file.
-// HERDR_INTEGRATION_ID=opencode-tui
-// HERDR_INTEGRATION_VERSION=14
+// managed by HiCodeer; reinstalling or updating the integration overwrites this file.
+// HICODEER_AGENT_INTEGRATION_ID=opencode-tui
+// HICODEER_AGENT_INTEGRATION_VERSION=15
 
 import net from "node:net";
 
-const SOURCE = "herdr:opencode";
+const SOURCE = "hicodeer:opencode";
 const AGENT = "opencode";
 const ROUTE_POLL_INTERVAL_MS = 100;
 const SELECTION_RETRY_DELAYS_MS = [100, 400, 1_000];
 
 function requestOnce(sessionID, state, seq, isCurrent = () => true) {
-  const paneId = process.env.HERDR_PANE_ID;
+  const paneId = process.env.HICODEER_AGENT_PANE_ID;
   const socketPath = process.env.HICODEER_AGENT_SOCKET_PATH;
   if (!paneId || !socketPath) {
     return Promise.resolve(true);
@@ -63,7 +63,7 @@ function requestOnce(sessionID, state, seq, isCurrent = () => true) {
 }
 
 export default {
-  id: "herdr.opencode.session-selection",
+  id: "hicodeer.opencode.session-selection",
   // Keep this plain object dependency-free: V1 and V2 expose different SDK
   // packages, but both loaders accept their own lifecycle entry on this object.
   setup,
@@ -71,7 +71,7 @@ export default {
 };
 
 async function tui(api) {
-  if (process.env.HERDR_ENV !== "1" || !process.env.HICODEER_AGENT_SOCKET_PATH || !process.env.HERDR_PANE_ID) return;
+  if (process.env.HICODEER_AGENT_ENV !== "1" || !process.env.HICODEER_AGENT_SOCKET_PATH || !process.env.HICODEER_AGENT_PANE_ID) return;
 
   let disposed = false;
   let context;
@@ -404,7 +404,7 @@ async function tui(api) {
 }
 
 function setup(api) {
-  if (process.env.HERDR_ENV !== "1" || !process.env.HICODEER_AGENT_SOCKET_PATH || !process.env.HERDR_PANE_ID) return;
+  if (process.env.HICODEER_AGENT_ENV !== "1" || !process.env.HICODEER_AGENT_SOCKET_PATH || !process.env.HICODEER_AGENT_PANE_ID) return;
 
   let disposed = false;
   let selected;

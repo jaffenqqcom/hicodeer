@@ -375,6 +375,13 @@ pub(super) fn render_agent_row(
 
 fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
     for (offset, character) in text.chars().take(width as usize).enumerate() {
+        // Labels can come from config or an agent's own output; a control
+        // character would trip ratatui's width assertion.
+        let character = if character.is_ascii_control() {
+            ' '
+        } else {
+            character
+        };
         if let Some(cell) = buffer.cell_mut((x + offset as u16, y)) {
             cell.set_char(character).set_style(style);
         }

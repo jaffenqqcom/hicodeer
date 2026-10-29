@@ -1,12 +1,12 @@
 #!/bin/sh
 # installed by HiCodeer
-# managed by herdr; reinstalling or updating the integration overwrites this file.
+# managed by HiCodeer; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
-# HERDR_INTEGRATION_ID=antigravity_cli
-# HERDR_INTEGRATION_VERSION=6
+# HICODEER_AGENT_INTEGRATION_ID=antigravity_cli
+# HICODEER_AGENT_INTEGRATION_VERSION=7
 
-# Session-only: this hook reports the Antigravity conversation so Herdr can
-# resume the pane. Lifecycle state comes from Herdr's screen detection.
+# Session-only: this hook reports the Antigravity conversation so HiCodeer can
+# resume the pane. Lifecycle state comes from HiCodeer's screen detection.
 
 set -eu
 
@@ -18,9 +18,9 @@ emit_and_exit() {
 }
 
 [ "${1:-}" = "session" ] || emit_and_exit
-[ "${HERDR_ENV:-}" = "1" ] || emit_and_exit
+[ "${HICODEER_AGENT_ENV:-}" = "1" ] || emit_and_exit
 [ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || emit_and_exit
-[ -n "${HERDR_PANE_ID:-}" ] || emit_and_exit
+[ -n "${HICODEER_AGENT_PANE_ID:-}" ] || emit_and_exit
 command -v python3 >/dev/null 2>&1 || emit_and_exit
 
 python3 -c '
@@ -48,8 +48,8 @@ if session_id is None:
 
 seq = time.time_ns()
 params = {
-    "pane_id": os.environ["HERDR_PANE_ID"],
-    "source": "herdr:antigravity_cli",
+    "pane_id": os.environ["HICODEER_AGENT_PANE_ID"],
+    "source": "hicodeer:antigravity_cli",
     "agent": "agy",
     "seq": seq,
     "agent_session_id": session_id,
@@ -60,7 +60,7 @@ if transcript_path is not None:
     params["agent_session_path"] = transcript_path
 
 request = json.dumps({
-    "id": f"herdr:antigravity_cli:{seq}",
+    "id": f"hicodeer:antigravity_cli:{seq}",
     "method": "pane.report_agent_session",
     "params": params,
 })

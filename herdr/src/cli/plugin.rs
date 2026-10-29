@@ -16,7 +16,7 @@ use crate::popup_size::PopupSize;
 
 const PLUGIN_BUILD_OUTPUT_MAX_BYTES: usize = 64 * 1024;
 const PLUGIN_INSTALL_USAGE: &str =
-    "usage: herdr plugin install [--ref REF] [--yes|-y] <owner>/<repo>[/subdir...]";
+    "usage: hicodeer-agent plugin install [--ref REF] [--yes|-y] <owner>/<repo>[/subdir...]";
 
 pub(super) fn run_plugin_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
@@ -50,7 +50,7 @@ pub(super) fn run_plugin_command(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_link(args: &[String]) -> std::io::Result<i32> {
     let Some(path) = args.first() else {
-        eprintln!("usage: herdr plugin link <path> [--disabled]");
+        eprintln!("usage: hicodeer-agent plugin link <path> [--disabled]");
         return Ok(2);
     };
     let path = normalize_plugin_path_arg(path)?;
@@ -90,11 +90,11 @@ fn plugin_link(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_config_dir_command(args: &[String]) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
-        eprintln!("usage: herdr plugin config-dir <plugin_id>");
+        eprintln!("usage: hicodeer-agent plugin config-dir <plugin_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin config-dir <plugin_id>");
+        eprintln!("usage: hicodeer-agent plugin config-dir <plugin_id>");
         return Ok(2);
     }
     let path = crate::plugin_paths::plugin_config_dir(plugin_id);
@@ -142,11 +142,11 @@ fn plugin_list(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_unlink(args: &[String]) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
-        eprintln!("usage: herdr plugin unlink <plugin_id>");
+        eprintln!("usage: hicodeer-agent plugin unlink <plugin_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin unlink <plugin_id>");
+        eprintln!("usage: hicodeer-agent plugin unlink <plugin_id>");
         return Ok(2);
     }
     print_plugin_response(Method::PluginUnlink(PluginUnlinkParams {
@@ -451,11 +451,11 @@ fn install_github_plugin(
 
 fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+        eprintln!("usage: hicodeer-agent plugin uninstall <plugin_id|owner/repo[/subdir...]>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+        eprintln!("usage: hicodeer-agent plugin uninstall <plugin_id|owner/repo[/subdir...]>");
         return Ok(2);
     }
 
@@ -519,14 +519,14 @@ fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
 fn plugin_set_enabled(args: &[String], enabled: bool) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
         eprintln!(
-            "usage: herdr plugin {} <plugin_id>",
+            "usage: hicodeer-agent plugin {} <plugin_id>",
             if enabled { "enable" } else { "disable" }
         );
         return Ok(2);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: herdr plugin {} <plugin_id>",
+            "usage: hicodeer-agent plugin {} <plugin_id>",
             if enabled { "enable" } else { "disable" }
         );
         return Ok(2);
@@ -621,7 +621,7 @@ fn plugin_action_list(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_action_invoke(args: &[String]) -> std::io::Result<i32> {
     let Some(action_id) = args.first() else {
-        eprintln!("usage: herdr plugin action invoke <action_id> [--plugin ID]");
+        eprintln!("usage: hicodeer-agent plugin action invoke <action_id> [--plugin ID]");
         return Ok(2);
     };
     let mut plugin_id = None;
@@ -831,11 +831,11 @@ fn parse_popup_dimension(value: &str, flag: &str) -> Option<PopupSize> {
 
 fn plugin_pane_focus(args: &[String]) -> std::io::Result<i32> {
     let Some(pane_id) = args.first() else {
-        eprintln!("usage: herdr plugin pane focus <pane_id>");
+        eprintln!("usage: hicodeer-agent plugin pane focus <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin pane focus <pane_id>");
+        eprintln!("usage: hicodeer-agent plugin pane focus <pane_id>");
         return Ok(2);
     }
     print_plugin_response(Method::PluginPaneFocus(PluginPaneFocusParams {
@@ -845,11 +845,11 @@ fn plugin_pane_focus(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_pane_close(args: &[String]) -> std::io::Result<i32> {
     let Some(pane_id) = args.first() else {
-        eprintln!("usage: herdr plugin pane close <pane_id>");
+        eprintln!("usage: hicodeer-agent plugin pane close <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin pane close <pane_id>");
+        eprintln!("usage: hicodeer-agent plugin pane close <pane_id>");
         return Ok(2);
     }
     print_plugin_response(Method::PluginPaneClose(PluginPaneCloseParams {
@@ -1485,7 +1485,7 @@ fn ensure_manifest_unchanged_after_build(
         return Ok(());
     }
     Err(io::Error::other(
-        "plugin build changed herdr-plugin.toml after install preview; aborting install",
+        "plugin build changed hicodeer-plugin.toml after install preview; aborting install",
     ))
 }
 
@@ -1697,16 +1697,16 @@ fn scrub_herdr_runtime_env(command: &mut Command) {
         crate::api::SOCKET_PATH_ENV_VAR,
         crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
         crate::session::SESSION_ENV_VAR,
-        "HERDR_BIN_PATH",
-        "HERDR_ENV",
-        "HERDR_WORKSPACE_ID",
-        "HERDR_TAB_ID",
-        "HERDR_PANE_ID",
+        "HICODEER_AGENT_BIN_PATH",
+        "HICODEER_AGENT_ENV",
+        "HICODEER_AGENT_WORKSPACE_ID",
+        "HICODEER_AGENT_TAB_ID",
+        "HICODEER_AGENT_PANE_ID",
     ] {
         command.env_remove(key);
     }
     for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("HERDR_PLUGIN_") {
+        if key.to_string_lossy().starts_with("HICODEER_AGENT_PLUGIN_") {
             command.env_remove(key);
         }
     }
@@ -1807,32 +1807,32 @@ fn print_plugin_response(method: Method) -> std::io::Result<i32> {
 }
 
 fn print_plugin_help() {
-    eprintln!("herdr plugin commands:");
-    eprintln!("  herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
-    eprintln!("  herdr plugin update [<plugin_id|owner/repo[/subdir...]>...] [--yes]");
-    eprintln!("  herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
-    eprintln!("  herdr plugin link <path> [--disabled]");
-    eprintln!("  herdr plugin list [--plugin ID] [--json]");
-    eprintln!("  herdr plugin config-dir <plugin_id>");
-    eprintln!("  herdr plugin unlink <plugin_id>");
-    eprintln!("  herdr plugin enable <plugin_id>");
-    eprintln!("  herdr plugin disable <plugin_id>");
-    eprintln!("  herdr plugin action <list|invoke>");
-    eprintln!("  herdr plugin log list [--plugin ID] [--limit N]");
-    eprintln!("  herdr plugin pane <open|focus|close>");
+    eprintln!("hicodeer-agent plugin commands:");
+    eprintln!("  hicodeer-agent plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
+    eprintln!("  hicodeer-agent plugin update [<plugin_id|owner/repo[/subdir...]>...] [--yes]");
+    eprintln!("  hicodeer-agent plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+    eprintln!("  hicodeer-agent plugin link <path> [--disabled]");
+    eprintln!("  hicodeer-agent plugin list [--plugin ID] [--json]");
+    eprintln!("  hicodeer-agent plugin config-dir <plugin_id>");
+    eprintln!("  hicodeer-agent plugin unlink <plugin_id>");
+    eprintln!("  hicodeer-agent plugin enable <plugin_id>");
+    eprintln!("  hicodeer-agent plugin disable <plugin_id>");
+    eprintln!("  hicodeer-agent plugin action <list|invoke>");
+    eprintln!("  hicodeer-agent plugin log list [--plugin ID] [--limit N]");
+    eprintln!("  hicodeer-agent plugin pane <open|focus|close>");
 }
 
 fn print_plugin_action_help() {
-    eprintln!("herdr plugin action commands:");
-    eprintln!("  herdr plugin action list [--plugin ID]");
-    eprintln!("  herdr plugin action invoke <action_id> [--plugin ID]");
+    eprintln!("hicodeer-agent plugin action commands:");
+    eprintln!("  hicodeer-agent plugin action list [--plugin ID]");
+    eprintln!("  hicodeer-agent plugin action invoke <action_id> [--plugin ID]");
 }
 
 fn print_plugin_pane_help() {
-    eprintln!("herdr plugin pane commands:");
-    eprintln!("  herdr plugin pane open --plugin ID --entrypoint ID [--placement overlay|popup|split|tab|zoomed] [--width SIZE] [--height SIZE] [--workspace ID] [--target-pane PANE] [--direction right|down] [--cwd PATH] [--env KEY=VALUE] [--focus|--no-focus]");
-    eprintln!("  herdr plugin pane focus <pane_id>");
-    eprintln!("  herdr plugin pane close <pane_id>");
+    eprintln!("hicodeer-agent plugin pane commands:");
+    eprintln!("  hicodeer-agent plugin pane open --plugin ID --entrypoint ID [--placement overlay|popup|split|tab|zoomed] [--width SIZE] [--height SIZE] [--workspace ID] [--target-pane PANE] [--direction right|down] [--cwd PATH] [--env KEY=VALUE] [--focus|--no-focus]");
+    eprintln!("  hicodeer-agent plugin pane focus <pane_id>");
+    eprintln!("  hicodeer-agent plugin pane close <pane_id>");
 }
 
 #[cfg(test)]
@@ -1866,9 +1866,9 @@ mod tests {
             plugin_id: id.to_string(),
             name: "Test Plugin".to_string(),
             version: "0.1.0".to_string(),
-            min_herdr_version: crate::build_info::BASE_VERSION.to_string(),
+            min_in_app_version: crate::build_info::BASE_VERSION.to_string(),
             description: None,
-            manifest_path: format!("/tmp/{id}/herdr-plugin.toml"),
+            manifest_path: format!("/tmp/{id}/hicodeer-plugin.toml"),
             plugin_root: format!("/tmp/{id}"),
             enabled: true,
             platforms: None,
@@ -1885,7 +1885,7 @@ mod tests {
                 subdir: subdir.map(str::to_string),
                 requested_ref: None,
                 resolved_commit: Some("abc123".to_string()),
-                managed_path: Some(format!("/tmp/herdr/plugins/{id}")),
+                managed_path: Some(format!("/tmp/hicodeer-agent/plugins/{id}")),
                 installed_unix_ms: Some(42),
             },
             warnings: vec![],

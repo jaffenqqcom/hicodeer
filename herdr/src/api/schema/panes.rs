@@ -11,7 +11,7 @@ use super::common::{AgentStatus, PaneAgentState, ReadFormat, ReadSource, SplitDi
 #[serde(rename_all = "snake_case")]
 pub enum PaneRightClickTarget {
     #[default]
-    Herdr,
+    InApp,
     Pane,
 }
 
@@ -372,7 +372,7 @@ pub struct PaneReportAgentParams {
     pub agent_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session_path: Option<String>,
-    /// Command that resumes this agent's session after a Herdr restart. The
+    /// Command that resumes this agent's session after a HiCodeer restart. The
     /// first element must be a plain command name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_argv: Option<Vec<String>>,
@@ -391,7 +391,7 @@ pub struct PaneReportAgentSessionParams {
     pub agent_session_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_start_source: Option<String>,
-    /// Command that resumes this agent's session after a Herdr restart. The
+    /// Command that resumes this agent's session after a HiCodeer restart. The
     /// first element must be a plain command name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_argv: Option<Vec<String>>,

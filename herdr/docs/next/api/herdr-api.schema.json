@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Herdr API",
+  "title": "HiCodeer API",
   "schema_version": 1,
   "protocol": 22,
   "schemas": {
@@ -1741,7 +1741,7 @@
             "position": {
               "anyOf": [
                 {
-                  "$ref": "#/schemas/request/$defs/ToastHerdrPosition"
+                  "$ref": "#/schemas/request/$defs/ToastInAppPosition"
                 },
                 {
                   "type": "null"
@@ -1756,7 +1756,7 @@
             "title"
           ]
         },
-        "ToastHerdrPosition": {
+        "ToastInAppPosition": {
           "type": "string",
           "enum": [
             "top-left",
@@ -2833,7 +2833,7 @@
             },
             "right_click": {
               "$ref": "#/schemas/request/$defs/PaneRightClickTarget",
-              "default": "herdr"
+              "default": "in_app"
             },
             "env": {
               "type": "object",
@@ -2856,7 +2856,7 @@
         "PaneRightClickTarget": {
           "type": "string",
           "enum": [
-            "herdr",
+            "in_app",
             "pane"
           ]
         },
@@ -3631,7 +3631,7 @@
               ]
             },
             "resume_argv": {
-              "description": "Command that resumes this agent's session after a Herdr restart. The\nfirst element must be a plain command name.",
+              "description": "Command that resumes this agent's session after a HiCodeer restart. The\nfirst element must be a plain command name.",
               "type": [
                 "array",
                 "null"
@@ -3696,7 +3696,7 @@
               ]
             },
             "resume_argv": {
-              "description": "Command that resumes this agent's session after a Herdr restart. The\nfirst element must be a plain command name.",
+              "description": "Command that resumes this agent's session after a HiCodeer restart. The\nfirst element must be a plain command name.",
               "type": [
                 "array",
                 "null"
@@ -4716,7 +4716,11 @@
             "mastracode",
             "antigravity_cli",
             "grok",
-            "code_buddy"
+            "code_buddy",
+            "atomcode",
+            "deveco",
+            "codewhale",
+            "zcode"
           ]
         },
         "IntegrationUninstallParams": {
@@ -8690,7 +8694,11 @@
             "mastracode",
             "antigravity_cli",
             "grok",
-            "code_buddy"
+            "code_buddy",
+            "atomcode",
+            "deveco",
+            "codewhale",
+            "zcode"
           ]
         },
         "IntegrationState": {
@@ -8802,7 +8810,7 @@
             "version": {
               "type": "string"
             },
-            "min_herdr_version": {
+            "min_in_app_version": {
               "type": "string",
               "default": ""
             },

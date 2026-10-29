@@ -1413,7 +1413,7 @@ impl AppState {
                 self.update_dismissed = true;
                 if matches!(
                     self.toast_config.delivery,
-                    crate::config::ToastDelivery::Herdr
+                    crate::config::ToastDelivery::InApp
                 ) {
                     self.toast = Some(ToastNotification {
                         kind: ToastKind::UpdateInstalled,
@@ -1433,7 +1433,7 @@ impl AppState {
                 if !updated.is_empty()
                     && matches!(
                         self.toast_config.delivery,
-                        crate::config::ToastDelivery::Herdr
+                        crate::config::ToastDelivery::InApp
                     )
                 {
                     let agent_list = updated
@@ -2054,7 +2054,7 @@ impl AppState {
     fn apply_agent_notification_delivery(&mut self, delivery: &AgentNotificationDelivery) {
         if matches!(
             self.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
+            crate::config::ToastDelivery::InApp
         ) {
             if let Some(toast) = delivery.toast.clone() {
                 self.toast = Some(toast);
@@ -2203,8 +2203,8 @@ mod tests {
     fn mark_linked_worktree(state: &mut AppState, ws_idx: usize) {
         state.workspaces[ws_idx].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
+            label: "hicodeer-agent".into(),
+            repo_root: "/repo/hicodeer".into(),
             checkout_path: format!("/repo/worktree-{ws_idx}").into(),
             is_linked_worktree: true,
         });
@@ -2213,9 +2213,9 @@ mod tests {
     fn mark_parent_worktree(state: &mut AppState, ws_idx: usize) {
         state.workspaces[ws_idx].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr".into(),
+            label: "hicodeer-agent".into(),
+            repo_root: "/repo/hicodeer".into(),
+            checkout_path: "/repo/hicodeer".into(),
             is_linked_worktree: false,
         });
     }
@@ -2226,8 +2226,8 @@ mod tests {
         let root = state.workspaces[0].tabs[0].root_pane;
 
         assert_eq!(
-            notification_context(&state.workspaces[0], "__herdr_projects__", 0, root),
-            "__herdr_projects__ · 1"
+            notification_context(&state.workspaces[0], "__hicodeer_projects__", 0, root),
+            "__hicodeer_projects__ · 1"
         );
     }
 
@@ -2314,9 +2314,9 @@ mod tests {
                 "./src/app/actions.rs:795",
             ),
             (
-                "open ../herdr-worktrees/issue-1",
-                "herdr",
-                "../herdr-worktrees/issue-1",
+                "open ../hicodeer-agent-worktrees/issue-1",
+                "hicodeer-agent",
+                "../hicodeer-agent-worktrees/issue-1",
             ),
             (
                 "edit src/app/actions.rs,then",
@@ -2352,7 +2352,7 @@ mod tests {
             ),
             ("refs #123 and @owner/name", "#123", "#123"),
             ("refs #123 and @owner/name", "owner", "@owner/name"),
-            ("cargo test --package=herdr", "--package", "--package=herdr"),
+            ("cargo test --package=hicodeer-agent", "--package", "--package=hicodeer-agent"),
             (
                 "cargo test app::actions::tests",
                 "app::",
@@ -2365,7 +2365,7 @@ mod tests {
             ),
             ("ERROR [worker-1] request_id=abc-123", "worker", "worker-1"),
             (
-                "tmux|newhoo|fixhoo|newmoo|notification|window_bell|herdr",
+                "tmux|newhoo|fixhoo|newmoo|notification|window_bell|hicodeer-agent",
                 "newhoo",
                 "newhoo",
             ),
@@ -2412,7 +2412,7 @@ mod tests {
     fn double_click_word_bounds_ignore_delimiters() {
         for (row, click) in [
             (
-                "tmux|newhoo|fixhoo|newmoo|notification|window_bell|herdr",
+                "tmux|newhoo|fixhoo|newmoo|notification|window_bell|hicodeer-agent",
                 "|",
             ),
             ("alpha,beta;gamma", ","),
@@ -2941,16 +2941,16 @@ mod tests {
         let mut state = app_with_workspaces(&["main", "issue", "notes"]);
         state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr".into(),
+            label: "hicodeer-agent".into(),
+            repo_root: "/repo/hicodeer".into(),
+            checkout_path: "/repo/hicodeer".into(),
             is_linked_worktree: false,
         });
         state.workspaces[1].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-issue".into(),
+            label: "hicodeer-agent".into(),
+            repo_root: "/repo/hicodeer".into(),
+            checkout_path: "/repo/hicodeer-issue".into(),
             is_linked_worktree: true,
         });
         state.selected = 0;
@@ -3081,7 +3081,7 @@ mod tests {
     #[test]
     fn state_changed_idle_in_background_marks_unseen() {
         let mut state = app_with_workspaces(&["active", "background"]);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         state.active = Some(0);
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -3171,7 +3171,7 @@ mod tests {
     ) {
         let mut app = app_with_workspaces(&["active", "background"]);
         app.active = Some(0);
-        app.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.toast_config.delivery = crate::config::ToastDelivery::InApp;
         app.toast_config.delay_seconds = 0;
         let pane_id = app.workspaces[1].tabs[0].root_pane;
         if acquired {
@@ -3362,7 +3362,7 @@ mod tests {
         for (seq, session, reason) in [(1, "old-session", "startup"), (2, "new-session", "clear")] {
             let updates = app.handle_app_event(AppEvent::AgentSessionReported {
                 pane_id,
-                source: "herdr:claude".into(),
+                source: "hicodeer:claude".into(),
                 agent_label: "claude".into(),
                 seq: Some(seq),
                 session_ref: crate::agent_resume::AgentSessionRef::id(session),
@@ -3416,7 +3416,7 @@ mod tests {
     #[test]
     fn first_idle_after_process_detection_is_not_completion() {
         let mut state = app_with_workspaces(&["active", "background"]);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         state.active = Some(0);
         let pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -3532,7 +3532,7 @@ mod tests {
     fn background_waiting_sets_attention_toast() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
         state.handle_app_event(AppEvent::StateChanged {
@@ -3555,7 +3555,7 @@ mod tests {
     fn delayed_background_waiting_schedules_before_toast() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         state.toast_config.delay_seconds = 1;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -3587,7 +3587,7 @@ mod tests {
     fn delayed_background_waiting_cancels_when_agent_resumes_working() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         state.toast_config.delay_seconds = 1;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -3621,7 +3621,7 @@ mod tests {
     fn delayed_background_waiting_is_suppressed_if_pane_becomes_active() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         state.toast_config.delay_seconds = 1;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -3673,7 +3673,7 @@ mod tests {
     fn delayed_background_waiting_is_cleared_when_pane_dies() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         state.toast_config.delay_seconds = 1;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -3791,7 +3791,7 @@ mod tests {
         });
         state.handle_app_event(AppEvent::AgentResumeReported {
             pane_id,
-            source: "herdr:pi".into(),
+            source: "hicodeer:pi".into(),
             agent_label: "pi".into(),
             seq: None,
             argv: vec!["pi".into(), "--continue".into()],
@@ -3814,7 +3814,7 @@ mod tests {
 
         state.handle_app_event(AppEvent::AgentResumeReported {
             pane_id,
-            source: "herdr:pi".into(),
+            source: "hicodeer:pi".into(),
             agent_label: "pi".into(),
             seq: None,
             argv: vec!["pi".into(), "--continue".into()],
@@ -3871,7 +3871,7 @@ mod tests {
         });
         state.handle_app_event(AppEvent::HookStateReported {
             pane_id,
-            source: "herdr:pi".into(),
+            source: "hicodeer:pi".into(),
             agent_label: "pi".into(),
             state: AgentState::Working,
             message: None,
@@ -3895,7 +3895,7 @@ mod tests {
     fn hook_reported_unknown_agent_sets_toast_title_from_label() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
         state.handle_app_event(AppEvent::HookStateReported {
@@ -3918,7 +3918,7 @@ mod tests {
     fn visible_blocker_overrides_hook_working_and_notifies() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
         let bg_terminal_id = state.workspaces[1]
             .panes
@@ -3938,7 +3938,7 @@ mod tests {
         });
         state.handle_app_event(AppEvent::HookStateReported {
             pane_id: bg_pane_id,
-            source: "herdr:codex".into(),
+            source: "hicodeer:codex".into(),
             agent_label: "codex".into(),
             state: AgentState::Working,
             message: None,
@@ -3966,7 +3966,7 @@ mod tests {
     fn reserved_native_state_report_does_not_override_screen_state() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
         let terminal_id = state.workspaces[0]
             .panes
@@ -3986,7 +3986,7 @@ mod tests {
         });
         state.handle_app_event(AppEvent::HookStateReported {
             pane_id,
-            source: "herdr:claude".into(),
+            source: "hicodeer:claude".into(),
             agent_label: "claude".into(),
             state: AgentState::Blocked,
             message: None,
@@ -4035,7 +4035,7 @@ mod tests {
         });
         let terminal = state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:pi".into(),
+            source: "hicodeer:pi".into(),
             agent: "pi".into(),
             session_ref: crate::agent_resume::AgentSessionRef::path(
                 std::env::current_dir()
@@ -4047,7 +4047,7 @@ mod tests {
             .unwrap(),
         });
         terminal.set_hook_authority(
-            "herdr:pi".into(),
+            "hicodeer:pi".into(),
             "pi".into(),
             AgentState::Working,
             None,
@@ -4058,7 +4058,7 @@ mod tests {
 
         let updates = state.handle_app_event(AppEvent::HookAgentReleased {
             pane_id,
-            source: "herdr:pi".into(),
+            source: "hicodeer:pi".into(),
             agent_label: "pi".into(),
             known_agent: Some(Agent::Pi),
             seq: Some(2),
@@ -4095,7 +4095,7 @@ mod tests {
         });
         state.handle_app_event(AppEvent::HookStateReported {
             pane_id,
-            source: "herdr:devin".into(),
+            source: "hicodeer:devin".into(),
             agent_label: "devin".into(),
             state: AgentState::Working,
             message: None,
@@ -4187,7 +4187,7 @@ mod tests {
             .attached_terminal_id
             .clone();
         let cwd =
-            std::env::temp_dir().join(format!("herdr-cwd-report-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-agent-cwd-report-test-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).unwrap();
         state.session_dirty = false;
 
@@ -4206,7 +4206,7 @@ mod tests {
     fn background_idle_sets_finished_toast() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
         let bg_terminal_id = state.workspaces[1]
             .panes
@@ -4239,7 +4239,7 @@ mod tests {
     fn background_toast_includes_tab_name_when_workspace_has_multiple_tabs() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         state.workspaces[1].tabs[0].set_custom_name("main".into());
         let second_tab = state.workspaces[1].test_add_tab(Some("logs"));
         state.ensure_test_terminals();
@@ -4265,7 +4265,7 @@ mod tests {
     fn background_tab_in_active_workspace_still_sets_toast() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         state.workspaces[0].tabs[0].set_custom_name("main".into());
         let second_tab = state.workspaces[0].test_add_tab(Some("logs"));
         state.ensure_test_terminals();
@@ -4291,7 +4291,7 @@ mod tests {
     fn active_workspace_active_tab_does_not_set_toast() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
 
         state.handle_app_event(AppEvent::StateChanged {
@@ -4312,7 +4312,7 @@ mod tests {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
         state.outer_terminal_focus = Some(false);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
 
         state.handle_app_event(AppEvent::StateChanged {
@@ -4339,11 +4339,11 @@ mod tests {
     #[test]
     fn update_ready_sets_manual_update_toast() {
         let mut state = AppState::test_new();
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
 
         let updates = state.handle_app_event(AppEvent::UpdateReady {
             version: "0.5.0".into(),
-            install_command: "herdr update".into(),
+            install_command: "hicodeer-agent update".into(),
         });
 
         assert!(updates.is_empty());
@@ -4355,35 +4355,35 @@ mod tests {
         assert_eq!(toast.title, "v0.5.0 available");
         assert_eq!(
             toast.context,
-            "detach, run `herdr update`, then run Herdr again to reconnect"
+            "detach, run `hicodeer-agent update`, then run HiCodeer again to reconnect"
         );
     }
 
     #[test]
     fn update_ready_uses_event_install_command_in_toast() {
         let mut state = AppState::test_new();
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
 
         state.handle_app_event(AppEvent::UpdateReady {
             version: "0.5.0".into(),
-            install_command: "brew update && brew upgrade herdr".into(),
+            install_command: "brew update && brew upgrade hicodeer-agent".into(),
         });
 
         assert_eq!(
             state.update_install_command,
-            "brew update && brew upgrade herdr"
+            "brew update && brew upgrade hicodeer-agent"
         );
         let toast = state.toast.as_ref().expect("update toast");
         assert_eq!(
             toast.context,
-            "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
+            "detach, run `brew update && brew upgrade hicodeer-agent`, then run HiCodeer again to reconnect"
         );
     }
 
     #[test]
     fn agent_detection_manifest_update_event_updates_status_and_toast() {
         let mut state = AppState::test_new();
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         let status = crate::detect::manifest_update::ManifestUpdateStatus {
             last_result: Some("checked".to_string()),
             ..Default::default()
@@ -4586,7 +4586,7 @@ mod tests {
     #[test]
     fn pane_process_exit_publish_marks_agent_idle_before_pane_removal() {
         let mut state = app_with_workspaces(&["active", "background"]);
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        state.toast_config.delivery = crate::config::ToastDelivery::InApp;
         state.active = Some(1);
         state.ensure_test_terminals();
         let pane_id = state.workspaces[0].tabs[0].root_pane;

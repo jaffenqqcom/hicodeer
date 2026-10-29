@@ -51,9 +51,9 @@ beforeEach(() => {
   holdConnections = false;
   failConnections = false;
   connections.length = 0;
-  process.env.HERDR_ENV = "1";
+  process.env.HICODEER_AGENT_ENV = "1";
   process.env.HICODEER_AGENT_SOCKET_PATH = "test.sock";
-  process.env.HERDR_PANE_ID = "test:p1";
+  process.env.HICODEER_AGENT_PANE_ID = "test:p1";
 });
 
 afterEach(() => {
@@ -168,7 +168,7 @@ test("reports a root session when only the local route changes", async () => {
   expect(requestParam(requests[0], "seq")).toBeUndefined();
 });
 
-test("retries an initial selection while Herdr detects the process", async () => {
+test("retries an initial selection while HiCodeer detects the process", async () => {
   const plugin = await loadPlugin();
   const tui = fakeApi();
   tui.addSession({ id: "session-a" });

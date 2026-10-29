@@ -109,7 +109,7 @@ pub(super) fn render_notification_card(
     area: Rect,
     title: &str,
     body: &str,
-    position: crate::config::ToastHerdrPosition,
+    position: crate::config::ToastInAppPosition,
     top_offset: u16,
     dot_color: Color,
     palette: &Palette,
@@ -125,17 +125,17 @@ pub(super) fn render_notification_card(
         .min(area.width);
     let height: u16 = if body.is_empty() { 3 } else { 4 }.min(area.height);
     let x = match position {
-        crate::config::ToastHerdrPosition::TopLeft
-        | crate::config::ToastHerdrPosition::BottomLeft => area.x,
-        crate::config::ToastHerdrPosition::TopRight
-        | crate::config::ToastHerdrPosition::BottomRight => area.right().saturating_sub(width),
+        crate::config::ToastInAppPosition::TopLeft
+        | crate::config::ToastInAppPosition::BottomLeft => area.x,
+        crate::config::ToastInAppPosition::TopRight
+        | crate::config::ToastInAppPosition::BottomRight => area.right().saturating_sub(width),
     };
     let max_y = area.bottom().saturating_sub(height).max(area.y);
     let y = match position {
-        crate::config::ToastHerdrPosition::TopLeft
-        | crate::config::ToastHerdrPosition::TopRight => area.y.saturating_add(top_offset),
-        crate::config::ToastHerdrPosition::BottomLeft
-        | crate::config::ToastHerdrPosition::BottomRight => area
+        crate::config::ToastInAppPosition::TopLeft
+        | crate::config::ToastInAppPosition::TopRight => area.y.saturating_add(top_offset),
+        crate::config::ToastInAppPosition::BottomLeft
+        | crate::config::ToastInAppPosition::BottomRight => area
             .bottom()
             .saturating_sub(height.saturating_add(top_offset)),
     }
@@ -181,7 +181,7 @@ pub(super) fn render_visible_notification(
     buffer: &mut Buffer,
     area: Rect,
     notification: &ClientVisibleNotification,
-    default_position: crate::config::ToastHerdrPosition,
+    default_position: crate::config::ToastInAppPosition,
     top_offset: u16,
     palette: &Palette,
 ) -> Rect {
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn immediate_finished_evidence_for_acknowledged_idle_never_toasts_or_sounds() {
         let mut config = ClientShellConfig::from_config(&Config::default());
-        config.toast_delivery = crate::config::ToastDelivery::Herdr;
+        config.toast_delivery = crate::config::ToastDelivery::InApp;
         config.toast_delay_seconds = 0;
         let mut state = ClientShellState::new(config);
         let mut snapshot = super::super::tests::snapshot();
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn concurrent_endpoint_notifications_are_queued_in_arrival_order() {
         let mut config = Config::default();
-        config.ui.toast.delivery = crate::config::ToastDelivery::Herdr;
+        config.ui.toast.delivery = crate::config::ToastDelivery::InApp;
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
         let now = std::time::Instant::now();
         for title in ["first", "second"] {
@@ -459,8 +459,8 @@ mod tests {
         for height in [1, 2] {
             let area = Rect::new(3, 4, 8, height);
             for position in [
-                crate::config::ToastHerdrPosition::TopRight,
-                crate::config::ToastHerdrPosition::BottomRight,
+                crate::config::ToastInAppPosition::TopRight,
+                crate::config::ToastInAppPosition::BottomRight,
             ] {
                 let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 10));
                 let rect = render_visible_notification(

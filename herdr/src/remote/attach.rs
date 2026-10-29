@@ -30,13 +30,13 @@ const NONINTERACTIVE_SSH_STDERR_LIMIT: usize = 16 * 1024;
 const BRIDGE_FAILURE_REPORT_TIMEOUT: Duration = Duration::from_secs(1);
 const REMOTE_SERVER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
-const STABLE_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/latest.json";
-const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
-const REMOTE_BINARY_ENV_VAR: &str = "HERDR_REMOTE_BINARY";
-const REMOTE_OUTPUT_READY_MARKER: &str = "herdr-remote-output-ready:1";
-const WINDOWS_REMOTE_PATH_MARKER: &str = "herdr-remote-path:1:";
-const WINDOWS_REMOTE_INSTALL_DIR_MARKER: &str = "herdr-remote-install-dir:1:";
-const WINDOWS_REMOTE_INSTALL_RESULT_MARKER: &str = "herdr-remote-install-result:1:";
+const UPDATE_MANIFEST_URL_ENV: &str = "HICODEER_AGENT_UPDATE_MANIFEST_URL";
+const PREVIEW_MANIFEST_URL_ENV: &str = "HICODEER_AGENT_PREVIEW_MANIFEST_URL";
+const REMOTE_BINARY_ENV_VAR: &str = "HICODEER_AGENT_REMOTE_BINARY";
+const REMOTE_OUTPUT_READY_MARKER: &str = "hicodeer-remote-output-ready:1";
+const WINDOWS_REMOTE_PATH_MARKER: &str = "hicodeer-remote-path:1:";
+const WINDOWS_REMOTE_INSTALL_DIR_MARKER: &str = "hicodeer-remote-install-dir:1:";
+const WINDOWS_REMOTE_INSTALL_RESULT_MARKER: &str = "hicodeer-remote-install-result:1:";
 const SSH_CONTROL_SOCKET_NAME: &str = "ctl";
 pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     let session_name = crate::session::active_name()
@@ -44,7 +44,7 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     let local_socket = local_forward_socket_path(&remote.target, &session_name);
     let program = std::env::args()
         .next()
-        .unwrap_or_else(|| "herdr".to_string());
+        .unwrap_or_else(|| "hicodeer-agent".to_string());
     let reattach_command = reattach_command(
         &program,
         &remote.target,
@@ -119,7 +119,7 @@ pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
             Ok(())
         }
         _ => Err(io::Error::other(format!(
-            "remote Herdr server is stopped or incompatible; run `{}`",
+            "remote HiCodeer server is stopped or incompatible; run `{}`",
             super::saved_ssh_bootstrap_command(target, session),
         ))),
     }
@@ -187,7 +187,7 @@ impl SavedSshSetup {
             }
         }
         Err(io::Error::other(format!(
-            "could not discover remote Herdr sessions: {failure}; specify --remote-session to continue"
+            "could not discover remote HiCodeer sessions: {failure}; specify --remote-session to continue"
         )))
     }
 
@@ -474,10 +474,10 @@ impl RemoteHerdr {
         let (install_suffix, executable) = if platform.is_windows() {
             (
                 String::new(),
-                RemoteExecutable::WindowsPath("herdr.exe".to_string()),
+                RemoteExecutable::WindowsPath("hicodeer-agent.exe".to_string()),
             )
         } else {
-            let install_suffix = ".local/bin/herdr".to_string();
+            let install_suffix = ".local/bin/hicodeer-agent".to_string();
             let shell_path = format!("\"$HOME/{install_suffix}\"");
             (install_suffix, RemoteExecutable::PosixShellPath(shell_path))
         };
@@ -735,7 +735,7 @@ pub(crate) fn ssh_authentication_command(target: &str) -> io::Result<SshAuthenti
         ));
     }
     if !crate::platform::remote_ssh_config_paths().multiplexing {
-        return Err(io::Error::new(io::ErrorKind::Unsupported, "interactive SSH recovery requires Unix OpenSSH multiplexing; authenticate outside Herdr on this platform"));
+        return Err(io::Error::new(io::ErrorKind::Unsupported, "interactive SSH recovery requires Unix OpenSSH multiplexing; authenticate outside HiCodeer on this platform"));
     }
     if !crate::config::Config::load()
         .config
@@ -993,7 +993,7 @@ impl RemoteSsh {
                 )?;
                 self.copy_windows_file(
                     source_path,
-                    &format!(r"{remote_dir}\herdr-windows-x86_64.zip"),
+                    &format!(r"{remote_dir}\hicodeer-windows-x86_64.zip"),
                 )?;
 
                 let output = self.framed_user_shell_output(&windows_remote_install_command(
@@ -1146,7 +1146,7 @@ fn remote_install_commit_script(tmp_path: &str, dest_path: &str) -> String {
 
 fn windows_remote_install_prepare_command() -> String {
     windows_powershell_script_command(&format!(
-        "$remoteInstallDir = Join-Path ([System.IO.Path]::GetTempPath()) ('herdr-remote-' + [System.Guid]::NewGuid().ToString('N')); [System.IO.Directory]::CreateDirectory($remoteInstallDir) | Out-Null; $encodedInstallDir = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($remoteInstallDir)); [Console]::Out.WriteLine('{WINDOWS_REMOTE_INSTALL_DIR_MARKER}' + $encodedInstallDir); exit 0"
+        "$remoteInstallDir = Join-Path ([System.IO.Path]::GetTempPath()) ('hicodeer-remote-' + [System.Guid]::NewGuid().ToString('N')); [System.IO.Directory]::CreateDirectory($remoteInstallDir) | Out-Null; $encodedInstallDir = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($remoteInstallDir)); [Console]::Out.WriteLine('{WINDOWS_REMOTE_INSTALL_DIR_MARKER}' + $encodedInstallDir); exit 0"
     ))
 }
 
@@ -1171,9 +1171,9 @@ fn windows_scp_target(target: &str, remote_path: &str) -> String {
 fn windows_remote_install_command(remote_dir: &str, identity: &str, sha256: &str) -> String {
     let installer = crate::platform::quote_powershell_arg(&format!(r"{remote_dir}\install.ps1"));
     let package =
-        crate::platform::quote_powershell_arg(&format!(r"{remote_dir}\herdr-windows-x86_64.zip"));
+        crate::platform::quote_powershell_arg(&format!(r"{remote_dir}\hicodeer-windows-x86_64.zip"));
     windows_powershell_script_command(&format!(
-        r#"$herdrInstaller = {installer}; $herdrPackage = {package}; & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $herdrInstaller -Channel {channel} -LocalPackagePath $herdrPackage -LocalPackageFormat zip -LocalPackageIdentity {identity} -LocalPackageSha256 {sha256}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $herdrHome = if ([string]::IsNullOrWhiteSpace($env:HERDR_HOME)) {{ Join-Path $env:USERPROFILE '.herdr' }} else {{ $env:HERDR_HOME }}; $activeJunction = Join-Path $herdrHome 'packages\standalone\current'; $activeTarget = [string](Get-Item -LiteralPath $activeJunction -Force -ErrorAction Stop).Target; if ([string]::IsNullOrWhiteSpace($activeTarget)) {{ throw 'Herdr installer did not activate a concrete release.' }}; $installedHerdr = Join-Path $activeTarget 'herdr.exe'; if (-not (Test-Path -LiteralPath $installedHerdr -PathType Leaf)) {{ throw 'Herdr installer result does not contain herdr.exe.' }}; $encodedResult = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($installedHerdr))); [Console]::Out.WriteLine('{WINDOWS_REMOTE_INSTALL_RESULT_MARKER}' + $encodedResult); exit 0"#,
+        r#"$hicodeerInstaller = {installer}; $hicodeerPackage = {package}; & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $hicodeerInstaller -Channel {channel} -LocalPackagePath $hicodeerPackage -LocalPackageFormat zip -LocalPackageIdentity {identity} -LocalPackageSha256 {sha256}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $hicodeerHome = if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_HOME)) {{ Join-Path $env:USERPROFILE '.hicodeer-agent' }} else {{ $env:HICODEER_AGENT_HOME }}; $activeJunction = Join-Path $hicodeerHome 'packages\standalone\current'; $activeTarget = [string](Get-Item -LiteralPath $activeJunction -Force -ErrorAction Stop).Target; if ([string]::IsNullOrWhiteSpace($activeTarget)) {{ throw 'HiCodeer installer did not activate a concrete release.' }}; $installedHiCodeer = Join-Path $activeTarget 'hicodeer-agent.exe'; if (-not (Test-Path -LiteralPath $installedHiCodeer -PathType Leaf)) {{ throw 'HiCodeer installer result does not contain hicodeer-agent.exe.' }}; $encodedResult = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($installedHiCodeer))); [Console]::Out.WriteLine('{WINDOWS_REMOTE_INSTALL_RESULT_MARKER}' + $encodedResult); exit 0"#,
         channel = crate::platform::quote_powershell_arg(current_channel()),
         identity = crate::platform::quote_powershell_arg(identity),
         sha256 = crate::platform::quote_powershell_arg(sha256),
@@ -1378,7 +1378,7 @@ fn prepare_discovered_remote_herdr(
 
     if !remote_binary_supports_endpoint_requirement(ssh, &remote_herdr, require_surface_interest)? {
         return Err(io::Error::other(format!(
-            "installed remote herdr at {}, but it does not support saved SSH endpoint federation",
+            "installed remote hicodeer-agent at {}, but it does not support saved SSH endpoint federation",
             remote_herdr.executable.display()
         )));
     }
@@ -1405,7 +1405,7 @@ pub(super) fn find_installed_remote_herdr(ssh: &RemoteSsh) -> io::Result<RemoteH
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         format!(
-            "matching Herdr is not ready on {}; run `herdr --remote {}` interactively to install or update it",
+            "matching HiCodeer is not ready on {}; run `hicodeer-agent --remote {}` interactively to install or update it",
             ssh.target(),
             ssh.target()
         ),
@@ -1471,7 +1471,7 @@ fn prepare_windows_remote_herdr(
     let remote_herdr = install_result?;
     if !remote_binary_supports_endpoint_requirement(ssh, &remote_herdr, require_surface_interest)? {
         return Err(io::Error::other(format!(
-            "installed remote herdr at {}, but it does not support the required remote hosting capabilities",
+            "installed remote hicodeer-agent at {}, but it does not support the required remote hosting capabilities",
             remote_herdr.executable.display()
         )));
     }
@@ -1499,7 +1499,7 @@ pub(super) fn discover_remote_api_metadata(
         if !metadata.is_valid() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "invalid remote Herdr executable path",
+                "invalid remote HiCodeer executable path",
             ));
         }
         return Ok(metadata);
@@ -1513,7 +1513,7 @@ pub(super) fn discover_remote_api_metadata(
             return Err(command_failed("remote SSH connection failed", &probe));
         }
         if probe.status.success()
-            && String::from_utf8_lossy(&probe.stdout).trim() == "herdr-api-bridge-v1"
+            && String::from_utf8_lossy(&probe.stdout).trim() == "hicodeer-api-bridge-v1"
         {
             return Ok(crate::client::endpoint::SshMachineMetadata {
                 os: "windows".into(),
@@ -1523,7 +1523,7 @@ pub(super) fn discover_remote_api_metadata(
     }
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "remote Herdr does not support machine API forwarding; update Herdr on this machine",
+        "remote HiCodeer does not support machine API forwarding; update HiCodeer on this machine",
     ))
 }
 
@@ -1586,14 +1586,14 @@ fn looks_like_windows_uname(os: &str) -> bool {
 
 fn windows_platform_probe_command() -> String {
     windows_powershell_script_command(
-        "$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }; [Console]::Out.WriteLine('herdr-windows:' + $arch); exit 0",
+        "$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }; [Console]::Out.WriteLine('hicodeer-windows:' + $arch); exit 0",
     )
 }
 
 fn parse_windows_platform_probe(stdout: &str) -> Result<Option<DetectedRemotePlatform>, String> {
     let Some(arch) = stdout
         .lines()
-        .find_map(|line| line.trim().strip_prefix("herdr-windows:"))
+        .find_map(|line| line.trim().strip_prefix("hicodeer-windows:"))
     else {
         return Ok(None);
     };
@@ -1650,7 +1650,7 @@ fn remote_binary_candidates(
 
 fn windows_remote_binary_candidate_command() -> String {
     windows_powershell_script_command(&format!(
-        r#"function Emit-HerdrPath([string]$CandidatePath) {{ if ([string]::IsNullOrWhiteSpace($CandidatePath) -or -not (Test-Path -LiteralPath $CandidatePath -PathType Leaf)) {{ return }}; $candidateFullPath = [System.IO.Path]::GetFullPath($CandidatePath); $encodedCandidate = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($candidateFullPath)); [Console]::Out.WriteLine('{WINDOWS_REMOTE_PATH_MARKER}' + $encodedCandidate) }}; $pathCommand = Get-Command herdr.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if ($null -ne $pathCommand) {{ Emit-HerdrPath $pathCommand.Source }}; $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; Get-CimInstance Win32_Process -Filter "Name = 'herdr.exe' OR Name = 'herdr-dev.exe'" -ErrorAction SilentlyContinue | ForEach-Object {{ $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction SilentlyContinue; if ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $userSid) {{ Emit-HerdrPath $_.ExecutablePath }} }}; $herdrHome = if ([string]::IsNullOrWhiteSpace($env:HERDR_HOME)) {{ Join-Path $env:USERPROFILE '.herdr' }} else {{ $env:HERDR_HOME }}; $activeJunction = Get-Item -LiteralPath (Join-Path $herdrHome 'packages\standalone\current') -Force -ErrorAction SilentlyContinue; if ($null -ne $activeJunction -and -not [string]::IsNullOrWhiteSpace([string]$activeJunction.Target)) {{ Emit-HerdrPath (Join-Path ([string]$activeJunction.Target) 'herdr.exe') }}; exit 0"#
+        r#"function Emit-HiCodeerPath([string]$CandidatePath) {{ if ([string]::IsNullOrWhiteSpace($CandidatePath) -or -not (Test-Path -LiteralPath $CandidatePath -PathType Leaf)) {{ return }}; $candidateFullPath = [System.IO.Path]::GetFullPath($CandidatePath); $encodedCandidate = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($candidateFullPath)); [Console]::Out.WriteLine('{WINDOWS_REMOTE_PATH_MARKER}' + $encodedCandidate) }}; $pathCommand = Get-Command hicodeer-agent.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if ($null -ne $pathCommand) {{ Emit-HiCodeerPath $pathCommand.Source }}; $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; Get-CimInstance Win32_Process -Filter "Name = 'herdr.exe' OR Name = 'herdr-dev.exe'" -ErrorAction SilentlyContinue | ForEach-Object {{ $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction SilentlyContinue; if ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $userSid) {{ Emit-HiCodeerPath $_.ExecutablePath }} }}; $hicodeerHome = if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_HOME)) {{ Join-Path $env:USERPROFILE '.hicodeer-agent' }} else {{ $env:HICODEER_AGENT_HOME }}; $activeJunction = Get-Item -LiteralPath (Join-Path $hicodeerHome 'packages\standalone\current') -Force -ErrorAction SilentlyContinue; if ($null -ne $activeJunction -and -not [string]::IsNullOrWhiteSpace([string]$activeJunction.Target)) {{ Emit-HiCodeerPath (Join-Path ([string]$activeJunction.Target) 'hicodeer-agent.exe') }}; exit 0"#
     ))
 }
 
@@ -1694,34 +1694,34 @@ emit() {
     fi
 }
 if [ -n "$home" ]; then
-    emit "$home/.local/bin/herdr"
+    emit "$home/.local/bin/hicodeer-agent"
 fi
 "#,
     );
     if platform.os == "macos" {
         script.push_str(
-            r#"    emit "/opt/homebrew/bin/herdr"
-    emit "/usr/local/bin/herdr"
+            r#"    emit "/opt/homebrew/bin/hicodeer-agent"
+    emit "/usr/local/bin/hicodeer-agent"
 "#,
         );
     } else if platform.os == "linux" {
         script.push_str(
-            r#"    emit "/home/linuxbrew/.linuxbrew/bin/herdr"
+            r#"    emit "/home/linuxbrew/.linuxbrew/bin/hicodeer-agent"
 "#,
         );
     }
     script.push_str(
         r#"if [ -n "$home" ]; then
-    emit "$home/.local/share/mise/installs/herdr/$version/bin/herdr"
-    emit "$home/.local/share/mise/installs/herdr/$version/herdr"
-    emit "$home/.local/share/mise/installs/github-ogulcancelik-herdr/$version/herdr"
-    emit "$home/.nix-profile/bin/herdr"
+    emit "$home/.local/share/mise/installs/hicodeer-agent/$version/bin/hicodeer-agent"
+    emit "$home/.local/share/mise/installs/hicodeer-agent/$version/hicodeer-agent"
+    emit "$home/.local/share/mise/installs/github-ogulcancelik-hicodeer-agent/$version/hicodeer-agent"
+    emit "$home/.nix-profile/bin/hicodeer-agent"
 fi
 if [ -n "$user" ]; then
-    emit "/etc/profiles/per-user/$user/bin/herdr"
+    emit "/etc/profiles/per-user/$user/bin/hicodeer-agent"
 fi
-emit "/nix/var/nix/profiles/default/bin/herdr"
-emit "/run/current-system/sw/bin/herdr"
+emit "/nix/var/nix/profiles/default/bin/hicodeer-agent"
+emit "/run/current-system/sw/bin/hicodeer-agent"
 "#,
     );
 
@@ -1732,7 +1732,7 @@ fn remote_binary_on_path_any(
     ssh: &RemoteSsh,
     remote_herdr: &RemoteHerdr,
 ) -> io::Result<Option<RemoteHerdr>> {
-    let output = ssh.posix_user_shell_output("command -v herdr")?;
+    let output = ssh.posix_user_shell_output("command -v hicodeer-agent")?;
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         if let Some(candidate) = remote_herdr_from_path_discovery(remote_herdr, &stdout) {
@@ -1742,7 +1742,7 @@ fn remote_binary_on_path_any(
 
     // Non-POSIX login shells such as xonsh reject `command -v`; retry through
     // /bin/sh while retaining the login-shell probe for shell-initialized PATHs.
-    let output = ssh.sh_output("command -v herdr\n")?;
+    let output = ssh.sh_output("command -v hicodeer-agent\n")?;
     if !output.status.success() {
         return Ok(None);
     }
@@ -1779,7 +1779,7 @@ fn remote_herdr_from_path(remote_herdr: &RemoteHerdr, path: &str) -> Option<Remo
 }
 
 fn is_mise_shim_path(path: &str) -> bool {
-    path.ends_with("/mise/shims/herdr")
+    path.ends_with("/mise/shims/hicodeer-agent")
 }
 
 fn remote_client_status(
@@ -1871,7 +1871,7 @@ fn install_source_description_for(
     }
 
     if local_binary_can_seed_remote {
-        "the current local herdr binary".to_string()
+        "the current local hicodeer-agent binary".to_string()
     } else {
         format!(
             "the {} {} asset for {}",
@@ -2012,13 +2012,13 @@ fn confirm_remote_install_with_running_server(
         Err(err) => {
             if !io::stdin().is_terminal() {
                 return Err(io::Error::other(format!(
-                    "could not inspect the running remote herdr server on {target} before installing: {err}; run from an interactive terminal to approve updating the remote binary"
+                    "could not inspect the running remote hicodeer-agent server on {target} before installing: {err}; run from an interactive terminal to approve updating the remote binary"
                 )));
             }
             eprintln!(
-                "could not inspect the running remote herdr server on {target} before installing: {err}"
+                "could not inspect the running remote hicodeer-agent server on {target} before installing: {err}"
             );
-            eprint!("continue installing the remote herdr binary? [y/N] ");
+            eprint!("continue installing the remote hicodeer-agent binary? [y/N] ");
             io::stderr().flush()?;
 
             let mut answer = String::new();
@@ -2027,7 +2027,7 @@ fn confirm_remote_install_with_running_server(
             if answer != "y" && answer != "yes" {
                 return Err(io::Error::new(
                     io::ErrorKind::Interrupted,
-                    "remote herdr install cancelled",
+                    "remote hicodeer-agent install cancelled",
                 ));
             }
             return Ok(false);
@@ -2056,10 +2056,10 @@ fn confirm_remote_install_with_running_server(
 
     if plan == RemoteInstallRunningServerPlan::KeepRunning {
         if io::stdin().is_terminal() {
-            eprintln!("remote herdr server on {target} is already compatible:");
+            eprintln!("remote hicodeer-agent server on {target} is already compatible:");
             eprintln!("  server: v{}", version_label(version.as_deref()));
             eprintln!(
-                "Herdr will install {} without stopping the running remote server.",
+                "HiCodeer will install {} without stopping the running remote server.",
                 current_version()
             );
         }
@@ -2071,7 +2071,7 @@ fn confirm_remote_install_with_running_server(
             RemoteInstallRunningServerPlan::LiveHandoff => return Ok(false),
             RemoteInstallRunningServerPlan::StopRequired(_) => {
                 return Err(io::Error::other(format!(
-                    "remote herdr server on {target} is running v{}; run from an interactive terminal to approve stopping it for the update",
+                    "remote hicodeer-agent server on {target} is running v{}; run from an interactive terminal to approve stopping it for the update",
                     version_label(version.as_deref())
                 )));
             }
@@ -2080,19 +2080,19 @@ fn confirm_remote_install_with_running_server(
     }
 
     if plan == RemoteInstallRunningServerPlan::LiveHandoff {
-        eprintln!("remote herdr server on {target} is currently running:");
+        eprintln!("remote hicodeer-agent server on {target} is currently running:");
         eprintln!("  server: v{}", version_label(version.as_deref()));
         eprintln!(
-            "Herdr will install {} and hand off live pane processes to the prepared server.",
+            "HiCodeer will install {} and hand off live pane processes to the prepared server.",
             current_version()
         );
         return Ok(false);
     }
 
-    eprintln!("remote herdr server on {target} is currently running:");
+    eprintln!("remote hicodeer-agent server on {target} is currently running:");
     eprintln!("  server: v{}", version_label(version.as_deref()));
     eprintln!(
-        "To complete the remote update, Herdr must stop the running remote server after installing."
+        "To complete the remote update, HiCodeer must stop the running remote server after installing."
     );
     eprintln!("This stops active remote pane processes, including shells, agents, dev servers, and tests.");
     eprintln!();
@@ -2108,7 +2108,7 @@ fn confirm_remote_install_with_running_server(
     if answer != "y" && answer != "yes" {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote herdr install cancelled",
+            "remote hicodeer-agent install cancelled",
         ));
     }
 
@@ -2293,19 +2293,19 @@ fn confirm_remote_server_stop(
     if !io::stdin().is_terminal() {
         if required_upgrade {
             return Err(io::Error::other(format!(
-                "remote herdr server on {target} needs one final update before this client can attach; run from an interactive terminal to approve updating it"
+                "remote hicodeer-agent server on {target} needs one final update before this client can attach; run from an interactive terminal to approve updating it"
             )));
         }
 
         eprintln!(
-            "remote herdr server on {target} is still running v{}; it will use {} after it restarts.",
+            "remote hicodeer-agent server on {target} is still running v{}; it will use {} after it restarts.",
             version_label(version),
             current_version()
         );
         return Ok(false);
     }
 
-    eprintln!("remote herdr server on {target} is currently running:");
+    eprintln!("remote hicodeer-agent server on {target} is currently running:");
     eprintln!("  server: v{}", version_label(version));
     eprintln!("  prepared binary: {}", current_version());
     eprintln!();
@@ -2313,7 +2313,7 @@ fn confirm_remote_server_stop(
     match reason {
         RemoteServerRestartReason::EndpointProtocol => {
             eprintln!(
-                "the remote server predates Herdr's stable endpoint protocol and must update before this client can attach."
+                "the remote server predates HiCodeer's stable endpoint protocol and must update before this client can attach."
             );
         }
         RemoteServerRestartReason::SurfaceInterest => {
@@ -2326,7 +2326,7 @@ fn confirm_remote_server_stop(
         }
         RemoteServerRestartReason::DaemonDetach => {
             eprintln!(
-                "the remote server was started by a herdr build that may not survive SSH connection loss. restart it so network drops disconnect only this client."
+                "the remote server was started by a hicodeer-agent build that may not survive SSH connection loss. restart it so network drops disconnect only this client."
             );
         }
     }
@@ -2346,7 +2346,7 @@ fn confirm_remote_server_stop(
     if required_upgrade {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote herdr server stop cancelled",
+            "remote hicodeer-agent server stop cancelled",
         ));
     }
 
@@ -2355,15 +2355,15 @@ fn confirm_remote_server_stop(
 
 fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
     let status = remote_client_status(ssh, remote_herdr)?.ok_or_else(|| {
-        io::Error::other("could not inspect the prepared remote herdr binary before live handoff")
+        io::Error::other("could not inspect the prepared remote hicodeer-agent binary before live handoff")
     })?;
     let protocol = status.protocol.ok_or_else(|| {
-        io::Error::other("prepared remote herdr did not report its private protocol")
+        io::Error::other("prepared remote hicodeer-agent did not report its private protocol")
     })?;
     let version = status
         .version
         .filter(|version| !version.is_empty())
-        .ok_or_else(|| io::Error::other("prepared remote herdr did not report its version"))?;
+        .ok_or_else(|| io::Error::other("prepared remote hicodeer-agent did not report its version"))?;
     let command =
         remote_herdr
             .executable
@@ -2374,7 +2374,7 @@ fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io
     }
 
     eprintln!(
-        "handed off the remote herdr server on {}; reconnecting to the prepared server.",
+        "handed off the remote hicodeer-agent server on {}; reconnecting to the prepared server.",
         ssh.target()
     );
     Ok(())
@@ -2391,7 +2391,7 @@ fn stop_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result
 
     wait_for_remote_server_shutdown(ssh, remote_herdr)?;
     eprintln!(
-        "stopped the remote herdr server on {}; it will restart when the remote client bridge attaches.",
+        "stopped the remote hicodeer-agent server on {}; it will restart when the remote client bridge attaches.",
         ssh.target()
     );
     Ok(())
@@ -2407,7 +2407,7 @@ fn wait_for_remote_server_shutdown(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) 
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!(
-                    "shutdown was requested, but the old remote herdr server on {target} is still responding after {} seconds",
+                    "shutdown was requested, but the old remote hicodeer-agent server on {target} is still responding after {} seconds",
                     REMOTE_SERVER_SHUTDOWN_CONFIRM_TIMEOUT.as_secs(),
                     target = ssh.target()
                 ),
@@ -2422,7 +2422,7 @@ fn version_label(version: Option<&str>) -> &str {
 }
 
 fn warn_if_remote_bin_not_on_path(ssh: &RemoteSsh) -> io::Result<()> {
-    let output = ssh.posix_user_shell_output("command -v herdr")?;
+    let output = ssh.posix_user_shell_output("command -v hicodeer-agent")?;
     if output.status.success()
         && remote_shell_resolves_managed_install(&String::from_utf8_lossy(&output.stdout))
     {
@@ -2430,7 +2430,7 @@ fn warn_if_remote_bin_not_on_path(ssh: &RemoteSsh) -> io::Result<()> {
     }
 
     eprintln!(
-        "herdr: installed remote binary to ~/.local/bin/herdr, but the remote shell does not resolve `herdr` to that path"
+        "hicodeer-agent: installed remote binary to ~/.local/bin/hicodeer-agent, but the remote shell does not resolve `hicodeer-agent` to that path"
     );
     Ok(())
 }
@@ -2440,7 +2440,7 @@ fn remote_shell_resolves_managed_install(stdout: &str) -> bool {
         .lines()
         .next()
         .map(str::trim)
-        .is_some_and(|path| path.ends_with("/.local/bin/herdr"))
+        .is_some_and(|path| path.ends_with("/.local/bin/hicodeer-agent"))
 }
 
 fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource> {
@@ -2448,7 +2448,7 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
     let asset = remote_release_asset(&asset_key)?;
 
     let dir = private_download_dir(&asset_key)?;
-    let path = dir.join("herdr.tmp");
+    let path = dir.join("hicodeer.tmp");
     let status = crate::noninteractive_process::curl_command()
         .args(["-sfL", "--max-time", "120", "-o"])
         .arg(&path)
@@ -2508,18 +2508,34 @@ fn preview_assets_for_build<'a>(
     }
     let build = manifest.builds.get(build_id).ok_or_else(|| {
         io::Error::other(format!(
-            "preview manifest no longer includes build {build_id}; run `herdr update` locally or set {REMOTE_BINARY_ENV_VAR}=target/release/herdr"
+            "preview manifest no longer includes build {build_id}; run `hicodeer-agent update` locally or set {REMOTE_BINARY_ENV_VAR}=target/release/hicodeer-agent"
         ))
     })?;
     Ok((build.protocol, &build.assets))
 }
 
+/// Remote installs fetch the release manifest from a configured endpoint: a
+/// build that ships no release service leaves it unset instead of reaching a
+/// host the product does not own.
+fn remote_manifest_endpoint(env_name: &str) -> io::Result<String> {
+    std::env::var(env_name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "{env_name} is not set; this build has no remote download endpoint configured"
+            ))
+        })
+}
+
 fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
     if crate::build_info::is_preview() {
         let build_id = crate::build_info::build_id().ok_or_else(|| {
-            io::Error::other("preview client has no build id; set HERDR_REMOTE_BINARY or install Herdr on the remote manually")
+            io::Error::other("preview client has no build id; set HICODEER_AGENT_REMOTE_BINARY or install HiCodeer on the remote manually")
         })?;
-        let manifest_bytes = fetch_remote_manifest(PREVIEW_UPDATE_MANIFEST_URL)?;
+        let endpoint = remote_manifest_endpoint(PREVIEW_MANIFEST_URL_ENV)?;
+        let manifest_bytes = fetch_remote_manifest(&endpoint)?;
         let manifest: RemotePreviewManifest =
             serde_json::from_slice(&manifest_bytes).map_err(|err| {
                 io::Error::other(format!("failed to parse preview manifest JSON: {err}"))
@@ -2527,7 +2543,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
         let (protocol, assets) = preview_assets_for_build(&manifest, build_id)?;
         if protocol != CURRENT_PROTOCOL {
             return Err(io::Error::other(format!(
-                "preview manifest has build {build_id} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdr or install a matching Herdr on the remote host manually"
+                "preview manifest has build {build_id} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/hicodeer-agent or install a matching HiCodeer on the remote host manually"
             )));
         }
         return assets.get(asset_key).map(remote_asset_info).ok_or_else(|| {
@@ -2538,25 +2554,26 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
     }
 
     let current_version = current_version();
-    let manifest_bytes = fetch_remote_manifest(STABLE_UPDATE_MANIFEST_URL)?;
+    let endpoint = remote_manifest_endpoint(UPDATE_MANIFEST_URL_ENV)?;
+    let manifest_bytes = fetch_remote_manifest(&endpoint)?;
     let manifest: RemoteUpdateManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|err| io::Error::other(format!("failed to parse update manifest JSON: {err}")))?;
     let release = manifest.release_for_version(&current_version).ok_or_else(|| {
         io::Error::other(format!(
-            "release manifest does not include herdr {current_version}; build herdr for {} or install it there manually",
+            "release manifest does not include hicodeer-agent {current_version}; build hicodeer-agent for {} or install it there manually",
             asset_key
         ))
     })?;
     if let Some(protocol) = release.protocol {
         if protocol != CURRENT_PROTOCOL {
             return Err(io::Error::other(format!(
-                "release manifest has herdr {current_version} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdr or install a matching herdr on the remote host manually"
+                "release manifest has hicodeer-agent {current_version} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/hicodeer-agent or install a matching hicodeer-agent on the remote host manually"
             )));
         }
     }
     let asset = release.assets.get(asset_key).ok_or_else(|| {
         io::Error::other(format!(
-            "no {asset_key} binary in the release manifest for herdr {current_version}"
+            "no {asset_key} binary in the release manifest for hicodeer-agent {current_version}"
         ))
     })?;
     let mut asset = remote_asset_info(asset);
@@ -2576,7 +2593,7 @@ fn private_download_dir(asset_key: &str) -> io::Result<PathBuf> {
     fs::create_dir_all(&base)?;
     for attempt in 0..100 {
         let dir = base.join(format!(
-            "herdr-remote-{}-{}-{attempt}",
+            "hicodeer-remote-{}-{}-{attempt}",
             std::process::id(),
             asset_key
         ));
@@ -2589,7 +2606,7 @@ fn private_download_dir(asset_key: &str) -> io::Result<PathBuf> {
 
     Err(io::Error::new(
         io::ErrorKind::AlreadyExists,
-        "failed to create private herdr remote download directory",
+        "failed to create private hicodeer-agent remote download directory",
     ))
 }
 
@@ -2619,14 +2636,14 @@ fn confirm_remote_install(
 ) -> io::Result<()> {
     if !io::stdin().is_terminal() {
         return Err(io::Error::other(format!(
-            "matching remote herdr {} is not installed at {}; run from an interactive terminal to approve installation",
+            "matching remote hicodeer-agent {} is not installed at {}; run from an interactive terminal to approve installation",
             current_version(),
             remote_herdr.executable.display()
         )));
     }
 
     eprintln!(
-        "matching herdr {} is not installed on {target} for {}.",
+        "matching hicodeer-agent {} is not installed on {target} for {}.",
         current_version(),
         remote_herdr.platform.asset_key()
     );
@@ -2640,7 +2657,7 @@ fn confirm_remote_install(
     if !read_remote_confirmation(&mut io::stdin().lock(), true)? {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote herdr installation cancelled",
+            "remote hicodeer-agent installation cancelled",
         ));
     }
 
@@ -2663,12 +2680,12 @@ for candidate in $candidates; do
         *) continue ;;
     esac
     [ -x "$candidate" ] || continue
-    if capability=$("$candidate" --session {session} remote-api-bridge --check </dev/null 2>/dev/null) && [ "$capability" = herdr-api-bridge-v1 ]; then
+    if capability=$("$candidate" --session {session} remote-api-bridge --check </dev/null 2>/dev/null) && [ "$capability" = hicodeer-api-bridge-v1 ]; then
         printf '%s\n' "$candidate"
         exit 0
     fi
 done
-printf '%s\n' 'remote Herdr does not support machine API forwarding; update Herdr on this machine' >&2
+printf '%s\n' 'remote HiCodeer does not support machine API forwarding; update HiCodeer on this machine' >&2
 exit 2"#,
         discovery = known_remote_binary_candidate_script(platform),
         session = shell_quote(session),
@@ -2679,7 +2696,7 @@ exit 2"#,
     )
 }
 
-pub(super) const STALE_API_METADATA: &str = "herdr-machine-metadata-stale-v1";
+pub(super) const STALE_API_METADATA: &str = "hicodeer-machine-metadata-stale-v1";
 
 pub(super) fn cached_remote_api_command(
     metadata: &crate::client::endpoint::SshMachineMetadata,
@@ -2689,7 +2706,7 @@ pub(super) fn cached_remote_api_command(
         let path = crate::platform::quote_powershell_arg(&metadata.executable);
         let session_arg = crate::platform::quote_powershell_arg(session);
         let probe = format!(
-            "$capability = & {path} --session {session_arg} remote-api-bridge --check 2>$null; if ($LASTEXITCODE -ne 0 -or $capability -ne 'herdr-api-bridge-v1') {{ [Console]::Error.WriteLine('{STALE_API_METADATA}'); exit 78 }}; "
+            "$capability = & {path} --session {session_arg} remote-api-bridge --check 2>$null; if ($LASTEXITCODE -ne 0 -or $capability -ne 'hicodeer-api-bridge-v1') {{ [Console]::Error.WriteLine('{STALE_API_METADATA}'); exit 78 }}; "
         );
         return windows_powershell_script_command(&format!(
             "{probe}{}",
@@ -2702,7 +2719,7 @@ pub(super) fn cached_remote_api_command(
     let path = shell_quote(&metadata.executable);
     let session = shell_quote(session);
     let script = format!(
-        "if capability=$({path} --session {session} remote-api-bridge --check </dev/null 2>/dev/null) && [ \"$capability\" = herdr-api-bridge-v1 ]; then\n{}\nelse\n    printf '%s\\n' '{STALE_API_METADATA}' >&2\n    exit 78\nfi",
+        "if capability=$({path} --session {session} remote-api-bridge --check </dev/null 2>/dev/null) && [ \"$capability\" = hicodeer-api-bridge-v1 ]; then\n{}\nelse\n    printf '%s\\n' '{STALE_API_METADATA}' >&2\n    exit 78\nfi",
         posix_remote_output_command(&format!("exec {path} --session {session} remote-api-bridge")),
     );
     format!("/bin/sh -c {}", shell_quote(&script))
@@ -2846,7 +2863,7 @@ impl SshStdioBridge {
                             if noninteractive {
                                 tracing::warn!(error = %err, "saved SSH endpoint bridge failed");
                             } else {
-                                eprintln!("herdr: remote bridge failed: {err}");
+                                eprintln!("HiCodeer: remote bridge failed: {err}");
                             }
                         }
                     }
@@ -2857,7 +2874,7 @@ impl SshStdioBridge {
                         if noninteractive {
                             tracing::warn!(error = %err, "saved SSH endpoint listener failed");
                         } else {
-                            eprintln!("herdr: remote bridge listener failed: {err}");
+                            eprintln!("HiCodeer: remote bridge listener failed: {err}");
                         }
                         break;
                     }
@@ -3417,10 +3434,10 @@ fn local_forward_socket_path(target: &str, session_name: &str) -> PathBuf {
     let pid = std::process::id();
     let target_clean = sanitize_path_component(target);
     let session_clean = sanitize_path_component(session_name);
-    let readable_name = format!("herdr-remote-{pid}-{target_clean}-{session_clean}.sock");
+    let readable_name = format!("hicodeer-remote-{pid}-{target_clean}-{session_clean}.sock");
     let target_prefix: String = target_clean.chars().take(8).collect();
     let hash = short_socket_hash(target, session_name);
-    let short_name = format!("herdr-r-{pid}-{target_prefix}-{hash}.sock");
+    let short_name = format!("hicodeer-r-{pid}-{target_prefix}-{hash}.sock");
     crate::platform::remote_bridge_endpoint_path(&readable_name, &short_name)
 }
 
@@ -3463,20 +3480,20 @@ mod tests {
     #[test]
     fn remote_client_preferences_cross_process_handoff() {
         let root =
-            std::env::temp_dir().join(format!("herdr-preference-handoff-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-agent-preference-handoff-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         for bridge in ["bridge-100.sock", "bridge-200.sock"] {
             let mut command = Command::new(std::env::current_exe().unwrap());
             command.args(["--exact", "client::shell::tests::keybindings_settings::remote_client_preferences_process_child", "--nocapture"]);
             command
-                .env("HERDR_TEST_PREFERENCES_CHILD", "1")
+                .env("HICODEER_TEST_PREFERENCES_CHILD", "1")
                 .env("XDG_STATE_HOME", &root);
             // A stale inherited identity must be replaced by this launch's identity.
             command.env(REMOTE_PREFERENCES_ENV_VAR, r#"["wrong", "session"]"#);
             configure_remote_client_environment(
                 &mut command,
                 &root.join(bridge),
-                "herdr --remote dev",
+                "hicodeer-agent --remote dev",
                 RemoteKeybindings::Local,
                 "dev",
                 "agents",
@@ -3665,7 +3682,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let socket = std::env::temp_dir().join(format!(
-            "herdr-bridge-permissions-test-{}.sock",
+            "hicodeer-agent-bridge-permissions-test-{}.sock",
             std::process::id()
         ));
         let remote_herdr = RemoteHerdr::for_platform(RemotePlatform {
@@ -3705,7 +3722,7 @@ mod tests {
         }
 
         let socket = std::env::temp_dir().join(format!(
-            "herdr-bridge-blocking-test-{}.sock",
+            "hicodeer-agent-bridge-blocking-test-{}.sock",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&socket);
@@ -3754,7 +3771,7 @@ mod tests {
             .expect("system clock after epoch")
             .as_nanos();
         let socket = std::env::temp_dir().join(format!(
-            "herdr-bridge-large-frame-{}-{nonce}.sock",
+            "hicodeer-agent-bridge-large-frame-{}-{nonce}.sock",
             std::process::id()
         ));
         let listener = crate::ipc::bind_private_local_listener(&socket).expect("bind listener");
@@ -3853,7 +3870,7 @@ mod tests {
                 let fallback_at = contents.find("Host *").expect("fallback present");
                 assert!(
                     include_at < fallback_at,
-                    "user config must be Included before herdr's fallback: {contents}"
+                    "user config must be Included before hicodeer-agent's fallback: {contents}"
                 );
             }
         }
@@ -4057,7 +4074,7 @@ mod tests {
         let fallback_at = contents.find("Host *").expect("fallback present");
         assert!(
             include_at < fallback_at,
-            "user config must be Included before herdr's fallback: {contents}"
+            "user config must be Included before hicodeer-agent's fallback: {contents}"
         );
 
         let ssh = RemoteSsh {
@@ -4140,7 +4157,7 @@ mod tests {
         )
         .expect("write isolated probe config");
         let ssh = RemoteSsh {
-            target: "herdr-probe.invalid".into(),
+            target: "hicodeer-agent-probe.invalid".into(),
             session_name: "probe-options".into(),
             managed_config: Some(managed_config),
             noninteractive: false,
@@ -4289,9 +4306,9 @@ mod tests {
 
     #[test]
     fn remote_install_stream_command_avoids_shell_c_wrapper() {
-        let command = remote_install_stream_command("/home/a b/.local/bin/herdr.tmp.123");
+        let command = remote_install_stream_command("/home/a b/.local/bin/hicodeer.tmp.123");
 
-        assert_eq!(command, "tee '/home/a b/.local/bin/herdr.tmp.123'");
+        assert_eq!(command, "tee '/home/a b/.local/bin/hicodeer.tmp.123'");
     }
 
     #[test]
@@ -4305,35 +4322,35 @@ mod tests {
         assert!(prepare.contains("mkdir -p \"$dir\""));
         assert!(prepare.contains("printf '%s\\0%s\\0' \"$tmp\" \"$dest\""));
         assert_eq!(
-            parse_remote_install_paths(b"/home/a b/herdr.tmp.42\0/home/a b/herdr\0").unwrap(),
+            parse_remote_install_paths(b"/home/a b/hicodeer.tmp.42\0/home/a b/hicodeer\0").unwrap(),
             (
-                "/home/a b/herdr.tmp.42".to_string(),
-                "/home/a b/herdr".to_string()
+                "/home/a b/hicodeer.tmp.42".to_string(),
+                "/home/a b/hicodeer".to_string()
             )
         );
         assert_eq!(
-            parse_remote_install_paths(b"/home/a b\n/herdr.tmp.42\0/home/a b\n/herdr\0").unwrap(),
+            parse_remote_install_paths(b"/home/a b\n/hicodeer.tmp.42\0/home/a b\n/hicodeer-agent\0").unwrap(),
             (
-                "/home/a b\n/herdr.tmp.42".to_string(),
-                "/home/a b\n/herdr".to_string()
+                "/home/a b\n/hicodeer.tmp.42".to_string(),
+                "/home/a b\n/hicodeer-agent".to_string()
             )
         );
         assert_eq!(
-            remote_install_commit_script("/home/a b/herdr.tmp.42", "/home/a b/herdr"),
-            "set -eu\nchmod 755 '/home/a b/herdr.tmp.42'\nmv '/home/a b/herdr.tmp.42' '/home/a b/herdr'\n"
+            remote_install_commit_script("/home/a b/hicodeer.tmp.42", "/home/a b/hicodeer"),
+            "set -eu\nchmod 755 '/home/a b/hicodeer.tmp.42'\nmv '/home/a b/hicodeer.tmp.42' '/home/a b/hicodeer'\n"
         );
     }
 
     #[test]
     fn extract_remote_args_removes_space_form() {
         let args = vec![
-            "herdr".into(),
+            "hicodeer-agent".into(),
             "--remote".into(),
             "dev".into(),
             "--help".into(),
         ];
         let (cleaned, remote) = extract_remote_args(&args).unwrap();
-        assert_eq!(cleaned, vec!["herdr", "--help"]);
+        assert_eq!(cleaned, vec!["hicodeer-agent", "--help"]);
         let remote = remote.unwrap();
         assert_eq!(remote.target, "dev");
         assert_eq!(remote.keybindings, RemoteKeybindings::Local);
@@ -4341,9 +4358,9 @@ mod tests {
 
     #[test]
     fn extract_remote_args_removes_equals_form() {
-        let args = vec!["herdr".into(), "--remote=user@host".into()];
+        let args = vec!["hicodeer-agent".into(), "--remote=user@host".into()];
         let (cleaned, remote) = extract_remote_args(&args).unwrap();
-        assert_eq!(cleaned, vec!["herdr"]);
+        assert_eq!(cleaned, vec!["hicodeer-agent"]);
         let remote = remote.unwrap();
         assert_eq!(remote.target, "user@host");
         assert_eq!(remote.keybindings, RemoteKeybindings::Local);
@@ -4352,13 +4369,13 @@ mod tests {
     #[test]
     fn extract_remote_args_accepts_remote_keybindings_server() {
         let args = vec![
-            "herdr".into(),
+            "hicodeer-agent".into(),
             "--remote".into(),
             "dev".into(),
             "--remote-keybindings=server".into(),
         ];
         let (cleaned, remote) = extract_remote_args(&args).unwrap();
-        assert_eq!(cleaned, vec!["herdr"]);
+        assert_eq!(cleaned, vec!["hicodeer-agent"]);
         let remote = remote.unwrap();
         assert_eq!(remote.target, "dev");
         assert_eq!(remote.keybindings, RemoteKeybindings::Server);
@@ -4367,23 +4384,23 @@ mod tests {
     #[test]
     fn extract_remote_args_accepts_remote_keybindings_space_form() {
         let args = vec![
-            "herdr".into(),
+            "hicodeer-agent".into(),
             "--remote=dev".into(),
             "--remote-keybindings".into(),
             "server".into(),
         ];
         let (cleaned, remote) = extract_remote_args(&args).unwrap();
-        assert_eq!(cleaned, vec!["herdr"]);
+        assert_eq!(cleaned, vec!["hicodeer-agent"]);
         assert_eq!(remote.unwrap().keybindings, RemoteKeybindings::Server);
     }
 
     #[test]
     fn extract_remote_args_accepts_explicit_handoff() {
-        let args = vec!["herdr".into(), "--remote=dev".into(), "--handoff".into()];
+        let args = vec!["hicodeer-agent".into(), "--remote=dev".into(), "--handoff".into()];
 
         let (cleaned, remote) = extract_remote_args(&args).unwrap();
 
-        assert_eq!(cleaned, vec!["herdr"]);
+        assert_eq!(cleaned, vec!["hicodeer-agent"]);
         let remote = remote.unwrap();
         assert_eq!(remote.target, "dev");
         assert!(remote.live_handoff);
@@ -4392,7 +4409,7 @@ mod tests {
     #[test]
     fn extract_remote_args_preserves_child_remote_options_after_separator() {
         let args = vec![
-            "herdr".into(),
+            "hicodeer-agent".into(),
             "agent".into(),
             "start".into(),
             "repro".into(),
@@ -4412,7 +4429,7 @@ mod tests {
 
     #[test]
     fn extract_remote_args_preserves_handoff_without_remote() {
-        let args = vec!["herdr".into(), "update".into(), "--handoff".into()];
+        let args = vec!["hicodeer-agent".into(), "update".into(), "--handoff".into()];
 
         let (cleaned, remote) = extract_remote_args(&args).unwrap();
 
@@ -4422,7 +4439,7 @@ mod tests {
 
     #[test]
     fn extract_remote_args_rejects_remote_keybindings_without_remote() {
-        let args = vec!["herdr".into(), "--remote-keybindings=server".into()];
+        let args = vec!["hicodeer-agent".into(), "--remote-keybindings=server".into()];
         let err = extract_remote_args(&args).unwrap_err();
         assert_eq!(err, "--remote-keybindings requires --remote");
     }
@@ -4430,7 +4447,7 @@ mod tests {
     #[test]
     fn extract_remote_args_rejects_duplicate_remote_keybindings() {
         let args = vec![
-            "herdr".into(),
+            "hicodeer-agent".into(),
             "--remote=dev".into(),
             "--remote-keybindings=local".into(),
             "--remote-keybindings=server".into(),
@@ -4441,14 +4458,14 @@ mod tests {
 
     #[test]
     fn extract_remote_args_requires_value() {
-        let args = vec!["herdr".into(), "--remote".into()];
+        let args = vec!["hicodeer-agent".into(), "--remote".into()];
         let err = extract_remote_args(&args).unwrap_err();
         assert_eq!(err, "missing value for --remote");
     }
 
     #[test]
     fn extract_remote_args_rejects_empty_value() {
-        let args = vec!["herdr".into(), "--remote=".into()];
+        let args = vec!["hicodeer-agent".into(), "--remote=".into()];
         let err = extract_remote_args(&args).unwrap_err();
         assert_eq!(err, "missing value for --remote");
     }
@@ -4456,7 +4473,7 @@ mod tests {
     #[test]
     fn extract_remote_args_rejects_duplicate_values() {
         let args = vec![
-            "herdr".into(),
+            "hicodeer-agent".into(),
             "--remote=dev".into(),
             "--remote=prod".into(),
         ];
@@ -4466,7 +4483,7 @@ mod tests {
 
     #[test]
     fn extract_remote_args_rejects_option_like_target() {
-        let args = vec!["herdr".into(), "--remote".into(), "-oProxyCommand=x".into()];
+        let args = vec!["hicodeer-agent".into(), "--remote".into(), "-oProxyCommand=x".into()];
         let err = extract_remote_args(&args).unwrap_err();
         assert_eq!(err, "--remote target must not start with '-'");
     }
@@ -4497,7 +4514,7 @@ mod tests {
     fn windows_platform_probe_preserves_native_and_unsupported_architectures() {
         for arch in ["AMD64", "x86_64"] {
             assert_eq!(
-                parse_windows_platform_probe(&format!("profile noise\r\nherdr-windows:{arch}\r\n"))
+                parse_windows_platform_probe(&format!("profile noise\r\nhicodeer-windows:{arch}\r\n"))
                     .unwrap(),
                 Some(DetectedRemotePlatform {
                     platform: RemotePlatform {
@@ -4510,14 +4527,14 @@ mod tests {
         }
         assert_eq!(parse_windows_platform_probe("other output").unwrap(), None);
         assert_eq!(
-            parse_windows_platform_probe("herdr-windows:x86").unwrap_err(),
+            parse_windows_platform_probe("hicodeer-windows:x86").unwrap_err(),
             "unsupported remote platform: Windows X86"
         );
     }
 
     #[test]
     fn windows_arm64_probe_selects_x64_package() {
-        let platform = parse_windows_platform_probe("herdr-windows:ARM64")
+        let platform = parse_windows_platform_probe("hicodeer-windows:ARM64")
             .expect("Windows ARM64 should use the x64 build on a best-effort basis")
             .expect("the Windows platform marker should be recognized");
         assert_eq!(platform.platform.asset_key(), "windows-x86_64");
@@ -4560,7 +4577,7 @@ mod tests {
     #[test]
     fn windows_bridge_returns_application_exit_while_descendant_is_running() {
         let pid_file = std::env::temp_dir().join(format!(
-            "herdr bridge descendant {}-{}.pid",
+            "hicodeer-agent bridge descendant {}-{}.pid",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4631,7 +4648,7 @@ mod tests {
             arch: "x86_64",
         });
         assert!(remote.machine_metadata().is_none());
-        let path = "/home/user's files/$literal/herdr";
+        let path = "/home/user's files/$literal/hicodeer-agent";
         let resolved = remote.with_posix_path(path);
         assert_eq!(resolved.machine_metadata().unwrap().executable, path);
         assert_eq!(resolved.executable.display(), shell_quote(path));
@@ -4640,7 +4657,7 @@ mod tests {
             arch: "x86_64",
         });
         assert!(remote.machine_metadata().is_none());
-        let path = r"C:\Users\A B\herdr.exe";
+        let path = r"C:\Users\A B\hicodeer-agent.exe";
         assert_eq!(
             remote
                 .with_windows_path(path.into())
@@ -4653,7 +4670,7 @@ mod tests {
 
     #[test]
     fn cached_windows_api_command_checks_before_starting_the_stream() {
-        let path = r"C:\Users\A'B\herdr.exe";
+        let path = r"C:\Users\A'B\hicodeer-agent.exe";
         let command = cached_remote_api_command(
             &crate::client::endpoint::SshMachineMetadata {
                 os: "windows".into(),
@@ -4683,52 +4700,52 @@ mod tests {
 
     #[test]
     fn windows_remote_commands_use_one_encoded_powershell_grammar() {
-        let executable = RemoteExecutable::WindowsPath("herdr.exe".to_string());
+        let executable = RemoteExecutable::WindowsPath("hicodeer-agent.exe".to_string());
         let commands = [
             (
                 "platform probe",
                 windows_platform_probe_command(),
-                "$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }; [Console]::Out.WriteLine('herdr-windows:' + $arch); exit 0",
+                "$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }; [Console]::Out.WriteLine('hicodeer-windows:' + $arch); exit 0",
             ),
             (
                 "PATH lookup",
                 executable.exists_command(),
-                "if ($null -ne (Get-Command herdr.exe -CommandType Application -ErrorAction SilentlyContinue)) { exit 0 }; exit 1",
+                "if ($null -ne (Get-Command hicodeer-agent.exe -CommandType Application -ErrorAction SilentlyContinue)) { exit 0 }; exit 1",
             ),
             (
                 "client status",
                 executable.status_client_command(),
-                "& herdr.exe status client '--json'; exit $LASTEXITCODE",
+                "& hicodeer-agent.exe status client '--json'; exit $LASTEXITCODE",
             ),
             (
                 "named server status",
                 executable.session_command("agents", &["status", "server", "--json"]),
-                "& herdr.exe '--session' agents status server '--json'; exit $LASTEXITCODE",
+                "& hicodeer-agent.exe '--session' agents status server '--json'; exit $LASTEXITCODE",
             ),
             (
                 "server stop",
                 executable.session_command("agents", &["server", "stop"]),
-                "& herdr.exe '--session' agents server stop; exit $LASTEXITCODE",
+                "& hicodeer-agent.exe '--session' agents server stop; exit $LASTEXITCODE",
             ),
             (
                 "direct bridge",
                 executable.bridge_command("agents"),
-                "$process = Start-Process -FilePath herdr.exe -ArgumentList '--session agents remote-client-bridge' -NoNewWindow -PassThru -ErrorAction Stop; $null = $process.Handle; $process.WaitForExit(); exit $process.ExitCode",
+                "$process = Start-Process -FilePath hicodeer-agent.exe -ArgumentList '--session agents remote-client-bridge' -NoNewWindow -PassThru -ErrorAction Stop; $null = $process.Handle; $process.WaitForExit(); exit $process.ExitCode",
             ),
             (
                 "API bridge with explicit default session",
                 remote_api_bridge_command(&RemoteHerdr::for_platform(RemotePlatform { os: "windows", arch: "x86_64" }), "default", false),
-                "$process = Start-Process -FilePath herdr.exe -ArgumentList '--session default remote-api-bridge' -NoNewWindow -PassThru -ErrorAction Stop; $null = $process.Handle; $process.WaitForExit(); exit $process.ExitCode",
+                "$process = Start-Process -FilePath hicodeer-agent.exe -ArgumentList '--session default remote-api-bridge' -NoNewWindow -PassThru -ErrorAction Stop; $null = $process.Handle; $process.WaitForExit(); exit $process.ExitCode",
             ),
             (
                 "API bridge capability probe",
                 remote_api_bridge_command(&RemoteHerdr::for_platform(RemotePlatform { os: "windows", arch: "x86_64" }), "agents", true),
-                "$process = Start-Process -FilePath herdr.exe -ArgumentList '--session agents remote-api-bridge --check' -NoNewWindow -PassThru -ErrorAction Stop; $null = $process.Handle; $process.WaitForExit(); exit $process.ExitCode",
+                "$process = Start-Process -FilePath hicodeer-agent.exe -ArgumentList '--session agents remote-api-bridge --check' -NoNewWindow -PassThru -ErrorAction Stop; $null = $process.Handle; $process.WaitForExit(); exit $process.ExitCode",
             ),
             (
                 "saved bridge with closed stdin",
                 executable.saved_bridge_command("agents"),
-                "$process = Start-Process -FilePath herdr.exe -ArgumentList '--session agents remote-client-bridge' -NoNewWindow -PassThru -ErrorAction Stop; $null = $process.Handle; $process.WaitForExit(); exit $process.ExitCode",
+                "$process = Start-Process -FilePath hicodeer-agent.exe -ArgumentList '--session agents remote-client-bridge' -NoNewWindow -PassThru -ErrorAction Stop; $null = $process.Handle; $process.WaitForExit(); exit $process.ExitCode",
             ),
         ];
 
@@ -4769,13 +4786,13 @@ mod tests {
             windows_scp_target("example", r"C:\Temp\A+B%20 C\install.ps1"),
             "example:C:/Temp/A+B%20 C/install.ps1"
         );
-        let remote_dir = r"C:\Temp\Herdr O'Brien\测试";
+        let remote_dir = r"C:\Temp\HiCodeer O'Brien\测试";
         assert_eq!(
             windows_scp_target(
                 "user@example",
-                &format!(r"{remote_dir}\herdr-windows-x86_64.zip")
+                &format!(r"{remote_dir}\hicodeer-agent-windows-x86_64.zip")
             ),
-            "user@example:C:/Temp/Herdr O'Brien/测试/herdr-windows-x86_64.zip"
+            "user@example:C:/Temp/HiCodeer O'Brien/测试/hicodeer-agent-windows-x86_64.zip"
         );
         assert_eq!(
             windows_scp_target("ssh://user@example:2222", r"C:\Temp\install.ps1"),
@@ -4792,7 +4809,7 @@ mod tests {
         assert!(command.contains(".Target"));
         assert!(command.contains(WINDOWS_REMOTE_INSTALL_RESULT_MARKER));
 
-        let installed = r"C:\Users\test\测试\.herdr\packages\standalone\releases\0.9.0\herdr.exe";
+        let installed = r"C:\Users\test\测试\.hicodeer-agent\packages\standalone\releases\0.9.0\hicodeer-agent.exe";
         let encoded = base64::engine::general_purpose::STANDARD.encode(installed);
         assert_eq!(
             parse_windows_remote_path(
@@ -4815,8 +4832,8 @@ mod tests {
             os: "windows",
             arch: "x86_64",
         });
-        let path = r"C:\stale\herdr.exe";
-        let active = r"C:\Users\test\.herdr\packages\standalone\releases\current\herdr.exe";
+        let path = r"C:\stale\hicodeer-agent.exe";
+        let active = r"C:\Users\test\.hicodeer-agent\packages\standalone\releases\current\hicodeer-agent.exe";
         let stdout = format!(
             "{WINDOWS_REMOTE_PATH_MARKER}{}\nnoise\n{WINDOWS_REMOTE_PATH_MARKER}{}\n{WINDOWS_REMOTE_PATH_MARKER}{}\n",
             base64::engine::general_purpose::STANDARD.encode(path),
@@ -4835,7 +4852,7 @@ mod tests {
         );
 
         let command = decode_windows_command(&windows_remote_binary_candidate_command());
-        assert!(command.contains("Get-Command herdr.exe"));
+        assert!(command.contains("Get-Command hicodeer-agent.exe"));
         assert!(command.contains("$activeJunction.Target"));
     }
 
@@ -4849,7 +4866,7 @@ function Get-Command {}
 function Get-Item {}
 function Get-CimInstance {
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    [pscustomobject]@{ ExecutablePath=$env:HERDR_TEST_EXE; OwnerSid=$sid; OwnerResult=0 }
+    [pscustomobject]@{ ExecutablePath=$env:HICODEER_TEST_EXE; OwnerSid=$sid; OwnerResult=0 }
     [pscustomobject]@{ ExecutablePath="$env:SystemRoot\System32\cmd.exe"; OwnerSid='S-1-0-0'; OwnerResult=0 }
     [pscustomobject]@{ ExecutablePath="$PSHOME\powershell.exe"; OwnerSid=$sid; OwnerResult=2 }
 }
@@ -4871,7 +4888,7 @@ function Get-Process {
         command
             .args(["-NoProfile", "-NonInteractive", "-EncodedCommand"])
             .arg(encoded.split_whitespace().last().unwrap())
-            .env("HERDR_TEST_EXE", &executable);
+            .env("HICODEER_TEST_EXE", &executable);
         crate::platform::configure_background_command(&mut command);
         let output = command.output().unwrap();
         assert!(
@@ -4892,7 +4909,7 @@ function Get-Process {
     fn remote_output_framing_discards_any_banner_and_preserves_binary() {
         let payload = [0, 1, 2, 0xff, b'\n'];
         let mut input = vec![b'x'; 4 * 1024 * 1024];
-        input.extend_from_slice(b"\r\nherdr-remote-output-ready:1\r\n");
+        input.extend_from_slice(b"\r\nhicodeer-remote-output-ready:1\r\n");
         input.extend_from_slice(&payload);
         let mut reader = io::BufReader::with_capacity(17, io::Cursor::new(input));
 
@@ -4906,7 +4923,7 @@ function Get-Process {
         normalize_remote_stdout(&mut missing, false).unwrap();
         assert_eq!(missing, b"profile output without marker");
 
-        let mut platform = b"profile output\nherdr-remote-output-ready:1\nLinux\nx86_64\n".to_vec();
+        let mut platform = b"profile output\nhicodeer-remote-output-ready:1\nLinux\nx86_64\n".to_vec();
         normalize_remote_stdout(&mut platform, true).unwrap();
         let platform = String::from_utf8(platform).unwrap();
         let mut lines = platform.lines();
@@ -4924,43 +4941,43 @@ function Get-Process {
     fn reattach_command_includes_remote_and_session() {
         assert_eq!(
             reattach_command(
-                "target/release/herdr",
+                "target/release/hicodeer-agent",
                 "user@host",
                 "work",
                 RemoteKeybindings::Local,
                 false,
             ),
-            "target/release/herdr --remote user@host --session work"
+            "target/release/hicodeer-agent --remote user@host --session work"
         );
         assert_eq!(
             reattach_command(
-                "herdr",
+                "hicodeer-agent",
                 "host name",
                 crate::session::DEFAULT_SESSION_NAME,
                 RemoteKeybindings::Local,
                 false,
             ),
-            "herdr --remote 'host name'"
+            "hicodeer-agent --remote 'host name'"
         );
         assert_eq!(
             reattach_command(
-                "herdr",
+                "hicodeer-agent",
                 "host",
                 crate::session::DEFAULT_SESSION_NAME,
                 RemoteKeybindings::Server,
                 false,
             ),
-            "herdr --remote host --remote-keybindings server"
+            "hicodeer-agent --remote host --remote-keybindings server"
         );
         assert_eq!(
             reattach_command(
-                "herdr",
+                "hicodeer-agent",
                 "host",
                 crate::session::DEFAULT_SESSION_NAME,
                 RemoteKeybindings::Local,
                 true,
             ),
-            "herdr --remote host --handoff"
+            "hicodeer-agent --remote host --handoff"
         );
     }
 
@@ -4970,7 +4987,7 @@ function Get-Process {
         let executable = std::env::current_exe().expect("current test executable");
         assert_eq!(
             reattach_command(
-                r"C:\Program Files\Herdr\herdr.exe",
+                r"C:\Program Files\HiCodeer\hicodeer-agent.exe",
                 "host'name",
                 "work'name",
                 RemoteKeybindings::Local,
@@ -4993,7 +5010,7 @@ function Get-Process {
             assert_eq!(
                 remote_api_bridge_command(&remote_herdr, session, false),
                 posix_remote_output_command(&format!(
-                    "exec \"$HOME/.local/bin/herdr\" --session {session} remote-api-bridge"
+                    "exec \"$HOME/.local/bin/hicodeer-agent\" --session {session} remote-api-bridge"
                 ))
             );
         }
@@ -5028,11 +5045,11 @@ function Get-Process {
             remote_herdr
                 .executable
                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec \"$HOME/.local/bin/herdr\" remote-client-bridge"
+            "printf '\n%s\n' 'hicodeer-remote-output-ready:1'\nexec \"$HOME/.local/bin/hicodeer-agent\" remote-client-bridge"
         );
         assert_eq!(
             remote_herdr.executable.saved_bridge_command("agents"),
-            "exec \"$HOME/.local/bin/herdr\" --session agents remote-client-bridge </dev/null"
+            "exec \"$HOME/.local/bin/hicodeer-agent\" --session agents remote-client-bridge </dev/null"
         );
     }
 
@@ -5042,14 +5059,14 @@ function Get-Process {
             os: "linux",
             arch: "x86_64",
         });
-        let remote_herdr = remote_herdr_from_path_discovery(&remote_herdr, "/usr/bin/herdr\n")
+        let remote_herdr = remote_herdr_from_path_discovery(&remote_herdr, "/usr/bin/hicodeer-agent\n")
             .expect("path binary");
 
         assert_eq!(
             remote_herdr
                 .executable
                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec /usr/bin/herdr remote-client-bridge"
+            "printf '\n%s\n' 'hicodeer-remote-output-ready:1'\nexec /usr/bin/hicodeer-agent remote-client-bridge"
         );
     }
 
@@ -5060,14 +5077,14 @@ function Get-Process {
             arch: "x86_64",
         });
         let remote_herdr =
-            remote_herdr_from_path_discovery(&remote_herdr, "/opt/herdr bin/herdr\n")
+            remote_herdr_from_path_discovery(&remote_herdr, "/opt/hicodeer-agent bin/hicodeer-agent\n")
                 .expect("path binary");
 
         assert_eq!(
             remote_herdr
                 .executable
                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec '/opt/herdr bin/herdr' remote-client-bridge"
+            "printf '\n%s\n' 'hicodeer-remote-output-ready:1'\nexec '/opt/hicodeer-agent bin/hicodeer-agent' remote-client-bridge"
         );
     }
 
@@ -5078,14 +5095,14 @@ function Get-Process {
             arch: "aarch64",
         });
         let remote_herdr =
-            remote_herdr_from_path_discovery(&remote_herdr, "/opt/homebrew/bin/herdr\n")
+            remote_herdr_from_path_discovery(&remote_herdr, "/opt/homebrew/bin/hicodeer-agent\n")
                 .expect("path binary");
 
         assert_eq!(
             remote_herdr
                 .executable
                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec /opt/homebrew/bin/herdr remote-client-bridge"
+            "printf '\n%s\n' 'hicodeer-remote-output-ready:1'\nexec /opt/homebrew/bin/hicodeer-agent remote-client-bridge"
         );
         assert_eq!(remote_herdr.platform.asset_key(), "macos-aarch64");
     }
@@ -5098,17 +5115,17 @@ function Get-Process {
         });
         let candidates = remote_herdrs_from_path_discovery(
             &remote_herdr,
-            "/usr/bin/herdr\nbin/herdr\n /opt/herdr bin/herdr\n",
+            "/usr/bin/hicodeer-agent\nbin/hicodeer-agent\n /opt/hicodeer-agent bin/hicodeer-agent\n",
         );
 
         assert_eq!(candidates.len(), 2);
         assert_eq!(
             candidates[0].executable,
-            RemoteExecutable::PosixShellPath("/usr/bin/herdr".to_string())
+            RemoteExecutable::PosixShellPath("/usr/bin/hicodeer-agent".to_string())
         );
         assert_eq!(
             candidates[1].executable,
-            RemoteExecutable::PosixShellPath("'/opt/herdr bin/herdr'".to_string())
+            RemoteExecutable::PosixShellPath("'/opt/hicodeer-agent bin/hicodeer-agent'".to_string())
         );
     }
 
@@ -5120,14 +5137,14 @@ function Get-Process {
         });
         let candidates = remote_herdrs_from_path_discovery(
             &remote_herdr,
-            "/home/can/.local/share/mise/shims/herdr\n/home/can/.local/share/mise/installs/herdr/0.7.1/bin/herdr\n",
+            "/home/can/.local/share/mise/shims/hicodeer-agent\n/home/can/.local/share/mise/installs/hicodeer-agent/0.7.1/bin/hicodeer-agent\n",
         );
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(
             candidates[0].executable,
             RemoteExecutable::PosixShellPath(
-                "/home/can/.local/share/mise/installs/herdr/0.7.1/bin/herdr".to_string()
+                "/home/can/.local/share/mise/installs/hicodeer-agent/0.7.1/bin/hicodeer-agent".to_string()
             )
         );
     }
@@ -5139,21 +5156,21 @@ function Get-Process {
             arch: "x86_64",
         });
 
-        assert!(script.contains("emit \"$home/.local/bin/herdr\""));
-        assert!(!script.contains("mise/shims/herdr"));
+        assert!(script.contains("emit \"$home/.local/bin/hicodeer-agent\""));
+        assert!(!script.contains("mise/shims/hicodeer-agent"));
         assert!(script.contains(&format!("version={}", shell_quote(&current_version()))));
         assert!(
-            script.contains("emit \"$home/.local/share/mise/installs/herdr/$version/bin/herdr\"")
+            script.contains("emit \"$home/.local/share/mise/installs/hicodeer-agent/$version/bin/hicodeer-agent\"")
         );
-        assert!(script.contains("emit \"$home/.local/share/mise/installs/herdr/$version/herdr\""));
+        assert!(script.contains("emit \"$home/.local/share/mise/installs/hicodeer-agent/$version/hicodeer-agent\""));
         assert!(script.contains(
-            "emit \"$home/.local/share/mise/installs/github-ogulcancelik-herdr/$version/herdr\""
+            "emit \"$home/.local/share/mise/installs/github-ogulcancelik-hicodeer-agent/$version/hicodeer-agent\""
         ));
-        assert!(script.contains("emit \"$home/.nix-profile/bin/herdr\""));
-        assert!(script.contains("emit \"/etc/profiles/per-user/$user/bin/herdr\""));
-        assert!(script.contains("emit \"/run/current-system/sw/bin/herdr\""));
-        assert!(script.contains("emit \"/home/linuxbrew/.linuxbrew/bin/herdr\""));
-        assert!(!script.contains("emit \"/opt/homebrew/bin/herdr\""));
+        assert!(script.contains("emit \"$home/.nix-profile/bin/hicodeer-agent\""));
+        assert!(script.contains("emit \"/etc/profiles/per-user/$user/bin/hicodeer-agent\""));
+        assert!(script.contains("emit \"/run/current-system/sw/bin/hicodeer-agent\""));
+        assert!(script.contains("emit \"/home/linuxbrew/.linuxbrew/bin/hicodeer-agent\""));
+        assert!(!script.contains("emit \"/opt/homebrew/bin/hicodeer-agent\""));
     }
 
     #[test]
@@ -5163,9 +5180,9 @@ function Get-Process {
             arch: "aarch64",
         });
 
-        assert!(script.contains("emit \"/opt/homebrew/bin/herdr\""));
-        assert!(script.contains("emit \"/usr/local/bin/herdr\""));
-        assert!(!script.contains("emit \"/home/linuxbrew/.linuxbrew/bin/herdr\""));
+        assert!(script.contains("emit \"/opt/homebrew/bin/hicodeer-agent\""));
+        assert!(script.contains("emit \"/usr/local/bin/hicodeer-agent\""));
+        assert!(!script.contains("emit \"/home/linuxbrew/.linuxbrew/bin/hicodeer-agent\""));
     }
 
     #[test]
@@ -5175,14 +5192,14 @@ function Get-Process {
             arch: "x86_64",
         });
         let remote_herdr =
-            remote_herdr_from_path_discovery(&remote_herdr, "/opt/herdr's/bin/herdr\n")
+            remote_herdr_from_path_discovery(&remote_herdr, "/opt/hicodeer-agent's/bin/hicodeer-agent\n")
                 .expect("path binary");
 
         assert_eq!(
             remote_herdr
                 .executable
                 .bridge_command(crate::session::DEFAULT_SESSION_NAME),
-            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
+            "printf '\n%s\n' 'hicodeer-remote-output-ready:1'\nexec '/opt/hicodeer-agent'\\''s/bin/hicodeer-agent' remote-client-bridge"
         );
     }
 
@@ -5192,7 +5209,7 @@ function Get-Process {
             os: "linux",
             arch: "x86_64",
         });
-        let remote_herdr = remote_herdr_from_path_discovery(&remote_herdr, "bin/herdr\n");
+        let remote_herdr = remote_herdr_from_path_discovery(&remote_herdr, "bin/hicodeer-agent\n");
 
         assert!(remote_herdr.is_none());
     }
@@ -5211,13 +5228,13 @@ function Get-Process {
     #[test]
     fn remote_shell_path_warning_accepts_managed_install() {
         assert!(remote_shell_resolves_managed_install(
-            "/home/can/.local/bin/herdr\n"
+            "/home/can/.local/bin/hicodeer-agent\n"
         ));
         assert!(remote_shell_resolves_managed_install(
-            "/Users/can/.local/bin/herdr\n"
+            "/Users/can/.local/bin/hicodeer-agent\n"
         ));
         assert!(!remote_shell_resolves_managed_install(
-            "/usr/local/bin/herdr\n"
+            "/usr/local/bin/hicodeer-agent\n"
         ));
         assert!(!remote_shell_resolves_managed_install(""));
     }
@@ -5563,8 +5580,8 @@ function Get-Process {
             arch: "aarch64",
         };
         assert_eq!(
-            install_source_description_for(&platform, Some(Path::new("/tmp/herdr-aarch64")), false),
-            "HERDR_REMOTE_BINARY (/tmp/herdr-aarch64)"
+            install_source_description_for(&platform, Some(Path::new("/tmp/hicodeer-aarch64")), false),
+            "HICODEER_AGENT_REMOTE_BINARY (/tmp/hicodeer-aarch64)"
         );
     }
 
@@ -5574,7 +5591,7 @@ function Get-Process {
 
         assert_eq!(
             install_source_description_for(&platform, None, true),
-            "the current local herdr binary"
+            "the current local hicodeer-agent binary"
         );
     }
 
@@ -5599,9 +5616,9 @@ function Get-Process {
             os: "linux",
             arch: "aarch64",
         };
-        let source = resolve_install_source(&platform, Some(PathBuf::from("/tmp/herdr-aarch64")))
+        let source = resolve_install_source(&platform, Some(PathBuf::from("/tmp/hicodeer-aarch64")))
             .expect("override source");
-        assert_eq!(source.path, PathBuf::from("/tmp/herdr-aarch64"));
+        assert_eq!(source.path, PathBuf::from("/tmp/hicodeer-aarch64"));
         assert!(source.temporary_dir.is_none());
     }
 
@@ -5612,7 +5629,7 @@ function Get-Process {
         assert!(path.starts_with(crate::platform::remote_private_temp_base()));
         assert!(path
             .file_name()
-            .is_some_and(|name| name.to_string_lossy().starts_with("herdr-r-")));
+            .is_some_and(|name| name.to_string_lossy().starts_with("hicodeer-agent-r-")));
     }
 
     #[cfg(unix)]
@@ -5640,7 +5657,7 @@ function Get-Process {
             .unwrap_or("")
             .to_string();
         assert!(
-            filename.starts_with("herdr-remote-"),
+            filename.starts_with("hicodeer-remote-"),
             "expected readable name, got {filename}"
         );
         assert!(filename.contains("-dev-default."), "got {filename}");
@@ -5699,7 +5716,7 @@ function Get-Process {
         assert!(fits, "fallback path still overflows: {}", path.display());
         assert_eq!(parent.as_deref(), Some(Path::new("/tmp")));
         assert!(
-            filename.starts_with("herdr-r-"),
+            filename.starts_with("hicodeer-r-"),
             "expected hashed fallback, got {filename}"
         );
     }
@@ -5707,12 +5724,12 @@ function Get-Process {
     #[test]
     fn install_source_cleanup_removes_temporary_directory() {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-install-source-cleanup-test-{}",
+            "hicodeer-agent-install-source-cleanup-test-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir(&dir).expect("create temp dir");
-        let path = dir.join("herdr.tmp");
+        let path = dir.join("hicodeer.tmp");
         fs::write(&path, b"test").expect("write temp file");
 
         InstallSource::temporary(path, dir.clone()).cleanup();

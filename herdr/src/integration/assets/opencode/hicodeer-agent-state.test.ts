@@ -47,15 +47,15 @@ beforeEach(() => {
   requestWaiters.length = 0;
   autoAcknowledge = true;
   process.argv = ["bun", "/$bunfs/root/src/index.js", "run"];
-  process.env.HERDR_ENV = "1";
+  process.env.HICODEER_AGENT_ENV = "1";
   process.env.HICODEER_AGENT_SOCKET_PATH = "test.sock";
-  process.env.HERDR_PANE_ID = "test:p1";
+  process.env.HICODEER_AGENT_PANE_ID = "test:p1";
 });
 
 async function loadPlugin() {
   importCounter += 1;
-  const { HerdrAgentStatePlugin } = await import(`./hicodeer-agent-state.js?test=${importCounter}`);
-  return HerdrAgentStatePlugin();
+  const { HiCodeerAgentStatePlugin } = await import(`./hicodeer-agent-state.js?test=${importCounter}`);
+  return HiCodeerAgentStatePlugin();
 }
 
 function waitForNextRequest(): Promise<void> {
@@ -254,7 +254,7 @@ function requestMethod(request: unknown): unknown {
 
 test("dual server entrypoint keeps V1 hooks and never reports from the V2 shared server", async () => {
   const module = await import(`./hicodeer-agent-state.js?test=${++importCounter}`);
-  expect(module.default.server).toBe(module.HerdrAgentStatePlugin);
+  expect(module.default.server).toBe(module.HiCodeerAgentStatePlugin);
   expect(await module.default.setup({})).toBeUndefined();
   expect(requests).toHaveLength(0);
   const hooks = await module.default.server();

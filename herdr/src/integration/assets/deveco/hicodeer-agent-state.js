@@ -1,12 +1,12 @@
 // installed by HiCodeer
-// managed by herdr; reinstalling or updating the integration overwrites this file.
+// managed by HiCodeer; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
-// HERDR_INTEGRATION_ID=deveco
-// HERDR_INTEGRATION_VERSION=2
+// HICODEER_AGENT_INTEGRATION_ID=deveco
+// HICODEER_AGENT_INTEGRATION_VERSION=3
 
 import net from "node:net";
 
-const SOURCE = "herdr:deveco";
+const SOURCE = "hicodeer:deveco";
 const AGENT = "deveco";
 let reportSeq = Date.now() * 1000;
 let requestChain = Promise.resolve();
@@ -59,7 +59,7 @@ function request(method, params) {
 }
 
 function requestOnce(method, params) {
-  const paneId = process.env.HERDR_PANE_ID;
+  const paneId = process.env.HICODEER_AGENT_PANE_ID;
   const socketPath = process.env.HICODEER_AGENT_SOCKET_PATH;
 
   if (!paneId || !socketPath) {
@@ -132,12 +132,12 @@ function ownsLocalLifecycle() {
     (!["serve", "web", "attach"].includes(args[0]) && args.includes("--mini"));
 }
 
-export const HerdrAgentStatePlugin = async () => {
+export const HiCodeerAgentStatePlugin = async () => {
   if (
     !ownsLocalLifecycle() ||
-    process.env.HERDR_ENV !== "1" ||
+    process.env.HICODEER_AGENT_ENV !== "1" ||
     !process.env.HICODEER_AGENT_SOCKET_PATH ||
-    !process.env.HERDR_PANE_ID
+    !process.env.HICODEER_AGENT_PANE_ID
   ) {
     return {};
   }
@@ -218,7 +218,7 @@ export const HerdrAgentStatePlugin = async () => {
 // V1 local run/Mini retain their server hooks. V1/V2 full TUIs own both
 // selection and lifecycle, including when attached to a shared remote server.
 export default {
-  id: "herdr.deveco",
-  server: HerdrAgentStatePlugin,
+  id: "hicodeer.deveco",
+  server: HiCodeerAgentStatePlugin,
   setup() {},
 };

@@ -4162,19 +4162,19 @@ mod tests {
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
 
-        let partial = pane.process_pty_bytes(pane_id, 0, b"\x1b]7;file:///tmp/herdr%20", &tx);
+        let partial = pane.process_pty_bytes(pane_id, 0, b"\x1b]7;file:///tmp/hicodeer-agent%20", &tx);
         assert_eq!(partial.reported_cwd, None);
 
         let completed = pane.process_pty_bytes(pane_id, 0, b"repo\x07", &tx);
         #[cfg(not(windows))]
         assert_eq!(
             completed.reported_cwd,
-            Some(std::path::PathBuf::from("/tmp/herdr repo"))
+            Some(std::path::PathBuf::from("/tmp/hicodeer-agent repo"))
         );
         #[cfg(windows)]
         assert_eq!(
             completed.reported_cwd,
-            Some(std::path::PathBuf::from("\\tmp\\herdr repo"))
+            Some(std::path::PathBuf::from("\\tmp\\hicodeer-agent repo"))
         );
 
         let latest = pane.process_pty_bytes(

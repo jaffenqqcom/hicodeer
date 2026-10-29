@@ -1,7 +1,7 @@
 //! Self-update mechanism.
 //!
-//! Checks the hosted herdr.dev update manifest for newer versions.
-//! Manual `herdr update` downloads and installs the binary.
+//! Checks the configured update manifest endpoint for newer versions.
+//! Manual `hicodeer-agent update` downloads and installs the binary.
 //! Background checks only surface availability and release notes.
 //! Uses `curl` as a subprocess for HTTP — no additional Rust HTTP dependencies.
 //! JSON parsing uses serde_json (already in deps for persistence).
@@ -22,16 +22,16 @@ use std::time::{Duration, Instant};
 use interprocess::local_socket::traits::Stream as _;
 use serde::{Deserialize, Deserializer};
 
-const STABLE_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/latest.json";
-const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
-const HOMEBREW_FORMULA_API_URL: &str = "https://formulae.brew.sh/api/formula/herdr.json";
-const HERDR_UPDATE_COMMAND: &str = "herdr update";
-const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade herdr";
-const MISE_UPDATE_COMMAND: &str = "mise upgrade herdr";
+const UPDATE_MANIFEST_URL_ENV: &str = "HICODEER_AGENT_UPDATE_MANIFEST_URL";
+const PREVIEW_MANIFEST_URL_ENV: &str = "HICODEER_AGENT_PREVIEW_MANIFEST_URL";
+const HOMEBREW_FORMULA_URL_ENV: &str = "HICODEER_AGENT_HOMEBREW_FORMULA_URL";
+const HICODEER_AGENT_UPDATE_COMMAND: &str = "hicodeer-agent update";
+const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade hicodeer-agent";
+const MISE_UPDATE_COMMAND: &str = "mise upgrade hicodeer-agent";
 const NIX_UPDATE_COMMAND: &str = "update through Nix";
 const MISE_INSTALLS_DIR_ENV: &str = "MISE_INSTALLS_DIR";
-const FAKE_UPDATE_VERSION_ENV: &str = "HERDR_FAKE_UPDATE_VERSION";
-const FAKE_UPDATE_NOTES_VERSION_ENV: &str = "HERDR_FAKE_UPDATE_NOTES_VERSION";
+const FAKE_UPDATE_VERSION_ENV: &str = "HICODEER_AGENT_FAKE_UPDATE_VERSION";
+const FAKE_UPDATE_NOTES_VERSION_ENV: &str = "HICODEER_AGENT_FAKE_UPDATE_NOTES_VERSION";
 const DEFAULT_FAKE_UPDATE_NOTES_VERSION: &str = "0.3.0";
 #[cfg(not(windows))]
 const SERVER_STOP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -325,12 +325,27 @@ impl ReleaseInfo {
     }
 }
 
+/// Update endpoints are deployment configuration rather than build-time
+/// constants: a build that ships no release service leaves them unset, and the
+/// check reports that instead of reaching a host the product does not own.
+fn configured_endpoint(env_name: &str) -> Result<String, String> {
+    std::env::var(env_name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!("{env_name} is not set; this build has no update endpoint configured")
+        })
+}
+
 fn fetch_update_manifest() -> Result<UpdateManifest, String> {
-    fetch_json_manifest(STABLE_UPDATE_MANIFEST_URL)
+    let endpoint = configured_endpoint(UPDATE_MANIFEST_URL_ENV)?;
+    fetch_json_manifest(&endpoint)
 }
 
 fn fetch_preview_manifest() -> Result<PreviewManifest, String> {
-    fetch_json_manifest(PREVIEW_UPDATE_MANIFEST_URL)
+    let endpoint = configured_endpoint(PREVIEW_MANIFEST_URL_ENV)?;
+    fetch_json_manifest(&endpoint)
 }
 
 fn fetch_json_manifest<T>(url: &str) -> Result<T, String>
@@ -578,6 +593,7 @@ fn homebrew_update_from_formula_json(
 
 fn check_homebrew_latest() -> Result<Option<Version>, String> {
     let current = Version::current();
+    let endpoint = configured_endpoint(HOMEBREW_FORMULA_URL_ENV)?;
 
     let output = crate::noninteractive_process::curl_command()
         .args([
@@ -588,7 +604,7 @@ fn check_homebrew_latest() -> Result<Option<Version>, String> {
             "5",
             "--max-time",
             "10",
-            HOMEBREW_FORMULA_API_URL,
+            endpoint.as_str(),
         ])
         .output()
         .map_err(|e| format!("curl failed: {e}"))?;
@@ -627,7 +643,7 @@ fn download_update(release: &ReleaseInfo) -> Result<DownloadedUpdate, String> {
     let parent = current_exe.parent().ok_or("can't find binary directory")?;
 
     // Check write permissions early
-    let test_path = parent.join(".herdr-write-test");
+    let test_path = parent.join(".hicodeer-write-test");
     if let Err(e) = fs::write(&test_path, b"") {
         let _ = fs::remove_file(&test_path);
         return Err(format!(
@@ -639,7 +655,7 @@ fn download_update(release: &ReleaseInfo) -> Result<DownloadedUpdate, String> {
     let _ = fs::remove_file(&test_path);
 
     // Unique temp file (avoids races with concurrent instances)
-    let tmp_path = parent.join(format!(".herdr-update-{}.tmp", std::process::id()));
+    let tmp_path = parent.join(format!(".hicodeer-update-{}.tmp", std::process::id()));
 
     // Download the exact asset URL (pinned to the release we checked)
     let status = crate::noninteractive_process::curl_command()
@@ -720,7 +736,7 @@ fn download_windows_update(release: &ReleaseInfo) -> Result<DownloadedWindowsUpd
         .sha256
         .as_deref()
         .ok_or("Windows update asset is missing a SHA-256 checksum")?;
-    let stem = format!("herdr-update-{}", std::process::id());
+    let stem = format!("hicodeer-update-{}", std::process::id());
     let update = DownloadedWindowsUpdate {
         package_path: env::temp_dir().join(format!("{stem}.{}", release.package_format)),
         installer_path: env::temp_dir().join(format!("{stem}.ps1")),
@@ -786,17 +802,17 @@ fn install_windows_update_with_installer(
 
 #[cfg(windows)]
 fn windows_installed_herdr_exe_path() -> Result<PathBuf, String> {
-    if let Some(install_dir) = env::var_os("HERDR_INSTALL_DIR").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(install_dir).join("herdr.exe"));
+    if let Some(install_dir) = env::var_os("HICODEER_AGENT_INSTALL_DIR").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(install_dir).join("hicodeer-agent.exe"));
     }
 
     let local_app_data = env::var_os("LOCALAPPDATA")
-        .ok_or("LOCALAPPDATA is not set; cannot locate Herdr install")?;
+        .ok_or("LOCALAPPDATA is not set; cannot locate HiCodeer install")?;
     Ok(PathBuf::from(local_app_data)
         .join("Programs")
-        .join("Herdr")
+        .join("HiCodeer")
         .join("bin")
-        .join("herdr.exe"))
+        .join("hicodeer-agent.exe"))
 }
 
 // ---------------------------------------------------------------------------
@@ -804,11 +820,11 @@ fn windows_installed_herdr_exe_path() -> Result<PathBuf, String> {
 // ---------------------------------------------------------------------------
 
 fn running_inside_herdr_env(herdr_env: Option<&str>) -> bool {
-    herdr_env == Some(crate::HERDR_ENV_VALUE)
+    herdr_env == Some(crate::HICODEER_AGENT_ENV_VALUE)
 }
 
 fn running_inside_herdr() -> bool {
-    running_inside_herdr_env(env::var(crate::HERDR_ENV_VAR).ok().as_deref())
+    running_inside_herdr_env(env::var(crate::HICODEER_AGENT_ENV_VAR).ok().as_deref())
 }
 
 #[cfg(not(windows))]
@@ -961,7 +977,7 @@ fn plan_running_server_updates(
         )
         .map_err(|err| {
             format!(
-                "failed to read status for herdr target {} at {}: {err}. stop it with `{}` and run `herdr update` again",
+                "failed to read status for hicodeer-agent target {} at {}: {err}. stop it with `{}` and run `hicodeer-agent update` again",
                 target.label,
                 target.socket_path.display(),
                 target.stop_command
@@ -970,7 +986,7 @@ fn plan_running_server_updates(
             Some(server) => server,
             None if target.must_be_running => {
                 return Err(format!(
-                        "herdr target {} looked running, but its status API did not respond at {}. stop it with `{}` and run `herdr update` again",
+                        "hicodeer-agent target {} looked running, but its status API did not respond at {}. stop it with `{}` and run `hicodeer-agent update` again",
                     target.label,
                     target.socket_path.display(),
                     target.stop_command
@@ -978,7 +994,7 @@ fn plan_running_server_updates(
             }
             None if client_protocol_server_is_running_at(&target.client_socket_path) => {
                 return Err(format!(
-                    "herdr target {} has a client socket, but its status API did not respond at {}. stop it with `{}` and run `herdr update` again",
+                    "hicodeer-agent target {} has a client socket, but its status API did not respond at {}. stop it with `{}` and run `hicodeer-agent update` again",
                     target.label,
                     target.socket_path.display(),
                     target.stop_command
@@ -996,7 +1012,7 @@ fn plan_running_server_updates(
 
     if plans.is_empty() && target_client_protocol_server_is_running()? {
         return Err(format!(
-            "a herdr server is listening, but its status API is unavailable; try `{}`, or stop the old server process manually, then run `herdr update` again",
+            "a hicodeer-agent server is listening, but its status API is unavailable; try `{}`, or stop the old server process manually, then run `hicodeer-agent update` again",
             crate::session::local_stop_command()
         ));
     }
@@ -1037,7 +1053,7 @@ fn running_update_targets() -> Result<Vec<RunningUpdateTarget>, String> {
             name: None,
             label: socket_path.display().to_string(),
             stop_command: format!(
-                "{}={} herdr server stop",
+                "{}={} hicodeer-agent server stop",
                 crate::api::SOCKET_PATH_ENV_VAR,
                 socket_path.display()
             ),
@@ -1052,7 +1068,7 @@ fn running_update_targets() -> Result<Vec<RunningUpdateTarget>, String> {
     }
 
     let sessions = crate::session::list_sessions()
-        .map_err(|err| format!("failed to list herdr sessions: {err}"))?;
+        .map_err(|err| format!("failed to list hicodeer-agent sessions: {err}"))?;
     Ok(sessions
         .into_iter()
         .map(|session| RunningUpdateTarget {
@@ -1067,9 +1083,9 @@ fn running_update_targets() -> Result<Vec<RunningUpdateTarget>, String> {
                 Some(&session.name)
             }),
             attach_command: Some(if session.default {
-                "herdr".to_string()
+                "hicodeer-agent".to_string()
             } else {
-                format!("herdr session attach {}", session.name)
+                format!("hicodeer-agent session attach {}", session.name)
             }),
             label: session.name.clone(),
             client_socket_path: crate::session::client_socket_path_for(if session.default {
@@ -1092,7 +1108,7 @@ fn target_client_protocol_server_is_running() -> Result<bool, String> {
     }
 
     let sessions = crate::session::list_sessions()
-        .map_err(|err| format!("failed to list herdr sessions: {err}"))?;
+        .map_err(|err| format!("failed to list hicodeer-agent sessions: {err}"))?;
     Ok(sessions.into_iter().any(|session| {
         let client_socket = crate::session::client_socket_path_for(if session.default {
             None
@@ -1114,7 +1130,7 @@ pub(crate) fn parse_self_update_args(args: &[String]) -> Result<SelfUpdateOption
         match arg.as_str() {
             "--handoff" => options.live_handoff = true,
             "--help" | "-h" => {
-                return Err("usage: herdr update [--handoff]".to_string());
+                return Err("usage: hicodeer-agent update [--handoff]".to_string());
             }
             _ => return Err(format!("unknown update option: {arg}")),
         }
@@ -1129,7 +1145,7 @@ fn prompt_to_stop_old_servers_before_update(
 ) -> Result<bool, String> {
     if !io::stdin().is_terminal() {
         return Err(
-            "one or more Herdr sessions must stop for this update. Stop running Herdr sessions when ready, then run `herdr update` again from an interactive terminal."
+            "one or more HiCodeer sessions must stop for this update. Stop running HiCodeer sessions when ready, then run `hicodeer-agent update` again from an interactive terminal."
                 .to_string(),
         );
     }
@@ -1260,7 +1276,7 @@ fn prompt_to_complete_plain_update(
     let (singular, plural) = target_group_nouns(&plans);
     let noun = if plans.len() == 1 { singular } else { plural };
     eprintln!(
-        "To complete the update, Herdr must stop {} running {}.",
+        "To complete the update, HiCodeer must stop {} running {}.",
         plans.len(),
         noun
     );
@@ -1320,7 +1336,7 @@ fn print_running_session_update_summary(
     release: &ReleaseInfo,
     options: SelfUpdateOptions,
 ) {
-    eprintln!("running herdr targets:");
+    eprintln!("running hicodeer-agent targets:");
     for plan in plans {
         if options.live_handoff {
             let capability = if server_supports_live_handoff(&plan.server) {
@@ -1405,7 +1421,7 @@ fn prompt_to_stop_old_server_after_failed_handoff(
     eprintln!("  server: v{}", version_label(status.version.as_deref()));
     eprintln!("  installed: {}", release.label());
     eprintln!(
-        "you can keep using the old server, or stop it now so the next `herdr` start uses {}.",
+        "you can keep using the old server, or stop it now so the next `hicodeer-agent` start uses {}.",
         release.label()
     );
     eprintln!("stopping the old server will exit its pane processes.");
@@ -1472,13 +1488,13 @@ fn recover_failed_live_handoff_for_update(
         FailedHandoffServerState::NoServerResponding => {
             if let Some(command) = plan.attach_command() {
                 eprintln!(
-                    "no herdr server is responding for session {}. the binary was updated; run `{command}` to start {}.",
+                    "no hicodeer-agent server is responding for session {}. the binary was updated; run `{command}` to start {}.",
                     plan.label(),
                     release.label()
                 );
             } else {
                 eprintln!(
-                    "no herdr server is responding at {}. the binary was updated; restart with the same socket override to use {}.",
+                    "no hicodeer-agent server is responding at {}. the binary was updated; restart with the same socket override to use {}.",
                     plan.socket_path().display(),
                     release.label()
                 );
@@ -1487,7 +1503,7 @@ fn recover_failed_live_handoff_for_update(
         }
         FailedHandoffServerState::Unknown(status_error) => {
             eprintln!(
-                "herdr could not determine server state for {} {} after the failed handoff: {status_error}",
+                "hicodeer-agent could not determine server state for {} {} after the failed handoff: {status_error}",
                 plan.target_noun(),
                 plan.label()
             );
@@ -1677,7 +1693,7 @@ fn wait_for_server_shutdown_at(socket_path: &Path, timeout: Duration) -> Result<
 
 #[cfg(not(windows))]
 fn stop_running_server_for_update(plan: &RunningServerUpdatePlan) -> Result<(), String> {
-    eprintln!("stopping herdr {} {}...", plan.target_noun(), plan.label());
+    eprintln!("stopping hicodeer-agent {} {}...", plan.target_noun(), plan.label());
     stop_server_via_api_at(plan.socket_path(), SERVER_STOP_RESPONSE_TIMEOUT)?;
     wait_for_server_shutdown_at(plan.socket_path(), SERVER_HANDOFF_CONFIRM_TIMEOUT)?;
     Ok(())
@@ -1777,7 +1793,7 @@ fn print_running_session_update_outcomes(
     release: &ReleaseInfo,
 ) {
     if outcomes.is_empty() {
-        eprintln!("run herdr again.");
+        eprintln!("run hicodeer-agent again.");
         return;
     }
 
@@ -1824,7 +1840,7 @@ fn print_running_session_update_outcomes(
                         release.label()
                     ),
                     None => eprintln!(
-                        "Run `{}`, then restart Herdr with the same socket override when ready to use {}.",
+                        "Run `{}`, then restart HiCodeer with the same socket override when ready to use {}.",
                         outcome.stop_command,
                         release.label()
                     ),
@@ -1889,26 +1905,26 @@ pub(crate) fn update_install_command() -> &'static str {
     } else if is_nix_managed_install() {
         NIX_UPDATE_COMMAND
     } else {
-        HERDR_UPDATE_COMMAND
+        HICODEER_AGENT_UPDATE_COMMAND
     }
 }
 
 pub(crate) fn update_install_instruction(install_command: &str) -> String {
     match install_command {
-        HERDR_UPDATE_COMMAND => {
-            "detach, run `herdr update`, then run Herdr again to reconnect".to_string()
+        HICODEER_AGENT_UPDATE_COMMAND => {
+            "detach, run `hicodeer-agent update`, then run HiCodeer again to reconnect".to_string()
         }
         HOMEBREW_UPDATE_COMMAND => {
-            "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
+            "detach, run `brew update && brew upgrade hicodeer-agent`, then run HiCodeer again to reconnect"
                 .to_string()
         }
         MISE_UPDATE_COMMAND => {
-            "detach, run `mise upgrade herdr`, then run Herdr again to reconnect".to_string()
+            "detach, run `mise upgrade hicodeer-agent`, then run HiCodeer again to reconnect".to_string()
         }
         NIX_UPDATE_COMMAND => {
-            "detach, update through Nix, then run Herdr again to reconnect".to_string()
+            "detach, update through Nix, then run HiCodeer again to reconnect".to_string()
         }
-        command => format!("detach, run `{command}`, then run Herdr again to reconnect"),
+        command => format!("detach, run `{command}`, then run HiCodeer again to reconnect"),
     }
 }
 
@@ -1947,11 +1963,11 @@ pub(crate) fn preview_channel_rejection_for_current_install() -> Option<&'static
 pub(crate) fn package_manager_channel_update_guidance_for_current_install() -> Option<&'static str>
 {
     if is_homebrew_managed_install() {
-        Some("Use `brew update && brew upgrade herdr` to update Homebrew installs.")
+        Some("Use `brew update && brew upgrade hicodeer-agent` to update Homebrew installs.")
     } else if is_mise_managed_install() {
-        Some("Use `mise upgrade herdr` to update mise installs.")
+        Some("Use `mise upgrade hicodeer-agent` to update mise installs.")
     } else if is_nix_managed_install() {
-        Some("Update through Nix to update Nix-managed Herdr installs.")
+        Some("Update through Nix to update Nix-managed HiCodeer installs.")
     } else {
         None
     }
@@ -1960,14 +1976,14 @@ pub(crate) fn package_manager_channel_update_guidance_for_current_install() -> O
 fn preview_channel_rejection_for_exe_path(path: &Path) -> Option<&'static str> {
     if is_homebrew_managed_exe_path_following_links(path) {
         Some(
-            "preview channel is only available for direct Herdr installs; Homebrew installs update through `brew update && brew upgrade herdr`",
+            "preview channel is only available for direct HiCodeer installs; Homebrew installs update through `brew update && brew upgrade hicodeer-agent`",
         )
     } else if is_mise_managed_exe_path_following_links(path) {
         Some(
-            "preview channel is only available for direct Herdr installs; mise installs update through `mise upgrade herdr`",
+            "preview channel is only available for direct HiCodeer installs; mise installs update through `mise upgrade hicodeer-agent`",
         )
     } else if is_nix_store_exe_path_following_links(path) {
-        Some("preview channel is only available for direct Herdr installs; Nix installs update through Nix")
+        Some("preview channel is only available for direct HiCodeer installs; Nix installs update through Nix")
     } else {
         None
     }
@@ -2048,7 +2064,7 @@ fn mise_install_root_under_named_installs_dir(path: &Path) -> Option<PathBuf> {
 }
 
 fn mise_tool_version_dir(path: &Path) -> Option<&Path> {
-    if path.file_name()? != "herdr" {
+    if path.file_name()? != "hicodeer-agent" {
         return None;
     }
     let bin_dir = path.parent()?;
@@ -2057,7 +2073,7 @@ fn mise_tool_version_dir(path: &Path) -> Option<&Path> {
     }
     let version_dir = bin_dir.parent()?;
     let tool_dir = version_dir.parent()?;
-    if tool_dir.file_name()? != "herdr" {
+    if tool_dir.file_name()? != "hicodeer-agent" {
         return None;
     }
     Some(version_dir)
@@ -2082,7 +2098,7 @@ fn is_homebrew_managed_exe_path(path: &Path) -> bool {
 }
 
 fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
-    if path.file_name()? != "herdr" {
+    if path.file_name()? != "hicodeer-agent" {
         return None;
     }
     let bin_dir = path.parent()?;
@@ -2091,7 +2107,7 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
     }
     let version_dir = bin_dir.parent()?;
     let formula_dir = version_dir.parent()?;
-    if formula_dir.file_name()? != "herdr" {
+    if formula_dir.file_name()? != "hicodeer-agent" {
         return None;
     }
     let cellar_dir = formula_dir.parent()?;
@@ -2105,14 +2121,14 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Manual self-update command (`herdr update`).
+/// Manual self-update command (`hicodeer-agent update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     let channel = UpdateChannel::configured();
 
     if is_homebrew_managed_install() {
         if channel == UpdateChannel::Preview {
             return Err(
-                "self-update is disabled for Homebrew installs; preview is only available for direct Herdr installs".into(),
+                "self-update is disabled for Homebrew installs; preview is only available for direct HiCodeer installs".into(),
             );
         }
         return Err(format!(
@@ -2123,7 +2139,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     if is_mise_managed_install() {
         if channel == UpdateChannel::Preview {
             return Err(
-                "self-update is disabled for mise installs; preview is only available for direct Herdr installs".into(),
+                "self-update is disabled for mise installs; preview is only available for direct HiCodeer installs".into(),
             );
         }
         return Err(format!(
@@ -2134,16 +2150,16 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     if is_nix_managed_install() {
         if channel == UpdateChannel::Preview {
             return Err(
-                "self-update is disabled for Nix installs; preview is only available for direct Herdr installs".into(),
+                "self-update is disabled for Nix installs; preview is only available for direct HiCodeer installs".into(),
             );
         }
         return Err(
-            "self-update is disabled for Nix installs; update with `nix profile upgrade` or update the flake input that provides Herdr".into(),
+            "self-update is disabled for Nix installs; update with `nix profile upgrade` or update the flake input that provides HiCodeer".into(),
         );
     }
 
     if running_inside_herdr() {
-        return Err("run `herdr update` outside herdr after detaching from the session".into());
+        return Err("run `hicodeer-agent update` outside hicodeer-agent after detaching from the session".into());
     }
 
     eprintln!("checking {} channel for updates...", channel.as_str());
@@ -2184,7 +2200,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
         eprintln!("installed {}", release.label());
         print_outdated_integration_notice_with_updated_binary(&updated_exe);
         eprintln!(
-            "Open a new terminal, or reconnect SSH, then start Herdr again to use the updated client. Running servers remain active; restart them later only if you need server-side changes from {}.",
+            "Open a new terminal, or reconnect SSH, then start HiCodeer again to use the updated client. Running servers remain active; restart them later only if you need server-side changes from {}.",
             release.label()
         );
         print_saved_machine_update_notice();
@@ -2203,8 +2219,8 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
         if !options.live_handoff
             && !prompt_to_complete_plain_update(&server_update_decisions, &release)?
         {
-            eprintln!("Herdr was not updated.");
-            eprintln!("Stop running Herdr sessions when ready, then run `herdr update` again.");
+            eprintln!("HiCodeer was not updated.");
+            eprintln!("Stop running HiCodeer sessions when ready, then run `hicodeer-agent update` again.");
             return Ok(current);
         }
         install_downloaded_update(downloaded_update)?;
@@ -2257,11 +2273,11 @@ fn saved_machine_update_notice_lines(
     }
     let mut lines = vec![
         String::new(),
-        "your SSH machines run their own herdr and may be older:".to_string(),
+        "your SSH machines run their own hicodeer-agent and may be older:".to_string(),
     ];
     lines.extend(labels.into_iter().map(|label| format!("  {label}")));
     lines.push(
-        "run `herdr update` on each one. it will tell you what to restart there.".to_string(),
+        "run `hicodeer-agent update` on each one. it will tell you what to restart there.".to_string(),
     );
     lines
 }
@@ -2279,7 +2295,7 @@ impl KeptServer<'_> {
     fn reconnect(&self) -> String {
         match self.attach_command {
             Some(attach) => format!("`{attach}`"),
-            None => "herdr with the same socket override".to_string(),
+            None => "hicodeer-agent with the same socket override".to_string(),
         }
     }
 }
@@ -2535,10 +2551,10 @@ mod tests {
             saved_machine_update_notice_lines(&profiles),
             [
                 "",
-                "your SSH machines run their own herdr and may be older:",
+                "your SSH machines run their own hicodeer-agent and may be older:",
                 "  rohan",
                 "  workbox",
-                "run `herdr update` on each one. it will tell you what to restart there.",
+                "run `hicodeer-agent update` on each one. it will tell you what to restart there.",
             ]
         );
     }
@@ -2556,16 +2572,16 @@ mod tests {
         let default = KeptServer {
             label: "default",
             version: "0.9.1",
-            stop_command: "herdr server stop",
-            attach_command: Some("herdr"),
+            stop_command: "hicodeer-agent server stop",
+            attach_command: Some("hicodeer-agent"),
         };
         assert_eq!(
             kept_server_notice_lines(&[default], "0.10.0"),
             [
                 "",
-                "your running server is still v0.9.1. run `herdr` to reconnect; everything keeps working.",
+                "your running server is still v0.9.1. run `hicodeer-agent` to reconnect; everything keeps working.",
                 "server fixes in v0.10.0 apply only after it restarts.",
-                "when your agents are idle, run `herdr server stop`, then `herdr`.",
+                "when your agents are idle, run `hicodeer-agent server stop`, then `hicodeer-agent`.",
                 "this closes running panes and their agents.",
             ]
         );
@@ -2573,14 +2589,14 @@ mod tests {
         let work = KeptServer {
             label: "work",
             version: "0.9.0",
-            stop_command: "herdr session stop work",
-            attach_command: Some("herdr session attach work"),
+            stop_command: "hicodeer-agent session stop work",
+            attach_command: Some("hicodeer-agent session attach work"),
         };
         let default = KeptServer {
             label: "default",
             version: "0.9.1",
-            stop_command: "herdr server stop",
-            attach_command: Some("herdr"),
+            stop_command: "hicodeer-agent server stop",
+            attach_command: Some("hicodeer-agent"),
         };
         assert_eq!(
             kept_server_notice_lines(&[default, work], "0.10.0"),
@@ -2588,23 +2604,23 @@ mod tests {
                 "",
                 "your running servers are still older. reconnect as usual; everything keeps working.",
                 "server fixes in v0.10.0 apply only after each one restarts:",
-                "  default  v0.9.1  `herdr server stop`, then `herdr`",
-                "  work     v0.9.0  `herdr session stop work`, then `herdr session attach work`",
+                "  default  v0.9.1  `hicodeer-agent server stop`, then `hicodeer-agent`",
+                "  work     v0.9.0  `hicodeer-agent session stop work`, then `hicodeer-agent session attach work`",
                 "restart one when its agents are idle. this closes its panes and their agents.",
             ]
         );
         assert!(kept_server_notice_lines(&[], "0.10.0").is_empty());
 
         let socket_override = KeptServer {
-            label: "/tmp/herdr.sock",
+            label: "/tmp/hicodeer.sock",
             version: "0.9.1",
-            stop_command: "herdr server stop",
+            stop_command: "hicodeer-agent server stop",
             attach_command: None,
         };
         let lines = kept_server_notice_lines(&[socket_override], "0.10.0");
         assert_eq!(
             lines[3],
-            "when your agents are idle, run `herdr server stop`, then herdr with the same socket override."
+            "when your agents are idle, run `hicodeer-agent server stop`, then hicodeer-agent with the same socket override."
         );
     }
 
@@ -2677,7 +2693,7 @@ mod tests {
             target_endpoint_generation: Some(
                 crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
             ),
-            download_url: "https://example.com/herdr".to_string(),
+            download_url: "https://example.com/hicodeer-agent".to_string(),
             sha256: None,
             notes_body: "### Changed\n- One".to_string(),
         }
@@ -2732,57 +2748,57 @@ mod tests {
 
     #[test]
     fn homebrew_cellar_path_is_detected() {
-        let path = Path::new("/opt/homebrew/Cellar/herdr/0.5.9/bin/herdr");
+        let path = Path::new("/opt/homebrew/Cellar/hicodeer-agent/0.5.9/bin/hicodeer-agent");
 
         assert!(is_homebrew_managed_exe_path(path));
         assert_eq!(
             homebrew_cellar_keg_root(path).unwrap(),
-            PathBuf::from("/opt/homebrew/Cellar/herdr/0.5.9")
+            PathBuf::from("/opt/homebrew/Cellar/hicodeer-agent/0.5.9")
         );
     }
 
     #[test]
     fn homebrew_linux_cellar_path_is_detected() {
-        let path = Path::new("/home/linuxbrew/.linuxbrew/Cellar/herdr/0.5.9/bin/herdr");
+        let path = Path::new("/home/linuxbrew/.linuxbrew/Cellar/hicodeer-agent/0.5.9/bin/hicodeer-agent");
 
         assert!(is_homebrew_managed_exe_path(path));
     }
 
     #[test]
     fn homebrew_opt_path_requires_canonicalized_cellar_target() {
-        let path = Path::new("/opt/homebrew/opt/herdr/bin/herdr");
+        let path = Path::new("/opt/homebrew/opt/hicodeer-agent/bin/hicodeer-agent");
 
         assert!(!is_homebrew_managed_exe_path(path));
     }
 
     #[test]
     fn non_homebrew_path_is_not_detected() {
-        let path = Path::new("/usr/local/bin/herdr");
+        let path = Path::new("/usr/local/bin/hicodeer-agent");
 
         assert!(!is_homebrew_managed_exe_path(path));
     }
 
     #[test]
     fn mise_install_path_is_detected() {
-        let path = Path::new("/home/user/.local/share/mise/installs/herdr/0.6.6/bin/herdr");
+        let path = Path::new("/home/user/.local/share/mise/installs/hicodeer-agent/0.6.6/bin/hicodeer-agent");
 
         assert!(is_mise_managed_exe_path(path));
         assert_eq!(
             mise_install_root(path).unwrap(),
-            PathBuf::from("/home/user/.local/share/mise/installs/herdr/0.6.6")
+            PathBuf::from("/home/user/.local/share/mise/installs/hicodeer-agent/0.6.6")
         );
     }
 
     #[test]
     fn mise_alias_install_path_is_detected() {
-        let path = Path::new("/home/user/.local/share/mise/installs/herdr/latest/bin/herdr");
+        let path = Path::new("/home/user/.local/share/mise/installs/hicodeer-agent/latest/bin/hicodeer-agent");
 
         assert!(is_mise_managed_exe_path(path));
     }
 
     #[test]
     fn mise_custom_installs_dir_path_is_detected() {
-        let path = Path::new("/opt/mise-tools/installs/herdr/0.6.6/bin/herdr");
+        let path = Path::new("/opt/mise-tools/installs/hicodeer-agent/0.6.6/bin/hicodeer-agent");
 
         assert!(is_mise_managed_exe_path(path));
     }
@@ -2792,12 +2808,12 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         let previous = std::env::var_os(MISE_INSTALLS_DIR_ENV);
         std::env::set_var(MISE_INSTALLS_DIR_ENV, "/opt/mise-tools");
-        let path = Path::new("/opt/mise-tools/herdr/0.6.6/bin/herdr");
+        let path = Path::new("/opt/mise-tools/hicodeer-agent/0.6.6/bin/hicodeer-agent");
 
         assert!(is_mise_managed_exe_path(path));
         assert_eq!(
             mise_install_root(path).unwrap(),
-            PathBuf::from("/opt/mise-tools/herdr/0.6.6")
+            PathBuf::from("/opt/mise-tools/hicodeer-agent/0.6.6")
         );
 
         if let Some(previous) = previous {
@@ -2809,7 +2825,7 @@ mod tests {
 
     #[test]
     fn non_mise_install_path_is_not_detected() {
-        let path = Path::new("/home/user/.local/bin/herdr");
+        let path = Path::new("/home/user/.local/bin/hicodeer-agent");
 
         assert!(!is_mise_managed_exe_path(path));
     }
@@ -2819,15 +2835,15 @@ mod tests {
         #[cfg(unix)]
         {
             let root = std::env::temp_dir().join(format!(
-                "herdr-homebrew-symlink-test-{}",
+                "hicodeer-homebrew-symlink-test-{}",
                 std::process::id()
             ));
-            let cellar_bin = root.join("Cellar/herdr/0.6.2/bin");
-            let opt_bin = root.join("opt/herdr/bin");
+            let cellar_bin = root.join("Cellar/hicodeer-agent/0.6.2/bin");
+            let opt_bin = root.join("opt/hicodeer-agent/bin");
             fs::create_dir_all(&cellar_bin).unwrap();
             fs::create_dir_all(&opt_bin).unwrap();
-            let cellar_binary = cellar_bin.join("herdr");
-            let opt_binary = opt_bin.join("herdr");
+            let cellar_binary = cellar_bin.join("hicodeer-agent");
+            let opt_binary = opt_bin.join("hicodeer-agent");
             fs::write(&cellar_binary, b"").unwrap();
             std::os::unix::fs::symlink(&cellar_binary, &opt_binary).unwrap();
 
@@ -2842,13 +2858,13 @@ mod tests {
         #[cfg(unix)]
         {
             let root = std::env::temp_dir()
-                .join(format!("herdr-mise-symlink-test-{}", std::process::id()));
-            let version_bin = root.join("installs/herdr/0.6.2/bin");
-            let latest_bin = root.join("installs/herdr/latest/bin");
+                .join(format!("hicodeer-mise-symlink-test-{}", std::process::id()));
+            let version_bin = root.join("installs/hicodeer-agent/0.6.2/bin");
+            let latest_bin = root.join("installs/hicodeer-agent/latest/bin");
             fs::create_dir_all(&version_bin).unwrap();
             fs::create_dir_all(&latest_bin).unwrap();
-            let version_binary = version_bin.join("herdr");
-            let latest_binary = latest_bin.join("herdr");
+            let version_binary = version_bin.join("hicodeer-agent");
+            let latest_binary = latest_bin.join("hicodeer-agent");
             fs::write(&version_binary, b"").unwrap();
             std::os::unix::fs::symlink(&version_binary, &latest_binary).unwrap();
 
@@ -2860,7 +2876,7 @@ mod tests {
 
     #[test]
     fn nix_store_path_is_detected() {
-        let path = Path::new("/nix/store/abc123-herdr-0.6.1/bin/herdr");
+        let path = Path::new("/nix/store/abc123-hicodeer-0.6.1/bin/hicodeer-agent");
 
         assert!(is_nix_store_exe_path(path));
         assert!(is_package_manager_managed_exe_path(path));
@@ -2868,10 +2884,10 @@ mod tests {
 
     #[test]
     fn preview_channel_is_rejected_for_package_manager_paths() {
-        let homebrew = Path::new("/opt/homebrew/Cellar/herdr/0.6.6/bin/herdr");
-        let mise = Path::new("/home/user/.local/share/mise/installs/herdr/0.6.6/bin/herdr");
-        let nix = Path::new("/nix/store/abc123-herdr-0.6.6/bin/herdr");
-        let direct = Path::new("/home/user/.local/bin/herdr");
+        let homebrew = Path::new("/opt/homebrew/Cellar/hicodeer-agent/0.6.6/bin/hicodeer-agent");
+        let mise = Path::new("/home/user/.local/share/mise/installs/hicodeer-agent/0.6.6/bin/hicodeer-agent");
+        let nix = Path::new("/nix/store/abc123-hicodeer-0.6.6/bin/hicodeer-agent");
+        let direct = Path::new("/home/user/.local/bin/hicodeer-agent");
 
         assert!(preview_channel_rejection_for_exe_path(homebrew)
             .is_some_and(|message| message.contains("Homebrew")));
@@ -2884,7 +2900,7 @@ mod tests {
 
     #[test]
     fn non_nix_store_path_is_not_detected() {
-        let path = Path::new("/usr/local/bin/herdr");
+        let path = Path::new("/usr/local/bin/hicodeer-agent");
 
         assert!(!is_nix_store_exe_path(path));
     }
@@ -2939,7 +2955,7 @@ mod tests {
                 "protocol": 10,
                 "notes": "### Fixed\n- Brew notes",
                 "assets": {
-                    "linux-x86_64": "https://example.com/herdr-linux-x86_64"
+                    "linux-x86_64": "https://example.com/hicodeer-linux-x86_64"
                 }
             }"####,
         )
@@ -2955,16 +2971,16 @@ mod tests {
     #[test]
     fn update_install_instruction_distinguishes_install_from_restart() {
         assert_eq!(
-            update_install_instruction(HERDR_UPDATE_COMMAND),
-            "detach, run `herdr update`, then run Herdr again to reconnect"
+            update_install_instruction(HICODEER_AGENT_UPDATE_COMMAND),
+            "detach, run `hicodeer-agent update`, then run HiCodeer again to reconnect"
         );
         assert_eq!(
             update_install_instruction(HOMEBREW_UPDATE_COMMAND),
-            "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
+            "detach, run `brew update && brew upgrade hicodeer-agent`, then run HiCodeer again to reconnect"
         );
         assert_eq!(
             update_install_instruction(MISE_UPDATE_COMMAND),
-            "detach, run `mise upgrade herdr`, then run Herdr again to reconnect"
+            "detach, run `mise upgrade hicodeer-agent`, then run HiCodeer again to reconnect"
         );
     }
 
@@ -2993,7 +3009,7 @@ mod tests {
 
     #[test]
     fn running_inside_herdr_env_requires_marker() {
-        assert!(running_inside_herdr_env(Some(crate::HERDR_ENV_VALUE)));
+        assert!(running_inside_herdr_env(Some(crate::HICODEER_AGENT_ENV_VALUE)));
         assert!(!running_inside_herdr_env(None));
         assert!(!running_inside_herdr_env(Some("0")));
     }
@@ -3111,8 +3127,8 @@ mod tests {
             target: RunningUpdateTarget {
                 name: Some("work".to_string()),
                 label: "work".to_string(),
-                stop_command: "herdr session stop work".to_string(),
-                attach_command: Some("herdr session attach work".to_string()),
+                stop_command: "hicodeer-agent session stop work".to_string(),
+                attach_command: Some("hicodeer-agent session attach work".to_string()),
                 socket_path: crate::session::api_socket_path_for(Some("work")),
                 client_socket_path: crate::session::client_socket_path_for(Some("work")),
                 must_be_running: true,
@@ -3182,11 +3198,11 @@ mod tests {
     fn explicit_session_update_targets_only_that_session() {
         let _guard = env_lock().lock().unwrap();
         let config_home = set_test_config_home("explicit-session");
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/ignored-herdr.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/ignored-hicodeer.sock");
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
         let args = vec![
-            "herdr".to_string(),
+            "hicodeer-agent".to_string(),
             "--session".to_string(),
             "work".to_string(),
             "update".to_string(),
@@ -3211,7 +3227,7 @@ mod tests {
     #[test]
     fn socket_override_update_targets_socket_not_env_session() {
         let _guard = env_lock().lock().unwrap();
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/custom-herdr.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/custom-hicodeer.sock");
         std::env::set_var(crate::session::SESSION_ENV_VAR, "work");
         crate::session::clear_explicit_session_for_test();
 
@@ -3225,7 +3241,7 @@ mod tests {
         assert_eq!(targets[0].name, None);
         assert_eq!(
             targets[0].socket_path,
-            PathBuf::from("/tmp/custom-herdr.sock")
+            PathBuf::from("/tmp/custom-hicodeer.sock")
         );
         assert!(targets[0]
             .stop_command
@@ -3255,7 +3271,7 @@ mod tests {
             "unexpected error: {err}"
         );
         assert!(
-            err.contains("herdr session stop work"),
+            err.contains("hicodeer-agent session stop work"),
             "unexpected error: {err}"
         );
     }
@@ -3326,7 +3342,7 @@ mod tests {
             target_endpoint_generation: Some(
                 crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
             ),
-            download_url: "https://example.com/herdr".to_string(),
+            download_url: "https://example.com/hicodeer-agent".to_string(),
             sha256: None,
             notes_body: "### Changed\n- One".to_string(),
         };
@@ -3334,8 +3350,8 @@ mod tests {
             target: RunningUpdateTarget {
                 name: Some("work".to_string()),
                 label: "work".to_string(),
-                stop_command: "herdr session stop work".to_string(),
-                attach_command: Some("herdr session attach work".to_string()),
+                stop_command: "hicodeer-agent session stop work".to_string(),
+                attach_command: Some("hicodeer-agent session attach work".to_string()),
                 socket_path: crate::session::api_socket_path_for(Some("work")),
                 client_socket_path: crate::session::client_socket_path_for(Some("work")),
                 must_be_running: true,
@@ -3370,8 +3386,8 @@ mod tests {
             target: RunningUpdateTarget {
                 name: Some("work".to_string()),
                 label: "work".to_string(),
-                stop_command: "herdr session stop work".to_string(),
-                attach_command: Some("herdr session attach work".to_string()),
+                stop_command: "hicodeer-agent session stop work".to_string(),
+                attach_command: Some("hicodeer-agent session attach work".to_string()),
                 socket_path: crate::session::api_socket_path_for(Some("work")),
                 client_socket_path: crate::session::client_socket_path_for(Some("work")),
                 must_be_running: true,
@@ -3493,7 +3509,7 @@ mod tests {
                 .unwrap();
             let value: serde_json::Value = serde_json::from_str(&request).unwrap();
             assert_eq!(value["method"], "server.live_handoff");
-            assert_eq!(value["params"]["import_exe"], "/tmp/herdr-new");
+            assert_eq!(value["params"]["import_exe"], "/tmp/hicodeer-new");
             assert_eq!(value["params"]["expected_protocol"], 77);
             assert_eq!(value["params"]["expected_version"], "9.8.7");
             stream
@@ -3511,7 +3527,7 @@ mod tests {
             target_endpoint_generation: Some(
                 crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
             ),
-            download_url: "https://example.com/herdr".to_string(),
+            download_url: "https://example.com/hicodeer-agent".to_string(),
             sha256: None,
             notes_body: "### Changed\n- One".to_string(),
         };
@@ -3519,7 +3535,7 @@ mod tests {
         let result = live_handoff_server_via_api_for_release_at(
             &socket_path,
             Duration::from_millis(200),
-            Path::new("/tmp/herdr-new"),
+            Path::new("/tmp/hicodeer-new"),
             &release,
         );
         let _ = handle.join();
@@ -3629,8 +3645,8 @@ mod tests {
                 \"body\": \"### Heads up\\n- Defaults changed\"\n\
             },\n\
             \"assets\": {\n\
-                \"linux-x86_64\": \"https://example.com/herdr-linux-x86_64\",\n\
-                \"macos-aarch64\": \"https://example.com/herdr-macos-aarch64\"\n\
+                \"linux-x86_64\": \"https://example.com/hicodeer-linux-x86_64\",\n\
+                \"macos-aarch64\": \"https://example.com/hicodeer-macos-aarch64\"\n\
             }\n\
         }";
         let manifest: UpdateManifest = serde_json::from_str(json).unwrap();
@@ -3655,7 +3671,7 @@ mod tests {
         );
         assert_eq!(
             manifest.download_url_for("linux", "x86_64").as_deref(),
-            Some("https://example.com/herdr-linux-x86_64")
+            Some("https://example.com/hicodeer-linux-x86_64")
         );
     }
 
@@ -3762,7 +3778,7 @@ mod tests {
         let json = r#"{
             "version": "0.2.0",
             "assets": {
-                "linux-x86_64": "https://example.com/herdr-linux-x86_64"
+                "linux-x86_64": "https://example.com/hicodeer-linux-x86_64"
             }
         }"#;
 
@@ -3778,7 +3794,7 @@ mod tests {
                 "version": "99.99.99",
                 "notes": "### Changed\n- One",
                 "assets": {{
-                    "{asset_key}": "https://example.com/herdr"
+                    "{asset_key}": "https://example.com/hicodeer-agent"
                 }}
             }}"####
         );
@@ -3805,7 +3821,7 @@ mod tests {
                 }},
                 "assets": {{
                     "{asset_key}": {{
-                        "url": "https://example.com/herdr",
+                        "url": "https://example.com/hicodeer-agent",
                         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     }}
                 }}
@@ -3819,7 +3835,7 @@ mod tests {
             .expect("release info");
 
         assert_eq!(release.version, Version::parse("99.99.99").unwrap());
-        assert_eq!(release.download_url, "https://example.com/herdr");
+        assert_eq!(release.download_url, "https://example.com/hicodeer-agent");
     }
 
     #[test]
@@ -3853,7 +3869,7 @@ mod tests {
                 "notes": "### Fixed\n- One",
                 "assets": {{
                     "{asset_key}": {{
-                        "url": "https://example.com/herdr-linux-x86_64",
+                        "url": "https://example.com/hicodeer-linux-x86_64",
                         "sha256": "deadbeef"
                     }}
                 }},
@@ -3865,7 +3881,7 @@ mod tests {
                         "protocol": 77,
                         "assets": {{
                             "{asset_key}": {{
-                                "url": "https://example.com/herdr-linux_x86_64",
+                                "url": "https://example.com/hicodeer-linux_x86_64",
                                 "sha256": "deadbeef"
                             }}
                         }}
@@ -3908,7 +3924,7 @@ mod tests {
         ));
 
         let with_windows: UpdateManifest = serde_json::from_str(
-            r#"{"version":"9.9.9","notes":"notes","assets":{"windows-x86_64":"https://example.com/herdr-windows-x86_64.zip"},"announcement":null}"#,
+            r#"{"version":"9.9.9","notes":"notes","assets":{"windows-x86_64":"https://example.com/hicodeer-windows-x86_64.zip"},"announcement":null}"#,
         )
         .unwrap();
         assert!(!first_windows_stable_is_pending(&with_windows, true, true));
@@ -3962,13 +3978,13 @@ mod tests {
                 "unexpected release URL for {target}: {url}"
             );
             assert!(
-                url.ends_with(&format!("herdr-{target}")),
+                url.ends_with(&format!("hicodeer-{target}")),
                 "unexpected asset name for {target}: {url}"
             );
         }
 
         if let Some(windows) = manifest.assets.get("windows-x86_64") {
-            assert!(windows.url.ends_with("/herdr-windows-x86_64.zip"));
+            assert!(windows.url.ends_with("/hicodeer-windows-x86_64.zip"));
             assert_eq!(
                 manifest.sha256.get("windows-x86_64").map(String::len),
                 Some(64),
@@ -3999,14 +4015,14 @@ mod tests {
                     "unexpected release URL for {version} {target}: {url}"
                 );
                 assert!(
-                    url.ends_with(&format!("herdr-{target}")),
+                    url.ends_with(&format!("hicodeer-{target}")),
                     "unexpected asset name for {version} {target}: {url}"
                 );
             }
             if let Some(windows) = assets.get("windows-x86_64") {
                 let windows: AssetRef = serde_json::from_value(windows.clone())
                     .unwrap_or_else(|_| panic!("invalid Windows asset for release {version}"));
-                assert!(windows.url.ends_with("/herdr-windows-x86_64.zip"));
+                assert!(windows.url.ends_with("/hicodeer-windows-x86_64.zip"));
                 let checksums = release
                     .get("sha256")
                     .and_then(serde_json::Value::as_object)

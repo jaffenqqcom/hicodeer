@@ -5,8 +5,6 @@ edition = "2021"
 build = "build.rs"
 description = "terminal workspace manager for AI coding agents"
 license = "Apache-2.0"
-repository = "https://github.com/herdrdev/herdr"
-homepage = "https://herdr.dev"
 keywords = ["terminal", "tui", "ai", "agents", "multiplexer"]
 categories = ["command-line-utilities"]
 include = [
@@ -21,11 +19,11 @@ include = [
 ]
 
 [lib]
-name = "herdr"
+name = "hicodeer_agent"
 path = "src/lib.rs"
 
 [[bin]]
-name = "herdr"
+name = "hicodeer-agent"
 path = "src/main.rs"
 
 [workspace]

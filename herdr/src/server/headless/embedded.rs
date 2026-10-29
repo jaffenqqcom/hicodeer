@@ -49,7 +49,7 @@ pub fn build() -> io::Result<EmbeddedServer> {
     info!(
         api_socket = %api::socket_path().display(),
         client_socket = %client_socket_path().display(),
-        "herdr server built for embedding"
+        "hicodeer-agent server built for embedding"
     );
 
     Ok(EmbeddedServer { server })

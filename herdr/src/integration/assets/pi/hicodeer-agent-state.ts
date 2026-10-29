@@ -1,22 +1,22 @@
 // installed by HiCodeer
-// managed by herdr; reinstalling or updating the integration overwrites this file.
+// managed by HiCodeer; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
-// HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=10
+// HICODEER_AGENT_INTEGRATION_ID=pi
+// HICODEER_AGENT_INTEGRATION_VERSION=11
 // @ts-nocheck
 
 import net from "node:net";
 import path from "node:path";
 
-const HERDR_ENV = process.env.HERDR_ENV;
+const HICODEER_AGENT_ENV = process.env.HICODEER_AGENT_ENV;
 const socketPath = process.env.HICODEER_AGENT_SOCKET_PATH;
 const socketEndpoint =
   process.platform === "win32" && socketPath ? `\\\\.\\pipe\\${socketPath}` : socketPath;
-const paneId = process.env.HERDR_PANE_ID;
-const source = "herdr:pi";
+const paneId = process.env.HICODEER_AGENT_PANE_ID;
+const source = "hicodeer:pi";
 
 function enabled() {
-  return HERDR_ENV === "1" && !!socketPath && !!paneId;
+  return HICODEER_AGENT_ENV === "1" && !!socketPath && !!paneId;
 }
 
 function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolean> {
@@ -208,7 +208,7 @@ export default function (pi) {
     queueState(next.state, next.message);
   }
 
-  pi.events.on("herdr:blocked", (data) => {
+  pi.events.on("hicodeer:blocked", (data) => {
     if (!rootSession) {
       return;
     }
@@ -227,7 +227,7 @@ export default function (pi) {
   });
 
   pi.on("session_start", async (event, ctx) => {
-    // TUI only: RPC/JSON/print modes are headless (no PTY herdr can display),
+    // TUI only: RPC/JSON/print modes are headless (no PTY HiCodeer can display),
     // and RPC still reports hasUI=true, so mode is the reliable gate.
     if (ctx?.mode !== "tui") {
       return;

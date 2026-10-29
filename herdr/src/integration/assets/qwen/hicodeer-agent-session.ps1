@@ -1,14 +1,14 @@
 # installed by HiCodeer
-# managed by herdr; reinstalling or updating the integration overwrites this file.
+# managed by HiCodeer; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
-# HERDR_INTEGRATION_ID=qwen
-# HERDR_INTEGRATION_VERSION=3
+# HICODEER_AGENT_INTEGRATION_ID=qwen
+# HICODEER_AGENT_INTEGRATION_VERSION=7
 
 param([string]$Action = "")
 
 if ($Action -ne "session") { exit 0 }
-if ($env:HERDR_ENV -ne "1") { exit 0 }
-if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { exit 0 }
+if ($env:HICODEER_AGENT_ENV -ne "1") { exit 0 }
+if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_PANE_ID)) { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_SOCKET_PATH)) { exit 0 }
 
 # Read hook input as raw bytes so UTF-8 payloads decode correctly even when the
@@ -24,10 +24,10 @@ try {
 if ($null -eq $payload -or [string]::IsNullOrWhiteSpace($payload.session_id)) { exit 0 }
 
 $seq = [DateTime]::UtcNow.Ticks
-$herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
+$agentBin = if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_BIN_PATH)) { "hicodeer-agent" } else { $env:HICODEER_AGENT_BIN_PATH }
 $commandArgs = @(
-    "pane", "report-agent-session", $env:HERDR_PANE_ID,
-    "--source", "herdr:qwen", "--agent", "qwen",
+    "pane", "report-agent-session", $env:HICODEER_AGENT_PANE_ID,
+    "--source", "hicodeer:qwen", "--agent", "qwen",
     "--agent-session-id", [string]$payload.session_id,
     "--seq", [string]$seq
 )
@@ -35,6 +35,6 @@ if ($payload.source -in @("startup", "resume", "clear", "compact", "branch")) {
     $commandArgs += @("--session-start-source", [string]$payload.source)
 }
 try {
-    & $herdr @commandArgs 2>$null | Out-Null
+    & $agentBin @commandArgs 2>$null | Out-Null
 } catch {
 }

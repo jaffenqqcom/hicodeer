@@ -837,22 +837,22 @@ mod tests {
         use std::os::windows::ffi::OsStringExt;
 
         let root = std::env::temp_dir().join(format!(
-            "herdr-portable-pty-search-path-{}",
+            "hicodeer-portable-pty-search-path-{}",
             std::process::id()
         ));
         let shadow_dir = root.join("shadow");
         let real_dir = root.join("real");
-        std::fs::create_dir_all(shadow_dir.join("herdrprobe")).expect("create shadow directory");
-        std::fs::create_dir_all(shadow_dir.join("herdrprobe.EXE"))
+        std::fs::create_dir_all(shadow_dir.join("hicodeerprobe")).expect("create shadow directory");
+        std::fs::create_dir_all(shadow_dir.join("hicodeerprobe.EXE"))
             .expect("create shadow extension directory");
         std::fs::create_dir_all(&real_dir).expect("create real directory");
         let source = std::path::PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"))
             .join("System32")
             .join("where.exe");
-        let executable = real_dir.join("herdrprobe.exe");
+        let executable = real_dir.join("hicodeerprobe.exe");
         std::fs::copy(&source, &executable).expect("copy probe executable");
 
-        let mut cmd = CommandBuilder::new("herdrprobe");
+        let mut cmd = CommandBuilder::new("hicodeerprobe");
         cmd.env(
             "PATH",
             std::env::join_paths([&shadow_dir, &real_dir]).expect("join PATH"),

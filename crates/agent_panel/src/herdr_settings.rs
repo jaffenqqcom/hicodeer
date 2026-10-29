@@ -729,6 +729,8 @@ mod tests {
 
         let defaults = parse_settings("[ui]\nsidebar_width = 26\n");
         assert!(defaults.sound_enabled);
-        assert_eq!(defaults.toast, ToastDelivery::Off);
+        // Both switches read as on until the user turns them off, so a file
+        // that never names the key keeps the editor's own notifications.
+        assert_eq!(defaults.toast, ToastDelivery::System);
     }
 }

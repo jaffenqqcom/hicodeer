@@ -88,6 +88,22 @@ pub(crate) fn rename_space(workspace_id: &str, label: &str) -> Result<(), Client
     Ok(())
 }
 
+/// Renames one agent, addressed by its public pane id.
+///
+/// The name is the agent's own row label, not its kind: the server stores it on
+/// the terminal, so the other agents keep the names they were given. It is
+/// persisted with the server's session snapshot, which is what keeps a renamed
+/// agent named across an app restart, a daemon restart, or both.
+pub(crate) fn rename_agent(pane_id: &str, name: &str) -> Result<(), ClientError> {
+    let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
+    call(
+        &control,
+        "agent.rename",
+        json!({ "target": pane_id, "name": name }),
+    )?;
+    Ok(())
+}
+
 /// Closes one space.
 pub(crate) fn close_space(workspace_id: &str) -> Result<(), ClientError> {
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;

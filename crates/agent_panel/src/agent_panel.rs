@@ -348,6 +348,13 @@ pub struct AgentPanel {
     renaming: Option<RenameTarget>,
     rename_editor: Option<Entity<Editor>>,
     rename_subscription: Option<Subscription>,
+    /// Agent row whose name is being edited in place, as its public pane id.
+    agent_renaming: Option<String>,
+    agent_rename_editor: Option<Entity<Editor>>,
+    agent_rename_subscription: Option<Subscription>,
+    /// The name the agent row carried when its rename began, kept so the
+    /// session title's existing prefix can be replaced instead of stacked.
+    agent_rename_previous_name: Option<String>,
     _settings_subscription: Subscription,
     _refresh: Task<()>,
     /// Last state the server reported for each agent, keyed by its public pane
@@ -454,6 +461,10 @@ impl AgentPanel {
             renaming: None,
             rename_editor: None,
             rename_subscription: None,
+            agent_renaming: None,
+            agent_rename_editor: None,
+            agent_rename_subscription: None,
+            agent_rename_previous_name: None,
             _settings_subscription: cx.observe_global::<SettingsStore>(|_, cx| cx.notify()),
             _refresh: refresh,
             #[cfg(target_env = "ohos")]
@@ -1019,6 +1030,165 @@ impl AgentPanel {
         .detach();
     }
 
+    /// Starts editing one agent's name in place. The editor is created here
+    /// rather than in `render` so the row can draw it and route its confirm and
+    /// cancel actions to `finish_agent_rename`.
+    fn begin_agent_rename(&mut self, pane_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(agent) = self.agent_row(pane_id) else {
+            return;
+        };
+        // The editor starts from the server's name, not from the capitalised
+        // label the row draws, so confirming without typing is a no-op.
+        let previous_name = client::display_name(&agent.pane_id, &agent.name).to_owned();
+
+        let editor = cx.new(|cx| Editor::single_line(window, cx));
+        let subscription = cx.subscribe_in(&editor, window, {
+            let editor = editor.clone();
+            move |_this, _, event, window, cx| {
+                if let editor::EditorEvent::Blurred = event {
+                    // Focus moves while the click that caused it settles; check
+                    // on the next turn rather than cancelling mid-gesture.
+                    let editor = editor.clone();
+                    cx.defer_in(window, move |this, window, cx| {
+                        let still_current = this
+                            .agent_rename_editor
+                            .as_ref()
+                            .is_some_and(|current| current == &editor);
+                        if still_current && !editor.focus_handle(cx).is_focused(window) {
+                            this.finish_agent_rename(false, window, cx);
+                        }
+                    });
+                }
+            }
+        });
+
+        self.agent_renaming = Some(pane_id.to_owned());
+        self.agent_rename_editor = Some(editor.clone());
+        self.agent_rename_subscription = Some(subscription);
+        self.agent_rename_previous_name = Some(previous_name.clone());
+
+        editor.update(cx, |editor, cx| {
+            editor.set_text(previous_name, window, cx);
+            editor.select_all(&SelectAll, window, cx);
+            editor.focus_handle(cx).focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    /// Ends the in-place agent rename, asking the server for the new name when
+    /// asked to save it.
+    fn finish_agent_rename(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.agent_rename_editor.take() else {
+            return;
+        };
+        self.agent_rename_subscription = None;
+        let Some(pane_id) = self.agent_renaming.take() else {
+            return;
+        };
+        let previous_name = self.agent_rename_previous_name.take().unwrap_or_default();
+
+        if save {
+            let name = editor.read(cx).text(cx).trim().to_string();
+            // An empty name would erase the row's label; the server treats that
+            // as "no change" through `--clear`, which this path never sends.
+            if !name.is_empty() && name != previous_name {
+                self.rename_agent(pane_id, previous_name, name, cx);
+            }
+        }
+        cx.notify();
+        self.focus_handle.focus(window, cx);
+    }
+
+    fn rename_agent(
+        &self,
+        pane_id: String,
+        previous_name: String,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let request_pane = pane_id.clone();
+            let request_name = name.clone();
+            let renamed = cx
+                .background_spawn(async move { client::rename_agent(&request_pane, &request_name) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match renamed {
+                    Ok(()) => this.apply_agent_rename(&pane_id, &previous_name, &name, cx),
+                    Err(err) => {
+                        log::warn!("agent panel: renaming an agent failed: {err}");
+                        let message = agent_rename_failure_message(&err);
+                        this.show_history_toast(&message, None, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Applies a rename the server accepted: the row's label changes now rather
+    /// than on the next status poll, and the session this agent is showing
+    /// takes the new name as a title prefix.
+    fn apply_agent_rename(
+        &mut self,
+        pane_id: &str,
+        previous_name: &str,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let mut session = None;
+        for space in &mut self.spaces {
+            if let Some(agent) = space.agents.iter_mut().find(|agent| agent.pane_id == pane_id) {
+                agent.name = name.to_owned();
+                session = agent.agent_session.clone();
+            }
+        }
+        if let Some((agent, session_id)) = session {
+            self.prefix_open_session_title(&agent, &session_id, previous_name, name);
+        }
+        cx.notify();
+    }
+
+    /// Rewrites the title of the session an agent is showing to
+    /// `{agent name}:{original title}`.
+    ///
+    /// The prefix already on the title belongs to the name this agent had
+    /// before, so it is replaced rather than stacked: renaming twice leaves one
+    /// prefix. A session with no name from its own store keeps none here; there
+    /// is nothing to put after the colon.
+    fn prefix_open_session_title(
+        &mut self,
+        agent: &str,
+        session_id: &str,
+        previous_name: &str,
+        name: &str,
+    ) {
+        let key = SessionKey::new(agent, session_id);
+        let scanned_title = self
+            .last_sessions
+            .iter()
+            .find(|session| session.agent == key.agent && session.session_id == key.session_id)
+            .and_then(|session| session.title.clone());
+        let Some(current) = self.session_service.title_override_of(&key).or(scanned_title) else {
+            return;
+        };
+        let title = title_with_agent_prefix(&current, previous_name, name);
+        if let Err(err) = self.session_service.rename(&key, Some(title)) {
+            log::error!("agent panel: cannot rename the open session: {err}");
+            return;
+        }
+        self.rebuild_history();
+    }
+
+    /// The agent drawn in one pane, if the last snapshot has it.
+    fn agent_row(&self, pane_id: &str) -> Option<&Agent> {
+        self.spaces
+            .iter()
+            .flat_map(|space| space.agents.iter())
+            .find(|agent| agent.pane_id == pane_id)
+    }
+
     /// One space: its status marker and name. A space row is the container for
     /// its agents, so it never carries the selection highlight itself.
     ///
@@ -1173,6 +1343,9 @@ impl AgentPanel {
 
     /// One agent, drawn one level under the space it works in. Only this row
     /// carries the selection highlight: the space above it is a heading.
+    ///
+    /// The row renames in place the way a space and a history row do: the
+    /// pencil on the right opens an editor over the label.
     fn render_agent_row(&self, agent: &Agent, cx: &mut Context<Self>) -> AnyElement {
         let pane_id = agent.pane_id.clone();
         // A claimed row owns the highlight, so the one that was lit from the
@@ -1183,49 +1356,143 @@ impl AgentPanel {
         };
         let panel = cx.entity();
         let (marker, marker_color) = status_marker(agent.status);
+        let renaming = self.agent_renaming.as_deref() == Some(agent.pane_id.as_str());
+        let editor = if renaming {
+            self.agent_rename_editor.clone()
+        } else {
+            None
+        };
 
-        row_container(
-            ElementId::Name(SharedString::from(format!("agent-row-{}", agent.id))),
-            AGENT_INDENT,
-            focused,
-            cx,
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1p5()
-                // The bell sits at the row's leading edge, before the state
-                // marker, so the eye lands on it before reading the row.
-                .when(self.agent_needs_attention(&agent.pane_id), |this| {
-                    this.child(
-                        Icon::new(IconName::BellRing)
-                            .size(IconSize::Small)
-                            .color(Color::Warning),
-                    )
-                })
-                .child(status_slot(marker, marker_color))
-                .when(!agent.kind.is_empty(), |this| {
-                    this.child(
-                        Icon::new(agent_display::agent_icon(&agent.kind))
-                            .size(IconSize::Small)
-                            .color(Color::Muted),
-                    )
-                })
+        let title: AnyElement = if let Some(editor) = editor {
+            let confirm_panel = panel.clone();
+            let cancel_panel = panel.clone();
+            div()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "agent-rename-{}",
+                    agent.pane_id
+                ))))
+                .relative()
+                .flex_1()
+                .h_6()
+                // Clicking into the editor must not also count as clicking the
+                // row, which would focus the agent.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
-                    h_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .h_6()
-                        .child(Label::new(agent_display::capitalize(client::display_name(
-                            &agent.pane_id,
-                            &agent.name,
-                        )))),
-                ),
-        )
-        .on_click(move |_, window, cx| {
-            let _ = panel.update(cx, |panel, cx| panel.focus_agent(pane_id.clone(), window, cx));
-        })
-        .into_any_element()
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(editor)
+                        .on_action(move |_: &menu::Confirm, window, cx| {
+                            let _ = confirm_panel.update(cx, |panel, cx| {
+                                panel.finish_agent_rename(true, window, cx)
+                            });
+                        })
+                        .on_action(move |_: &menu::Cancel, window, cx| {
+                            let _ = cancel_panel.update(cx, |panel, cx| {
+                                panel.finish_agent_rename(false, window, cx)
+                            });
+                        }),
+                )
+                .into_any_element()
+        } else {
+            // An agent name is user-written, so it can outgrow the panel. The
+            // row keeps one line and truncates with an ellipsis; the hover card
+            // carries the full name, the same way a history row carries a long
+            // session title. The rename editor starts from this same string, so
+            // a name the user wrote is shown exactly as stored and confirming
+            // without typing changes nothing.
+            let display_name = client::display_name(&agent.pane_id, &agent.name).to_owned();
+            h_flex()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "agent-title-{}",
+                    agent.id
+                ))))
+                .flex_1()
+                .min_w_0()
+                .h_6()
+                .child(
+                    Label::new(display_name.clone())
+                        .single_line()
+                        .truncate(),
+                )
+                .tooltip(Tooltip::text(display_name))
+                .into_any_element()
+        };
+
+        let row_id = SharedString::from(format!("agent-row-{}", agent.id));
+        let rename_panel = panel.clone();
+        row_container(ElementId::Name(row_id.clone()), AGENT_INDENT, focused, cx)
+            .group(row_id.clone())
+            .child(
+                h_flex()
+                    .relative()
+                    .w_full()
+                    .gap_1p5()
+                    // The bell sits at the row's leading edge, before the state
+                    // marker, so the eye lands on it before reading the row.
+                    .when(self.agent_needs_attention(&agent.pane_id), |this| {
+                        this.child(
+                            Icon::new(IconName::BellRing)
+                                .size(IconSize::Small)
+                                .color(Color::Warning),
+                        )
+                    })
+                    .child(status_slot(marker, marker_color))
+                    .when(!agent.kind.is_empty(), |this| {
+                        this.child(
+                            Icon::new(agent_display::agent_icon(&agent.kind))
+                                .size(IconSize::Small)
+                                .color(Color::Muted),
+                        )
+                    })
+                    .child(title)
+                    .when(!renaming, |this| {
+                        this.child(
+                            h_flex()
+                                .absolute()
+                                .right_0()
+                                .top_0()
+                                .bottom_0()
+                                .items_center()
+                                .px_1()
+                                .bg(cx.theme().colors().ghost_element_hover)
+                                .visible_on_hover(row_id.clone())
+                                .child(
+                                    IconButton::new(
+                                        ElementId::Name(SharedString::from(format!(
+                                            "agent-rename-button-{}",
+                                            agent.pane_id
+                                        ))),
+                                        IconName::Pencil,
+                                    )
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(move |_, cx| {
+                                        Tooltip::simple(
+                                            localization::localized_str!("Rename"),
+                                            cx,
+                                        )
+                                    })
+                                    .on_click({
+                                        let panel = rename_panel;
+                                        let target = agent.pane_id.clone();
+                                        move |_, window, cx| {
+                                            let _ = panel.update(cx, |panel, cx| {
+                                                panel.begin_agent_rename(&target, window, cx);
+                                            });
+                                        }
+                                    }),
+                                ),
+                        )
+                    }),
+            )
+            .on_click(move |_, window, cx| {
+                let _ = panel.update(cx, |panel, cx| panel.focus_agent(pane_id.clone(), window, cx));
+            })
+            .into_any_element()
     }
 
     /// Whether this agent's row should wear the attention bell.
@@ -2364,6 +2631,44 @@ fn log_client_error(action: &str, err: ClientError) {
     log::warn!("agent panel: {action} failed: {reason}");
 }
 
+/// The title an open session takes when its agent is renamed.
+///
+/// The prefix already on the title belongs to the agent's previous name, so it
+/// is replaced rather than stacked: renaming twice leaves one prefix. A title
+/// the user wrote without one is kept whole behind the new prefix.
+fn title_with_agent_prefix(current: &str, previous_name: &str, name: &str) -> String {
+    let previous_prefix = format!("{previous_name}:");
+    let base = current.strip_prefix(&previous_prefix).unwrap_or(current);
+    format!("{name}:{base}")
+}
+
+/// A rename failure the user can act on.
+///
+/// The server answers with a structured error code; printing its raw body puts
+/// a JSON object in a toast. The codes a rename can produce get a sentence, and
+/// anything else keeps the server's text for a bug report.
+fn agent_rename_failure_message(error: &ClientError) -> String {
+    let ClientError::Failed(message) = error else {
+        return localization::localized_str!("Failed to rename agent").to_owned();
+    };
+    if message.contains("invalid_agent_name") {
+        localization::localized_str!(
+            "A name can only contain letters, digits, spaces, '-' and '_'"
+        )
+        .to_owned()
+    } else if message.contains("agent_launch_pending") {
+        localization::localized_str!("The agent is still starting; try again in a moment")
+            .to_owned()
+    } else if message.contains("agent_not_found") {
+        localization::localized_str!("That agent is no longer running").to_owned()
+    } else {
+        format!(
+            "{}: {message}",
+            localization::localized_str!("Failed to rename agent")
+        )
+    }
+}
+
 /// The marker drawn before a row, in the same slot the sidebar uses for a
 /// thread's icon.
 ///
@@ -2610,5 +2915,30 @@ impl Panel for AgentPanel {
 
     fn activation_priority(&self) -> u32 {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::title_with_agent_prefix;
+
+    /// The prefix belongs to the agent's previous name, so a second rename
+    /// replaces it instead of stacking a third one in front.
+    #[test]
+    fn a_rename_replaces_the_previous_prefix() {
+        assert_eq!(
+            title_with_agent_prefix("修复登录", "codebuddy-1", "总指挥"),
+            "总指挥:修复登录"
+        );
+        assert_eq!(
+            title_with_agent_prefix("总指挥:修复登录", "总指挥", "开发"),
+            "开发:修复登录"
+        );
+        // A title the user renamed by hand carries no agent prefix, so it is
+        // kept whole behind the new one.
+        assert_eq!(
+            title_with_agent_prefix("我手动起的名字", "总指挥", "开发"),
+            "开发:我手动起的名字"
+        );
     }
 }

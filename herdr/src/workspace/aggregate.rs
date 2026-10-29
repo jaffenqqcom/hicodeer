@@ -30,7 +30,13 @@ impl Tab {
                 let pane = self.panes.get(id)?;
                 let terminal = terminals.get(&pane.attached_terminal_id)?;
                 let agent_kind_label = terminal.effective_agent_label().map(str::to_string);
-                if terminal.agent_name.is_none() && agent_kind_label.is_none() {
+                // The same rule the panel applies: a name labels a row, it does
+                // not prove an agent is running. A restored pane keeps its name
+                // while it is only a shell, and must not be listed as an agent
+                // until one is observed there again. `agent_kind_label` already
+                // holds that observation, so this reuses it rather than asking
+                // the terminal twice.
+                if agent_kind_label.is_none() && !terminal.managed_agent_launch_pending() {
                     return None;
                 }
                 Some(PaneDetail {

@@ -606,6 +606,13 @@ fn restore_tab(
                 (Some(agent_name), Some(agent)) => {
                     terminal.restore_managed_agent(agent_name, agent)
                 }
+                // A name belongs to the session it was given to, so it comes
+                // back only when the snapshot also carries that session.
+                // Without one the name would label nothing and later stick to
+                // whatever agent runs in this pane next.
+                (Some(agent_name), None) if saved_agent_session.is_some() => {
+                    terminal.set_agent_name(agent_name)
+                }
                 (Some(_), None) => {}
                 (None, _) => {}
             }
@@ -706,8 +713,14 @@ fn restore_tab(
                     (Some(agent_name), Some(agent)) if was_imported => {
                         terminal.restore_managed_agent(agent_name, agent)
                     }
-                    (Some(_), Some(_)) => {}
-                    (Some(agent_name), None) if was_imported => terminal.set_agent_name(agent_name),
+                    // The name follows the session it was given to, so a
+                    // managed agent keeps it here too. Only the launch
+                    // identity differs on this path, which the observed state
+                    // below re-establishes.
+                    (Some(agent_name), Some(_)) => terminal.set_agent_name(agent_name),
+                    (Some(agent_name), None) if saved_agent_session.is_some() => {
+                        terminal.set_agent_name(agent_name)
+                    }
                     (Some(_), None) => {}
                     (None, _) => {}
                 }
@@ -1592,7 +1605,9 @@ mod tests {
             !terminal.respawn_shell_on_exit,
             "agent sessions should not use native restore lifecycle when resume_agents_on_restore is disabled"
         );
-        assert_eq!(terminal.agent_name, None);
+        // The session survives, and so does the name that belongs to it: the
+        // pane is a shell again, but resuming that session brings the name back.
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
         assert_eq!(terminal.manual_label.as_deref(), Some("reviewer"));
         let session = terminal
             .persisted_agent_session
@@ -1689,7 +1704,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cold_restore_with_gapped_public_tab_numbers_drops_unmanaged_agent_name() {
+    async fn cold_restore_with_gapped_public_tab_numbers_keeps_unmanaged_agent_name() {
         let cwd = std::env::current_dir().unwrap();
         let pane_snap = |id: &str| {
             (
@@ -1793,7 +1808,12 @@ mod tests {
         assert_eq!(workspace.tabs[3].number, 5);
         let agent_pane = workspace.tabs[3].root_pane;
         let terminal_id = &workspace.tabs[3].panes[&agent_pane].attached_terminal_id;
-        assert!(terminals[terminal_id].agent_name.is_none());
+        // The name survives the restart even though the pane comes back as a
+        // shell: it labels the row, it does not claim an agent is running.
+        assert_eq!(
+            terminals[terminal_id].agent_name.as_deref(),
+            Some("planner")
+        );
         assert_eq!(terminals[terminal_id].managed_agent_kind(), None);
         assert!(workspace
             .pane_details(&terminals)

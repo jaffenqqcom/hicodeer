@@ -126,6 +126,15 @@ impl SessionService {
         self.save()
     }
 
+    /// The title the user set for one session, if any. Read-only, so asking
+    /// about a session the user never renamed leaves no entry behind.
+    pub(crate) fn title_override_of(&self, key: &SessionKey) -> Option<String> {
+        self.state
+            .sessions
+            .get(&key.to_json_key())
+            .and_then(|entry| entry.title_override.clone())
+    }
+
     /// Builds the history view from one daemon scan plus the currently open
     /// sessions (as `(agent, session value)` pairs from `agents()`).
     ///
@@ -383,6 +392,24 @@ mod tests {
         );
         assert_eq!(view.pinned.len(), 1, "pin state must survive a reload");
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn title_override_reads_back_what_a_rename_wrote() {
+        let path = std::env::temp_dir().join(format!("herdr-hist-{}e.json", std::process::id()));
+        let mut service = SessionService::load(path.clone());
+        let key = SessionKey::new("claude", "c9");
+        assert_eq!(service.title_override_of(&key), None);
+
+        service
+            .rename(&key, Some("总指挥:修复登录".to_owned()))
+            .unwrap();
+
+        assert_eq!(
+            service.title_override_of(&key).as_deref(),
+            Some("总指挥:修复登录")
+        );
         let _ = std::fs::remove_file(path);
     }
 

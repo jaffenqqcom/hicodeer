@@ -10,7 +10,10 @@ pub(crate) const MAX_AGENT_START_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const AGENT_START_SETTLE_DELAY: Duration = Duration::from_secs(3);
 const INVALID_AGENT_TIMEOUT_MESSAGE: &str =
     "agent start timeout must be greater than 3000ms and at most 300000ms";
-const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (1-32 characters)";
+const INVALID_AGENT_NAME_MESSAGE: &str = "agent name must start with a letter and contain only letters, digits, spaces, '-' or '_' (1-32 characters)";
+/// Longest agent name, counted in characters rather than bytes so a name written
+/// in a multi-byte script gets the same budget as an ASCII one.
+const MAX_AGENT_NAME_CHARS: usize = 32;
 
 /// The one place an agent name is built. `taken` decides what uniqueness means
 /// for the caller, so the app and its state machine share the naming rule
@@ -50,11 +53,46 @@ pub(super) fn auto_agent_name_with(
     name
 }
 
+/// Whether a name can address an agent from the CLI and over the API.
+///
+/// A name starts with a letter and may then hold letters in any script (so a
+/// Chinese label works), digits, inner spaces, `-` and `_`. Everything else is
+/// rejected, which keeps whitespace from trailing a name, and keeps `:`, quotes
+/// and control characters out of a value that may be used as a target. Spaces
+/// mean a name typed into a shell needs quoting; the pane id never does.
 fn valid_agent_name(name: &str) -> bool {
+    if name.chars().count() > MAX_AGENT_NAME_CHARS {
+        return false;
+    }
     let mut chars = name.chars();
-    matches!(chars.next(), Some('a'..='z'))
-        && name.len() <= 32
-        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
+    match chars.next() {
+        Some(first) if first.is_alphabetic() => {}
+        _ => return false,
+    }
+    // A trailing space would be invisible in a target; the panel trims, but the
+    // server has to hold the same rule on its own.
+    if name.ends_with(' ') {
+        return false;
+    }
+    chars.all(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '_' | ' '))
+}
+
+/// Folds the wide spaces a keyboard or a paste produces into the ASCII space.
+///
+/// Chinese input methods insert U+3000 by default, and text copied from a web
+/// page can carry U+00A0 or a thin space. They all look like a space in a row,
+/// so they all mean one here. ASCII whitespace (tabs, newlines) is left alone
+/// for the grammar to reject.
+fn normalize_agent_name(name: &str) -> String {
+    name.chars()
+        .map(|character| {
+            if character.is_whitespace() && !character.is_ascii_whitespace() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 impl App {
@@ -171,20 +209,15 @@ impl App {
             .resolve_agent_target(target)
             .map_err(AgentRenameError::Target)?;
         let normalized_name = match name {
-            Some(name) if valid_agent_name(&name) => Some(name),
-            Some(_) => return Err(AgentRenameError::InvalidName),
+            Some(name) => {
+                let name = normalize_agent_name(&name);
+                if !valid_agent_name(&name) {
+                    return Err(AgentRenameError::InvalidName);
+                }
+                Some(name)
+            }
             None => None,
         };
-
-        if let Some(name) = normalized_name.as_deref() {
-            let conflicts = self.agent_name_conflicts(name, &resolved.terminal_id);
-            if !conflicts.is_empty() {
-                return Err(AgentRenameError::DuplicateName {
-                    name: name.to_string(),
-                    candidates: conflicts,
-                });
-            }
-        }
 
         let Some(terminal) = self
             .state
@@ -247,6 +280,7 @@ impl App {
         // the detection path uses for agents started from the command line.
         let name = match params.name {
             Some(name) => {
+                let name = normalize_agent_name(&name);
                 if !valid_agent_name(&name) {
                     return Err(AgentStartError::InvalidName);
                 }
@@ -459,25 +493,6 @@ impl App {
                 code: "agent_launch_pending".into(),
                 message: "agent name cannot change while startup is pending".into(),
             },
-            AgentRenameError::DuplicateName { name, candidates } => crate::api::schema::ErrorBody {
-                code: "agent_name_taken".into(),
-                message: format!(
-                    "agent name {name} is already used; candidates: {}",
-                    candidates
-                        .into_iter()
-                        .map(|candidate| format!(
-                            "terminal_id={} pane_id={} workspace_id={} tab_id={} cwd={} status={:?}",
-                            candidate.terminal_id,
-                            candidate.pane_id,
-                            candidate.workspace_id,
-                            candidate.tab_id,
-                            candidate.cwd.unwrap_or_else(|| "unknown".into()),
-                            candidate.agent_status,
-                        ))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-            },
         }
     }
 
@@ -646,15 +661,11 @@ pub(super) enum AgentRenameError {
     InvalidName,
     NotAgent,
     PendingLaunch,
-    DuplicateName {
-        name: String,
-        candidates: Vec<crate::api::schema::AgentInfo>,
-    },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{auto_agent_name_with, valid_agent_name};
+    use super::{MAX_AGENT_NAME_CHARS, auto_agent_name_with, normalize_agent_name, valid_agent_name};
 
     #[test]
     fn auto_agent_name_uses_space_kind_and_tab_number() {
@@ -702,19 +713,44 @@ mod tests {
     }
 
     #[test]
-    fn agent_names_use_a_small_cli_safe_grammar() {
-        for name in ["a", "reviewer-one", "reviewer_2", &"a".repeat(32)] {
+    fn a_wide_space_is_read_as_a_space() {
+        assert_eq!(normalize_agent_name("总\u{3000}指挥"), "总 指挥");
+        assert_eq!(normalize_agent_name("a\u{3000}\u{3000}b"), "a  b");
+        // NBSP and a thin space are what a paste from a web page tends to bring.
+        assert_eq!(normalize_agent_name("a\u{00a0}b"), "a b");
+        assert_eq!(normalize_agent_name("a\u{2009}b"), "a b");
+        // ASCII whitespace keeps its own identity so the grammar still rejects it.
+        assert_eq!(normalize_agent_name("a\tb"), "a\tb");
+        assert!(valid_agent_name(&normalize_agent_name("总\u{3000}指挥")));
+    }
+
+    #[test]
+    fn agent_names_accept_letters_in_any_script() {
+        for name in [
+            "a",
+            "reviewer-one",
+            "reviewer_2",
+            "Reviewer",
+            "reviewer one",
+            "QA lead",
+            "总指挥",
+            "总 指挥",
+            "开发-2",
+            &"a".repeat(MAX_AGENT_NAME_CHARS),
+            &"总".repeat(MAX_AGENT_NAME_CHARS),
+        ] {
             assert!(valid_agent_name(name), "expected {name:?} to be valid");
         }
         for name in [
             "",
             " reviewer",
             "reviewer ",
-            "reviewer one",
-            "Reviewer",
+            "reviewer\tone",
             "1reviewer",
+            "-reviewer",
             "reviewer.one",
-            &"a".repeat(33),
+            "总:指挥",
+            &"a".repeat(MAX_AGENT_NAME_CHARS + 1),
         ] {
             assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
         }

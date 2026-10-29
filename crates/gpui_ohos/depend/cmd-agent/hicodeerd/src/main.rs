@@ -95,10 +95,31 @@ const AGENT_SOCKET_ARGUMENT: &str = "--socket";
 /// Hidden subcommand: run the agent TUI client in the calling terminal against
 /// this daemon's embedded server. Not a listener mode; it exits with the TUI.
 const AGENT_TUI_SUBCOMMAND: &str = "agent-tui";
+/// Name the TUI client gives its own process. The client and the daemon are the
+/// same executable by design (the client is spawned from a terminal pane the
+/// daemon hosts), so without this `ps` lists two identical `hicodeerd` entries
+/// and there is no way to tell which one owns the panes.
+const AGENT_TUI_PROCESS_NAME: &str = "hicodeerd-tui";
+
+/// Renames the current process, so `ps` distinguishes the TUI client from the
+/// daemon it talks to. Keep this in the client only: the daemon's name is what
+/// scripts and `killall hicodeerd` rely on.
+fn set_process_name(name: &str) {
+    use std::ffi::CString;
+    let Ok(cname) = CString::new(name) else {
+        return;
+    };
+    // SAFETY: `cname` outlives the call. PR_SET_NAME copies at most 15 bytes
+    // into the task's comm and keeps no pointer to it.
+    unsafe {
+        libc::prctl(libc::PR_SET_NAME, cname.as_ptr(), 0, 0, 0);
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some(AGENT_TUI_SUBCOMMAND) {
+        set_process_name(AGENT_TUI_PROCESS_NAME);
         let Some(socket_path) = socket_path_argument(&args[1..]).map(str::to_string) else {
             // The socket path is the only link to the daemon: without it the
             // client would fall back to a default the application account

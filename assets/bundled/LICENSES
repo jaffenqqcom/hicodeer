@@ -1,0 +1,13 @@
+## [Mozilla CA certificate bundle](https://curl.se/docs/caextract.html)
+
+`resources/resfile/ca-bundle.crt` carries the root certificates curl distributes
+as `cacert.pem`, extracted from the Mozilla CA store (158 certificates at the
+time of writing). It is what makes device-local HTTPS (git, extension download)
+validate instead of failing with "unable to get local issuer certificate"; see
+`launch_app.rs` setting `SSL_CERT_FILE`.
+
+The bundle is distributed under the Mozilla Public License 2.0. The full text is
+available at <https://mozilla.org/MPL/2.0/>; individual certificates carry their
+own terms inside the bundle (each entry is preceded by a comment naming the CA).
+
+********************************************************************************

@@ -1,0 +1,341 @@
+[
+ {
+  "id": "html",
+  "repository": "https://github.com/zed-industries/zed",
+  "slug": "zed-industries/zed",
+  "license": "GPL-3.0",
+  "license_name": "Other",
+  "copyright": "Copyright 2022 - 2025 Zed Industries, Inc.",
+  "license_note": "zed-industries/zed ships LICENSE-GPL + LICENSE-APACHE; GPL-3.0 chosen (same as HiCodeer)"
+ },
+ {
+  "id": "git-firefly",
+  "repository": "https://github.com/d1y/git_firefly",
+  "slug": "d1y/git_firefly",
+  "license": "Apache-2.0",
+  "license_name": "Apache License 2.0",
+  "copyright": "Apache License"
+ },
+ {
+  "id": "toml",
+  "repository": "https://github.com/zed-extensions/toml",
+  "slug": "zed-extensions/toml",
+  "license": "Apache-2.0",
+  "license_name": "Apache License 2.0",
+  "copyright": "Apache License"
+ },
+ {
+  "id": "java",
+  "repository": "https://github.com/zed-extensions/java",
+  "slug": "zed-extensions/java",
+  "license": "Apache-2.0",
+  "license_name": "Apache License 2.0",
+  "copyright": "Apache License"
+ },
+ {
+  "id": "dockerfile",
+  "repository": "https://github.com/zed-extensions/dockerfile",
+  "slug": "zed-extensions/dockerfile",
+  "license": "Apache-2.0",
+  "license_name": "Apache License 2.0",
+  "copyright": "Apache License"
+ },
+ {
+  "id": "sql",
+  "repository": "https://github.com/zed-extensions/sql",
+  "slug": "zed-extensions/sql",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2024 evrsen"
+ },
+ {
+  "id": "php",
+  "repository": "https://github.com/zed-extensions/php",
+  "slug": "zed-extensions/php",
+  "license": "Apache-2.0",
+  "license_name": "Other",
+  "copyright": "Copyright 2022 - 2025 Zed Industries, Inc.",
+  "license_note": "LICENSE-APACHE in repo root; GitHub reports NOASSERTION"
+ },
+ {
+  "id": "vue",
+  "repository": "https://github.com/zed-extensions/vue",
+  "slug": "zed-extensions/vue",
+  "license": "Apache-2.0",
+  "license_name": "Apache License 2.0",
+  "copyright": "Apache License"
+ },
+ {
+  "id": "ruby",
+  "repository": "https://github.com/zed-extensions/ruby",
+  "slug": "zed-extensions/ruby",
+  "license": "Apache-2.0",
+  "license_name": "Other",
+  "copyright": "Copyright 2022 - 2024 Zed Industries, Inc.",
+  "license_note": "LICENSE-APACHE in repo root; GitHub reports NOASSERTION"
+ },
+ {
+  "id": "xml",
+  "repository": "https://github.com/sweetppro/zed-xml",
+  "slug": "sweetppro/zed-xml",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 SweetPPro"
+ },
+ {
+  "id": "catppuccin",
+  "repository": "https://github.com/catppuccin/zed",
+  "slug": "catppuccin/zed",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2021 Catppuccin"
+ },
+ {
+  "id": "macos-classic",
+  "repository": "https://github.com/huacnlee/zed-theme-macos-classic",
+  "slug": "huacnlee/zed-theme-macos-classic",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2023 Jason Lee."
+ },
+ {
+  "id": "tokyo-night",
+  "repository": "https://github.com/ssaunderss/zed-tokyo-night",
+  "slug": "ssaunderss/zed-tokyo-night",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2024 Austin Saunders"
+ },
+ {
+  "id": "one-dark-pro",
+  "repository": "https://github.com/mordfustang21/zed-one-dark-pro",
+  "slug": "mordfustang21/zed-one-dark-pro",
+  "license": "GPL-3.0",
+  "license_name": "GNU General Public License v3.0",
+  "copyright": "Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>"
+ },
+ {
+  "id": "github-theme",
+  "repository": "https://github.com/PyaeSoneAungRgn/github-zed-theme",
+  "slug": "PyaeSoneAungRgn/github-zed-theme",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 Pyae Sone Aung"
+ },
+ {
+  "id": "vscode-dark-modern",
+  "repository": "https://github.com/kcamcam/vscode_dark_modern.zed",
+  "slug": "kcamcam/vscode_dark_modern.zed",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2024 Kevin Camellini"
+ },
+ {
+  "id": "nvim-nightfox",
+  "repository": "https://github.com/cange/nightfox.zed",
+  "slug": "cange/nightfox.zed",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2024 Christian Angermann"
+ },
+ {
+  "id": "dracula",
+  "repository": "https://github.com/dracula/zed",
+  "slug": "dracula/zed",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2023 Dracula Theme"
+ },
+ {
+  "id": "snazzy",
+  "repository": "https://github.com/Eivs/zed-snazzy",
+  "slug": "Eivs/zed-snazzy",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2024 Catppuccin"
+ },
+ {
+  "id": "catppuccin-blur",
+  "repository": "https://github.com/jenslys/zed-catppuccin-blur",
+  "slug": "jenslys/zed-catppuccin-blur",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2024 Catppuccin"
+ },
+ {
+  "id": "catppuccin-icons",
+  "repository": "https://github.com/catppuccin/zed-icons",
+  "slug": "catppuccin/zed-icons",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2021 Catppuccin"
+ },
+ {
+  "id": "material-icon-theme",
+  "repository": "https://github.com/zed-extensions/material-icon-theme",
+  "slug": "zed-extensions/material-icon-theme",
+  "license": "Apache-2.0",
+  "license_name": "Apache License 2.0",
+  "copyright": "Apache License"
+ },
+ {
+  "id": "vscode-icons",
+  "repository": "https://github.com/vscode-icons/vscode-icons-zed",
+  "slug": "vscode-icons/vscode-icons-zed",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2016 Roberto Huertas"
+ },
+ {
+  "id": "colored-zed-icons-theme",
+  "repository": "https://github.com/TheRedXD/zed-icons-colored-theme",
+  "slug": "TheRedXD/zed-icons-colored-theme",
+  "license": "NONE",
+  "license_name": null,
+  "copyright": null
+ },
+ {
+  "id": "jetbrains-new-ui-icons",
+  "repository": "https://github.com/ankddev/zed-jetbrains-newui-icons",
+  "slug": "ankddev/zed-jetbrains-newui-icons",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2026 Andrey"
+ },
+ {
+  "id": "vscode-great-icons",
+  "repository": "https://github.com/randazraik/zed-vscode-great-icons",
+  "slug": "randazraik/zed-vscode-great-icons",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 Randa Zraik"
+ },
+ {
+  "id": "min-theme",
+  "repository": "https://github.com/phibr0/zed-min-theme",
+  "slug": "phibr0/zed-min-theme",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2024 Phillip"
+ },
+ {
+  "id": "charmed-icons",
+  "repository": "https://github.com/jmesrje/zed-charmed-icons",
+  "slug": "jmesrje/zed-charmed-icons",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright 2025 jmesrje"
+ },
+ {
+  "id": "symbols",
+  "repository": "https://github.com/joangarciaa-dev/zed-symbols",
+  "slug": "joangarciaa-dev/zed-symbols",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2020-22 Miguel Solorio"
+ },
+ {
+  "id": "bearded-icon-theme",
+  "repository": "https://github.com/sethstha/bearded-icons-theme",
+  "slug": "sethstha/bearded-icons-theme",
+  "license": "GPL-3.0",
+  "license_name": "GNU General Public License v3.0",
+  "copyright": "Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>"
+ },
+ {
+  "id": "python-snippets",
+  "repository": "https://github.com/jctosta/python-zed-snippets",
+  "slug": "jctosta/python-zed-snippets",
+  "license": "GPL-3.0",
+  "license_name": "GNU General Public License v3.0",
+  "copyright": "Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>"
+ },
+ {
+  "id": "react-typescript-snippets",
+  "repository": "https://github.com/vishnuroshan/zed-react-ts-snippets",
+  "slug": "vishnuroshan/zed-react-ts-snippets",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 Vishnu Roshan"
+ },
+ {
+  "id": "asciidoc",
+  "repository": "https://github.com/dunyakirkali/zed-asciidoc",
+  "slug": "dunyakirkali/zed-asciidoc",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 Dunya Kirkali"
+ },
+ {
+  "id": "go-snippets",
+  "repository": "https://github.com/ayberkgezer/go-zed-snippets",
+  "slug": "ayberkgezer/go-zed-snippets",
+  "license": "GPL-3.0",
+  "license_name": "GNU General Public License v3.0",
+  "copyright": "Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>"
+ },
+ {
+  "id": "flutter-snippets",
+  "repository": "https://github.com/luisdanieldlcg/flutter-snippets",
+  "slug": "luisdanieldlcg/flutter-snippets",
+  "license": "GPL-3.0",
+  "license_name": "GNU General Public License v3.0",
+  "copyright": "Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>"
+ },
+ {
+  "id": "nextjs-react-snippets",
+  "repository": "https://github.com/Konstantinos-Ps/zed-nextjs-react-snippets",
+  "slug": "Konstantinos-Ps/zed-nextjs-react-snippets",
+  "license": "GPL-3.0",
+  "license_name": "GNU General Public License v3.0",
+  "copyright": "Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>"
+ },
+ {
+  "id": "svelte-snippets",
+  "repository": "https://github.com/bobbymannino/svelte-snippets-for-zed",
+  "slug": "bobbymannino/svelte-snippets-for-zed",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 Bobby Mannino"
+ },
+ {
+  "id": "vue-snippets",
+  "repository": "https://github.com/rubjo/zed-vue-snippets",
+  "slug": "rubjo/zed-vue-snippets",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 rubjo"
+ },
+ {
+  "id": "react-snippets",
+  "repository": "https://github.com/tamimhasandev/react-snippets",
+  "slug": "tamimhasandev/react-snippets",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) [year] [fullname]"
+ },
+ {
+  "id": "rust-snippets",
+  "repository": "https://github.com/bobbymannino/rust-snippets-for-zed",
+  "slug": "bobbymannino/rust-snippets-for-zed",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 Bobby Mannino"
+ },
+ {
+  "id": "javascript-snippets",
+  "repository": "https://github.com/seekode/zed-js-snippets",
+  "slug": "seekode/zed-js-snippets",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 seekode"
+ },
+ {
+  "id": "typescript-snippets",
+  "repository": "https://github.com/seekode/zed-ts-snippets",
+  "slug": "seekode/zed-ts-snippets",
+  "license": "MIT",
+  "license_name": "MIT License",
+  "copyright": "Copyright (c) 2025 seekode"
+ }
+]

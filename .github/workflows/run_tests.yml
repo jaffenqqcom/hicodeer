@@ -801,7 +801,7 @@ jobs:
       working-directory: herdr
       run: >-
         cargo about generate --fail
-        -c ../script/licenses/zed-licenses.toml
+        -c ../script/licenses/hicodeer-licenses.toml
         ../script/licenses/template.md.hbs > /dev/null
   check_scripts:
     needs:

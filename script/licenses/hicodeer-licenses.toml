@@ -1,0 +1,185 @@
+no-clearly-defined = true
+private = { ignore = true }
+# Licenses allowed in Zed's dependencies. AGPL should not be added to this list.
+# When adding to this list, please check the following open source license policies:
+#
+# * https://opensource.google/documentation/reference/thirdparty/licenses
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "MIT-0",
+    "0BSD",
+    "Apache-2.0 WITH LLVM-exception",
+    "MPL-2.0",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "CC0-1.0",
+    "NCSA",
+    "Unicode-3.0",
+    "OpenSSL",
+    "Zlib",
+    "BSL-1.0",
+    "bzip2-1.0.6",
+    "CDLA-Permissive-2.0",
+    # NOT an OSI license. The franken stack pulled in by
+    # `franken-agent-detection` (herdr) ships MIT plus a rider denying use to
+    # OpenAI, Anthropic and their affiliates. It is listed here because it is
+    # accepted for this product, and kept visible as its own SPDX reference so
+    # the report prints the rider instead of claiming plain MIT. See the
+    # clarify block at the end of this file for the full text.
+    "LicenseRef-MIT-OpenAI-Anthropic-Rider",
+]
+
+[procinfo.clarify]
+license = "MIT"
+[[procinfo.clarify.files]]
+path = 'LICENSE.md'
+checksum = '37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca'
+
+[webpki.clarify]
+license = "ISC" # It actually says 'ISC-style' but I don't know the SPDX expression for that.
+[[webpki.clarify.files]]
+path = 'LICENSE'
+checksum = '5b698ca13897be3afdb7174256fa1574f8c6892b8bea1a66dd6469d3fe27885a'
+
+[fuchsia-cprng.clarify]
+license = "BSD-3-Clause"
+[[fuchsia-cprng.clarify.files]]
+path = 'LICENSE'
+checksum = '03b114f53e6587a398931762ee11e2395bfdba252a329940e2c8c9e81813845b'
+
+# ==================== franken stack (FAD and its dependencies) ====================
+# These crates declare the license only through `license-file = "LICENSE"`, and
+# the file starts with "MIT License (with OpenAI/Anthropic Rider)", which is not
+# a text cargo-about can match. The clarification below supplies the expression
+# (and the checksummed file, which cargo-about requires for a valid
+# clarification) so the requirement resolves. The text itself is emitted by the
+# CUSTOM LICENSE TERMS section (generate-rider-licenses.py): cargo-about drops
+# the group from its own output because it cannot classify the license text.
+
+[fsqlite.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-ast.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-ast.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-btree.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-btree.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-core.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-core.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-error.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-error.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-ext-fts5.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-ext-fts5.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-ext-icu.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-ext-icu.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-ext-json.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-ext-json.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-ext-misc.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-ext-misc.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-ext-rtree.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-ext-rtree.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-func.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-func.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-mvcc.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-mvcc.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-observability.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-observability.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-pager.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-pager.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-parser.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-parser.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-planner.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-planner.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-types.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-types.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-vdbe.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-vdbe.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-vfs.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-vfs.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[fsqlite-wal.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[fsqlite-wal.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'
+
+[asupersync.clarify]
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+[[asupersync.clarify.files]]
+path = 'LICENSE'
+checksum = '32a82e0a5754e72e51fae44b65a936c831c07376f21c90f5fb9e76897fcc3509'

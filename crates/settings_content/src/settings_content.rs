@@ -533,7 +533,7 @@ pub struct ExtensionsSettingsContent {
 
 /// Base key bindings scheme. Base keymaps can be overridden with user keymaps.
 ///
-/// Default: Zed
+/// Default: HiCodeer
 #[derive(
     Copy,
     Clone,
@@ -562,7 +562,7 @@ pub enum BaseKeymapContent {
 
 impl strum::VariantNames for BaseKeymapContent {
     const VARIANTS: &'static [&'static str] = &[
-        "Default",
+        "HiCodeer",
         "VSCode",
         "JetBrains",
         "Sublime Text",

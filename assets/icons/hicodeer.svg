@@ -1,0 +1,10 @@
+<svg width="16" height="10.49" viewBox="0 0 540 354" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- The wordmark is 1:0.52 in the source art; squashing x by 0.8 lets it fill
+     more of a square icon slot while keeping every glyph complete. -->
+<g transform="scale(0.8 1)">
+<path d="M0 10h64v339H0zM222 10h65v339h-65zM0 144h287v57H0zM310 110h63v239h-63z" fill="#000000"/>
+<circle cx="341" cy="38" r="38" fill="#000000"/>
+<ellipse cx="525" cy="177.5" rx="120" ry="145" stroke="#000000" stroke-width="61" stroke-dasharray="672 162" stroke-dashoffset="753"/>
+<path d="M510 133l53 49-53 49M564 133l53 49-53 49" stroke="#000000" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</svg>

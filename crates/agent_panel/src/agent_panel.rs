@@ -2197,9 +2197,9 @@ impl AgentPanel {
                     .child(
                         h_flex().min_w(STATUS_SLOT_SIZE).justify_center().child(
                             Icon::new(if collapsed {
-                                IconName::ChevronRight
+                                IconName::Folder
                             } else {
-                                IconName::ChevronDown
+                                IconName::FolderOpen
                             })
                             .size(IconSize::Small)
                             .color(Color::Muted),

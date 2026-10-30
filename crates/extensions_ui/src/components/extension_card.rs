@@ -47,14 +47,6 @@ const CONFIGURE_ACTION_AVAILABLE: bool = false;
 const CONFIGURE_ACTION_AVAILABLE: bool = true;
 // [OHOS PORT END]
 
-// [OHOS PORT BEGIN] The catalog is a static host (Gitee), which exposes no
-// per-file download statistics, so every card would read "Downloads: 0".
-#[cfg(target_env = "ohos")]
-const SHOW_DOWNLOAD_COUNT: bool = false;
-#[cfg(not(target_env = "ohos"))]
-const SHOW_DOWNLOAD_COUNT: bool = true;
-// [OHOS PORT END]
-
 struct ExtensionCardDetails {
     id: Arc<str>,
     name: SharedString,
@@ -648,7 +640,7 @@ impl RenderOnce for ExtensionCard {
             source,
         } = details;
         let installed_version = source.installed_version(&version);
-        let download_count = source.download_count().filter(|_| SHOW_DOWNLOAD_COUNT);
+        let download_count = source.download_count();
         let is_dev = source.is_dev();
         let is_overridden = source.is_overridden();
         let repository_button_id = SharedString::from(format!("repository-{id}"));

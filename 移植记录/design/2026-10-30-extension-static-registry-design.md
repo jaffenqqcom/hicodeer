@@ -108,8 +108,7 @@ if !actual.eq_ignore_ascii_case(expected) { bail!("extension archive checksum mi
 |---|---|---|
 | 隐藏"调试适配器""MCP 服务"分类 | `extensions_ui.rs:1629` | 本构建没有这两类功能，分类下永远为空 |
 | 卡片不再宣传这两类能力 | `extension_card.rs` `provided_feature_labels` | 同上，避免卡片承诺做不到的功能 |
-| 隐藏 Configure 按钮 | `extension_card.rs:45`（`CONFIGURE_ACTION_AVAILABLE`） | 该按钮只服务 MCP 配置，MCP 已裁剪 |
-| 不显示下载量 | `extension_card.rs:53`（`SHOW_DOWNLOAD_COUNT`） | 静态宿主没有按文件统计，卡片会全是 `Downloads: 0` |
+| 隐藏 Configure 按钮 | `extension_card.rs:42`（`CONFIGURE_ACTION_AVAILABLE`） | 该按钮只服务 MCP 配置，MCP 已裁剪 |
 
 四处都用一对互斥 `const` 加 `#[cfg(target_env = "ohos")]` 门控，桌面构建保持上游行为，
 代码本身不删（避免与上游分叉成两份渲染逻辑）。
@@ -202,7 +201,8 @@ Gitee 免费版单仓库上限 500 MB、单文件 50 MB；实测最大单包 2.4
 2. 约 540 个 id 在 `extensions.toml` 里但不在 `/extensions` 列表接口返回的 1000 条内。
    这些扩展可正常查询与下载（静态目录不依赖列表接口），但"官方站点可见性"与本地不一致。
 3. `index.json` 里的 `download_count` 是 **Zed 侧**的计数、写入时的快照，之后不会自己更新；
-   我们自己的下载量不统计（Gitee 不提供按文件的下载计数），界面也不显示这个字段。
+   卡片上显示的就是这个数，因此它反映的是 Zed 社区的安装量，不是 HiCodeer 自己的下载量
+   （Gitee 不提供按文件的下载计数，自建计数需要额外的服务端）。
 4. 完整性只到"目录内的 sha256"，没有扩展签名，防的是传输损坏与目录内混入错误包，
    不防"目录本身被替换"（该风险由 HTTPS 承担）。
 5. 同步工具是手工执行的外部脚本，没有 CI 定时任务；上游新增扩展需要人工跑一次。
@@ -215,7 +215,7 @@ Gitee 免费版单仓库上限 500 MB、单文件 50 MB；实测最大单包 2.4
 | `crates/extension_host/src/static_registry_test.rs` | 6 个过滤语义单测（空 provides / 搜索 / updates 空 ids / updates 指定 ids / 版本查询 / 浏览去重） |
 | `crates/extension_host/Cargo.toml` | 新增 `sha2`、`hex` |
 | `crates/extensions_ui/src/extensions_ui.rs` | 分类行隐藏调试适配器与 MCP（cfg 门控） |
-| `crates/extensions_ui/src/components/extension_card.rs` | 能力标签过滤、Configure 与下载量的 cfg 门控 |
+| `crates/extensions_ui/src/components/extension_card.rs` | 能力标签过滤、Configure 按钮的 cfg 门控（下载量已恢复显示） |
 | `crates/extensions_ui/src/extension_version_selector.rs` | 复用 `compare_extension_versions`，删除重复排序与无用 import |
 
 ## 7. 验证

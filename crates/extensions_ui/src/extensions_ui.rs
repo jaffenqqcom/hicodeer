@@ -1621,6 +1621,14 @@ impl Render for ExtensionsPage {
                                 | ExtensionProvides::Grammars // grammars do not add anything of value to users currently
                                 | ExtensionProvides::IndexedDocsProviders
                                 | ExtensionProvides::SlashCommands => false,
+                                // [OHOS PORT BEGIN] HiCodeer ships without
+                                // debug adapters and MCP servers, so a category
+                                // filter for either would only ever return an
+                                // empty list.
+                                #[cfg(target_env = "ohos")]
+                                ExtensionProvides::DebugAdapters
+                                | ExtensionProvides::ContextServers => false,
+                                // [OHOS PORT END]
                                 _ => true,
                             })
                             .map(|provides| {

@@ -5,6 +5,8 @@ pub mod wasm_host;
 
 #[cfg(test)]
 mod extension_store_test;
+#[cfg(test)]
+mod static_registry_test;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_compression::futures::bufread::GzipDecoder;
@@ -45,6 +47,7 @@ use release_channel::ReleaseChannel;
 use remote::{ConnectionState, RemoteClient, RemoteClientEvent};
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use settings::{SemanticTokenRules, Settings, SettingsStore};
 use std::ops::RangeInclusive;
 use std::str::FromStr;
@@ -126,6 +129,281 @@ static SUPPRESSED_EXTENSIONS: LazyLock<FxHashSet<&str>> = LazyLock::new(|| {
     ])
 });
 
+/// Base URL of the static extension registry.
+///
+/// HiCodeer cannot use Zed's extension service, so the catalog is a plain
+/// `index.json` plus one archive per extension, published on Gitee. Each entry
+/// carries the upstream metadata (`cloud_api_types::ExtensionMetadata`) plus the
+/// two things a static host cannot provide by itself: where the archive lives
+/// and its checksum.
+const STATIC_REGISTRY_BASE: &str = "https://gitee.com/jaffengit/hicodeer-extension/raw/master";
+
+/// Returns the static registry base to use, or `None` to keep talking to the
+/// upstream extension API (desktop builds).
+fn static_registry_base() -> Option<String> {
+    if let Ok(base) = std::env::var("HICODEER_EXTENSION_REGISTRY") {
+        let base = base.trim().trim_end_matches('/');
+        if !base.is_empty() {
+            return Some(base.to_owned());
+        }
+    }
+
+    cfg!(target_env = "ohos").then(|| STATIC_REGISTRY_BASE.to_owned())
+}
+
+/// One entry of the static catalog: upstream metadata plus what a static host
+/// cannot provide by itself (where the archive lives and its checksum).
+#[derive(Clone, Debug, Deserialize)]
+struct StaticRegistryEntry {
+    #[serde(flatten)]
+    metadata: ExtensionMetadata,
+    download_url: String,
+    sha256: String,
+}
+
+impl StaticRegistryEntry {
+    /// An entry is usable only when the archive location and checksum make
+    /// sense; a malformed one is skipped instead of taking down the catalog.
+    fn is_valid(&self) -> bool {
+        !self.download_url.is_empty()
+            && self.sha256.len() == 64
+            && self.sha256.chars().all(|character| character.is_ascii_hexdigit())
+    }
+}
+
+/// Parses the catalog, skipping entries that cannot be used.
+///
+/// A single bad entry used to fail the whole document and take the extension
+/// page down with it; now it is logged and the rest still loads.
+fn parse_static_registry(body: &[u8], url: &str) -> Result<Vec<StaticRegistryEntry>> {
+    let document: serde_json::Value =
+        serde_json::from_slice(body).with_context(|| format!("parsing extension catalog from {url}"))?;
+    let rows = document
+        .get("data")
+        .and_then(|data| data.as_array())
+        .with_context(|| format!("extension catalog {url} has no `data` array"))?;
+
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id = row.get("id").and_then(|id| id.as_str()).unwrap_or("<unknown>");
+        match serde_json::from_value::<StaticRegistryEntry>(row.clone()) {
+            Ok(entry) if entry.is_valid() => entries.push(entry),
+            Ok(_) => log::error!(
+                "extension catalog {url}: entry {id} has an unusable download_url/sha256, skipped"
+            ),
+            Err(error) => log::error!("extension catalog {url}: entry {id} skipped: {error}"),
+        }
+    }
+    Ok(entries)
+}
+
+/// Fetches and parses the catalog.
+///
+/// Free-standing so the shared in-flight task can hold it without borrowing the
+/// store.
+async fn fetch_static_registry_catalog(
+    http_client: &HttpClientWithUrl,
+    base: &str,
+) -> Result<Arc<Vec<StaticRegistryEntry>>> {
+    let url = format!("{base}/index.json");
+    require_secure_url(&url)?;
+    let mut response = http_client
+        .get(&url, AsyncBody::empty(), true)
+        .await
+        .with_context(|| format!("fetching extension catalog from {url}"))?;
+    let status = response.status();
+    let mut body = Vec::new();
+    response.body_mut().read_to_end(&mut body).await?;
+    if !status.is_success() {
+        let preview = String::from_utf8_lossy(&body[..body.len().min(200)]).to_string();
+        bail!(
+            "extension catalog {url} returned {}: {preview}",
+            status.as_u16()
+        );
+    }
+
+    Ok(Arc::new(parse_static_registry(&body, &url)?))
+}
+
+/// Rejects plaintext HTTP outside debug builds.
+///
+/// The checksum only binds an archive to the catalog, so anyone able to rewrite
+/// one can rewrite both. Transport security is the only real anchor.
+fn require_secure_url(url: &str) -> Result<()> {
+    if url.starts_with("https://") {
+        return Ok(());
+    }
+    if cfg!(debug_assertions) && url.starts_with("http://") {
+        return Ok(());
+    }
+    bail!("refusing a non-HTTPS extension source: {url}");
+}
+
+/// Resolves an entry's `download_url`.
+///
+/// The catalog is the single source of truth for where an archive lives: an
+/// absolute URL is used as-is, which is how the catalog and the packages can sit
+/// on different hosts. A relative path is resolved against the catalog's own
+/// base, for catalogs written before absolute URLs became the convention.
+fn static_registry_url(path: &str) -> Result<Url> {
+    let url = if path.starts_with("https://") || path.starts_with("http://") {
+        Url::parse(path)?
+    } else {
+        let base = static_registry_base().context("static extension registry is not configured")?;
+        let base = Url::parse(&format!("{}/", base.trim_end_matches('/')))?;
+        // `join` rather than string concatenation: a path segment containing `?`
+        // or `#` would otherwise change the URL's meaning.
+        base.join(path.trim_start_matches('/'))?
+    };
+    require_secure_url(url.as_str())?;
+    Ok(url)
+}
+
+/// Orders two extension versions, falling back to publish time when a version is
+/// not valid semver.
+///
+/// Shared with the version selector in `extensions_ui` so the two orderings
+/// cannot drift apart.
+pub fn compare_extension_versions(
+    a: &ExtensionMetadata,
+    b: &ExtensionMetadata,
+) -> std::cmp::Ordering {
+    match (
+        Version::from_str(&a.manifest.version),
+        Version::from_str(&b.manifest.version),
+    ) {
+        (Ok(a), Ok(b)) => a.cmp(&b),
+        _ => a.published_at.cmp(&b.published_at),
+    }
+}
+
+/// Applies the upstream query semantics to the static catalog.
+///
+/// - `/extensions`         -> `filter` (search) and `provides`
+/// - `/extensions/updates` -> `ids`; an empty id list means "nothing to update",
+///   not "the whole catalog"
+/// - `/extensions/{id}`    -> every version of that id, *without* compatibility
+///   filtering, so the version selector can render unsupported ones disabled
+///
+/// Browsable lists keep one entry per extension (the newest version) and are
+/// sorted by name, matching what the upstream list endpoint returns.
+fn filter_static_registry(
+    entries: &[StaticRegistryEntry],
+    path: &str,
+    query: &[(String, String)],
+    release_channel: ReleaseChannel,
+) -> Vec<ExtensionMetadata> {
+    let is_updates = path == "/extensions/updates";
+    let by_path_id = if is_updates {
+        None
+    } else {
+        path.strip_prefix("/extensions/")
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+    };
+    let is_version_query = by_path_id.is_some();
+    let by_query_ids = query
+        .iter()
+        .find(|(key, _)| key.as_str() == "ids")
+        .map(|(_, value)| {
+            value
+                .split(',')
+                .filter(|id| !id.is_empty())
+                .collect::<FxHashSet<_>>()
+        });
+    let search = query
+        .iter()
+        .find(|(key, _)| key.as_str() == "filter")
+        .map(|(_, value)| value.to_lowercase())
+        .filter(|needle| !needle.is_empty());
+    let provides = query
+        .iter()
+        .find(|(key, _)| key.as_str() == "provides")
+        .map(|(_, value)| {
+            value
+                .split(',')
+                .filter_map(|name| name.parse::<ExtensionProvides>().ok())
+                .collect::<BTreeSet<_>>()
+        })
+        // The UI always sends the parameter, with an empty value when no category
+        // is selected. An empty set has to mean "no filter"; matching it literally
+        // would drop every extension and leave the "All" list empty.
+        .filter(|wanted| !wanted.is_empty());
+
+    let mut filtered: Vec<&StaticRegistryEntry> = entries
+        .iter()
+        .filter(|entry| !SUPPRESSED_EXTENSIONS.contains(entry.metadata.id.as_ref()))
+        .filter(|entry| is_version_query || is_version_compatible(release_channel, &entry.metadata))
+        .filter(|entry| {
+            by_path_id
+                .as_deref()
+                .is_none_or(|id| entry.metadata.id.as_ref() == id)
+        })
+        .filter(|entry| {
+            if is_updates {
+                // Only the extensions the caller named: returning everything here
+                // would upgrade extensions the user excluded from auto-update.
+                by_query_ids
+                    .as_ref()
+                    .is_some_and(|ids| ids.contains(entry.metadata.id.as_ref()))
+            } else {
+                by_query_ids
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(entry.metadata.id.as_ref()))
+            }
+        })
+        .filter(|entry| {
+            provides.as_ref().is_none_or(|wanted| {
+                entry
+                    .metadata
+                    .manifest
+                    .provides
+                    .iter()
+                    .any(|offered| wanted.contains(offered))
+            })
+        })
+        .filter(|entry| {
+            search.as_ref().is_none_or(|needle| {
+                let manifest = &entry.metadata.manifest;
+                entry.metadata.id.to_lowercase().contains(needle)
+                    || manifest.name.to_lowercase().contains(needle)
+                    || manifest.description.as_deref().is_some_and(|description| {
+                        description.to_lowercase().contains(needle)
+                    })
+            })
+        })
+        .collect();
+
+    if !is_version_query {
+        // One card per extension: keep the newest when the catalog carries several
+        // versions, and order deterministically (upstream sorts server-side).
+        let mut newest: HashMap<&str, &StaticRegistryEntry> = HashMap::default();
+        for entry in filtered {
+            let id = entry.metadata.id.as_ref();
+            let replace = newest.get(id).is_none_or(|current| {
+                compare_extension_versions(&current.metadata, &entry.metadata)
+                    == std::cmp::Ordering::Less
+            });
+            if replace {
+                newest.insert(id, entry);
+            }
+        }
+        filtered = newest.into_values().collect();
+        filtered.sort_by(|a, b| {
+            a.metadata
+                .manifest
+                .name
+                .to_lowercase()
+                .cmp(&b.metadata.manifest.name.to_lowercase())
+        });
+    }
+
+    filtered
+        .into_iter()
+        .map(|entry| entry.metadata.clone())
+        .collect()
+}
+
 /// Returns the [`SchemaVersion`] range that is compatible with this version of Zed.
 pub fn schema_version_range() -> RangeInclusive<SchemaVersion> {
     SchemaVersion::ZERO..=SchemaVersion::CURRENT
@@ -173,6 +451,17 @@ pub struct ExtensionStore {
     pub tasks: Vec<Task<()>>,
     pub(crate) remote_clients: HashMap<EntityId, RemoteClientState>,
     pub(crate) initial_index_load: Shared<Task<()>>,
+    /// Catalog from the static registry. Fetched once and reused because the UI
+    /// calls `fetch_extensions` on every search keystroke, and a static host has
+    /// no query endpoint to filter server-side.
+    static_registry: std::sync::Mutex<Option<Arc<Vec<StaticRegistryEntry>>>>,
+    /// In-flight catalog fetch. Kept here so a caller dropping its handle cannot
+    /// cancel the download, and so concurrent callers share one request.
+    ///
+    /// The error is a message rather than an `anyhow::Error` because the shared
+    /// future has to be cloneable for every caller.
+    static_registry_task:
+        std::sync::Mutex<Option<Shared<Task<Result<Arc<Vec<StaticRegistryEntry>>, Arc<str>>>>>>,
 }
 
 pub(crate) struct RemoteClientState {
@@ -411,6 +700,8 @@ impl ExtensionStore {
 
             remote_clients: HashMap::default(),
             initial_index_load: Task::ready(()).shared(),
+            static_registry: Default::default(),
+            static_registry_task: Default::default(),
         };
 
         // The extensions store maintains an index file, which contains a complete
@@ -816,6 +1107,10 @@ impl ExtensionStore {
         query: &[(&str, &str)],
         cx: &mut Context<ExtensionStore>,
     ) -> Task<Result<Vec<ExtensionMetadata>>> {
+        if static_registry_base().is_some() {
+            return self.fetch_extensions_from_static_registry(path, query, cx);
+        }
+
         let url = self.http_client.build_zed_api_url(path, query);
         let http_client = self.http_client.clone();
         cx.spawn(async move |_, _| {
@@ -848,6 +1143,109 @@ impl ExtensionStore {
         })
     }
 
+    /// Serves `fetch_extensions`, `fetch_extensions_with_update_available` and
+    /// `fetch_extension_versions` from the static catalog.
+    ///
+    /// The upstream service filters by the query string; a static host cannot, so
+    /// [`filter_static_registry`] applies the same parameters locally.
+    fn fetch_extensions_from_static_registry(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        cx: &mut Context<ExtensionStore>,
+    ) -> Task<Result<Vec<ExtensionMetadata>>> {
+        let path = path.to_owned();
+        let query: Vec<(String, String)> = query
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        let release_channel = ReleaseChannel::global(cx);
+        let catalog = self.static_registry_snapshot(cx);
+
+        cx.spawn(async move |_, _| {
+            let entries = catalog.await?;
+            Ok(filter_static_registry(
+                &entries,
+                &path,
+                &query,
+                release_channel,
+            ))
+        })
+    }
+
+    /// Returns the static catalog, fetching it once per process.
+    ///
+    /// Caching is required, not an optimization: the extension UI calls
+    /// `fetch_extensions` on every search keystroke, and the catalog is a single
+    /// file that cannot be queried server-side.
+    fn static_registry_snapshot(
+        &self,
+        cx: &mut Context<ExtensionStore>,
+    ) -> Task<Result<Arc<Vec<StaticRegistryEntry>>>> {
+        if let Some(snapshot) = self
+            .static_registry
+            .lock()
+            .expect("static registry cache poisoned")
+            .clone()
+        {
+            return Task::ready(Ok(snapshot));
+        }
+
+        let in_flight = self
+            .static_registry_task
+            .lock()
+            .expect("static registry task poisoned")
+            .clone();
+
+        let shared = match in_flight {
+            Some(task) => task,
+            None => {
+                let Some(base) = static_registry_base() else {
+                    return Task::ready(Err(anyhow!(
+                        "static extension registry is not configured"
+                    )));
+                };
+                let http_client = self.http_client.clone();
+                let task = cx
+                    .spawn(async move |this, cx| {
+                        let result = fetch_static_registry_catalog(&http_client, &base)
+                            .await
+                            .map_err(|error| Arc::<str>::from(format!("{error:#}")));
+                        this.update(cx, |store, _| {
+                            *store
+                                .static_registry_task
+                                .lock()
+                                .expect("static registry task poisoned") = None;
+                            if let Ok(snapshot) = &result {
+                                *store
+                                    .static_registry
+                                    .lock()
+                                    .expect("static registry cache poisoned") =
+                                    Some(snapshot.clone());
+                            }
+                        })
+                        .ok();
+                        result
+                    })
+                    .shared();
+                *self
+                    .static_registry_task
+                    .lock()
+                    .expect("static registry task poisoned") = Some(task.clone());
+                task
+            }
+        };
+
+        // Hand out a thin wrapper: the caller may drop it (the UI cancels the
+        // previous fetch on every keystroke) without cancelling the shared
+        // download, which the store keeps alive until it completes.
+        cx.spawn(async move |_, _| {
+            shared
+                .await
+                .map_err(|message| anyhow!("{message}"))
+        })
+    }
+
     pub fn install_extension(
         &mut self,
         extension_id: Arc<str>,
@@ -862,6 +1260,7 @@ impl ExtensionStore {
         &mut self,
         extension_id: Arc<str>,
         url: Url,
+        expected_sha256: Option<String>,
         operation: ExtensionOperation,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
@@ -885,6 +1284,7 @@ impl ExtensionStore {
                 }
             });
 
+            let download_id = extension_id.clone();
             cx.background_spawn(async move {
                 let mut response = http_client
                     .get(url.as_ref(), Default::default(), true)
@@ -906,6 +1306,19 @@ impl ExtensionStore {
                         bail!(
                             "downloaded extension size {actual_len} \
                         does not match content length {content_length}"
+                        );
+                    }
+                }
+
+                // A static registry serves files from a plain Git host: verify the
+                // bytes against the checksum published with the catalog instead of
+                // trusting the transport.
+                if let Some(expected) = expected_sha256.as_deref() {
+                    let actual = hex::encode(Sha256::digest(&tar_gz_bytes));
+                    if !actual.eq_ignore_ascii_case(expected) {
+                        bail!(
+                            "extension archive checksum mismatch for {download_id}: \
+                             expected {expected}, got {actual}"
                         );
                     }
                 }
@@ -975,6 +1388,11 @@ impl ExtensionStore {
     pub fn install_latest_extension(&mut self, extension_id: Arc<str>, cx: &mut Context<Self>) {
         log::info!("installing extension {extension_id} latest version");
 
+        if static_registry_base().is_some() {
+            self.install_latest_from_static_registry(extension_id, cx);
+            return;
+        }
+
         let schema_versions = schema_version_range();
         let wasm_api_versions = wasm_api_version_range(ReleaseChannel::global(cx));
 
@@ -1000,9 +1418,48 @@ impl ExtensionStore {
         self.install_or_upgrade_extension_at_endpoint(
             extension_id,
             url,
+            None,
             ExtensionOperation::Install,
             cx,
         )
+        .detach_and_log_err(cx);
+    }
+
+    /// Installs the newest compatible version from the static catalog. The
+    /// catalog has no "latest" endpoint, so the pick happens locally with the
+    /// same compatibility check the server would apply.
+    fn install_latest_from_static_registry(
+        &mut self,
+        extension_id: Arc<str>,
+        cx: &mut Context<Self>,
+    ) {
+        let release_channel = ReleaseChannel::global(cx);
+        let catalog = self.static_registry_snapshot(cx);
+        let id = extension_id.clone();
+
+        cx.spawn(async move |this, cx| {
+            let entries = catalog.await?;
+            let entry = entries
+                .iter()
+                .filter(|entry| entry.metadata.id == id)
+                .filter(|entry| is_version_compatible(release_channel, &entry.metadata))
+                .max_by(|a, b| compare_extension_versions(&a.metadata, &b.metadata))
+                .with_context(|| format!("extension {id} is not in the static registry"))?;
+
+            let url = static_registry_url(&entry.download_url)?;
+            let expected_sha256 = entry.sha256.clone();
+            this.update(cx, |this, cx| {
+                this.install_or_upgrade_extension_at_endpoint(
+                    id.clone(),
+                    url,
+                    Some(expected_sha256),
+                    ExtensionOperation::Install,
+                    cx,
+                )
+                .detach_and_log_err(cx);
+            })?;
+            anyhow::Ok(())
+        })
         .detach_and_log_err(cx);
     }
 
@@ -1023,6 +1480,16 @@ impl ExtensionStore {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         log::info!("installing extension {extension_id} {version}");
+
+        if static_registry_base().is_some() {
+            return self.install_or_upgrade_from_static_registry(
+                extension_id,
+                version,
+                operation,
+                cx,
+            );
+        }
+
         let Some(url) = self
             .http_client
             .build_zed_api_url(
@@ -1034,7 +1501,45 @@ impl ExtensionStore {
             return Task::ready(Ok(()));
         };
 
-        self.install_or_upgrade_extension_at_endpoint(extension_id, url, operation, cx)
+        self.install_or_upgrade_extension_at_endpoint(extension_id, url, None, operation, cx)
+    }
+
+    /// Installs a specific version from the static catalog, verifying the archive
+    /// against the checksum the catalog publishes for it.
+    fn install_or_upgrade_from_static_registry(
+        &mut self,
+        extension_id: Arc<str>,
+        version: Arc<str>,
+        operation: ExtensionOperation,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<()>> {
+        let catalog = self.static_registry_snapshot(cx);
+
+        cx.spawn(async move |this, cx| {
+            let entries = catalog.await?;
+            let entry = entries
+                .iter()
+                .find(|entry| {
+                    entry.metadata.id == extension_id
+                        && entry.metadata.manifest.version == version
+                })
+                .with_context(|| {
+                    format!("extension {extension_id} {version} is not in the static registry")
+                })?;
+
+            let url = static_registry_url(&entry.download_url)?;
+            let expected_sha256 = entry.sha256.clone();
+            this.update(cx, |this, cx| {
+                this.install_or_upgrade_extension_at_endpoint(
+                    extension_id.clone(),
+                    url,
+                    Some(expected_sha256),
+                    operation,
+                    cx,
+                )
+            })?
+            .await
+        })
     }
 
     pub fn uninstall_extension(

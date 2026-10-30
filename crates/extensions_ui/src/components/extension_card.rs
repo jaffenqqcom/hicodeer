@@ -39,6 +39,22 @@ enum LocalExtensionKind {
     Installed,
 }
 
+// [OHOS PORT BEGIN] HiCodeer ships without MCP servers, so the "Configure"
+// button would only ever open an empty configuration view.
+#[cfg(target_env = "ohos")]
+const CONFIGURE_ACTION_AVAILABLE: bool = false;
+#[cfg(not(target_env = "ohos"))]
+const CONFIGURE_ACTION_AVAILABLE: bool = true;
+// [OHOS PORT END]
+
+// [OHOS PORT BEGIN] The catalog is a static host (Gitee), which exposes no
+// per-file download statistics, so every card would read "Downloads: 0".
+#[cfg(target_env = "ohos")]
+const SHOW_DOWNLOAD_COUNT: bool = false;
+#[cfg(not(target_env = "ohos"))]
+const SHOW_DOWNLOAD_COUNT: bool = true;
+// [OHOS PORT END]
+
 struct ExtensionCardDetails {
     id: Arc<str>,
     name: SharedString,
@@ -266,7 +282,9 @@ impl ExtensionCard {
                 |button| button.style(ButtonStyle::OutlinedGhost),
             )
             .disabled(Self::disables_actions(status));
-        let configure = (!extension.context_servers.is_empty()).then(|| {
+        let is_configurable =
+            CONFIGURE_ACTION_AVAILABLE && !extension.context_servers.is_empty();
+        let configure = is_configurable.then(|| {
             Self::configure_button(&extension.id, Some(extension.clone()))
                 .when_else(
                     is_dev,
@@ -310,10 +328,11 @@ impl ExtensionCard {
         state: &PublishedExtensionState,
         cx: &App,
     ) -> ExtensionCardActions {
-        let is_configurable = extension
-            .manifest
-            .provides
-            .contains(&ExtensionProvides::ContextServers);
+        let is_configurable = CONFIGURE_ACTION_AVAILABLE
+            && extension
+                .manifest
+                .provides
+                .contains(&ExtensionProvides::ContextServers);
 
         let status = match state {
             PublishedExtensionState::OverriddenByDevExtension => {
@@ -425,7 +444,20 @@ fn provided_feature_labels(
 ) -> Vec<&'static str> {
     provides
         .into_iter()
-        .filter(|provides| !provides.is_deprecated())
+        .filter(|provides| {
+            // [OHOS PORT BEGIN] Debug adapters and MCP servers are not part of
+            // this build, so advertising them on a card would promise a feature
+            // that cannot work.
+            #[cfg(target_env = "ohos")]
+            if matches!(
+                provides,
+                ExtensionProvides::DebugAdapters | ExtensionProvides::ContextServers
+            ) {
+                return false;
+            }
+            // [OHOS PORT END]
+            !provides.is_deprecated()
+        })
         .map(extension_provides_label)
         .collect()
 }
@@ -616,7 +648,7 @@ impl RenderOnce for ExtensionCard {
             source,
         } = details;
         let installed_version = source.installed_version(&version);
-        let download_count = source.download_count();
+        let download_count = source.download_count().filter(|_| SHOW_DOWNLOAD_COUNT);
         let is_dev = source.is_dev();
         let is_overridden = source.is_overridden();
         let repository_button_id = SharedString::from(format!("repository-{id}"));

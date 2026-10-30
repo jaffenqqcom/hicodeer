@@ -1,14 +1,12 @@
-use std::str::FromStr;
 use std::sync::Arc;
 
 use cloud_api_types::ExtensionMetadata;
-use extension_host::ExtensionStore;
+use extension_host::{ExtensionStore, compare_extension_versions};
 use fs::Fs;
 use fuzzy::{StringMatch, StringMatchCandidate, match_strings};
 use gpui::{App, DismissEvent, Entity, EventEmitter, Focusable, Task, WeakEntity, prelude::*};
 use picker::{Picker, PickerDelegate};
 use release_channel::ReleaseChannel;
-use semver::Version;
 use settings::update_settings_file;
 use ui::{HighlightedLabel, ListItem, ListItemSpacing, prelude::*};
 use util::ResultExt;
@@ -59,15 +57,9 @@ impl ExtensionVersionSelectorDelegate {
         selector: WeakEntity<ExtensionVersionSelector>,
         mut extension_versions: Vec<ExtensionMetadata>,
     ) -> Self {
-        extension_versions.sort_unstable_by(|a, b| {
-            let a_version = Version::from_str(&a.manifest.version);
-            let b_version = Version::from_str(&b.manifest.version);
-
-            match (a_version, b_version) {
-                (Ok(a_version), Ok(b_version)) => b_version.cmp(&a_version),
-                _ => b.published_at.cmp(&a.published_at),
-            }
-        });
+        // Newest first; the ordering rule lives in `extension_host` so the
+        // catalog and this selector cannot disagree.
+        extension_versions.sort_unstable_by(|a, b| compare_extension_versions(b, a));
 
         let matches = extension_versions
             .iter()

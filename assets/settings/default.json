@@ -1630,7 +1630,9 @@
   "load_direnv": "direct",
   "edit_predictions": {
     // Which edit prediction provider to use.
-    "provider": "zed",
+    // HiCodeer ships without the hosted Zed provider, so no provider is active
+    // by default; users can still opt into a local or bring-your-own-key one.
+    "provider": "none",
     // Disable edit predictions for files matching these glob patterns.
     //
     // Use `"..."` to add patterns without repeating Zed's defaults. In project

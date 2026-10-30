@@ -38,10 +38,11 @@ const INTEGRATION_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Directory the agent client keeps its own configuration in.
 ///
-/// This is the release layout, not a `cfg!`-derived one: the daemon ships as a
-/// release binary even though this crate is compiled in debug, and the server's
-/// state now lives below HiCodeer's own directory.
-const CLIENT_CONFIG_DIR: &str = "hicodeer/agenttui";
+/// This is the release build's name because the daemon ships as a release
+/// binary even though this crate is compiled in debug; deriving it from `cfg!`
+/// would point at the development directory and miss the file the client
+/// actually reads.
+const CLIENT_CONFIG_DIR: &str = "herdr";
 const CLIENT_CONFIG_FILE: &str = "config.toml";
 /// Top-level switch that makes the client skip its first-run welcome screen.
 const ONBOARDING_KEY: &str = "onboarding";
@@ -51,7 +52,7 @@ const ONBOARDING_KEY: &str = "onboarding";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToastDelivery {
     Off,
-    InApp,
+    Herdr,
     Terminal,
     System,
 }
@@ -61,7 +62,7 @@ impl ToastDelivery {
     fn as_str(self) -> &'static str {
         match self {
             ToastDelivery::Off => "off",
-            ToastDelivery::InApp => "in_app",
+            ToastDelivery::Herdr => "herdr",
             ToastDelivery::Terminal => "terminal",
             ToastDelivery::System => "system",
         }
@@ -69,7 +70,7 @@ impl ToastDelivery {
 
     fn from_str(value: &str) -> Self {
         match value {
-            "in_app" => ToastDelivery::InApp,
+            "herdr" => ToastDelivery::Herdr,
             "terminal" => ToastDelivery::Terminal,
             "system" => ToastDelivery::System,
             _ => ToastDelivery::Off,
@@ -526,7 +527,7 @@ pub fn migrate_legacy_delivery(cx: &mut App) {
     };
     if matches!(
         load(&path).toast,
-        ToastDelivery::InApp | ToastDelivery::Terminal
+        ToastDelivery::Herdr | ToastDelivery::Terminal
     ) {
         if let Err(error) = set_toast_delivery(ToastDelivery::System, cx) {
             log::warn!("agent settings: cannot migrate the notification delivery: {error}");
@@ -703,11 +704,11 @@ mod tests {
     #[test]
     fn upsert_keeps_other_keys_and_adds_a_missing_section() {
         let original = "[ui]\nsidebar_width = 26\n";
-        let updated = upsert_section_value(original, TOAST_SECTION, TOAST_KEY, "\"in_app\"");
+        let updated = upsert_section_value(original, TOAST_SECTION, TOAST_KEY, "\"herdr\"");
 
         assert!(updated.contains("sidebar_width = 26"));
-        assert!(updated.contains("[ui.toast]\ndelivery = \"in_app\""));
-        assert_eq!(parse_settings(&updated).toast, ToastDelivery::InApp);
+        assert!(updated.contains("[ui.toast]\ndelivery = \"herdr\""));
+        assert_eq!(parse_settings(&updated).toast, ToastDelivery::Herdr);
     }
 
     #[test]

@@ -439,7 +439,7 @@ impl App {
     ) {
         if !matches!(
             self.state.toast_config.delivery,
-            crate::config::ToastDelivery::InApp
+            crate::config::ToastDelivery::Herdr
         ) || self.state.toast == *previous_toast
         {
             return;
@@ -1289,7 +1289,7 @@ impl App {
 
         let reason = match self.state.toast_config.delivery {
             crate::config::ToastDelivery::Off => NotificationShowReason::Disabled,
-            crate::config::ToastDelivery::InApp => {
+            crate::config::ToastDelivery::Herdr => {
                 if self.state.toast.is_some() {
                     NotificationShowReason::Busy
                 } else if self.api_notification_rate_limited(Instant::now()) {
@@ -1741,7 +1741,7 @@ mod tests {
             .get_mut(&terminal_id)
             .unwrap()
             .set_hook_authority(
-                "hicodeer:omp".to_string(),
+                "herdr:omp".to_string(),
                 "omp".to_string(),
                 AgentState::Working,
                 None,
@@ -1848,15 +1848,15 @@ mod tests {
         let root = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
-            "hicodeer-agent-toast-context-{}-{}",
+            "herdr-toast-context-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        let stale_cwd = temp_root.join("__hicodeer_original__");
-        let live_cwd = temp_root.join("__hicodeer_projects__");
+        let stale_cwd = temp_root.join("__herdr_original__");
+        let live_cwd = temp_root.join("__herdr_projects__");
         std::fs::create_dir_all(&stale_cwd).unwrap();
         std::fs::create_dir_all(&live_cwd).unwrap();
         init_repo(&stale_cwd);
@@ -1869,7 +1869,7 @@ mod tests {
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::InApp;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
         app.state.toast_config.delay_seconds = 0;
 
         let (events, _) = tokio::sync::mpsc::channel(4);
@@ -1915,7 +1915,7 @@ mod tests {
 
         assert_eq!(
             app.state.toast.as_ref().map(|toast| toast.context.as_str()),
-            Some("__hicodeer_projects__ · 1")
+            Some("__herdr_projects__ · 1")
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
@@ -1941,15 +1941,15 @@ mod tests {
         let root = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
-            "hicodeer-agent-delayed-toast-context-{}-{}",
+            "herdr-delayed-toast-context-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        let stale_cwd = temp_root.join("__hicodeer_original__");
-        let live_cwd = temp_root.join("__hicodeer_projects__");
+        let stale_cwd = temp_root.join("__herdr_original__");
+        let live_cwd = temp_root.join("__herdr_projects__");
         std::fs::create_dir_all(&stale_cwd).unwrap();
         std::fs::create_dir_all(&live_cwd).unwrap();
         init_repo(&stale_cwd);
@@ -1962,7 +1962,7 @@ mod tests {
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::InApp;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
         app.state.toast_config.delay_seconds = 1;
 
         let (events, _) = tokio::sync::mpsc::channel(4);
@@ -2019,7 +2019,7 @@ mod tests {
                 .first()
                 .and_then(|delivery| delivery.toast.as_ref())
                 .map(|toast| toast.context.as_str()),
-            Some("__hicodeer_projects__ · 1")
+            Some("__herdr_projects__ · 1")
         );
 
         for (_, runtime) in app.terminal_runtimes.drain() {
@@ -2161,7 +2161,7 @@ mod tests {
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
         terminal
             .set_hook_authority_at(
-                "hicodeer:codex".into(),
+                "herdr:codex".into(),
                 "codex".into(),
                 AgentState::Working,
                 None,
@@ -2307,7 +2307,7 @@ mod tests {
         terminal.respawn_shell_on_exit = true;
         terminal.set_agent_name("codex".into());
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "hicodeer:codex".into(),
+            source: "herdr:codex".into(),
             agent: "codex".into(),
             session_ref: crate::agent_resume::AgentSessionRef::id("codex-session")
                 .expect("test session id should be valid"),
@@ -2466,13 +2466,13 @@ mod tests {
         );
         let mut workspace = crate::workspace::Workspace::test_new("stale");
         workspace.custom_name = None;
-        workspace.identity_cwd = "/__hicodeer_original__".into();
+        workspace.identity_cwd = "/__herdr_original__".into();
         let root = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let workspace_id = workspace.id.clone();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
-        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = "/__hicodeer_projects__".into();
+        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = "/__herdr_projects__".into();
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
@@ -2490,7 +2490,7 @@ mod tests {
         app.state.toast = Some(crate::app::state::ToastNotification {
             kind: ToastKind::Finished,
             title: "codex finished".into(),
-            context: "__hicodeer_original__ · 1".into(),
+            context: "__herdr_original__ · 1".into(),
             position: None,
             target: Some(crate::app::state::ToastTarget {
                 workspace_id,
@@ -2510,7 +2510,7 @@ mod tests {
 
         assert_eq!(
             app.state.toast.as_ref().map(|toast| toast.context.as_str()),
-            Some("__hicodeer_original__ · 1")
+            Some("__herdr_original__ · 1")
         );
     }
 }

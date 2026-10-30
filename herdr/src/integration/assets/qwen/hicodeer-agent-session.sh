@@ -1,16 +1,16 @@
 #!/bin/sh
-# managed by HiCodeer; reinstalling the integration replaces this file.
-# HICODEER_AGENT_INTEGRATION_ID=qwen
-# HICODEER_AGENT_INTEGRATION_VERSION=7
+# managed by herdr; reinstalling the integration replaces this file.
+# HERDR_INTEGRATION_ID=qwen
+# HERDR_INTEGRATION_VERSION=3
 
 [ "${1:-}" = "session" ] || exit 0
-[ "${HICODEER_AGENT_ENV:-}" = "1" ] || exit 0
-[ -n "${HICODEER_AGENT_PANE_ID:-}" ] || exit 0
+[ "${HERDR_ENV:-}" = "1" ] || exit 0
+[ -n "${HERDR_PANE_ID:-}" ] || exit 0
 [ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || exit 0
-if [ -n "${HICODEER_AGENT_BIN_PATH:-}" ]; then
-    [ -x "$HICODEER_AGENT_BIN_PATH" ] || exit 0
+if [ -n "${HERDR_BIN_PATH:-}" ]; then
+    [ -x "$HERDR_BIN_PATH" ] || exit 0
 else
-    command -v hicodeer-agent >/dev/null 2>&1 || exit 0
+    command -v herdr >/dev/null 2>&1 || exit 0
 fi
 command -v python3 >/dev/null 2>&1 || exit 0
 
@@ -27,10 +27,10 @@ try:
     source = payload.get("source")
     if not isinstance(session_id, str) or not session_id:
         raise ValueError
-    command = os.environ.get("HICODEER_AGENT_BIN_PATH") or "hicodeer-agent"
+    command = os.environ.get("HERDR_BIN_PATH") or "herdr"
     args = [
-        command, "pane", "report-agent-session", os.environ["HICODEER_AGENT_PANE_ID"],
-        "--source", "hicodeer:qwen", "--agent", "qwen",
+        command, "pane", "report-agent-session", os.environ["HERDR_PANE_ID"],
+        "--source", "herdr:qwen", "--agent", "qwen",
         "--agent-session-id", session_id, "--seq", str(time.time_ns()),
     ]
     if source in ("startup", "resume", "clear", "compact", "branch"):

@@ -10,7 +10,7 @@
     "preview": false
   },
   "update_available": "1.0.1",
-  "update_install_command": "hicodeer-agent update",
+  "update_install_command": "herdr update",
   "server_keybindings_toml": "[keys]",
   "latest_release_notes_available": true,
   "integration_updates_available": true,

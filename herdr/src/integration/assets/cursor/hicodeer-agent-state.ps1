@@ -1,6 +1,6 @@
-# managed by HiCodeer; reinstalling the integration replaces this file.
-# HICODEER_AGENT_INTEGRATION_ID=cursor
-# HICODEER_AGENT_INTEGRATION_VERSION=4
+# managed by herdr; reinstalling the integration replaces this file.
+# HERDR_INTEGRATION_ID=cursor
+# HERDR_INTEGRATION_VERSION=2
 
 param([string]$Action = "")
 
@@ -10,8 +10,8 @@ function Exit-Hook {
 }
 
 if ($Action -ne "session") { Exit-Hook }
-if ($env:HICODEER_AGENT_ENV -ne "1") { Exit-Hook }
-if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_PANE_ID)) { Exit-Hook }
+if ($env:HERDR_ENV -ne "1") { Exit-Hook }
+if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { Exit-Hook }
 
 # Read hook input as raw bytes so UTF-8 payloads decode correctly even when the
 # console input code page is not UTF-8 (for example CP949 on Korean Windows).
@@ -42,9 +42,9 @@ foreach ($name in @("session_id", "sessionId", "conversation_id", "conversationI
 if ([string]::IsNullOrWhiteSpace($sessionId)) { Exit-Hook }
 
 $seq = [DateTime]::UtcNow.Ticks
-$agentBin = if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_BIN_PATH)) { "hicodeer-agent" } else { $env:HICODEER_AGENT_BIN_PATH }
+$herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
 try {
-    & $agentBin pane report-agent-session $env:HICODEER_AGENT_PANE_ID --source hicodeer:cursor --agent cursor --seq $seq --agent-session-id $sessionId 2>$null | Out-Null
+    & $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:cursor --agent cursor --seq $seq --agent-session-id $sessionId 2>$null | Out-Null
 } catch {
 }
 

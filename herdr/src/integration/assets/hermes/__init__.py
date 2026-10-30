@@ -1,7 +1,7 @@
-"""Hermes plugin installed by HiCodeer to report resumable session identity."""
+"""Hermes plugin installed by Herdr to report resumable session identity."""
 
-# HICODEER_AGENT_INTEGRATION_ID=hermes
-# HICODEER_AGENT_INTEGRATION_VERSION=6
+# HERDR_INTEGRATION_ID=hermes
+# HERDR_INTEGRATION_VERSION=5
 
 from __future__ import annotations
 
@@ -9,15 +9,15 @@ import os
 import subprocess
 import time
 
-_SOURCE = "hicodeer:hermes"
+_SOURCE = "herdr:hermes"
 _AGENT = "hermes"
 _INTERACTIVE_PLATFORMS = {"cli", "tui", "desktop", "acp"}
 
 
 def _pane_id() -> str | None:
-    if os.environ.get("HICODEER_AGENT_ENV") != "1":
+    if os.environ.get("HERDR_ENV") != "1":
         return None
-    return os.environ.get("HICODEER_AGENT_PANE_ID", "").strip() or None
+    return os.environ.get("HERDR_PANE_ID", "").strip() or None
 
 
 def _send_session(session_id: str, start_source: str) -> None:
@@ -25,7 +25,7 @@ def _send_session(session_id: str, start_source: str) -> None:
     if pane_id is None:
         return
     command = [
-        os.environ.get("HICODEER_AGENT_BIN_PATH") or "hicodeer-agent",
+        os.environ.get("HERDR_BIN_PATH") or "herdr",
         "pane",
         "report-agent-session",
         pane_id,

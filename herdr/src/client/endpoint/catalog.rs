@@ -389,7 +389,7 @@ mod tests {
     fn path(name: &str) -> PathBuf {
         std::env::temp_dir()
             .join(format!(
-                "hicodeer-agent-endpoint-catalog-{}-{name}",
+                "herdr-endpoint-catalog-{}-{name}",
                 std::process::id()
             ))
             .join("endpoints.json")

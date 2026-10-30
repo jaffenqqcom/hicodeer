@@ -722,7 +722,7 @@ pub struct ToastNotification {
     pub kind: ToastKind,
     pub title: String,
     pub context: String,
-    pub position: Option<crate::config::ToastInAppPosition>,
+    pub position: Option<crate::config::ToastHerdrPosition>,
     pub target: Option<ToastTarget>,
 }
 
@@ -1046,7 +1046,7 @@ impl AppState {
             mode: Mode::Navigate,
             should_quit: false,
             request_client_config_reload: false,
-            worktree_directory: std::path::PathBuf::from("/tmp/hicodeer-worktrees"),
+            worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             latest_release_notes: None,
             product_announcement: None,
             view: ViewState {
@@ -1054,7 +1054,7 @@ impl AppState {
                 pane_infos: Vec::new(),
             },
             update_available: None,
-            update_install_command: "hicodeer-agent update".into(),
+            update_install_command: "herdr update".into(),
             latest_release_notes_available: false,
             update_dismissed: false,
             config_diagnostic: None,

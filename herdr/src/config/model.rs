@@ -63,9 +63,7 @@ fn default_update_channel_for_build(is_windows: bool, is_preview: bool) -> Updat
 pub enum ToastDelivery {
     #[default]
     Off,
-    /// In-app notification drawn by the terminal UI.
-    #[serde(rename = "in_app")]
-    InApp,
+    Herdr,
     Terminal,
     System,
 }
@@ -74,7 +72,7 @@ pub enum ToastDelivery {
     Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema, Default,
 )]
 #[serde(rename_all = "kebab-case")]
-pub enum ToastInAppPosition {
+pub enum ToastHerdrPosition {
     TopLeft,
     TopRight,
     BottomLeft,
@@ -201,14 +199,14 @@ fn parse_right_click_passthrough_modifier(value: &str) -> Option<Option<KeyModif
 pub struct ToastConfig {
     pub delivery: ToastDelivery,
     pub delay_seconds: u64,
-    pub in_app: InAppToastConfig,
+    pub herdr: HerdrToastConfig,
     pub clipboard: ClipboardToastConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
-pub struct InAppToastConfig {
-    pub position: ToastInAppPosition,
+pub struct HerdrToastConfig {
+    pub position: ToastHerdrPosition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -371,7 +369,7 @@ pub struct KeysConfig {
     pub navigate_pane_up: BindingConfig,
     /// Focus the pane to the right in navigate mode. Default: "l". Right arrow is always an alias.
     pub navigate_pane_right: BindingConfig,
-    /// Detach the current client from its HiCodeer server. Default: "prefix+q".
+    /// Detach the current client from its Herdr server. Default: "prefix+q".
     pub detach: BindingConfig,
     /// Reload config.toml in the running app/server. Default: "prefix+shift+r".
     pub reload_config: BindingConfig,
@@ -950,7 +948,7 @@ pub struct UiConfig {
     pub sidebar_collapsed_mode: SidebarCollapsedModeConfig,
     /// Terminal width at or below which Herdr uses the mobile single-column layout. Default: 64.
     pub mobile_width_threshold: u16,
-    /// Capture mouse input for HiCodeer's mouse UI. Default: true.
+    /// Capture mouse input for Herdr's mouse UI. Default: true.
     pub mouse_capture: bool,
     /// Copy text selected with the mouse. Default: true.
     pub copy_on_select: bool,
@@ -1061,7 +1059,7 @@ pub struct AdvancedConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct RemoteConfig {
-    /// Add keepalive fallbacks and private connection reuse for `hicodeer-agent --remote`.
+    /// Add keepalive fallbacks and private connection reuse for `herdr --remote`.
     /// Set false to run plain ssh unchanged. Default: true.
     pub manage_ssh_config: bool,
 }
@@ -1077,7 +1075,7 @@ impl Default for RemoteConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ExperimentalConfig {
-    /// Allow launching herdr inside an existing hicodeer-agent pane. Default: false.
+    /// Allow launching herdr inside an existing herdr pane. Default: false.
     pub allow_nested: bool,
     /// Deprecated compatibility key for `terminal.kitty_graphics`.
     pub kitty_graphics: Option<bool>,
@@ -1192,7 +1190,7 @@ impl Default for KeysConfig {
 impl Default for WorktreesConfig {
     fn default() -> Self {
         Self {
-            directory: "~/.hicodeer/worktrees".into(),
+            directory: "~/.herdr/worktrees".into(),
         }
     }
 }
@@ -1256,16 +1254,16 @@ impl Default for ToastConfig {
         Self {
             delivery: ToastDelivery::Off,
             delay_seconds: 1,
-            in_app: InAppToastConfig::default(),
+            herdr: HerdrToastConfig::default(),
             clipboard: ClipboardToastConfig::default(),
         }
     }
 }
 
-impl Default for InAppToastConfig {
+impl Default for HerdrToastConfig {
     fn default() -> Self {
         Self {
-            position: ToastInAppPosition::BottomRight,
+            position: ToastHerdrPosition::BottomRight,
         }
     }
 }
@@ -1293,13 +1291,13 @@ impl<'de> Deserialize<'de> for ToastConfig {
             delivery: Option<ToastDelivery>,
             enabled: Option<bool>,
             delay_seconds: Option<u64>,
-            in_app: InAppToastConfig,
+            herdr: HerdrToastConfig,
             clipboard: ClipboardToastConfig,
         }
 
         let raw = RawToastConfig::deserialize(deserializer)?;
         let legacy_delivery = match raw.enabled {
-            Some(true) => ToastDelivery::InApp,
+            Some(true) => ToastDelivery::Herdr,
             Some(false) | None => ToastDelivery::Off,
         };
         let delivery = raw.delivery.unwrap_or(legacy_delivery);
@@ -1313,7 +1311,7 @@ impl<'de> Deserialize<'de> for ToastConfig {
         Ok(Self {
             delivery,
             delay_seconds,
-            in_app: raw.in_app,
+            herdr: raw.herdr,
             clipboard: raw.clipboard,
         })
     }
@@ -1578,14 +1576,14 @@ tab_bar_right_separator = " · "
     #[test]
     fn worktrees_directory_defaults_and_parses() {
         let default_config = Config::default();
-        assert_eq!(default_config.worktrees.directory, "~/.hicodeer/worktrees");
+        assert_eq!(default_config.worktrees.directory, "~/.herdr/worktrees");
 
         let toml = r#"
 [worktrees]
-directory = "~/Projects/hicodeer-agent-worktrees"
+directory = "~/Projects/herdr-worktrees"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.worktrees.directory, "~/Projects/hicodeer-agent-worktrees");
+        assert_eq!(config.worktrees.directory, "~/Projects/herdr-worktrees");
     }
 
     #[test]
@@ -1888,7 +1886,7 @@ mouse_scroll_lines = 0
 delivery = "terminal"
 delay_seconds = 2
 
-[ui.toast.in_app]
+[ui.toast.herdr]
 position = "top-left"
 
 [ui.toast.clipboard]
@@ -1898,7 +1896,7 @@ position = "top-center"
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.toast.delivery, ToastDelivery::Terminal);
         assert_eq!(config.ui.toast.delay_seconds, 2);
-        assert_eq!(config.ui.toast.in_app.position, ToastInAppPosition::TopLeft);
+        assert_eq!(config.ui.toast.herdr.position, ToastHerdrPosition::TopLeft);
         assert!(!config.ui.toast.clipboard.enabled);
         assert_eq!(
             config.ui.toast.clipboard.position,
@@ -1912,8 +1910,8 @@ position = "top-center"
         assert_eq!(config.ui.toast.delivery, ToastDelivery::Off);
         assert_eq!(config.ui.toast.delay_seconds, 1);
         assert_eq!(
-            config.ui.toast.in_app.position,
-            ToastInAppPosition::BottomRight
+            config.ui.toast.herdr.position,
+            ToastHerdrPosition::BottomRight
         );
         assert!(config.ui.toast.clipboard.enabled);
         assert_eq!(
@@ -1939,7 +1937,7 @@ delivery = "system"
 enabled = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.toast.delivery, ToastDelivery::InApp);
+        assert_eq!(config.ui.toast.delivery, ToastDelivery::Herdr);
     }
 
     #[test]

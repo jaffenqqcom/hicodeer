@@ -1591,7 +1591,7 @@ mod tests {
             .expect("clock should be after unix epoch")
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "hicodeer-agent-workspace-label-cache-{}-{stamp}",
+            "herdr-workspace-label-cache-{}-{stamp}",
             std::process::id()
         ));
         let cwd = root.join("deep/nested");
@@ -1636,14 +1636,14 @@ mod tests {
         let mut terminals = HashMap::new();
         terminals.insert(
             terminal_id.clone(),
-            TerminalState::new(terminal_id, PathBuf::from("/hicodeer-test/pion")),
+            TerminalState::new(terminal_id, PathBuf::from("/herdr-test/pion")),
         );
         let terminal_runtimes = TerminalRuntimeRegistry::new();
 
         assert_eq!(ws.display_name_from(&terminals, &terminal_runtimes), "pion");
         assert_eq!(
             ws.resolved_identity_cwd_from(&terminals, &terminal_runtimes),
-            Some(PathBuf::from("/hicodeer-test/pion"))
+            Some(PathBuf::from("/herdr-test/pion"))
         );
     }
 

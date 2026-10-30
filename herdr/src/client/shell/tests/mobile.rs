@@ -40,7 +40,7 @@ fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
             workspace_id: None,
             tab_id: None,
             pane_id: None,
-            position: Some(crate::config::ToastInAppPosition::BottomRight),
+            position: Some(crate::config::ToastHerdrPosition::BottomRight),
         },
         deadline: std::time::Instant::now(),
     });

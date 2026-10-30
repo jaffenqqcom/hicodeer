@@ -13,7 +13,7 @@ mod tests;
 
 fn backup_paths(target: &Path) -> (PathBuf, PathBuf) {
     let mut name = target.as_os_str().to_os_string();
-    name.push(".hicodeer-backup");
+    name.push(".herdr-backup");
     let complete = PathBuf::from(&name);
     name.push(".pending");
     (complete, PathBuf::from(name))

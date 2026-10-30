@@ -130,7 +130,7 @@ python3 test_resume.py --agent openclaw --session <id> --expect-known-failure
 - `--require-ready` / `--wait-seconds`：额外硬断言会话在 N 秒内到达 `interactive_ready`。
 - `--cleanup`：结束后关闭本轮新建的 workspace（本轮之前就存在的 space 一律不关）。
 - `--method-args JSON`：额外合并进 `agent.start` 参数的 JSON 对象（`{session}` 占位替换）。**不能带 `args`**——`resume_session` 与 `args` 互斥，同传会被服务端判 `invalid_agent_argument`（`herdr/src/app/agents.rs:300-310`）。
-- `--require-agent-session` / `--no-require-agent-session`：是否断言该 pane 的 `agent_session`（**默认开启**）。默认会校验 `value` == 会话 id、`agent` == 目标 agent、`source` == `hicodeer:<label>`（`agy` 例外，是 `hicodeer:antigravity_cli`）。`openclaw` 自动跳过这一项（它起不来时 session 会被清掉），也可手动用 `--no-require-agent-session` 关掉。
+- `--require-agent-session` / `--no-require-agent-session`：是否断言该 pane 的 `agent_session`（**默认开启**）。默认会校验 `value` == 会话 id、`agent` == 目标 agent、`source` == `herdr:<label>`（`agy` 例外，是 `herdr:antigravity_cli`）。`openclaw` 自动跳过这一项（它起不来时 session 会被清掉），也可手动用 `--no-require-agent-session` 关掉。
 - `--expect-known-failure`：把该 agent 的失败记为「已知失败」，退出码仍为 0。用于 `openclaw`：服务端会正确下发 `openclaw resume <id>`，但 CLI 的 `resume <query>` 只匹配 session key / display name / label（[官方文档](https://docs.openclaw.ai/cli/resume)），扫描出的 id 是 UUID，TUI 大概率 exit 1。
 
 断言：`agent.start` 返回成功；返回的 `argv`（完整形式，含 argv[0]）等于服务端恢复命令表（见下）；`agent.list` 出现新 pane；pane 归属新建的 workspace；`agent_session` 的 `value` / `agent` / `source` 正确（默认开启）；`agent` 字段等于目标 agent。
@@ -184,7 +184,7 @@ python3 test_hooks.py --all --keep           # 跑完不关本轮新建的 space
    - 必须至少出现过一次 `agent_status == "working"`；
    - working 之后必须回到 `idle`（`done` 也算收尾）。
 5. 断言 `agent.list` 里该 pane 的 `completion_seq` 非空——这是服务端对「这次空闲是真完成、而不是被 Esc 打断」的判定（`herdr/src/app/actions.rs` 的 `is_completion_transition` + `suppress_completion`），属 herdr 内部事实。
-6. 断言 `agent_session.source == "hicodeer:<agent>"`、`agent_session.agent == <agent>`——即状态确实来自我们装的 hook，而不是屏幕识别兜底。
+6. 断言 `agent_session.source == "herdr:<agent>"`、`agent_session.agent == <agent>`——即状态确实来自我们装的 hook，而不是屏幕识别兜底。
 
 覆盖范围只到 herdr 服务端：脚本读的都是 `integration.list` / `pane.get` / `agent.list`，断言服务端记录的状态、会话与完成标记。面板侧的表现（侧栏行标记、提示音、应用内 toast，即 `agent_panel.rs` 的 `attention_agents` 与 `toast_is_silent`）**不在本脚本范围内**，也不为了它往协议里加字段。`completion_seq` 之所以要断言，是因为它是服务端对「这次空闲是真完成而不是被打断」的判定，属于 herdr 内部事实。
 
@@ -203,7 +203,7 @@ python3 test_hooks.py --all --keep           # 跑完不关本轮新建的 space
 - `--wait-seconds`（默认 180）/ `--start-timeout-ms`（默认 60000）/ `--startup-prompt-seconds`（默认 30）。
 - `--no-blocked` / `--blocked-prompt`：关掉或改写「等审批」那一轮。
 
-blocked 那一轮会先确认权限注入成功：配置不存在、读不了、或者已经带 `permission` 键时直接判失败，不会在「根本没有 ask」的前提下跑完再说通过。断言除 `agent_status == "blocked"` 之外还校验 `agent_session.source == "hicodeer:<agent>"`，防止被其它来源的 blocked 蒙过。
+blocked 那一轮会先确认权限注入成功：配置不存在、读不了、或者已经带 `permission` 键时直接判失败，不会在「根本没有 ask」的前提下跑完再说通过。断言除 `agent_status == "blocked"` 之外还校验 `agent_session.source == "herdr:<agent>"`，防止被其它来源的 blocked 蒙过。
 - `--cwd`：workspace 目录，默认沿用 daemon 当前目录。
 - `--keep`：保留本轮 space。
 

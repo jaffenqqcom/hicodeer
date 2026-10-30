@@ -128,7 +128,7 @@ impl ClientShellConfig {
             sound_enabled: config.ui.sound.enabled,
             toast_delivery: config.ui.toast.delivery,
             toast_delay_seconds: config.ui.toast.delay_seconds,
-            toast_position: config.ui.toast.in_app.position,
+            toast_position: config.ui.toast.herdr.position,
             copy_on_select: config.ui.copy_on_select,
             clipboard_toast_enabled: config.ui.toast.clipboard.enabled,
             clipboard_toast_position: config.ui.toast.clipboard.position,
@@ -355,7 +355,7 @@ impl ClientShellConfig {
                 self.sound_enabled = ui.sound.enabled;
                 self.toast_delivery = ui.toast.delivery;
                 self.toast_delay_seconds = ui.toast.delay_seconds;
-                self.toast_position = ui.toast.in_app.position;
+                self.toast_position = ui.toast.herdr.position;
                 self.copy_on_select = ui.copy_on_select;
                 self.clipboard_toast_enabled = ui.toast.clipboard.enabled;
                 self.clipboard_toast_position = ui.toast.clipboard.position;
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn initial_surface_size_uses_persisted_endpoint_chrome() {
         let path = std::env::temp_dir().join(format!(
-            "hicodeer-agent-initial-shell-preferences-{}.json",
+            "herdr-initial-shell-preferences-{}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

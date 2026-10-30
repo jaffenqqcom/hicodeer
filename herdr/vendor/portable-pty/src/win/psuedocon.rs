@@ -134,21 +134,21 @@ fn load_conpty() -> ConPtyFuncs {
         )
     });
 
-    if std::env::var("HICODEER_AGENT_WINDOWS_CONPTY").as_deref() == Ok("system") {
-        log::warn!("HICODEER_AGENT_WINDOWS_CONPTY=system disables the bundled ConPTY");
+    if std::env::var("HERDR_WINDOWS_CONPTY").as_deref() == Ok("system") {
+        log::warn!("HERDR_WINDOWS_CONPTY=system disables Herdr's bundled ConPTY");
         return system;
     }
 
     match app_local_conpty_path() {
         Ok(Some(path)) => load_app_local_conpty(&path).unwrap_or_else(|error| {
             panic!(
-                "failed to load verified app-local ConPTY from {}: {error}; set HICODEER_AGENT_WINDOWS_CONPTY=system to use the Windows system ConPTY",
+                "failed to load verified app-local ConPTY from {}: {error}; set HERDR_WINDOWS_CONPTY=system to use the Windows system ConPTY",
                 path.display()
             )
         }),
         Ok(None) => system,
         Err(error) => panic!(
-            "the app-local ConPTY bundle is invalid: {}; reinstall HiCodeer or set HICODEER_AGENT_WINDOWS_CONPTY=system to use the Windows system ConPTY",
+            "Herdr's app-local ConPTY bundle is invalid: {}; reinstall Herdr or set HERDR_WINDOWS_CONPTY=system to use the Windows system ConPTY",
             error
         ),
     }
@@ -175,22 +175,22 @@ fn app_local_conpty_path() -> Result<Option<PathBuf>, String> {
         return Ok(None);
     }
     let executable = std::env::current_exe()
-        .map_err(|error| format!("cannot locate the HiCodeer executable: {error}"))?;
+        .map_err(|error| format!("cannot locate the Herdr executable: {error}"))?;
     let executable_dir = executable
         .parent()
-        .ok_or_else(|| "HiCodeer executable has no parent directory".to_string())?;
+        .ok_or_else(|| "Herdr executable has no parent directory".to_string())?;
     let bundle = executable_dir.join("conpty");
     if !bundle.exists() {
         return Ok(None);
     }
     reject_reparse_point(&bundle)?;
 
-    let mut expected = BTreeSet::from(["hicodeer-conpty.json".to_string()]);
+    let mut expected = BTreeSet::from(["herdr-conpty.json".to_string()]);
     for (relative, expected_hash) in CONPTY_FILES {
         expected.insert((*relative).to_string());
         verify_bundle_file(&bundle, relative, expected_hash)?;
     }
-    let marker = bundle.join("hicodeer-conpty.json");
+    let marker = bundle.join("herdr-conpty.json");
     verify_regular_file(&marker)?;
 
     let actual = bundle_files(&bundle)?;

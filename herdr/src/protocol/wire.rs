@@ -1,4 +1,4 @@
-//! Wire protocol for hicodeer-agent server/client communication.
+//! Wire protocol for herdr server/client communication.
 //!
 //! Defines the message types, framing, version negotiation, and safety
 //! constraints for the binary protocol over local sockets.
@@ -880,7 +880,7 @@ impl FrameData {
                 let idx = (row as usize) * (self.width as usize) + (col as usize);
                 let cell_data = &self.cells[idx];
                 let cell = buffer.cell_mut((col, row)).expect("cell within bounds");
-                cell.set_symbol(sanitize_cell_symbol(&cell_data.symbol));
+                cell.set_symbol(&cell_data.symbol);
                 cell.fg = u32_to_color(cell_data.fg);
                 cell.bg = u32_to_color(cell_data.bg);
                 cell.modifier = u16_to_modifier(cell_data.modifier);
@@ -889,30 +889,6 @@ impl FrameData {
         }
 
         Some(buffer)
-    }
-}
-
-/// Returns `symbol`, or a single space when it would be a lone ASCII control
-/// character.
-///
-/// Terminals never render control characters, but a symbol arriving from the
-/// wire or from a synthesized frame can be one. Handing it to
-/// `Cell::set_symbol` trips a debug assertion inside ratatui, so every path that
-/// writes a symbol into a buffer goes through here first.
-pub(crate) fn sanitize_cell_symbol(symbol: &str) -> &str {
-    let bytes = symbol.as_bytes();
-    if bytes.len() == 1 && bytes[0].is_ascii_control() {
-        static REPORTED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            tracing::warn!(
-                "replacing control character {:?} from a screen cell with a space",
-                char::from(bytes[0])
-            );
-        }
-        " "
-    } else {
-        symbol
     }
 }
 
@@ -1397,7 +1373,7 @@ pub struct SemanticNotification {
     pub workspace_id: Option<String>,
     pub tab_id: Option<String>,
     pub pane_id: Option<String>,
-    pub position: Option<crate::config::ToastInAppPosition>,
+    pub position: Option<crate::config::ToastHerdrPosition>,
 }
 
 /// Messages sent from the server to the client over the client protocol socket.
@@ -1450,7 +1426,7 @@ pub enum ServerMessage {
 
     /// Set the foreground client's outer terminal window title.
     WindowTitle {
-        /// Sanitized title to write with OSC 0. `None` restores HiCodeer's default title.
+        /// Sanitized title to write with OSC 0. `None` restores Herdr's default title.
         title: Option<String>,
     },
 
@@ -1794,11 +1770,11 @@ pub fn check_client_version(client_version: u32) -> VersionCheck {
         VersionCheck::Compatible
     } else if client_version < PROTOCOL_VERSION {
         VersionCheck::Incompatible(format!(
-            "client version {client_version} is older than server version {PROTOCOL_VERSION}; please upgrade your hicodeer-agent client"
+            "client version {client_version} is older than server version {PROTOCOL_VERSION}; please upgrade your herdr client"
         ))
     } else {
         VersionCheck::Incompatible(format!(
-            "client version {client_version} is newer than server version {PROTOCOL_VERSION}; please upgrade the hicodeer-agent server"
+            "client version {client_version} is newer than server version {PROTOCOL_VERSION}; please upgrade the herdr server"
         ))
     }
 }
@@ -1810,49 +1786,6 @@ pub fn check_client_version(client_version: u32) -> VersionCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sanitize_cell_symbol_replaces_control_characters() {
-        assert_eq!(sanitize_cell_symbol("\u{1b}"), " ");
-        assert_eq!(sanitize_cell_symbol("\u{7}"), " ");
-        assert_eq!(sanitize_cell_symbol("\0"), " ");
-        assert_eq!(sanitize_cell_symbol("a"), "a");
-        assert_eq!(sanitize_cell_symbol("→"), "→");
-        assert_eq!(sanitize_cell_symbol(""), "");
-        assert_eq!(sanitize_cell_symbol("\u{1b}[31m"), "\u{1b}[31m");
-    }
-
-    #[test]
-    fn buffer_reconstruction_survives_control_symbols() {
-        let frame = FrameData {
-            width: 2,
-            height: 1,
-            cells: vec![
-                CellData {
-                    symbol: "\u{7}".to_owned(),
-                    fg: 0,
-                    bg: 0,
-                    modifier: 0,
-                    skip: false,
-                    hyperlink: None,
-                },
-                CellData {
-                    symbol: "x".to_owned(),
-                    fg: 0,
-                    bg: 0,
-                    modifier: 0,
-                    skip: false,
-                    hyperlink: None,
-                },
-            ],
-            cursor: None,
-            hyperlinks: Vec::new(),
-            graphics: Vec::new(),
-        };
-        let buffer = frame.to_ratatui_buffer().expect("buffer");
-        assert_eq!(buffer[(0, 0)].symbol(), " ");
-        assert_eq!(buffer[(1, 0)].symbol(), "x");
-    }
 
     #[test]
     fn graphics_bulk_codec_preserves_legacy_wire_and_json() {
@@ -2288,7 +2221,7 @@ mod tests {
     #[tokio::test]
     async fn client_shell_remote_altgr_dead_key_emits_only_composed_text() {
         // Spanish ISO AltGr+4, then Space, captured in #3948:
-        // https://example.invalid/hicodeer/issues/3948#issuecomment-5633222390
+        // https://github.com/herdrdev/herdr/issues/3948#issuecomment-5633222390
         let records = [
             ('4', ClientKeyKind::Press, 52, 5, 0, 9),
             ('4', ClientKeyKind::Release, 52, 5, 0, 9),
@@ -2877,11 +2810,11 @@ mod tests {
                 preview: false,
             }),
             update_available: Some("0.8.3".into()),
-            update_install_command: "hicodeer-agent update".into(),
+            update_install_command: "herdr update".into(),
             server_keybindings_toml: Some("[keys]\nprefix = \"ctrl+a\"\n".into()),
             latest_release_notes_available: true,
             integration_updates_available: true,
-            worktree_directory: "/tmp/hicodeer-agent-worktrees".into(),
+            worktree_directory: "/tmp/herdr-worktrees".into(),
             release_notes: Some(ClientShellReleaseNotes {
                 version: "0.8.3".into(),
                 body: "### New\n- Update ready".into(),
@@ -2968,7 +2901,7 @@ mod tests {
             workspace_id: Some("w1".into()),
             tab_id: Some("w1:t1".into()),
             pane_id: Some("w1:p1".into()),
-            position: Some(crate::config::ToastInAppPosition::TopRight),
+            position: Some(crate::config::ToastHerdrPosition::TopRight),
         });
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ServerMessage, _) =
@@ -3008,7 +2941,7 @@ mod tests {
 
     #[test]
     fn server_window_title_roundtrip() {
-        for title in [Some("hicodeer-agent api".to_owned()), None] {
+        for title in [Some("herdr api".to_owned()), None] {
             let msg = ServerMessage::WindowTitle { title };
             let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
             let (decoded, _): (ServerMessage, _) =
@@ -3102,7 +3035,7 @@ mod tests {
         assert_eq!(client, decoded);
 
         let server = ServerMessage::GraphicsFile {
-            path: "/run/user/1000/hicodeer-agent/source/frame".into(),
+            path: "/run/user/1000/herdr/source/frame".into(),
             expected_len: 4,
             image_id: 42,
             transfer_id: 7,

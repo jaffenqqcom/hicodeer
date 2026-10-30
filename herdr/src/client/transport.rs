@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn upload_cancellation_preserves_pending_endpoint_download() {
         let path = std::env::temp_dir().join(format!(
-            "hicodeer-cancel-{}-{}.sock",
+            "herdr-cancel-{}-{}.sock",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

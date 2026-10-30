@@ -26,9 +26,7 @@ impl std::fmt::Display for ClientError {
                 let path = client_socket_path();
                 write!(
                     f,
-                    "\nIs {} server running? Start it with `{} server`.",
-                    crate::brand::NAME,
-                    crate::brand::COMMAND
+                    "\nIs herdr server running? Start it with `herdr server`."
                 )?;
                 write!(f, "\nSocket path: {}", path.display())
             }
@@ -64,7 +62,7 @@ impl std::fmt::Display for ClientError {
             ClientError::ConnectionLost(err) => {
                 if let Ok(reattach_command) = std::env::var(crate::remote::REATTACH_COMMAND_ENV_VAR)
                 {
-                    write!(f, "lost connection to remote HiCodeer: {err}")?;
+                    write!(f, "lost connection to remote Herdr: {err}")?;
                     write!(f, "\nIf the remote server survived the SSH or network drop, its panes may still be running.")?;
                     write!(f, "\nRun `{reattach_command}` to reattach")
                 } else {

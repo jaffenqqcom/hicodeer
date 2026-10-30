@@ -52,7 +52,7 @@ async fn watch_connection(
             "Inhibit",
             &(
                 "shutdown",
-                "HiCodeer",
+                "Herdr",
                 "Save terminal workspace layout",
                 "delay",
             ),

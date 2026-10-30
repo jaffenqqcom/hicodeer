@@ -4,7 +4,7 @@ use std::process::Command;
 
 use libc::{c_char, c_int, c_void, mach_port_t, uid_t};
 
-const SERVER_CONTEXT_ENV: &str = "HICODEER_AGENT_MACOS_SERVER_CONTEXT";
+const SERVER_CONTEXT_ENV: &str = "HERDR_MACOS_SERVER_CONTEXT";
 const USER_CONTEXT: &str = "user";
 const TASK_BOOTSTRAP_PORT: c_int = 4;
 
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn missing_private_symbol_is_a_recoverable_error() {
-        let error = symbol(c"hicodeer-agent_nonexistent_bootstrap_symbol").unwrap_err();
+        let error = symbol(c"herdr_nonexistent_bootstrap_symbol").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }
 
@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn handoff_commands_remove_even_an_inherited_launch_marker() {
-        let mut command = Command::new("hicodeer-agent");
+        let mut command = Command::new("herdr");
         command.args(["server", "--handoff-import", "socket", "token"]);
         command.env(SERVER_CONTEXT_ENV, USER_CONTEXT);
         crate::platform::detach_server_daemon_command(&mut command);
@@ -295,9 +295,9 @@ mod tests {
 
     #[test]
     fn only_detached_server_commands_request_user_context() {
-        let direct = Command::new("hicodeer-agent");
+        let direct = Command::new("herdr");
         assert!(!direct.get_envs().any(|(key, _)| key == SERVER_CONTEXT_ENV));
-        let mut detached = Command::new("hicodeer-agent");
+        let mut detached = Command::new("herdr");
         crate::platform::detach_server_daemon_command(&mut detached);
         assert!(detached.get_envs().any(|(key, value)| {
             key == SERVER_CONTEXT_ENV && value == Some(OsStr::new(USER_CONTEXT))

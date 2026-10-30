@@ -8,7 +8,7 @@
   2. 新建独立 space，`agent.start` 起该 agent 的 TUI，等 pane 识别出 agent。
   3. `pane.send_text` + `pane.send_keys` 发一轮提示，轮询 `pane.get` 的
      `agent_status`，要求先出现 `working`、再回到 `idle`。
-  4. 断言 `agent_session` 的 `source` 是 `hicodeer:<agent>`，即上报来自我们装的 hook。
+  4. 断言 `agent_session` 的 `source` 是 `herdr:<agent>`，即上报来自我们装的 hook。
 
 覆盖有 hook 的四个 agent：zcode / codewhale / atomcode / deveco。
 openclaw 在 `agent --local` 下两套 hook 都不触发（2026-10-28 实测），不在此列。
@@ -383,7 +383,7 @@ def check_agent(harness, rpc, args, agent):
 
         harness.equal(
             "%s agent_session.source" % agent,
-            "hicodeer:%s" % agent,
+            "herdr:%s" % agent,
             session.get("source"),
         )
         harness.equal(
@@ -463,7 +463,7 @@ def check_blocked(harness, rpc, args, agent):
             session = pane.get("agent_session") or {}
             harness.equal(
                 "%s blocked 时 agent_session.source" % agent,
-                "hicodeer:%s" % agent,
+                "herdr:%s" % agent,
                 session.get("source"),
             )
         finally:

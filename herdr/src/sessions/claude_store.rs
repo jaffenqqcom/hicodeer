@@ -50,7 +50,7 @@ mod tests {
     /// a sub-agent of it and would show the same conversation twice.
     #[test]
     fn adjust_drops_transcripts_nested_below_a_session() {
-        let root = std::env::temp_dir().join(format!("hicodeer-agent-claude-store-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("herdr-claude-store-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let session = root.join("project").join("session.jsonl");
         let subagent = root

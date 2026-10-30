@@ -73,7 +73,7 @@ pub(crate) fn collect() -> Vec<CollectedSession> {
         // FAD's data dir backs its own bookkeeping, so each connector gets its
         // own scratch directory rather than sharing one across all of them.
         let ctx = ScanContext::local_default(
-            std::env::temp_dir().join("hicodeer-fad-scan").join(slug),
+            std::env::temp_dir().join("herdr-fad-scan").join(slug),
             None,
         );
         let deletable = store.delete.is_some();
@@ -577,7 +577,7 @@ mod tests {
     /// A directory this test owns, cleared before use so a previous run cannot
     /// make the assertions pass by accident.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("hicodeer-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("herdr-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the scratch directory");
         dir
@@ -708,7 +708,7 @@ mod tests {
             let session_ref = crate::agent_resume::AgentSessionRef::id("session-1")
                 .expect("a plain id is a valid session reference");
             let planned = crate::agent_resume::plan(
-                &format!("hicodeer:{label}"),
+                &format!("herdr:{label}"),
                 label,
                 &session_ref,
             );

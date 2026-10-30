@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn open_sessions_are_hidden_and_state_survives_a_reload() {
-        let path = std::env::temp_dir().join(format!("hicodeer-hist-{}.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("herdr-hist-{}.json", std::process::id()));
         let mut service = SessionService::load(path.clone());
         let view = service.history(
             vec![raw("codebuddy", "a1", "first", 100), raw("codebuddy", "a2", "second", 200)],
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn title_override_reads_back_what_a_rename_wrote() {
-        let path = std::env::temp_dir().join(format!("hicodeer-hist-{}e.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("herdr-hist-{}e.json", std::process::id()));
         let mut service = SessionService::load(path.clone());
         let key = SessionKey::new("claude", "c9");
         assert_eq!(service.title_override_of(&key), None);
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn rename_overrides_and_archive_hides_from_the_main_groups() {
-        let path = std::env::temp_dir().join(format!("hicodeer-hist-{}b.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("herdr-hist-{}b.json", std::process::id()));
         let mut service = SessionService::load(path.clone());
         let key = SessionKey::new("claude", "c1");
         service.rename(&key, Some("my name".to_owned())).unwrap();
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn sessions_without_a_folder_share_one_group_that_sorts_last() {
-        let path = std::env::temp_dir().join(format!("hicodeer-hist-{}c.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("herdr-hist-{}c.json", std::process::id()));
         let service = SessionService::load(path);
 
         let mut orphan = raw("hermes", "h1", "no folder", 300);
@@ -461,7 +461,7 @@ mod tests {
     /// not fall into the catch-all group that is keyed by an empty string.
     #[test]
     fn a_session_in_the_filesystem_root_keeps_its_own_group() {
-        let path = std::env::temp_dir().join(format!("hicodeer-hist-{}d.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("herdr-hist-{}d.json", std::process::id()));
         let service = SessionService::load(path);
 
         let mut at_root = raw("claude", "r1", "at root", 100);

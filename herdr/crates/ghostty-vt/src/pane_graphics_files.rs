@@ -25,8 +25,8 @@ fn clone_native_image_source(
     ))
 }
 
-// HiCodeer's default log filter uses the `hicodeer_agent` target.
-const LOG_TARGET: &str = "hicodeer_agent::pane_graphics_files";
+// Herdr's default log filter is `herdr=info`; keep these warnings under its target.
+const LOG_TARGET: &str = "herdr::pane_graphics_files";
 
 #[cfg(unix)]
 const DIRECTORY_MODE: u32 = 0o700;
@@ -374,7 +374,7 @@ pub fn validate_native_source(path: &Path, expected_len: usize) -> io::Result<()
 fn native_base() -> PathBuf {
     #[cfg(unix)]
     {
-        PathBuf::from(format!("/var/tmp/hicodeer-native-sources-{}", effective_uid()))
+        PathBuf::from(format!("/var/tmp/herdr-native-sources-{}", effective_uid()))
     }
     #[cfg(not(unix))]
     {
@@ -428,7 +428,7 @@ fn runtime_base() -> PathBuf {
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
             .unwrap_or_else(|| PathBuf::from("/var/tmp"));
-        root.join(format!("hicodeer-pane-graphics-{}", effective_uid()))
+        root.join(format!("herdr-pane-graphics-{}", effective_uid()))
     }
     #[cfg(not(unix))]
     {
@@ -611,7 +611,7 @@ mod tests {
 
     fn store() -> (FileStore, PathBuf) {
         let base = PathBuf::from(format!(
-            "/var/tmp/hicodeer-graphics-test-{}-{}",
+            "/var/tmp/herdr-graphics-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -773,7 +773,7 @@ mod tests {
     fn tmpfs_source_clone_failure_leaves_no_artifact() {
         use std::os::fd::AsRawFd;
         let path = PathBuf::from(format!(
-            "/dev/shm/hicodeer-snapshot-{}-{}",
+            "/dev/shm/herdr-snapshot-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));

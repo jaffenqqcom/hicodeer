@@ -1,7 +1,7 @@
 //! Thin client mode — connects to the server's client socket.
 //!
 //! The client:
-//! - Connects to `hicodeer-client.sock`, sends TerminalHello with terminal size and protocol version
+//! - Connects to `herdr-client.sock`, sends TerminalHello with terminal size and protocol version
 //! - Sets up the real terminal (raw mode, mouse capture, keyboard enhancements)
 //! - Receives Frame messages and blits them to the terminal (diff against last frame)
 //! - Reads stdin events (keystrokes, mouse, paste) and sends them as ClientMessage::Input
@@ -266,10 +266,7 @@ fn run_client_with_mode(
         setup_terminal(mouse_capture)
     }
     .map_err(|err| {
-        eprintln!(
-            "{}: failed to set up terminal: {err}",
-            crate::brand::NAME
-        );
+        eprintln!("herdr: failed to set up terminal: {err}");
         err
     })?;
     loop_config.host_escape_disambiguation_active =
@@ -380,7 +377,7 @@ fn run_client_with_mode(
     let terminal_restore_failed = terminal_guard.restore().is_err();
 
     if let Err(err) = result {
-        let _ = writeln!(io::stderr(), "{}: {err}", crate::brand::NAME);
+        let _ = writeln!(io::stderr(), "herdr: {err}");
         rt.shutdown_timeout(Duration::from_millis(100));
         crate::logging::shutdown("client");
 

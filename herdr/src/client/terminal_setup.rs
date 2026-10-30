@@ -751,7 +751,7 @@ fn pop_keyboard_enhancement_flags() -> io::Result<()> {
 
 #[cfg(any(windows, test))]
 pub(super) fn windows_win32_input_mode_enabled() -> bool {
-    std::env::var("HICODEER_AGENT_WINDOWS_INPUT_PROBE")
+    std::env::var("HERDR_WINDOWS_INPUT_PROBE")
         .map(|probe| probe.eq_ignore_ascii_case("win32"))
         .unwrap_or(true)
 }
@@ -786,7 +786,7 @@ pub(super) fn write_host_keyboard_protocol_refresh(
     refresh: HostKeyboardProtocolRefresh,
 ) -> io::Result<()> {
     if let Some(report_all_keys) = refresh.kitty_report_all_keys {
-        // Replace HiCodeer's stack entry rather than pushing, so repeated
+        // Replace Herdr's stack entry rather than pushing, so repeated
         // refreshes never grow the host's keyboard stack. On a host that
         // reset its stack, the pop is a no-op and the push restores the flags.
         crate::terminal_modes::set_host_kitty_keyboard_report_all(writer, report_all_keys)?;
@@ -996,7 +996,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn host_keyboard_protocol_refresh_resends_the_setup_modes() {
-        // Focus-in on a kitty host: replace HiCodeer's stack entry, keep paste on.
+        // Focus-in on a kitty host: replace Herdr's stack entry, keep paste on.
         let kitty = refresh_test_guard(true, true, None);
         assert_eq!(
             refresh_bytes(&kitty, false, false),
@@ -1037,7 +1037,7 @@ mod tests {
                 crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
                     80, 24, 0, b"", 4096,
                 );
-            // HiCodeer's setup push.
+            // Herdr's setup push.
             host.test_process_pty_bytes(b"\x1b[>7u");
             if reset {
                 host.test_process_pty_bytes(b"\x1bc");
@@ -1057,7 +1057,7 @@ mod tests {
                 b"\x1b[13;2u",
                 "reset={reset}"
             );
-            // Refreshes never grow the stack: HiCodeer's one exit pop restores
+            // Refreshes never grow the stack: Herdr's one exit pop restores
             // the host's own keyboard mode.
             host.test_process_pty_bytes(b"\x1b[<1u");
             assert_eq!(
@@ -1079,7 +1079,7 @@ mod tests {
         );
         // Something outside Herdr (a shell or wrapper) already set its own mode.
         host.test_process_pty_bytes(b"\x1b[>1u");
-        // HiCodeer's setup push.
+        // Herdr's setup push.
         host.test_process_pty_bytes(b"\x1b[>7u");
         for round in 0..6 {
             let report_all = round % 2 == 0;
@@ -1097,7 +1097,7 @@ mod tests {
                 "round {round}"
             );
         }
-        // HiCodeer's one exit pop restores exactly the outer mode.
+        // Herdr's one exit pop restores exactly the outer mode.
         host.test_process_pty_bytes(b"\x1b[<1u");
         assert_eq!(
             host.keyboard_protocol(),

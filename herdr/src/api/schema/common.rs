@@ -117,7 +117,7 @@ pub struct NotificationShowParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub position: Option<crate::config::ToastInAppPosition>,
+    pub position: Option<crate::config::ToastHerdrPosition>,
     #[serde(default, skip_serializing_if = "NotificationShowSound::is_none")]
     pub sound: NotificationShowSound,
 }

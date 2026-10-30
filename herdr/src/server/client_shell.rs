@@ -729,7 +729,7 @@ mod tests {
         );
         app.state.integration_recommendations.clear();
         app.state.update_available = Some("0.8.3".into());
-        app.state.update_install_command = "hicodeer-agent update".into();
+        app.state.update_install_command = "herdr update".into();
         app.state.latest_release_notes_available = true;
         app.state.latest_release_notes = Some(crate::release_notes::ReleaseNotes {
             version: "0.8.3".into(),
@@ -740,7 +740,7 @@ mod tests {
         let snapshot = snapshot(&app, "boot", 7, None, None);
 
         assert_eq!(snapshot.update_available.as_deref(), Some("0.8.3"));
-        assert_eq!(snapshot.update_install_command, "hicodeer-agent update");
+        assert_eq!(snapshot.update_install_command, "herdr update");
         assert!(snapshot.latest_release_notes_available);
         assert!(!snapshot.integration_updates_available);
         assert_eq!(

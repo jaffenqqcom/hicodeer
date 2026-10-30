@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn index_files_tolerates_a_missing_directory() {
         let missing =
-            std::env::temp_dir().join(format!("hicodeer-agent-atomcode-missing-{}", std::process::id()));
+            std::env::temp_dir().join(format!("herdr-atomcode-missing-{}", std::process::id()));
         assert!(
             index_files(&missing).is_empty(),
             "a missing store directory must yield no files"
@@ -345,7 +345,7 @@ mod tests {
     /// A directory this test owns, cleared before use so a previous run cannot
     /// make the assertions pass by accident.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("hicodeer-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("herdr-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the scratch directory");
         dir

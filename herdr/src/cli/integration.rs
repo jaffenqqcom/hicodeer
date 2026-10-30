@@ -26,7 +26,7 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
         [] => false,
         [flag] if flag == "--outdated-only" => true,
         _ => {
-            eprintln!("usage: hicodeer-agent integration status [--outdated-only]");
+            eprintln!("usage: herdr integration status [--outdated-only]");
             return Ok(2);
         }
     };
@@ -147,13 +147,13 @@ fn parse_integration_target(
 ) -> std::io::Result<Option<IntegrationCommandTarget>> {
     let Some(target) = args.first().map(|arg| arg.as_str()) else {
         eprintln!(
-            "usage: hicodeer-agent integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok|codebuddy>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok|codebuddy>"
         );
         return Ok(None);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: hicodeer-agent integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok|codebuddy>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok|codebuddy>"
         );
         return Ok(None);
     }
@@ -193,43 +193,43 @@ fn parse_integration_target(
 }
 
 fn print_integration_help() {
-    eprintln!("hicodeer-agent integration commands:");
-    eprintln!("  hicodeer-agent integration install pi");
-    eprintln!("  hicodeer-agent integration install omp");
-    eprintln!("  hicodeer-agent integration install claude");
-    eprintln!("  hicodeer-agent integration install codex");
-    eprintln!("  hicodeer-agent integration install copilot");
-    eprintln!("  hicodeer-agent integration install devin");
-    eprintln!("  hicodeer-agent integration install droid");
-    eprintln!("  hicodeer-agent integration install kimi");
-    eprintln!("  hicodeer-agent integration install opencode");
-    eprintln!("  hicodeer-agent integration install kilo");
-    eprintln!("  hicodeer-agent integration install hermes");
-    eprintln!("  hicodeer-agent integration install qodercli");
-    eprintln!("  hicodeer-agent integration install qwen");
-    eprintln!("  hicodeer-agent integration install letta");
-    eprintln!("  hicodeer-agent integration install cursor");
-    eprintln!("  hicodeer-agent integration install mastracode");
-    eprintln!("  hicodeer-agent integration install antigravity-cli");
-    eprintln!("  hicodeer-agent integration install grok");
-    eprintln!("  hicodeer-agent integration install codebuddy");
-    eprintln!("  hicodeer-agent integration uninstall pi");
-    eprintln!("  hicodeer-agent integration uninstall omp");
-    eprintln!("  hicodeer-agent integration uninstall claude");
-    eprintln!("  hicodeer-agent integration uninstall codex");
-    eprintln!("  hicodeer-agent integration uninstall copilot");
-    eprintln!("  hicodeer-agent integration uninstall devin");
-    eprintln!("  hicodeer-agent integration uninstall droid");
-    eprintln!("  hicodeer-agent integration uninstall kimi");
-    eprintln!("  hicodeer-agent integration uninstall opencode");
-    eprintln!("  hicodeer-agent integration uninstall kilo");
-    eprintln!("  hicodeer-agent integration uninstall hermes");
-    eprintln!("  hicodeer-agent integration uninstall qodercli");
-    eprintln!("  hicodeer-agent integration uninstall qwen");
-    eprintln!("  hicodeer-agent integration uninstall letta");
-    eprintln!("  hicodeer-agent integration uninstall cursor");
-    eprintln!("  hicodeer-agent integration uninstall mastracode");
-    eprintln!("  hicodeer-agent integration uninstall antigravity-cli");
-    eprintln!("  hicodeer-agent integration uninstall grok");
-    eprintln!("  hicodeer-agent integration status [--outdated-only]");
+    eprintln!("herdr integration commands:");
+    eprintln!("  herdr integration install pi");
+    eprintln!("  herdr integration install omp");
+    eprintln!("  herdr integration install claude");
+    eprintln!("  herdr integration install codex");
+    eprintln!("  herdr integration install copilot");
+    eprintln!("  herdr integration install devin");
+    eprintln!("  herdr integration install droid");
+    eprintln!("  herdr integration install kimi");
+    eprintln!("  herdr integration install opencode");
+    eprintln!("  herdr integration install kilo");
+    eprintln!("  herdr integration install hermes");
+    eprintln!("  herdr integration install qodercli");
+    eprintln!("  herdr integration install qwen");
+    eprintln!("  herdr integration install letta");
+    eprintln!("  herdr integration install cursor");
+    eprintln!("  herdr integration install mastracode");
+    eprintln!("  herdr integration install antigravity-cli");
+    eprintln!("  herdr integration install grok");
+    eprintln!("  herdr integration install codebuddy");
+    eprintln!("  herdr integration uninstall pi");
+    eprintln!("  herdr integration uninstall omp");
+    eprintln!("  herdr integration uninstall claude");
+    eprintln!("  herdr integration uninstall codex");
+    eprintln!("  herdr integration uninstall copilot");
+    eprintln!("  herdr integration uninstall devin");
+    eprintln!("  herdr integration uninstall droid");
+    eprintln!("  herdr integration uninstall kimi");
+    eprintln!("  herdr integration uninstall opencode");
+    eprintln!("  herdr integration uninstall kilo");
+    eprintln!("  herdr integration uninstall hermes");
+    eprintln!("  herdr integration uninstall qodercli");
+    eprintln!("  herdr integration uninstall qwen");
+    eprintln!("  herdr integration uninstall letta");
+    eprintln!("  herdr integration uninstall cursor");
+    eprintln!("  herdr integration uninstall mastracode");
+    eprintln!("  herdr integration uninstall antigravity-cli");
+    eprintln!("  herdr integration uninstall grok");
+    eprintln!("  herdr integration status [--outdated-only]");
 }

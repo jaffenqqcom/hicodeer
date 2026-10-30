@@ -443,7 +443,7 @@ pub(crate) fn integration_update_instructions(
         .iter()
         .map(|target| {
             format!(
-                "`hicodeer-agent integration install {}`",
+                "`herdr integration install {}`",
                 integration_target_label(*target)
             )
         })
@@ -467,7 +467,7 @@ pub(crate) fn print_outdated_update_notice() -> bool {
         .map(|integration| integration.target)
         .collect::<Vec<_>>();
     eprintln!(
-        "installed hicodeer-agent integrations need updating; {}.",
+        "installed herdr integrations need updating; {}.",
         integration_update_instructions(&targets).replace('`', "")
     );
     true
@@ -568,10 +568,10 @@ pub(crate) fn integration_status_at(
 ) -> super::IntegrationStatus {
     let (mut state, installed_version) = integration_state_for_path(&path, expected_version);
 
-    // Grok only invokes the hook when the HiCodeer-owned `hooks/hicodeer.json`
+    // Grok only invokes the hook when the herdr-owned `hooks/herdr.json`
     // registers it, so a current hook script with a missing or broken config
-    // is a nonfunctional install: report it as outdated so `hicodeer-agent
-    // integration status` flags it and a reinstall rewrites both files.
+    // is a nonfunctional install: report it as outdated so `herdr integration
+    // status` flags it and a reinstall rewrites both files.
     if target == crate::api::schema::IntegrationTarget::Grok
         && state == super::IntegrationStatusKind::Current
         && !grok_hook_config_is_valid(&path)

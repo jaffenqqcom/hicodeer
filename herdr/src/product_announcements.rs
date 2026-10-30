@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 const PRODUCT_ANNOUNCEMENTS_PATH: &str = "product-announcements.json";
-const FAKE_ANNOUNCEMENT_BODY_ENV: &str = "HICODEER_AGENT_FAKE_PRODUCT_ANNOUNCEMENT_BODY";
-const FAKE_ANNOUNCEMENT_BODY_FILE_ENV: &str = "HICODEER_AGENT_FAKE_PRODUCT_ANNOUNCEMENT_BODY_FILE";
-const FAKE_ANNOUNCEMENT_ID_ENV: &str = "HICODEER_AGENT_FAKE_PRODUCT_ANNOUNCEMENT_ID";
-const FAKE_ANNOUNCEMENT_TITLE_ENV: &str = "HICODEER_AGENT_FAKE_PRODUCT_ANNOUNCEMENT_TITLE";
+const FAKE_ANNOUNCEMENT_BODY_ENV: &str = "HERDR_FAKE_PRODUCT_ANNOUNCEMENT_BODY";
+const FAKE_ANNOUNCEMENT_BODY_FILE_ENV: &str = "HERDR_FAKE_PRODUCT_ANNOUNCEMENT_BODY_FILE";
+const FAKE_ANNOUNCEMENT_ID_ENV: &str = "HERDR_FAKE_PRODUCT_ANNOUNCEMENT_ID";
+const FAKE_ANNOUNCEMENT_TITLE_ENV: &str = "HERDR_FAKE_PRODUCT_ANNOUNCEMENT_TITLE";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ManifestAnnouncement {
@@ -237,7 +237,7 @@ mod tests {
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "hicodeer-agent-product-announcements-{name}-{}-{}.json",
+            "herdr-product-announcements-{name}-{}-{}.json",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

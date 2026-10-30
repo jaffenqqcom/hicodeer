@@ -39,9 +39,9 @@ mod tests {
 
     #[test]
     fn truncate_end_uses_display_width() {
-        let text = truncate_end("提交 hicodeer-agent 的反馈", 16);
+        let text = truncate_end("提交 herdr 的反馈", 16);
 
-        assert_eq!(text, "提交 hicodeer-a…");
+        assert_eq!(text, "提交 herdr 的反…");
         assert!(display_width(&text) <= 16);
     }
 }

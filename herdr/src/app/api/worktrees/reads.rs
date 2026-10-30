@@ -52,9 +52,9 @@ impl SourceInput {
                     ApiFailure::new(
                         "not_git_worktree",
                         if self.workspace_id.is_some() {
-                            "HiCodeer worktree actions require a workspace inside a Git work tree"
+                            "Herdr worktree actions require a workspace inside a Git work tree"
                         } else {
-                            "HiCodeer worktree actions require a path inside a Git work tree"
+                            "Herdr worktree actions require a path inside a Git work tree"
                         },
                     )
                 })?;

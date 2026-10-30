@@ -514,17 +514,17 @@ mod tests {
             app.state.active = Some(0);
             app.state.ensure_test_terminals();
             if missing_shell {
-                app.state.default_shell = "__hicodeer-agent_missing_resume_shell__".into();
+                app.state.default_shell = "__herdr_missing_resume_shell__".into();
             }
             let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
             if !missing_shell {
                 terminal.cwd = std::env::current_dir()
                     .unwrap()
-                    .join("__hicodeer-agent_missing_resume_cwd__");
+                    .join("__herdr_missing_resume_cwd__");
                 assert!(!terminal.cwd.exists());
             }
             let session = crate::agent_resume::PersistedAgentSession {
-                source: "hicodeer:codex".into(),
+                source: "herdr:codex".into(),
                 agent: "codex".into(),
                 session_ref: crate::agent_resume::AgentSessionRef::id("resume-test").unwrap(),
             };
@@ -568,7 +568,7 @@ mod tests {
         terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
             agent: "codex".into(),
             argv: marker_resume_test_argv(),
-            dedupe_key: "hicodeer:codex\0codex\0Id\0codex-session".into(),
+            dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
         });
 
         assert!(!app.start_pending_agent_resumes(Instant::now(), false));
@@ -646,7 +646,7 @@ mod tests {
             .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
             agent: "codex".into(),
             argv: long_running_test_argv(),
-            dedupe_key: "hicodeer:codex\0codex\0Id\0codex-session".into(),
+            dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
         });
 
         app.sync_pending_agent_resume_deadline(std::time::Instant::now());
@@ -697,7 +697,7 @@ mod tests {
                 .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
                 agent: "codex".into(),
                 argv: long_running_test_argv(),
-                dedupe_key: format!("hicodeer:codex\0codex\0Id\0{terminal_id}"),
+                dedupe_key: format!("herdr:codex\0codex\0Id\0{terminal_id}"),
             });
         }
         app.pending_agent_resume_deadline =
@@ -767,7 +767,7 @@ mod tests {
             .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
             agent: "codex".into(),
             argv: long_running_test_argv(),
-            dedupe_key: "hicodeer:codex\0codex\0Id\0inactive-tab-session".into(),
+            dedupe_key: "herdr:codex\0codex\0Id\0inactive-tab-session".into(),
         });
 
         assert!(app.start_pending_agent_resumes(Instant::now(), false));
@@ -828,7 +828,7 @@ mod tests {
             .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
             agent: "codex".into(),
             argv: long_running_test_argv(),
-            dedupe_key: "hicodeer:codex\0codex\0Id\0zoom-hidden-session".into(),
+            dedupe_key: "herdr:codex\0codex\0Id\0zoom-hidden-session".into(),
         });
 
         assert!(app.start_pending_agent_resumes(Instant::now(), false));
@@ -886,7 +886,7 @@ mod tests {
             .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
             agent: "codex".into(),
             argv: long_running_test_argv(),
-            dedupe_key: "hicodeer:codex\0codex\0Id\0codex-session".into(),
+            dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
         });
 
         app.sync_pending_agent_resume_deadline(std::time::Instant::now());
@@ -947,7 +947,7 @@ mod tests {
             .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
             agent: "codex".into(),
             argv: long_running_test_argv(),
-            dedupe_key: "hicodeer:codex\0codex\0Id\0codex-session".into(),
+            dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
         });
 
         assert!(app.start_pending_agent_resumes(Instant::now(), false));

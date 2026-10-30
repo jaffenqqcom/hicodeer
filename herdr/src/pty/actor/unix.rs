@@ -431,7 +431,7 @@ impl PtyIoActor {
             poll_observer,
         };
         std::thread::Builder::new()
-            .name(format!("hicodeer-pty-{}", config.pane_id))
+            .name(format!("herdr-pty-{}", config.pane_id))
             .spawn(move || runner.run())
             .map_err(|err| std::io::Error::other(err.to_string()))?;
 

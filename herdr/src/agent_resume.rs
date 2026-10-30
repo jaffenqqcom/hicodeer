@@ -144,7 +144,7 @@ pub fn persisted_session_from_launch_args(
     }
 
     Some(PersistedAgentSession {
-        source: "hicodeer:codex".into(),
+        source: "herdr:codex".into(),
         agent: "codex".into(),
         session_ref: AgentSessionRef::id(session_id.clone())?,
     })
@@ -163,15 +163,15 @@ pub fn normalize_session_start_source(value: Option<String>) -> Option<String> {
 pub fn is_reserved_native_state_source(source: &str, agent: &str) -> bool {
     matches!(
         (source, agent),
-        ("hicodeer:claude", "claude")
-            | ("hicodeer:codex", "codex")
-            | ("hicodeer:copilot", "copilot")
-            | ("hicodeer:devin", "devin")
-            | ("hicodeer:droid", "droid")
-            | ("hicodeer:qodercli", "qodercli")
-            | ("hicodeer:qwen", "qwen")
-            | ("hicodeer:cursor", "cursor")
-            | ("hicodeer:grok", "grok")
+        ("herdr:claude", "claude")
+            | ("herdr:codex", "codex")
+            | ("herdr:copilot", "copilot")
+            | ("herdr:devin", "devin")
+            | ("herdr:droid", "droid")
+            | ("herdr:qodercli", "qodercli")
+            | ("herdr:qwen", "qwen")
+            | ("herdr:cursor", "cursor")
+            | ("herdr:grok", "grok")
     )
 }
 
@@ -202,89 +202,89 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
     }
 
     let argv = match (source, agent, session_ref.kind) {
-        ("hicodeer:claude", "claude", AgentSessionRefKind::Id) => {
+        ("herdr:claude", "claude", AgentSessionRefKind::Id) => {
             vec![
                 "claude".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:codex", "codex", AgentSessionRefKind::Id) => {
+        ("herdr:codex", "codex", AgentSessionRefKind::Id) => {
             vec!["codex".into(), "resume".into(), session_ref.value.clone()]
         }
-        ("hicodeer:copilot", "copilot", AgentSessionRefKind::Id) => {
+        ("herdr:copilot", "copilot", AgentSessionRefKind::Id) => {
             vec!["copilot".into(), format!("--resume={}", session_ref.value)]
         }
-        ("hicodeer:devin", "devin", AgentSessionRefKind::Id) => {
+        ("herdr:devin", "devin", AgentSessionRefKind::Id) => {
             vec!["devin".into(), "--resume".into(), session_ref.value.clone()]
         }
-        ("hicodeer:droid", "droid", AgentSessionRefKind::Id) => {
+        ("herdr:droid", "droid", AgentSessionRefKind::Id) => {
             vec!["droid".into(), "--resume".into(), session_ref.value.clone()]
         }
         // Gemini resolves a full UUID (`SessionSelector::findSession`), but only
         // among the chats of its current project: the pane has to start in the
         // directory the session ran in, which `sessions/gemini_store.rs` is what
         // recovers.
-        ("hicodeer:gemini", "gemini", AgentSessionRefKind::Id) => {
+        ("herdr:gemini", "gemini", AgentSessionRefKind::Id) => {
             vec![
                 "gemini".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:kimi", "kimi", AgentSessionRefKind::Id) => {
+        ("herdr:kimi", "kimi", AgentSessionRefKind::Id) => {
             vec!["kimi".into(), "--session".into(), session_ref.value.clone()]
         }
-        ("hicodeer:mastracode", "mastracode", AgentSessionRefKind::Id) => {
+        ("herdr:mastracode", "mastracode", AgentSessionRefKind::Id) => {
             vec![
                 "mastracode".into(),
                 "--thread".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:pi", "pi", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
+        ("herdr:pi", "pi", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             vec!["pi".into(), "--session".into(), session_ref.value.clone()]
         }
-        ("hicodeer:omp", "omp", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
+        ("herdr:omp", "omp", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             // omp resume is `-r, --resume=<value>` (ID prefix or path); it has no
             // `--session` flag, unlike pi.
             vec!["omp".into(), format!("--resume={}", session_ref.value)]
         }
-        ("hicodeer:hermes", "hermes", AgentSessionRefKind::Id) => {
+        ("herdr:hermes", "hermes", AgentSessionRefKind::Id) => {
             vec![
                 "hermes".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:opencode", "opencode", AgentSessionRefKind::Id) => {
+        ("herdr:opencode", "opencode", AgentSessionRefKind::Id) => {
             vec![
                 "opencode".into(),
                 "--session".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:qodercli", "qodercli", AgentSessionRefKind::Id) => {
+        ("herdr:qodercli", "qodercli", AgentSessionRefKind::Id) => {
             vec![
                 "qodercli".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:codebuddy", "codebuddy", AgentSessionRefKind::Id) => {
+        ("herdr:codebuddy", "codebuddy", AgentSessionRefKind::Id) => {
             vec![
                 "codebuddy".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:qwen", "qwen", AgentSessionRefKind::Id) => {
+        ("herdr:qwen", "qwen", AgentSessionRefKind::Id) => {
             vec!["qwen".into(), "--resume".into(), session_ref.value.clone()]
         }
-        ("hicodeer:kilo", "kilo", AgentSessionRefKind::Id) => {
+        ("herdr:kilo", "kilo", AgentSessionRefKind::Id) => {
             vec!["kilo".into(), "--session".into(), session_ref.value.clone()]
         }
-        ("hicodeer:cursor", "cursor", AgentSessionRefKind::Id) => {
+        ("herdr:cursor", "cursor", AgentSessionRefKind::Id) => {
             vec![
                 if cfg!(windows) {
                     "cursor-agent.cmd"
@@ -296,17 +296,17 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:antigravity_cli", "agy", AgentSessionRefKind::Id) => {
+        ("herdr:antigravity_cli", "agy", AgentSessionRefKind::Id) => {
             vec![
                 "agy".into(),
                 "--conversation".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:grok", "grok", AgentSessionRefKind::Id) => {
+        ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
-        ("hicodeer:letta", "letta", AgentSessionRefKind::Id) => {
+        ("herdr:letta", "letta", AgentSessionRefKind::Id) => {
             if let Some(agent_id) = session_ref.value.strip_prefix("default:") {
                 if agent_id.is_empty() {
                     return None;
@@ -326,7 +326,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 ]
             }
         }
-        ("hicodeer:deveco", "deveco", AgentSessionRefKind::Id) => {
+        ("herdr:deveco", "deveco", AgentSessionRefKind::Id) => {
             // DevEco Code is OpenCode-shaped: `-s, --session <id>` continues one.
             vec![
                 "deveco".into(),
@@ -334,24 +334,24 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:zcode", "zcode", AgentSessionRefKind::Id) => {
+        ("herdr:zcode", "zcode", AgentSessionRefKind::Id) => {
             vec!["zcode".into(), "--resume".into(), session_ref.value.clone()]
         }
-        ("hicodeer:codewhale", "codewhale", AgentSessionRefKind::Id) => {
+        ("herdr:codewhale", "codewhale", AgentSessionRefKind::Id) => {
             vec![
                 "codewhale".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:atomcode", "atomcode", AgentSessionRefKind::Id) => {
+        ("herdr:atomcode", "atomcode", AgentSessionRefKind::Id) => {
             vec![
                 "atomcode".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:openclaw", "openclaw", AgentSessionRefKind::Id) => {
+        ("herdr:openclaw", "openclaw", AgentSessionRefKind::Id) => {
             // OpenClaw resumes by `resume <query>`, where the query matches a
             // session key, display name or label — not the UUID the connector
             // scans. Unverified against a live Gateway; see the panel test notes.
@@ -361,7 +361,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:minimax", "minimax", AgentSessionRefKind::Id) => {
+        ("herdr:minimax", "minimax", AgentSessionRefKind::Id) => {
             // MiniMax Code calls the flag `--session`; it has no `--resume`.
             vec![
                 "mcode".into(),
@@ -369,14 +369,14 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:opendesk", "opendesk", AgentSessionRefKind::Id) => {
+        ("herdr:opendesk", "opendesk", AgentSessionRefKind::Id) => {
             vec![
                 "opendesk".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
         }
-        ("hicodeer:deepseek", "deepseek", AgentSessionRefKind::Id) => {
+        ("herdr:deepseek", "deepseek", AgentSessionRefKind::Id) => {
             // DeepSeek Harness boots a profile first; `tui` is the interactive
             // one, and everything after the launcher flags reaches the app.
             vec![
@@ -406,50 +406,46 @@ pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> S
 pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
     matches!(
         (source, agent),
-        ("hicodeer:claude", "claude")
-            | ("hicodeer:codex", "codex")
-            | ("hicodeer:copilot", "copilot")
-            | ("hicodeer:devin", "devin")
-            | ("hicodeer:droid", "droid")
-            | ("hicodeer:gemini", "gemini")
-            | ("hicodeer:kimi", "kimi")
-            | ("hicodeer:omp", "omp")
-            | ("hicodeer:mastracode", "mastracode")
-            | ("hicodeer:pi", "pi")
-            | ("hicodeer:hermes", "hermes")
-            | ("hicodeer:opencode", "opencode")
-            | ("hicodeer:qodercli", "qodercli")
-            | ("hicodeer:codebuddy", "codebuddy")
-            | ("hicodeer:qwen", "qwen")
-            | ("hicodeer:kilo", "kilo")
-            | ("hicodeer:cursor", "cursor")
-            | ("hicodeer:antigravity_cli", "agy")
-            | ("hicodeer:grok", "grok")
-            | ("hicodeer:letta", "letta")
-            | ("hicodeer:deveco", "deveco")
-            | ("hicodeer:zcode", "zcode")
-            | ("hicodeer:codewhale", "codewhale")
-            | ("hicodeer:atomcode", "atomcode")
-            | ("hicodeer:minimax", "minimax")
-            | ("hicodeer:opendesk", "opendesk")
-            | ("hicodeer:openclaw", "openclaw")
-            | ("hicodeer:deepseek", "deepseek")
+        ("herdr:claude", "claude")
+            | ("herdr:codex", "codex")
+            | ("herdr:copilot", "copilot")
+            | ("herdr:devin", "devin")
+            | ("herdr:droid", "droid")
+            | ("herdr:gemini", "gemini")
+            | ("herdr:kimi", "kimi")
+            | ("herdr:omp", "omp")
+            | ("herdr:mastracode", "mastracode")
+            | ("herdr:pi", "pi")
+            | ("herdr:hermes", "hermes")
+            | ("herdr:opencode", "opencode")
+            | ("herdr:qodercli", "qodercli")
+            | ("herdr:codebuddy", "codebuddy")
+            | ("herdr:qwen", "qwen")
+            | ("herdr:kilo", "kilo")
+            | ("herdr:cursor", "cursor")
+            | ("herdr:antigravity_cli", "agy")
+            | ("herdr:grok", "grok")
+            | ("herdr:letta", "letta")
+            | ("herdr:deveco", "deveco")
+            | ("herdr:zcode", "zcode")
+            | ("herdr:codewhale", "codewhale")
+            | ("herdr:atomcode", "atomcode")
+            | ("herdr:minimax", "minimax")
+            | ("herdr:opendesk", "opendesk")
+            | ("herdr:openclaw", "openclaw")
+            | ("herdr:deepseek", "deepseek")
     )
 }
 
-/// The integration source that owns an agent's resume plan.
+/// The `herdr:` integration source that owns an agent's resume plan.
 ///
 /// Only Antigravity differs: its CLI label is `agy`, while the integration is
-/// published as `antigravity_cli`. Every other agent's source is
-/// `<product>:<label>`.
+/// published as `antigravity_cli`. Every other agent's source is `herdr:<label>`.
 pub fn official_source_for(agent: &str) -> String {
     if agent == "agy" {
-        format!(
-            "{}:antigravity_cli",
-            crate::brand::SESSION_KEY_PREFIX
-        )
+        "herdr:antigravity_cli".to_string()
     } else {
-        format!("{}:{agent}", crate::brand::SESSION_KEY_PREFIX)
+        format!("herdr:{agent}")
     }
 }
 
@@ -510,16 +506,16 @@ mod tests {
 
     #[test]
     fn native_state_reservation_excludes_full_lifecycle_sources() {
-        assert!(is_reserved_native_state_source("hicodeer:claude", "claude"));
-        assert!(is_reserved_native_state_source("hicodeer:codex", "codex"));
-        assert!(is_reserved_native_state_source("hicodeer:devin", "devin"));
-        assert!(!is_reserved_native_state_source("hicodeer:kimi", "kimi"));
+        assert!(is_reserved_native_state_source("herdr:claude", "claude"));
+        assert!(is_reserved_native_state_source("herdr:codex", "codex"));
+        assert!(is_reserved_native_state_source("herdr:devin", "devin"));
+        assert!(!is_reserved_native_state_source("herdr:kimi", "kimi"));
         assert!(!is_reserved_native_state_source(
-            "hicodeer:opencode",
+            "herdr:opencode",
             "opencode"
         ));
         assert!(!is_reserved_native_state_source(
-            "hicodeer:codebuddy",
+            "herdr:codebuddy",
             "codebuddy"
         ));
     }
@@ -564,7 +560,7 @@ mod tests {
         let omp_session = absolute_test_path("omp-session.jsonl");
         assert_eq!(
             plan(
-                "hicodeer:claude",
+                "herdr:claude",
                 "claude",
                 &AgentSessionRef::id("claude-session").unwrap()
             )
@@ -574,7 +570,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:codex",
+                "herdr:codex",
                 "codex",
                 &AgentSessionRef::id("codex-session").unwrap()
             )
@@ -584,7 +580,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:copilot",
+                "herdr:copilot",
                 "copilot",
                 &AgentSessionRef::id("copilot-session").unwrap()
             )
@@ -594,7 +590,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:devin",
+                "herdr:devin",
                 "devin",
                 &AgentSessionRef::id("devin-session").unwrap()
             )
@@ -604,7 +600,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:droid",
+                "herdr:droid",
                 "droid",
                 &AgentSessionRef::id("droid-session").unwrap()
             )
@@ -614,7 +610,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:kimi",
+                "herdr:kimi",
                 "kimi",
                 &AgentSessionRef::id("kimi-session").unwrap()
             )
@@ -624,7 +620,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:mastracode",
+                "herdr:mastracode",
                 "mastracode",
                 &AgentSessionRef::id("mastracode-session").unwrap()
             )
@@ -634,7 +630,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:pi",
+                "herdr:pi",
                 "pi",
                 &AgentSessionRef::path(&pi_session).unwrap()
             )
@@ -644,7 +640,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:omp",
+                "herdr:omp",
                 "omp",
                 &AgentSessionRef::path(&omp_session).unwrap()
             )
@@ -654,7 +650,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:hermes",
+                "herdr:hermes",
                 "hermes",
                 &AgentSessionRef::id("hermes-session").unwrap()
             )
@@ -664,7 +660,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:opencode",
+                "herdr:opencode",
                 "opencode",
                 &AgentSessionRef::id("opencode-session").unwrap()
             )
@@ -674,7 +670,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:qodercli",
+                "herdr:qodercli",
                 "qodercli",
                 &AgentSessionRef::id("qoder-session").unwrap()
             )
@@ -684,7 +680,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:qwen",
+                "herdr:qwen",
                 "qwen",
                 &AgentSessionRef::id("qwen-session").unwrap()
             )
@@ -694,7 +690,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:kilo",
+                "herdr:kilo",
                 "kilo",
                 &AgentSessionRef::id("kilo-session").unwrap()
             )
@@ -704,7 +700,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:cursor",
+                "herdr:cursor",
                 "cursor",
                 &AgentSessionRef::id("cursor-session").unwrap()
             )
@@ -722,7 +718,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:antigravity_cli",
+                "herdr:antigravity_cli",
                 "agy",
                 &AgentSessionRef::id("agy-session").unwrap()
             )
@@ -732,7 +728,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:grok",
+                "herdr:grok",
                 "grok",
                 &AgentSessionRef::id("grok-session").unwrap()
             )
@@ -742,7 +738,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:letta",
+                "herdr:letta",
                 "letta",
                 &AgentSessionRef::id("conversation-123").unwrap()
             )
@@ -752,7 +748,7 @@ mod tests {
         );
         assert_eq!(
             plan(
-                "hicodeer:letta",
+                "herdr:letta",
                 "letta",
                 &AgentSessionRef::id("default:agent-123").unwrap()
             )
@@ -761,7 +757,7 @@ mod tests {
             vec!["letta", "--conversation", "default", "--agent", "agent-123"]
         );
         assert!(plan(
-            "hicodeer:letta",
+            "herdr:letta",
             "letta",
             &AgentSessionRef::id("default:").unwrap()
         )
@@ -793,7 +789,7 @@ mod tests {
     #[test]
     fn deepseek_resume_boots_the_tui_profile_first() {
         let session_ref = AgentSessionRef::id("session-1").unwrap();
-        let planned = plan("hicodeer:deepseek", "deepseek", &session_ref)
+        let planned = plan("herdr:deepseek", "deepseek", &session_ref)
             .expect("deepseek should have a resume plan");
         assert_eq!(
             planned.argv,
@@ -806,7 +802,7 @@ mod tests {
     fn gemini_resume_uses_the_uuid_form() {
         let session_ref =
             AgentSessionRef::id("35b7d0d3-9d4c-4148-9c7c-97170e404ecc").unwrap();
-        let planned = plan("hicodeer:gemini", "gemini", &session_ref)
+        let planned = plan("herdr:gemini", "gemini", &session_ref)
             .expect("gemini should have a resume plan");
         assert_eq!(
             planned.argv,
@@ -847,7 +843,7 @@ mod tests {
         )
         .is_none());
         assert!(plan(
-            "hicodeer:claude",
+            "herdr:claude",
             "claude",
             &AgentSessionRef::path(&claude_session).unwrap()
         )
@@ -861,7 +857,7 @@ mod tests {
         let claude_session = absolute_test_path("claude-session");
         let copilot_session = absolute_test_path("copilot-session");
         let session_ref = session_ref_from_report(
-            "hicodeer:pi",
+            "herdr:pi",
             "pi",
             Some("pi-id".into()),
             Some(pi_session.clone()),
@@ -870,15 +866,15 @@ mod tests {
         assert_eq!(session_ref.kind, AgentSessionRefKind::Path);
         assert_eq!(session_ref.value, pi_session);
 
-        assert!(session_ref_from_report("hicodeer:pi", "pi", Some("bad\nid".into()), None).is_none());
+        assert!(session_ref_from_report("herdr:pi", "pi", Some("bad\nid".into()), None).is_none());
         assert!(
-            session_ref_from_report("hicodeer:pi", "pi", None, Some("relative.jsonl".into()))
+            session_ref_from_report("herdr:pi", "pi", None, Some("relative.jsonl".into()))
                 .is_none()
         );
         assert!(session_ref_from_report("custom:pi", "pi", Some("pi-id".into()), None).is_none());
 
         let session_ref = session_ref_from_report(
-            "hicodeer:omp",
+            "herdr:omp",
             "omp",
             Some("omp-id".into()),
             Some(omp_session.clone()),
@@ -888,11 +884,11 @@ mod tests {
         assert_eq!(session_ref.value, omp_session);
 
         let session_ref =
-            session_ref_from_report("hicodeer:omp", "omp", Some("omp-id".into()), None).unwrap();
+            session_ref_from_report("herdr:omp", "omp", Some("omp-id".into()), None).unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "omp-id");
         let session_ref = session_ref_from_report(
-            "hicodeer:omp",
+            "herdr:omp",
             "omp",
             Some("omp-id".into()),
             Some("relative.jsonl".into()),
@@ -901,35 +897,35 @@ mod tests {
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "omp-id");
         assert!(
-            session_ref_from_report("hicodeer:omp", "omp", None, Some("relative.jsonl".into()))
+            session_ref_from_report("herdr:omp", "omp", None, Some("relative.jsonl".into()))
                 .is_none()
         );
 
         assert!(
-            session_ref_from_report("hicodeer:claude", "claude", None, Some(claude_session)).is_none()
+            session_ref_from_report("herdr:claude", "claude", None, Some(claude_session)).is_none()
         );
 
         let session_ref =
-            session_ref_from_report("hicodeer:copilot", "copilot", Some("copilot-id".into()), None)
+            session_ref_from_report("herdr:copilot", "copilot", Some("copilot-id".into()), None)
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "copilot-id");
         assert!(
-            session_ref_from_report("hicodeer:copilot", "copilot", None, Some(copilot_session))
+            session_ref_from_report("herdr:copilot", "copilot", None, Some(copilot_session))
                 .is_none()
         );
 
         let session_ref =
-            session_ref_from_report("hicodeer:devin", "devin", Some("devin-id".into()), None).unwrap();
+            session_ref_from_report("herdr:devin", "devin", Some("devin-id".into()), None).unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "devin-id");
 
         let session_ref =
-            session_ref_from_report("hicodeer:droid", "droid", Some("droid-id".into()), None).unwrap();
+            session_ref_from_report("herdr:droid", "droid", Some("droid-id".into()), None).unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "droid-id");
         assert!(session_ref_from_report(
-            "hicodeer:droid",
+            "herdr:droid",
             "droid",
             None,
             Some("/tmp/droid-session".into())
@@ -937,12 +933,12 @@ mod tests {
         .is_none());
 
         let session_ref =
-            session_ref_from_report("hicodeer:kimi", "kimi", Some("kimi-id".into()), None).unwrap();
+            session_ref_from_report("herdr:kimi", "kimi", Some("kimi-id".into()), None).unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "kimi-id");
 
         let session_ref = session_ref_from_report(
-            "hicodeer:mastracode",
+            "herdr:mastracode",
             "mastracode",
             Some("mastracode-id".into()),
             None,
@@ -952,23 +948,23 @@ mod tests {
         assert_eq!(session_ref.value, "mastracode-id");
 
         let session_ref =
-            session_ref_from_report("hicodeer:kilo", "kilo", Some("kilo-id".into()), None).unwrap();
+            session_ref_from_report("herdr:kilo", "kilo", Some("kilo-id".into()), None).unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "kilo-id");
 
         let session_ref =
-            session_ref_from_report("hicodeer:qodercli", "qodercli", Some("qoder-id".into()), None)
+            session_ref_from_report("herdr:qodercli", "qodercli", Some("qoder-id".into()), None)
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "qoder-id");
 
         let session_ref =
-            session_ref_from_report("hicodeer:qwen", "qwen", Some("qwen-id".into()), None).unwrap();
+            session_ref_from_report("herdr:qwen", "qwen", Some("qwen-id".into()), None).unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "qwen-id");
 
         let session_ref =
-            session_ref_from_report("hicodeer:antigravity_cli", "agy", Some("agy-id".into()), None)
+            session_ref_from_report("herdr:antigravity_cli", "agy", Some("agy-id".into()), None)
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "agy-id");
@@ -1019,18 +1015,18 @@ mod tests {
     #[test]
     fn ids_are_data_not_shell_text() {
         let id = "abc; rm -rf /";
-        let codex_plan = plan("hicodeer:codex", "codex", &AgentSessionRef::id(id).unwrap()).unwrap();
+        let codex_plan = plan("herdr:codex", "codex", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(codex_plan.argv, vec!["codex", "resume", id]);
 
         let copilot_plan = plan(
-            "hicodeer:copilot",
+            "herdr:copilot",
             "copilot",
             &AgentSessionRef::id(id).unwrap(),
         )
         .unwrap();
         assert_eq!(copilot_plan.argv, vec!["copilot", "--resume=abc; rm -rf /"]);
 
-        let devin_plan = plan("hicodeer:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
+        let devin_plan = plan("herdr:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
     }
 
@@ -1042,79 +1038,79 @@ mod tests {
         let copilot_session = absolute_test_path("copilot-session");
         let devin_session = absolute_test_path("devin-session");
         assert!(plan(
-            "hicodeer:hermes",
+            "herdr:hermes",
             "hermes",
             &AgentSessionRef::path(&hermes_session).unwrap()
         )
         .is_none());
         assert!(plan(
-            "hicodeer:opencode",
+            "herdr:opencode",
             "opencode",
             &AgentSessionRef::path(&opencode_session).unwrap()
         )
         .is_none());
         assert!(plan(
-            "hicodeer:kilo",
+            "herdr:kilo",
             "kilo",
             &AgentSessionRef::path(&kilo_session).unwrap()
         )
         .is_none());
         assert!(plan(
-            "hicodeer:copilot",
+            "herdr:copilot",
             "copilot",
             &AgentSessionRef::path(&copilot_session).unwrap()
         )
         .is_none());
         assert!(plan(
-            "hicodeer:devin",
+            "herdr:devin",
             "devin",
             &AgentSessionRef::path(&devin_session).unwrap()
         )
         .is_none());
         assert!(session_ref_from_snapshot(
-            "hicodeer:mastracode",
+            "herdr:mastracode",
             "mastracode",
             AgentSessionRefKind::Id,
             "mastracode-session"
         )
         .is_some());
         assert!(session_ref_from_snapshot(
-            "hicodeer:hermes",
+            "herdr:hermes",
             "hermes",
             AgentSessionRefKind::Id,
             "hermes-session"
         )
         .is_some());
         assert!(session_ref_from_snapshot(
-            "hicodeer:opencode",
+            "herdr:opencode",
             "opencode",
             AgentSessionRefKind::Id,
             "opencode-session"
         )
         .is_some());
         assert!(session_ref_from_snapshot(
-            "hicodeer:kilo",
+            "herdr:kilo",
             "kilo",
             AgentSessionRefKind::Id,
             "kilo-session"
         )
         .is_some());
         assert!(session_ref_from_snapshot(
-            "hicodeer:copilot",
+            "herdr:copilot",
             "copilot",
             AgentSessionRefKind::Id,
             "copilot-session"
         )
         .is_some());
         assert!(session_ref_from_snapshot(
-            "hicodeer:devin",
+            "herdr:devin",
             "devin",
             AgentSessionRefKind::Id,
             "devin-session"
         )
         .is_some());
         assert!(session_ref_from_snapshot(
-            "hicodeer:antigravity_cli",
+            "herdr:antigravity_cli",
             "agy",
             AgentSessionRefKind::Id,
             "agy-session"
@@ -1122,7 +1118,7 @@ mod tests {
         .is_some());
         let agy_session = absolute_test_path("agy-session");
         assert!(plan(
-            "hicodeer:antigravity_cli",
+            "herdr:antigravity_cli",
             "agy",
             &AgentSessionRef::path(&agy_session).unwrap()
         )

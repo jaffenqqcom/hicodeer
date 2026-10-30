@@ -20,7 +20,7 @@ impl SshMachineMetadata {
             return false;
         }
         match self.os.as_str() {
-            "linux" | "macos" => path.starts_with('/') && !path.ends_with("/mise/shims/hicodeer-agent"),
+            "linux" | "macos" => path.starts_with('/') && !path.ends_with("/mise/shims/herdr"),
             "windows" => {
                 let bytes = path.as_bytes();
                 path.starts_with(r"\\")
@@ -123,15 +123,15 @@ mod tests {
     #[test]
     fn metadata_accepts_only_supported_platforms_and_absolute_paths() {
         for (os, path, valid) in [
-            ("linux", "/home/a b/hicodeer", true),
-            ("macos", "/opt/homebrew/bin/hicodeer-agent", true),
-            ("windows", r"C:\Program Files\hicodeer-agent.exe", true),
-            ("windows", r"\\server\share\hicodeer-agent.exe", true),
-            ("windows", "hicodeer-agent.exe", false),
-            ("linux", "$HOME/.local/bin/hicodeer-agent", false),
-            ("linux", "/home/user/.local/share/mise/shims/hicodeer-agent", false),
-            ("linux", "/bin/hicodeer-agent\nmalformed", false),
-            ("unknown", "/bin/hicodeer-agent", false),
+            ("linux", "/home/a b/herdr", true),
+            ("macos", "/opt/homebrew/bin/herdr", true),
+            ("windows", r"C:\Program Files\herdr.exe", true),
+            ("windows", r"\\server\share\herdr.exe", true),
+            ("windows", "herdr.exe", false),
+            ("linux", "$HOME/.local/bin/herdr", false),
+            ("linux", "/home/user/.local/share/mise/shims/herdr", false),
+            ("linux", "/bin/herdr\nmalformed", false),
+            ("unknown", "/bin/herdr", false),
         ] {
             assert_eq!(
                 SshMachineMetadata {
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn metadata_is_disposable_fingerprinted_and_independent_per_profile() {
-        let root = std::env::temp_dir().join(format!("hicodeer-ssh-metadata-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("herdr-ssh-metadata-{}", std::process::id()));
         let first = SshMetadataCache {
             path: root.join("first.json"),
             target: "mac".into(),
@@ -160,7 +160,7 @@ mod tests {
         };
         let metadata = SshMachineMetadata {
             os: "macos".into(),
-            executable: "/some path/hicodeer-agent".into(),
+            executable: "/some path/herdr".into(),
         };
         assert!(first.load().is_none());
         first.store(&metadata);
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn metadata_does_not_follow_symlinks() {
         let root =
-            std::env::temp_dir().join(format!("hicodeer-ssh-metadata-link-{}", std::process::id()));
+            std::env::temp_dir().join(format!("herdr-ssh-metadata-link-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let cache = SshMetadataCache {
             path: root.join("cache.json"),
@@ -213,7 +213,7 @@ mod tests {
         assert!(cache.load().is_none());
         cache.store(&SshMachineMetadata {
             os: "macos".into(),
-            executable: "/bin/hicodeer-agent".into(),
+            executable: "/bin/herdr".into(),
         });
         assert_eq!(std::fs::read_to_string(&other).unwrap(), "untouched");
         std::fs::remove_dir_all(root).unwrap();

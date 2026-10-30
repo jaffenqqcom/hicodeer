@@ -137,7 +137,7 @@ const PANE_MODES: &[(&str, &[u8])] = &[
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum HostProfile {
-    /// Kitty keyboard host (Ghostty, kitty, WezTerm, foot...). HiCodeer pushes 7,
+    /// Kitty keyboard host (Ghostty, kitty, WezTerm, foot...). Herdr pushes 7,
     /// or 31 while the pane wants all keys reported.
     Kitty,
     /// Host without an enhanced keyboard protocol.
@@ -274,7 +274,7 @@ fn legacy_shell_exception(pane_mode: &[u8], key: &str, mods: u16) -> Option<Vec<
     })
 }
 
-struct HiCodeerPath {
+struct HerdrPath {
     state: ClientShellState,
     framer: crate::raw_input::RawInputByteFramer,
     runtime: crate::terminal::TerminalRuntime,
@@ -283,7 +283,7 @@ struct HiCodeerPath {
     host_reports_all: bool,
 }
 
-impl HiCodeerPath {
+impl HerdrPath {
     fn new(host: HostProfile, app_output: &[u8]) -> Self {
         // Mirrors the client: report-all is pushed to the host while the pane
         // asks for it (`HostProfile::setup` picks 31 for those panes).
@@ -306,7 +306,7 @@ impl HiCodeerPath {
 
     fn fresh_state(host: HostProfile, host_reports_all: bool) -> ClientShellState {
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-        // Mirrors the client: HiCodeer pushes Kitty event types on Kitty hosts.
+        // Mirrors the client: Herdr pushes Kitty event types on Kitty hosts.
         state.set_host_reports_key_releases(host == HostProfile::Kitty);
         state.set_host_reports_all_keys(host_reports_all);
         state.set_snapshot(Box::new(snapshot()));
@@ -326,7 +326,7 @@ impl HiCodeerPath {
 
     /// Collect pane input from one client outcome, the way the client loop does:
     /// side requests (pane focus) are ignored, link lookups get a no-link answer
-    /// and the held mouse events are replayed. Returns true when HiCodeer kept the
+    /// and the held mouse events are replayed. Returns true when Herdr kept the
     /// input for itself.
     fn absorb(
         &mut self,
@@ -381,7 +381,7 @@ impl HiCodeerPath {
         self.framer = Self::fresh_framer(self.host);
     }
 
-    /// Feed one host write, then let idle flushes run. Returns None when HiCodeer
+    /// Feed one host write, then let idle flushes run. Returns None when Herdr
     /// itself consumed the key (prefix, binding, mode change).
     fn feed(&mut self, host_bytes: &[u8]) -> Option<Vec<u8>> {
         let mut chunks = self.framer.push(host_bytes);
@@ -399,7 +399,7 @@ impl HiCodeerPath {
     }
 
     /// Route client outcomes through server pane input and collect the bytes the
-    /// pane receives. None when HiCodeer kept the input for itself.
+    /// pane receives. None when Herdr kept the input for itself.
     fn deliver(&mut self, outcomes: Vec<ClientShellInput>) -> Option<Vec<u8>> {
         let mut events = Vec::new();
         let mut herdr_owned = false;
@@ -518,7 +518,7 @@ fn run_keyboard_conformance() -> Report {
                     .push(expected);
             }
 
-            let mut herdr = HiCodeerPath::new(host, pane_mode);
+            let mut herdr = HerdrPath::new(host, pane_mode);
             for (def, mods, host_bytes, expected) in &cases {
                 let group = if mods & ghostty::MOD_SUPER != 0 {
                     "super"
@@ -627,7 +627,7 @@ fn print_report(report: &Report) {
         total.herdr_owned
     );
 
-    if let Ok(path) = std::env::var("HICODEER_AGENT_INPUT_CONFORMANCE_FAILURES") {
+    if let Ok(path) = std::env::var("HERDR_INPUT_CONFORMANCE_FAILURES") {
         let lines: Vec<String> = report
             .failures
             .iter()
@@ -648,7 +648,7 @@ fn print_report(report: &Report) {
 }
 
 // Ratchet: failure counts may only go down. Lower them when a change fixes
-// cases; a rise means a regression in HiCodeer's input transparency.
+// cases; a rise means a regression in Herdr's input transparency.
 // Remaining: Alt+], Alt+Shift+P/X, Alt+^, Alt+_ behind legacy hosts. Their bytes
 // also start host replies, so they are never forwarded and the reply-tail
 // discard can swallow the next keystroke (#344).
@@ -676,7 +676,7 @@ const MOUSE_FORMATS: &[(&str, &[u8])] = &[
     ("urxvt", b"\x1b[?1015h"),
 ];
 
-/// What HiCodeer asks the host for while it captures the mouse.
+/// What Herdr asks the host for while it captures the mouse.
 const HOST_MOUSE_SETUP: &[u8] = b"\x1b[?1003h\x1b[?1006h";
 
 #[derive(Clone, Copy)]
@@ -896,7 +896,7 @@ fn run_mouse_conformance() -> Report {
                 .entry(("kitty-host", pane_name, "mouse"))
                 .or_default();
 
-            let mut herdr = HiCodeerPath::new(HostProfile::Kitty, &pane_mode);
+            let mut herdr = HerdrPath::new(HostProfile::Kitty, &pane_mode);
             herdr
                 .state
                 .set_pane_surface(mouse_surface(!tracking.is_empty()));
@@ -1004,7 +1004,7 @@ fn host_input_corpus() -> Vec<(HostProfile, Vec<u8>)> {
     corpus
 }
 
-/// Replies HiCodeer asks the host for at startup and on focus (colors, palette,
+/// Replies Herdr asks the host for at startup and on focus (colors, palette,
 /// cell size, appearance).
 const HOST_REPLIES: &[&[u8]] = &[
     b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
@@ -1033,7 +1033,7 @@ fn framed_events_with(
     pause_ms: Option<i32>,
     awaiting_replies: bool,
 ) -> String {
-    let mut framer = HiCodeerPath::fresh_framer(host);
+    let mut framer = HerdrPath::fresh_framer(host);
     if awaiting_replies {
         // Mirrors the Unix client right after it sent its host queries.
         framer.host_color_query_sent();
@@ -1138,7 +1138,7 @@ fn split_read_robustness() {
         pct(idle_mismatch.len()),
         idle_mismatch.len()
     );
-    if let Ok(path) = std::env::var("HICODEER_AGENT_INPUT_CONFORMANCE_FAILURES") {
+    if let Ok(path) = std::env::var("HERDR_INPUT_CONFORMANCE_FAILURES") {
         let lines: Vec<String> = burst_mismatch
             .iter()
             .chain(&reply_burst_mismatch)
@@ -1171,7 +1171,7 @@ fn split_read_robustness() {
 // Reporter captures: exact bytes and timing from real terminals in issues.
 // ---------------------------------------------------------------------------
 
-/// (issue, host, reads, gap between reads in ms, HiCodeer awaiting host replies)
+/// (issue, host, reads, gap between reads in ms, Herdr awaiting host replies)
 type SplitCapture = (
     &'static str,
     HostProfile,
@@ -1232,7 +1232,7 @@ async fn ime_committed_text_reaches_every_pane_mode_exactly_once() {
     for host in [HostProfile::Kitty, HostProfile::Legacy] {
         for &(pane_name, pane_mode) in PANE_MODES {
             for cut in [None, Some(1), Some(4), Some(bytes.len() - 2)] {
-                let mut herdr = HiCodeerPath::new(host, pane_mode);
+                let mut herdr = HerdrPath::new(host, pane_mode);
                 let got = match cut {
                     None => herdr.feed(bytes),
                     Some(cut) => {
@@ -1271,7 +1271,7 @@ async fn ime_committed_text_reaches_every_pane_mode_exactly_once() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn lab_kitty_function_keys_reach_the_pane() {
-    // #4403, recorded from kitty 0.47.1 through real key presses: with HiCodeer's
+    // #4403, recorded from kitty 0.47.1 through real key presses: with Herdr's
     // keyboard flags pushed, unmodified F1, F2 and F4 arrive as bare CSI P/Q/S.
     for (host_bytes, plain_shell) in [
         (&b"\x1b[P"[..], &b"\x1bOP"[..]),
@@ -1279,7 +1279,7 @@ async fn lab_kitty_function_keys_reach_the_pane() {
         (b"\x1b[13~", b"\x1bOR"),
         (b"\x1b[S", b"\x1bOS"),
     ] {
-        let mut herdr = HiCodeerPath::new(HostProfile::Kitty, b"");
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, b"");
         let got = herdr
             .feed(host_bytes)
             .expect("function key reaches the pane");
@@ -1293,14 +1293,14 @@ async fn reporter_text_key_release_reaches_kitty_event_pane() {
     // #4184: an app asking for event types gets typed-letter releases.
     // (pane mode, kitty host bytes for `a` press then release, pane bytes)
     for (pane_mode, press, want) in [
-        // Event types only: HiCodeer keeps the host at flags 7, so the press
+        // Event types only: Herdr keeps the host at flags 7, so the press
         // arrives as text and its release as a report (the reporter's capture).
         (&b"\x1b[>3u"[..], &b"a"[..], &b"a\x1b[97;1:3u"[..]),
-        // All keys too: HiCodeer switches the host to report-all (31), so kitty
+        // All keys too: Herdr switches the host to report-all (31), so kitty
         // reports the press with its text.
         (b"\x1b[>11u", b"\x1b[97;;97u", b"\x1b[97u\x1b[97;1:3u"),
     ] {
-        let mut herdr = HiCodeerPath::new(HostProfile::Kitty, pane_mode);
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
         let press = herdr.feed(press).expect("press reaches the pane");
         let release = herdr
             .feed(b"\x1b[97;1:3u")
@@ -1333,7 +1333,7 @@ fn layout_keystroke_through_herdr(
     } else {
         [press, release].concat()
     };
-    let mut herdr = HiCodeerPath::new(host, pane_mode);
+    let mut herdr = HerdrPath::new(host, pane_mode);
     let pane_press = herdr.feed(&keystroke.0).expect("press reaches the pane");
     let pane_release = herdr.feed(&keystroke.1).expect("release reaches the pane");
     (
@@ -1349,7 +1349,7 @@ async fn layout_ctrl_chords_match_ghostty_direct() {
     // #1079. Keystrokes from a Kitty host on Russian, German, Turkish, French,
     // Nordic and Polish layouts, built like Ghostty builds them. `ghostty` is
     // what Ghostty sends the app directly (recorded from libghostty, and
-    // checked against it below); `in_app` is what the pane gets through HiCodeer.
+    // checked against it below); `herdr` is what the pane gets through Herdr.
     use ffi::*;
     const CTRL: u16 = ghostty::MOD_CTRL;
     const ALT: u16 = ghostty::MOD_ALT;
@@ -1379,7 +1379,7 @@ async fn layout_ctrl_chords_match_ghostty_direct() {
         ("no ctrl+\u{e5}", no, CTRL),
         ("pl altgr \u{119}", pl, CTRL | ALT),
     ];
-    // (pane, key, ghostty, hicodeer-agent)
+    // (pane, key, ghostty, herdr)
     let table: &[(&str, &str, &str, &str)] = &[
         // Plain shell. Ctrl alone maps to the physical key's control byte
         // when Ghostty has one; Ctrl+I and Ctrl+[ keep the layout character.
@@ -1401,7 +1401,7 @@ async fn layout_ctrl_chords_match_ghostty_direct() {
         ("legacy", "no ctrl+\u{e5}", "\\x1b[229;5u", "\\x1b[229;5u"),
         // Ghostty maps these by physical key too, but Ctrl+Alt can be AltGr
         // on Windows hosts and Latin keys are shortcuts of their own, so
-        // HiCodeer keeps the layout character.
+        // Herdr keeps the layout character.
         ("legacy", "ru ctrl+alt+w", "\\x1b\\x17", "\\x1b[1094;7u"),
         ("legacy", "fr ctrl+\u{e9}", "\\x00", "\\x1b[233;5u"),
         ("legacy", "pl altgr \u{119}", "\\x1b\\x05", "\\x1b[281;7u"),
@@ -1439,7 +1439,7 @@ async fn layout_ctrl_chords_match_ghostty_direct() {
             "\\xd1\\x86\\x1b[1094;1:3u",
         ),
         // Alternate keys: the pane input wire has no base-layout slot, so
-        // HiCodeer drops that field for every non-ASCII key (as on master).
+        // Herdr drops that field for every non-ASCII key (as on master).
         ("kitty5", "ru ctrl+w", "\\x1b[1094::119;5u", "\\x1b[119;5u"),
         ("kitty5", "ru ctrl+c", "\\x1b[1089::99;5u", "\\x1b[99;5u"),
         (
@@ -1499,14 +1499,14 @@ async fn layout_ctrl_chords_match_ghostty_direct() {
         (b"", b"\x1b[1094;3u", "\\x1b\\xd1\\x86"),
         (b"\x1b[>1u", b"\x1b[1089:1057;6u", "\\x1b[1089;6u"),
     ] {
-        let mut herdr = HiCodeerPath::new(HostProfile::Kitty, pane_mode);
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
         let got = herdr.feed(host_bytes).expect("reaches the pane");
         assert_eq!(show(&got), want, "{}", show(host_bytes));
     }
 
     // Ctrl let go before the key: the release names the layout character
     // without Ctrl, and is paired with the physical-key press.
-    let mut herdr = HiCodeerPath::new(HostProfile::Kitty, b"\x1b[>3u");
+    let mut herdr = HerdrPath::new(HostProfile::Kitty, b"\x1b[>3u");
     let press = herdr.feed(b"\x1b[1094::119;5u").expect("press");
     let release = herdr.feed(b"\x1b[1094::119;1:3u").expect("release");
     assert_eq!(
@@ -1529,7 +1529,7 @@ async fn layout_chord_releases_pair_when_modifiers_change_first() {
     const PRESS: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS;
     const RELEASE: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE;
     let ru_w = layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}');
-    // (case, press mods, release mods, Ghostty direct, HiCodeer)
+    // (case, press mods, release mods, Ghostty direct, Herdr)
     let cases = [
         (
             "ctrl+shift, shift let go first",
@@ -1582,7 +1582,7 @@ async fn layout_chord_releases_pair_when_modifiers_change_first() {
         .concat();
         assert_eq!(show(&direct_bytes), ghostty, "{name}: Ghostty direct");
 
-        let mut herdr = HiCodeerPath::new(HostProfile::Kitty, pane_mode);
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
         let press = herdr.feed(&host_press).expect("press reaches the pane");
         let release = herdr.feed(&host_release).expect("release reaches the pane");
         assert_eq!(
@@ -1616,7 +1616,7 @@ async fn overlapping_layout_and_us_keys_release_exactly() {
     let us_w = *KEYS.iter().find(|def| def.name == "w").unwrap();
     let ru_w = layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}');
     type Step = (KeyDef, u16, ffi::GhosttyKeyAction);
-    // (case, steps, Ghostty direct, HiCodeer)
+    // (case, steps, Ghostty direct, Herdr)
     let cases: [(&str, Vec<Step>, &str, &str); 4] = [
         (
             "ctrl+shift+\u{446}, shift let go, \u{446} then w released",
@@ -1669,7 +1669,7 @@ async fn overlapping_layout_and_us_keys_release_exactly() {
     for (name, steps, ghostty, want) in cases {
         let mut host = Oracle::new(HostProfile::Kitty.setup(pane_mode));
         let mut direct = Oracle::new(pane_mode);
-        let mut herdr = HiCodeerPath::new(HostProfile::Kitty, pane_mode);
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
         let mut direct_bytes = Vec::new();
         let mut pane_bytes = Vec::new();
         let mut host_bytes = Vec::new();
@@ -1695,14 +1695,14 @@ async fn overlapping_layout_and_us_keys_release_exactly() {
 #[tokio::test(flavor = "multi_thread")]
 async fn goto_search_opens_on_shifted_slash_from_a_report_all_pane() {
     // #4963, recorded from Ghostty 1.3.1 with a Portuguese layout, where `/` is
-    // Shift+7. With a plain pane HiCodeer keeps the host at flags 7 and the press
-    // arrives as text; when the focused pane asks for all keys HiCodeer pushes 31
+    // Shift+7. With a plain pane Herdr keeps the host at flags 7 and the press
+    // arrives as text; when the focused pane asks for all keys Herdr pushes 31
     // and the press arrives as a report carrying the shifted key and its text.
     for (pane_mode, press, release) in [
         (&b""[..], &b"/"[..], &b"\x1b[55:47;2:3u"[..]),
         (b"\x1b[>31u", b"\x1b[55:47;2;47u", b"\x1b[55:47;2:3u"),
     ] {
-        let mut herdr = HiCodeerPath::new(HostProfile::Kitty, pane_mode);
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
         herdr.state.open_navigator_overlay();
         assert_eq!(herdr.feed(press), None, "{}", show(pane_mode));
         assert_eq!(herdr.feed(release), None, "{}", show(pane_mode));
@@ -1735,7 +1735,7 @@ async fn goto_search_opens_only_for_a_typed_slash() {
         (b"\x1b[>31u", b"\x1b[47;3u", false),
         (b"", b"\x1b/", false),
     ] {
-        let mut herdr = HiCodeerPath::new(HostProfile::Kitty, pane_mode);
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
         herdr.state.open_navigator_overlay();
         let _ = herdr.feed(press);
         let focused = matches!(
@@ -1764,7 +1764,7 @@ async fn wezterm_escape_tap_reaches_the_pane_with_doubled_escape_preserved() {
             (vec![[PRESS, RELEASE].concat()], "one read"),
             (vec![PRESS.to_vec(), RELEASE.to_vec()], "two reads"),
         ] {
-            let mut herdr = HiCodeerPath::new(HostProfile::Kitty, pane_mode);
+            let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
             herdr.framer = crate::raw_input::RawInputByteFramer::with_host_input_policy(true);
             herdr.framer.set_host_escape_disambiguation_active(true);
             let mut chunks = Vec::new();
@@ -1813,9 +1813,9 @@ async fn keyboard_transparency_conformance() {
 // ---------------------------------------------------------------------------
 //
 // In Windows Terminal each keypress reaches ConPTY as a native key record
-// (win32-input-mode). HiCodeer's pane is a ConPTY too, so for a pane that
+// (win32-input-mode). Herdr's pane is a ConPTY too, so for a pane that
 // negotiated no keyboard protocol, transparency means the pane's ConPTY gets
-// the same records HiCodeer received. Records are built from the real keyboard
+// the same records Herdr received. Records are built from the real keyboard
 // layouts with ToUnicodeEx, the way Windows produces them.
 
 #[cfg(windows)]
@@ -2020,7 +2020,7 @@ mod windows_records {
     }
 
     fn deliver_record(
-        herdr: &mut HiCodeerPath,
+        herdr: &mut HerdrPath,
         input: &mut crate::client::input::windows_vti::TestWindowsInput,
         record: crate::input::WindowsKeyRecord,
         layout: HKL,
@@ -2046,7 +2046,7 @@ mod windows_records {
                 );
                 continue;
             };
-            let mut herdr = HiCodeerPath::new(HostProfile::Legacy, b"");
+            let mut herdr = HerdrPath::new(HostProfile::Legacy, b"");
             let mut input = crate::client::input::windows_vti::TestWindowsInput::default();
             for (key_name, vk, enhanced) in virtual_keys() {
                 for chord in CHORDS {

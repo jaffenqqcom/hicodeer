@@ -49,8 +49,8 @@ profile, not the resume table.
 `agent_session` is asserted by default: `resume_session` is turned into a
 `PersistedAgentSession` and written before `agent.start` returns
 (herdr/src/app/agents.rs:237-243, :337), so a resumed pane reports
-`{source: "hicodeer:<label>", agent: "<label>", kind: "id", value: "<session id>"}`.
-Antigravity is the one source exception (`hicodeer:antigravity_cli`). An empty
+`{source: "herdr:<label>", agent: "<label>", kind: "id", value: "<session id>"}`.
+Antigravity is the one source exception (`herdr:antigravity_cli`). An empty
 `agent_session` is a real failure: it means the launch settled out, the process
 died, or the agent opened a different session. `--no-require-agent-session`
 skips the assertion (do not use it to paper over that).
@@ -122,9 +122,9 @@ READY_POLL_INTERVAL = 1.0
 # case; a longer wait would turn a real failure into a slow one.
 AGENT_SESSION_POLL_SECONDS = 3.0
 
-# `official_source_for` maps every agent to `hicodeer:<label>` except Antigravity,
-# whose CLI label is `agy` while its integration is `hicodeer:antigravity_cli`.
-SOURCE_OVERRIDES = {"agy": "hicodeer:antigravity_cli"}
+# `official_source_for` maps every agent to `herdr:<label>` except Antigravity,
+# whose CLI label is `agy` while its integration is `herdr:antigravity_cli`.
+SOURCE_OVERRIDES = {"agy": "herdr:antigravity_cli"}
 
 
 def expected_session_source(agent, label):
@@ -134,7 +134,7 @@ def expected_session_source(agent, label):
         return override
     if not label:
         return None
-    return "hicodeer:%s" % label
+    return "herdr:%s" % label
 
 
 def expected_resume_argv(agent, session_id):

@@ -23,7 +23,7 @@
 //! rows get the first user message as their title instead.
 //!
 //! Rows are read through the `sqlite3` CLI rather than a Rust SQLite binding.
-//! `in_app` already links `fsqlite` for FAD's SQLite connectors, but that API is
+//! `herdr` already links `fsqlite` for FAD's SQLite connectors, but that API is
 //! async and driven by an external runtime; a one-shot read-only query over a
 //! handful of rows does not justify wiring a second driver into this process,
 //! and the CLI keeps the scanner free of a native dependency that would have to

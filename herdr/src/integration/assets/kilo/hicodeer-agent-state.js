@@ -1,12 +1,12 @@
 // installed by HiCodeer
-// managed by HiCodeer; reinstalling or updating the integration overwrites this file.
+// managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
-// HICODEER_AGENT_INTEGRATION_ID=kilo
-// HICODEER_AGENT_INTEGRATION_VERSION=6
+// HERDR_INTEGRATION_ID=kilo
+// HERDR_INTEGRATION_VERSION=5
 
 import net from "node:net";
 
-const SOURCE = "hicodeer:kilo";
+const SOURCE = "herdr:kilo";
 const AGENT = "kilo";
 let reportSeq = Date.now() * 1000;
 
@@ -41,7 +41,7 @@ function stateFromSessionStatus(status) {
 }
 
 function request(method, params) {
-  const paneId = process.env.HICODEER_AGENT_PANE_ID;
+  const paneId = process.env.HERDR_PANE_ID;
   const socketPath = process.env.HICODEER_AGENT_SOCKET_PATH;
 
   if (!paneId || !socketPath) {
@@ -102,11 +102,11 @@ function reportState(state, sessionID) {
   return request("pane.report_agent", params);
 }
 
-export const HiCodeerAgentStatePlugin = async () => {
+export const HerdrAgentStatePlugin = async () => {
   if (
-    process.env.HICODEER_AGENT_ENV !== "1" ||
+    process.env.HERDR_ENV !== "1" ||
     !process.env.HICODEER_AGENT_SOCKET_PATH ||
-    !process.env.HICODEER_AGENT_PANE_ID
+    !process.env.HERDR_PANE_ID
   ) {
     return {};
   }

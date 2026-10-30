@@ -255,8 +255,21 @@ struct AutoUpdateSetting(bool);
 /// Default: true
 impl Settings for AutoUpdateSetting {
     fn from_settings(content: &settings::SettingsContent) -> Self {
-        Self(content.auto_update.unwrap())
+        Self(auto_update_enabled(content))
     }
+}
+
+// [OHOS PORT BEGIN] HiCodeer has no update channel on this platform: the check
+// would only build a request against the empty server URL and fail.
+#[cfg(target_env = "ohos")]
+fn auto_update_enabled(_content: &settings::SettingsContent) -> bool {
+    false
+}
+// [OHOS PORT END]
+
+#[cfg(not(target_env = "ohos"))]
+fn auto_update_enabled(content: &settings::SettingsContent) -> bool {
+    content.auto_update.unwrap_or(true)
 }
 
 #[derive(Default)]

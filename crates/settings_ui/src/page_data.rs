@@ -67,14 +67,18 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
     // [OHOS PORT] The agent panel's settings have no upstream counterpart. They
     // are appended to the Panels page as its last section (see `panels_page`),
     // because they configure a panel rather than being a page of their own.
-    pages.extend([
-        version_control_page(),
-        network_page(),
-        developer_page(cx),
-    ]);
+    pages.extend([version_control_page(), network_page()]);
+    // [OHOS PORT BEGIN] The developer page only carries the performance
+    // profiler, which is off and hidden in this build; keeping the page would
+    // leave an empty entry in the sidebar.
+    #[cfg(not(target_env = "ohos"))]
+    pages.push(developer_page(cx));
+    // [OHOS PORT END]
     pages
 }
 
+// [OHOS PORT BEGIN] Not reachable on this platform, see `settings_data`.
+#[cfg(not(target_env = "ohos"))]
 fn developer_page(cx: &App) -> SettingsPage {
     use feature_flags::FeatureFlagAppExt as _;
 
@@ -127,6 +131,7 @@ fn developer_page(cx: &App) -> SettingsPage {
         items: items.into_boxed_slice(),
     }
 }
+// [OHOS PORT END]
 
 fn general_page(cx: &App) -> SettingsPage {
     fn general_settings_section(_cx: &App) -> Vec<SettingsPageItem> {
@@ -286,7 +291,7 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Reveal If Open"),
-                description: localization::localized_str!("when enabled, zed will prefer already-open buffers."),
+                description: localization::localized_str!("when enabled, HiCodeer will prefer already-open buffers."),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("reveal_if_open"),
@@ -8151,8 +8156,8 @@ fn version_control_page() -> SettingsPage {
 
 
 fn network_page() -> SettingsPage {
-    fn network_section() -> [SettingsPageItem; 3] {
-        [
+    fn network_section() -> Vec<SettingsPageItem> {
+        let mut items = vec![
             SettingsPageItem::SectionHeader(localization::localized_str!("Network")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Proxy"),
@@ -8171,26 +8176,30 @@ fn network_page() -> SettingsPage {
                 })),
                 files: USER,
             }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: localization::localized_str!("Server URL"),
-                description: localization::localized_str!("The URL of the HiCodeer server to connect to."),
-                field: Box::new(SettingField {
-                    organization_override: None,
-                    json_path: Some("server_url"),
-                    pick: |settings_content| settings_content.server_url.as_ref(),
-                    write: |settings_content, value, _| {
-                        settings_content.server_url = value;
-                    },
-                }),
-                metadata: Some(Box::new(SettingsFieldMetadata {
-                    // [OHOS PORT BEGIN] no Zed server is referenced by this build.
-                    placeholder: if cfg!(target_env = "ohos") { None } else { Some("https://zed.dev") },
-                    // [OHOS PORT END]
-                    ..Default::default()
-                })),
-                files: USER,
+        ];
+        // [OHOS PORT BEGIN] This build never talks to a Zed server, so the
+        // server URL is neither used nor configurable.
+        #[cfg(not(target_env = "ohos"))]
+        items.push(SettingsPageItem::SettingItem(SettingItem {
+            title: localization::localized_str!("Server URL"),
+            description: localization::localized_str!("The URL of the HiCodeer server to connect to."),
+            field: Box::new(SettingField {
+                organization_override: None,
+                json_path: Some("server_url"),
+                pick: |settings_content| settings_content.server_url.as_ref(),
+                write: |settings_content, value, _| {
+                    settings_content.server_url = value;
+                },
             }),
-        ]
+            metadata: Some(Box::new(SettingsFieldMetadata {
+                placeholder: Some("https://zed.dev"),
+                ..Default::default()
+            })),
+            files: USER,
+        }));
+        // [OHOS PORT END]
+
+        items
     }
 
     SettingsPage {

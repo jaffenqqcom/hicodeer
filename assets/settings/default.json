@@ -12,7 +12,7 @@
     "light": "One Light",
     "dark": "One Dark",
   },
-  "icon_theme": "Zed (Default)",
+  "icon_theme": "HiCodeer (Default)",
   // The name of a base set of key bindings to use.
   // This setting can take the following values:
   //
@@ -2542,9 +2542,10 @@
     // Delay in milliseconds before showing the which-key popup.
     "delay_ms": 1000,
   },
-  // The server to connect to. If the environment variable
-  // ZED_SERVER_URL is set, it will override this setting.
-  "server_url": "https://zed.dev",
+  // The server to connect to. HiCodeer does not talk to a Zed server, so this
+  // is empty: every request built from it fails instead of reaching zed.dev.
+  // If the environment variable ZED_SERVER_URL is set, it overrides this.
+  "server_url": "",
   // Settings overrides to use when using Zed Preview.
   // Mostly useful for developers who are managing multiple instances of Zed.
   "preview": {
@@ -2571,7 +2572,9 @@
     // "theme": "Andromeda"
     "instrumentation": {
       "performance_profiler": {
-        "enabled": true,
+        // HiCodeer keeps the profiler off by default; its settings entry is
+        // hidden as well, so turning it on here would have no visible effect.
+        "enabled": false,
       },
     },
   },

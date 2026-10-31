@@ -25,7 +25,8 @@ use editor::{Editor, actions::SelectAll};
 use fs::Fs;
 use gpui::{
     Action, AnyElement, App, AsyncWindowContext, ClipboardItem, Context, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, Pixels, Render, SharedString,
+    EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, Pixels, Render, ScrollHandle,
+    SharedString,
     Subscription, Task, TaskExt, WeakEntity, Window, actions, div, prelude::*, px,
     transparent_black,
 };
@@ -36,7 +37,8 @@ use settings::{IntoGpui, RegisterSetting, Settings, SettingsStore, update_settin
 use terminal_view::TerminalView;
 use theme::ActiveTheme as _;
 use ui::{
-    Color, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, Tooltip, prelude::*,
+    Color, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, ScrollAxes, Scrollbars, Tooltip,
+    WithScrollbar, prelude::*,
 };
 #[cfg(target_env = "ohos")]
 use workspace::MultiWorkspace;
@@ -102,6 +104,10 @@ const ADD_SKILL_CLIPBOARD_HEADER: &str = "Add the skill as global skill of agent
 /// The hicodeer skill definition, embedded at build time so the clipboard
 /// copy always matches the herdr tree this build ships with.
 const HICODEER_SKILL_MD: &str = include_str!("../../../herdr/skills/herdr/SKILL.md");
+/// Space reserved on the right of the scrolling content for the panel's own
+/// scrollbar. The scrollbar is drawn over the content, so without this gutter
+/// it would sit on top of the trailing buttons of a row.
+const SCROLLBAR_GUTTER: Pixels = px(9.);
 /// Key the onboarding flow writes once the user finishes it. Mirrors
 /// `onboarding::FIRST_OPEN`; spelled out here so this crate does not depend on
 /// the onboarding crate.
@@ -423,6 +429,8 @@ pub struct AgentPanel {
     history_loading: bool,
     /// Whether the "add skill" helper popover is showing below the actions row.
     show_add_skill_popover: bool,
+    /// Scroll position of the space/agent tree, shared with its scrollbar.
+    scroll_handle: ScrollHandle,
 }
 
 impl AgentPanel {
@@ -501,6 +509,7 @@ impl AgentPanel {
             expanded_history_groups: HashSet::new(),
             history_loading: false,
             show_add_skill_popover: false,
+            scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -2963,9 +2972,23 @@ impl Render for AgentPanel {
                 v_flex()
                     .id("agent-panel-tree")
                     .flex_1()
-                    .overflow_y_scroll()
-                    .child(tree)
-                    .child(history),
+                    .overflow_hidden()
+                    .child(
+                        v_flex()
+                            .id("agent-panel-tree-content")
+                            .size_full()
+                            .pr(SCROLLBAR_GUTTER)
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll_handle)
+                            .child(tree)
+                            .child(history),
+                    )
+                    .custom_scrollbars(
+                        Scrollbars::new(ScrollAxes::Vertical)
+                            .tracked_scroll_handle(&self.scroll_handle),
+                        window,
+                        cx,
+                    ),
             )
     }
 }

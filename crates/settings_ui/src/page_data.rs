@@ -74,6 +74,11 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
     #[cfg(not(target_env = "ohos"))]
     pages.push(developer_page(cx));
     // [OHOS PORT END]
+    // [OHOS PORT BEGIN] HiCodeer adds an About page right after Network. The
+    // page is OHOS-only because upstream Zed uses the About window instead.
+    #[cfg(target_env = "ohos")]
+    pages.push(about_page());
+    // [OHOS PORT END]
     pages
 }
 
@@ -8207,6 +8212,19 @@ fn network_page() -> SettingsPage {
         items: concat_sections![network_section()],
     }
 }
+
+// [OHOS PORT BEGIN] The About page shows the app version and links to the
+// bundled license and privacy documents, the GitHub issue tracker and the
+// contact address. Upstream Zed has no settings About page (it uses the About
+// window instead), so the page is OHOS-only.
+#[cfg(target_env = "ohos")]
+fn about_page() -> SettingsPage {
+    SettingsPage {
+        title: localization::localized_str!("About"),
+        items: crate::ohos_about_page::items().into(),
+    }
+}
+// [OHOS PORT END]
 
 fn language_settings_field<T>(
     settings_content: &SettingsContent,

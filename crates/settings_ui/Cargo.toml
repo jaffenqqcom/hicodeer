@@ -53,6 +53,10 @@ serde_yaml_ng.workspace = true
 settings.workspace = true
 shell_command_parser.workspace = true
 strum.workspace = true
+# [OHOS PORT BEGIN] The About page opens bundled documents (licenses, privacy)
+# from the settings tab, which needs the embedded asset source.
+assets.workspace = true
+# [OHOS PORT END]
 telemetry.workspace = true
 theme.workspace = true
 theme_settings.workspace = true

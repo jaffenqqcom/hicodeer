@@ -4073,6 +4073,31 @@ impl SettingsWindow {
             )
     }
 
+    // ===== [OHOS PORT BEGIN] open a bundled document from a settings page =====
+    /// Opens one of the app's bundled documents in a new editor tab, leaving
+    /// this settings tab open. Settings pages call this through their click
+    /// handlers; `open_in_workspace_keeping_settings_tab` does the workspace
+    /// hop.
+    #[cfg(target_env = "ohos")]
+    pub(crate) fn open_bundled_document(
+        &mut self,
+        text: std::borrow::Cow<'static, str>,
+        title: &'static str,
+        language: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(original_window) = self.original_window else {
+            log::warn!(
+                "[ohos] open_bundled_document: settings window has no workspace to open into"
+            );
+            return;
+        };
+        open_in_workspace_keeping_settings_tab(original_window, cx, move |workspace, window, cx| {
+            open_readonly_document(workspace, text, title, language, window, cx);
+        });
+    }
+    // ===== [OHOS PORT END] =====
+
     /// This function will create a new settings file if one doesn't exist
     /// if the current file is a project settings with a valid worktree id
     /// We do this because the settings ui allows initializing project settings
@@ -6538,6 +6563,117 @@ pub(crate) fn open_in_workspace_then_close_settings_tab<T, F>(
     });
 }
 
+// ===== [OHOS PORT BEGIN] opening documents from settings =====
+/// Opens a document in the workspace while leaving the settings tab open.
+///
+/// Same mechanism as `open_in_workspace_then_close_settings_tab`, minus the
+/// close: the settings tab stays in the pane and the opened item lands next to
+/// it. Pages that only want to show a document (the About page's bundled
+/// license and privacy notice) use this so the user keeps their place.
+#[cfg(target_env = "ohos")]
+pub(crate) fn open_in_workspace_keeping_settings_tab<T, F>(
+    original_window: WindowHandle<MultiWorkspace>,
+    cx: &mut App,
+    open: F,
+) where
+    T: 'static,
+    F: 'static + FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) -> T,
+{
+    cx.defer(move |cx| {
+        if let Err(err) = original_window.update(cx, |multi_workspace, window, cx| {
+            multi_workspace
+                .workspace()
+                .clone()
+                .update(cx, |workspace, cx| {
+                    workspace
+                        .with_local_or_wsl_workspace(window, cx, open)
+                        .detach_and_log_err(cx);
+                });
+        }) {
+            log::error!("[ohos] failed to update the workspace: {err:?}");
+        }
+    });
+}
+
+/// Opens `text` as a read-only editor tab in `workspace`.
+///
+/// This is the single entry point for settings pages that show a bundled
+/// document. It mirrors what the "Open Licenses" action builds, but it is
+/// callable from a settings page: that action dispatches through the window
+/// handle, which cannot run while the settings tab is still open.
+#[cfg(target_env = "ohos")]
+pub(crate) fn open_readonly_document(
+    workspace: &mut Workspace,
+    text: std::borrow::Cow<'static, str>,
+    title: &'static str,
+    language_name: &'static str,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let existing = workspace.items_of_type::<Editor>(cx).find(|editor| {
+        editor.read_with(cx, |editor, cx| {
+            editor.read_only(cx)
+                && editor.title(cx).as_ref() == title
+                && editor
+                    .buffer()
+                    .read(cx)
+                    .as_singleton()
+                    .is_some_and(|buffer| buffer.read(cx).file().is_none())
+        })
+    });
+    if let Some(existing) = existing {
+        workspace.activate_item(&existing, true, true, window, cx);
+        return;
+    }
+
+    let language = workspace
+        .app_state()
+        .languages
+        .language_for_name(language_name);
+    cx.spawn_in(window, async move |workspace, cx| {
+        let language = language.await.log_err();
+        workspace
+            .update_in(cx, move |workspace, window, cx| {
+                let project = workspace.project().clone();
+                let buffer = project
+                    .update(cx, move |project, cx| project.create_buffer(language, false, cx));
+                cx.spawn_in(window, async move |workspace, cx| {
+                    let buffer = buffer.await?;
+                    buffer.update(cx, |buffer, cx| {
+                        buffer.set_text(text.into_owned(), cx);
+                        buffer.set_capability(language::Capability::ReadOnly, cx);
+                    });
+                    let buffer = cx.new(|cx| {
+                        editor::MultiBuffer::singleton(buffer, cx).with_title(title.into())
+                    });
+                    workspace.update_in(cx, |workspace, window, cx| {
+                        workspace.add_item_to_active_pane(
+                            Box::new(cx.new(|cx| {
+                                let mut editor = Editor::for_multibuffer(
+                                    buffer,
+                                    Some(project.clone()),
+                                    window,
+                                    cx,
+                                );
+                                editor.set_read_only(true);
+                                editor.set_should_serialize(false, cx);
+                                editor.set_breadcrumb_header(title.into());
+                                editor
+                            })),
+                            None,
+                            true,
+                            window,
+                            cx,
+                        )
+                    })
+                })
+            })?
+            .await
+    })
+    .detach_and_log_err(cx);
+}
+// ===== [OHOS PORT END] =====
+
 /// Closes the settings tab identified by `settings_item_id`.
 ///
 /// Logs and returns when the tab is already gone, so the close-then-open flow in
@@ -7056,5 +7192,191 @@ mod ohos_agent_settings {
             .into_any_element()
     }
 
+}
+// ===== [OHOS PORT END] =====
+
+// ===== [OHOS PORT BEGIN] About page =====
+// HiCodeer's settings UI gains an "About" page right after "Network". It shows
+// the app version and links to the bundled license and privacy documents, the
+// GitHub issue tracker and the contact address. Upstream Zed has no such page,
+// so the page and its render function are OHOS-only.
+#[cfg(target_env = "ohos")]
+mod ohos_about_page {
+    use super::*;
+    use ui::{
+        Button, ButtonSize, ButtonStyle, Color, Divider, DividerColor, Icon, IconName, IconSize,
+        Label, LabelSize,
+    };
+
+    /// The contact address shown on the About page.
+    const CONTACT_EMAIL: &str = "jaffen@qq.com";
+    /// The GitHub issue tracker the feedback row links to.
+    const FEEDBACK_URL: &str = "https://github.com/jaffenqqcom/hicodeer/issues/new/choose";
+
+    pub(crate) fn items() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader(localization::localized_str!("About")),
+            SettingsPageItem::Custom(CustomItem {
+                render: render_page,
+                keywords: &[
+                    "about",
+                    "version",
+                    "license",
+                    "feedback",
+                    "contact",
+                    "privacy",
+                ],
+            }),
+        ]
+    }
+
+    fn render_page(
+        _settings_window: &SettingsWindow,
+        _window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+    ) -> AnyElement {
+        let version = release_channel::AppVersion::global(cx);
+        let version_text = format!("{}.{}.{}", version.major, version.minor, version.patch);
+
+        let version_value = Label::new(version_text).into_any_element();
+
+        let license_button = Button::new(
+            "about-open-license",
+            localization::localized_str!("Open"),
+        )
+        .style(ButtonStyle::OutlinedGhost)
+        .size(ButtonSize::Medium)
+        .tab_index(0_isize)
+        .on_click(cx.listener(|this, _, _window, cx| {
+            this.open_bundled_document(
+                util::asset_str::<assets::Assets>("licenses.md"),
+                localization::localized_str!("License"),
+                "Markdown",
+                cx,
+            );
+        }))
+        .into_any_element();
+
+        let feedback_button = Button::new(
+            "about-open-feedback",
+            localization::localized_str!("Open Feedback"),
+        )
+        .style(ButtonStyle::OutlinedGhost)
+        .size(ButtonSize::Medium)
+        .tab_index(0_isize)
+        .end_icon(
+            Icon::new(IconName::ArrowUpRight)
+                .size(IconSize::Small)
+                .color(Color::Muted),
+        )
+        .on_click(|_, _, cx| {
+            cx.open_url(FEEDBACK_URL);
+        })
+        .into_any_element();
+
+        let contact = Button::new("about-contact", CONTACT_EMAIL)
+            .style(ButtonStyle::OutlinedGhost)
+            .size(ButtonSize::Medium)
+            .tab_index(0_isize)
+            .on_click(|_, _, cx| {
+                cx.open_url(&format!("mailto:{CONTACT_EMAIL}"));
+            })
+            .into_any_element();
+
+        let privacy_button = Button::new(
+            "about-open-privacy",
+            localization::localized_str!("Open"),
+        )
+        .style(ButtonStyle::OutlinedGhost)
+        .size(ButtonSize::Medium)
+        .tab_index(0_isize)
+        .on_click(cx.listener(|this, _, _window, cx| {
+            this.open_bundled_document(
+                util::asset_str::<assets::Assets>("privacy.md"),
+                localization::localized_str!("Data & Privacy"),
+                "Markdown",
+                cx,
+            );
+        }))
+        .into_any_element();
+
+        v_flex()
+            .id("about-page")
+            .w_full()
+            .child(block(setting_row(
+                localization::localized_str!("Version"),
+                localization::localized_str!("HiCodeer version"),
+                version_value,
+            )))
+            .child(divider())
+            .child(block(setting_row(
+                localization::localized_str!("License"),
+                localization::localized_str!("View the licenses for HiCodeer and its dependencies."),
+                license_button,
+            )))
+            .child(divider())
+            .child(block(setting_row(
+                localization::localized_str!("Feedback"),
+                localization::localized_str!("Report a problem or suggest a feature on GitHub."),
+                feedback_button,
+            )))
+            .child(divider())
+            .child(block(setting_row(
+                localization::localized_str!("Contact Us"),
+                localization::localized_str!("Send us an email if you run into issues."),
+                contact,
+            )))
+            .child(divider())
+            .child(block(setting_row(
+                localization::localized_str!("Data & Privacy"),
+                localization::localized_str!("View the data and privacy notice."),
+                privacy_button,
+            )))
+            .into_any_element()
+    }
+
+    fn setting_row(
+        title: &'static str,
+        description: &'static str,
+        control: AnyElement,
+    ) -> AnyElement {
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .justify_between()
+            .gap_4()
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w_2_3()
+                    .min_w_0()
+                    .child(Label::new(title))
+                    .child(
+                        Label::new(description)
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+            .child(control)
+            .into_any_element()
+    }
+
+    fn block(child: AnyElement) -> AnyElement {
+        v_flex()
+            .w_full()
+            .px_8()
+            .pt_4()
+            .pb_4()
+            .child(child)
+            .into_any_element()
+    }
+
+    fn divider() -> AnyElement {
+        h_flex()
+            .w_full()
+            .px_8()
+            .child(Divider::horizontal().color(DividerColor::BorderFaded))
+            .into_any_element()
+    }
 }
 // ===== [OHOS PORT END] =====

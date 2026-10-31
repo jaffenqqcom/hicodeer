@@ -4580,7 +4580,7 @@ mod tests {
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
 
         let mut official = metadata_params(pane_id.clone());
-        official.source = "herdr:pi".into();
+        official.source = "hicodeer:pi".into();
         official.seq = Some(200);
         let response = app.handle_pane_report_metadata("official".into(), official);
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -4588,7 +4588,7 @@ mod tests {
         let terminal = &app.state.terminals[&terminal_id];
         assert!(terminal.metadata_report_sequence_is_fresh("custom:pi-metadata", Some(1)));
         assert!(terminal.metadata_report_sequence_is_fresh("custom:pi-tokens", Some(1)));
-        assert!(terminal.metadata_report_sequence_is_fresh("herdr:pi", Some(1)));
+        assert!(terminal.metadata_report_sequence_is_fresh("hicodeer:pi", Some(1)));
 
         app.state
             .terminals

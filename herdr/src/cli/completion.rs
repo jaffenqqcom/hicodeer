@@ -9,9 +9,11 @@ pub(super) fn supported_shells_usage() -> String {
 }
 
 pub(super) fn run_completion_command(args: &[String]) -> std::io::Result<i32> {
+    // A bare group name prints help and succeeds; a bad shell argument below is
+    // still a usage error.
     let Some(shell) = args.first().map(String::as_str) else {
         print_completion_help();
-        return Ok(2);
+        return Ok(0);
     };
     if matches!(shell, "help" | "--help" | "-h") {
         print_completion_help();
@@ -83,7 +85,7 @@ fn parse_shell(shell: &str) -> Option<Shell> {
 }
 
 fn print_completion_help() {
-    eprintln!("usage: herdr completion <{}>", supported_shells_usage());
+    eprintln!("usage: hicodeerd completion <{}>", supported_shells_usage());
 }
 
 #[cfg(test)]

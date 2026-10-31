@@ -25,6 +25,6 @@ if ($null -eq $payload -or [string]::IsNullOrWhiteSpace($payload.session_id)) { 
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
 try {
-    & $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:qodercli --agent qodercli --agent-session-id $payload.session_id --seq $seq 2>$null | Out-Null
+    & $herdr pane report-agent-session $env:HERDR_PANE_ID --source hicodeer:qodercli --agent qodercli --agent-session-id $payload.session_id --seq $seq 2>$null | Out-Null
 } catch {
 }

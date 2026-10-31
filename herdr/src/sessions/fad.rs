@@ -708,7 +708,7 @@ mod tests {
             let session_ref = crate::agent_resume::AgentSessionRef::id("session-1")
                 .expect("a plain id is a valid session reference");
             let planned = crate::agent_resume::plan(
-                &format!("herdr:{label}"),
+                &format!("hicodeer:{label}"),
                 label,
                 &session_ref,
             );

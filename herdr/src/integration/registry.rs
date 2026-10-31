@@ -4,6 +4,31 @@ use std::path::{Path, PathBuf};
 
 use super::env::*;
 
+/// Resolves a CLI label to an integration target. Iterating [`IntegrationTarget::ALL`]
+/// instead of matching label by label keeps the CLI in step with the registry: a
+/// target added there becomes installable without touching the argument parser.
+pub(crate) fn integration_target_from_label(
+    label: &str,
+) -> Option<crate::api::schema::IntegrationTarget> {
+    // Accepted spelling of the two-word label in earlier builds.
+    const ALIASES: &[(&str, &str)] = &[("antigravity_cli", "antigravity-cli")];
+    let label = ALIASES
+        .iter()
+        .find_map(|(alias, canonical)| (*alias == label).then_some(*canonical))
+        .unwrap_or(label);
+
+    crate::api::schema::IntegrationTarget::ALL
+        .into_iter()
+        .find(|target| integration_target_label(*target) == label)
+}
+
+pub(crate) fn integration_target_labels() -> Vec<&'static str> {
+    crate::api::schema::IntegrationTarget::ALL
+        .iter()
+        .map(|target| integration_target_label(*target))
+        .collect()
+}
+
 pub(crate) fn integration_target_label(
     target: crate::api::schema::IntegrationTarget,
 ) -> &'static str {
@@ -443,7 +468,7 @@ pub(crate) fn integration_update_instructions(
         .iter()
         .map(|target| {
             format!(
-                "`herdr integration install {}`",
+                "`hicodeerd integration install {}`",
                 integration_target_label(*target)
             )
         })

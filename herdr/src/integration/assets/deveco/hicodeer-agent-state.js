@@ -6,7 +6,7 @@
 
 import net from "node:net";
 
-const SOURCE = "herdr:deveco";
+const SOURCE = "hicodeer:deveco";
 const AGENT = "deveco";
 let reportSeq = Date.now() * 1000;
 let requestChain = Promise.resolve();

@@ -49,7 +49,7 @@ if session_id is None:
 seq = time.time_ns()
 params = {
     "pane_id": os.environ["HERDR_PANE_ID"],
-    "source": "herdr:antigravity_cli",
+    "source": "hicodeer:antigravity_cli",
     "agent": "agy",
     "seq": seq,
     "agent_session_id": session_id,
@@ -60,7 +60,7 @@ if transcript_path is not None:
     params["agent_session_path"] = transcript_path
 
 request = json.dumps({
-    "id": f"herdr:antigravity_cli:{seq}",
+    "id": f"hicodeer:antigravity_cli:{seq}",
     "method": "pane.report_agent_session",
     "params": params,
 })

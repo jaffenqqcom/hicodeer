@@ -299,7 +299,7 @@ fn machine_diagnostic_badge_reopens_notice_without_collapsing_machine() {
         assert!(notice.body.contains("Permission denied"));
         assert!(notice
             .title
-            .contains("herdr machine reconnect 0123456789abcdef0123456789abcdef"));
+            .contains("hicodeerd machine reconnect 0123456789abcdef0123456789abcdef"));
     }
     state.set_endpoint_status(&id, ClientEndpointStatus::Online);
     state.compose(120, 40).unwrap();

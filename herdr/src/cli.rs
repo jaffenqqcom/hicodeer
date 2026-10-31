@@ -42,17 +42,17 @@ mod workspace;
 mod worktree;
 
 const TERMINAL_SESSION_OBSERVE_USAGE: &str =
-    "usage: herdr terminal session observe <target> [--cols N] [--rows N]";
+    "usage: hicodeerd terminal session observe <target> [--cols N] [--rows N]";
 const TERMINAL_SESSION_CONTROL_USAGE: &str =
-    "usage: herdr terminal session control <target> [--takeover] [--cols N] [--rows N]";
+    "usage: hicodeerd terminal session control <target> [--takeover] [--cols N] [--rows N]";
 pub(crate) const AGENT_HELP_FOOTER: &str = concat!(
     "Are you an AI? Use these resources ONLY IF your task specifically asks you to:\n",
-    "  Help a human understand or set up Herdr for the first time:\n",
+    "  Help a human understand or set up HiCodeer for the first time:\n",
     "    https://herdr.dev/agent-guide.md\n",
-    "  Debug or investigate a problem with Herdr:\n",
+    "  Debug or investigate a problem with HiCodeer:\n",
     "    https://herdr.dev/llms.txt\n",
-    "  Control Herdr panes, agents, or workspaces:\n",
-    "    SKIP if a Herdr skill is already in your context. Otherwise run: herdr --skill",
+    "  Control HiCodeer panes, agents, or workspaces:\n",
+    "    SKIP if a HiCodeer skill is already in your context. Otherwise run: hicodeerd --skill",
 );
 
 pub(crate) fn parse_token_assignment(raw: &str) -> Result<(String, Option<String>), String> {
@@ -137,6 +137,12 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
 }
 
 fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
+    // A bare group name prints help and succeeds; only an unknown subcommand
+    // is a usage error.
+    if args.first().is_none() {
+        print_channel_help();
+        return Ok(0);
+    }
     match args.first().map(|arg| arg.as_str()) {
         Some("set") => channel_set(&args[1..]),
         Some("show") if args.len() == 1 => {
@@ -157,7 +163,7 @@ fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
 
 fn channel_set(args: &[String]) -> std::io::Result<i32> {
     let Some(channel) = parse_channel_set_arg(args) else {
-        eprintln!("usage: herdr channel set <stable|preview>");
+        eprintln!("usage: hicodeerd channel set <stable|preview>");
         return Ok(2);
     };
 
@@ -201,7 +207,7 @@ fn channel_set(args: &[String]) -> std::io::Result<i32> {
     }
     std::fs::write(&path, updated)?;
     println!(
-        "Herdr update channel set to {channel} in {}.",
+        "HiCodeer update channel set to {channel} in {}.",
         path.display()
     );
 
@@ -218,7 +224,7 @@ fn channel_set(args: &[String]) -> std::io::Result<i32> {
     crate::platform::end_cli_output();
     if let Err(err) = crate::update::self_update(crate::update::SelfUpdateOptions::default()) {
         eprintln!("update failed: {err}");
-        eprintln!("Run `herdr update` to retry.");
+        eprintln!("Run `hicodeerd update` to retry.");
         return Ok(1);
     }
 
@@ -261,15 +267,15 @@ fn channel_set_install_action(
 }
 
 fn print_channel_help() {
-    eprintln!("herdr channel commands:");
-    eprintln!("  herdr channel show                  print the configured update channel");
-    eprintln!("  herdr channel set <stable|preview>  choose the update channel");
+    eprintln!("hicodeerd channel commands:");
+    eprintln!("  hicodeerd channel show                  print the configured update channel");
+    eprintln!("  hicodeerd channel set <stable|preview>  choose the update channel");
 }
 
 fn run_config_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
         print_config_help();
-        return Ok(2);
+        return Ok(0);
     };
 
     match subcommand {
@@ -290,11 +296,11 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
     match args {
         [] => {}
         [flag] if matches!(flag.as_str(), "help" | "--help" | "-h") => {
-            eprintln!("usage: herdr config check");
+            eprintln!("usage: hicodeerd config check");
             return Ok(0);
         }
         _ => {
-            eprintln!("usage: herdr config check");
+            eprintln!("usage: hicodeerd config check");
             return Ok(2);
         }
     }
@@ -314,7 +320,7 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
 
 fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: herdr config reset-keys");
+        eprintln!("usage: hicodeerd config reset-keys");
         return Ok(2);
     }
 
@@ -379,8 +385,8 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
         "Removed [keys], [keys.indexed], and [[keys.command]] from {}.",
         path.display()
     );
-    println!("Built-in v2 keybindings will apply after Herdr restarts or reloads config.");
-    println!("If a Herdr server is running, run `herdr server reload-config` to apply this now.");
+    println!("Built-in v2 keybindings will apply after HiCodeer restarts or reloads config.");
+    println!("If a HiCodeer server is running, run `hicodeerd server reload-config` to apply this now.");
     println!(
         "To restore: cp {} {}",
         backup_path.display(),
@@ -404,7 +410,7 @@ fn key_config_backup_path(path: &std::path::Path) -> std::path::PathBuf {
 fn run_terminal_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
         print_terminal_help();
-        return Ok(2);
+        return Ok(0);
     };
 
     match subcommand {
@@ -425,7 +431,7 @@ fn run_terminal_command(args: &[String]) -> std::io::Result<i32> {
 fn run_session_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
         print_session_help();
-        return Ok(2);
+        return Ok(0);
     };
 
     match subcommand {
@@ -449,15 +455,15 @@ fn session_attach_help(args: &[String]) -> std::io::Result<i32> {
         args.first().map(String::as_str),
         Some("help" | "--help" | "-h")
     ) {
-        eprintln!("usage: herdr session attach <name>");
+        eprintln!("usage: hicodeerd session attach <name>");
         return Ok(0);
     }
-    eprintln!("usage: herdr session attach <name>");
+    eprintln!("usage: hicodeerd session attach <name>");
     Ok(2)
 }
 
 fn session_list(args: &[String]) -> std::io::Result<i32> {
-    let json = match parse_session_json_only(args, "usage: herdr session list [--json]") {
+    let json = match parse_session_json_only(args, "usage: hicodeerd session list [--json]") {
         Ok(json) => json,
         Err(code) => return Ok(code),
     };
@@ -475,7 +481,7 @@ fn session_list(args: &[String]) -> std::io::Result<i32> {
 
 fn session_stop(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: herdr session stop <name> [--json]") {
+        match parse_session_name_and_json(args, "usage: hicodeerd session stop <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -508,7 +514,7 @@ fn session_stop(args: &[String]) -> std::io::Result<i32> {
 
 fn session_delete(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: herdr session delete <name> [--json]") {
+        match parse_session_name_and_json(args, "usage: hicodeerd session delete <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -535,7 +541,7 @@ fn session_delete(args: &[String]) -> std::io::Result<i32> {
 fn terminal_attach(args: &[String]) -> std::io::Result<i32> {
     let (terminal_id, takeover) = match parse_attach_target(
         args,
-        "usage: herdr terminal attach <terminal_id> [--takeover]",
+        "usage: hicodeerd terminal attach <terminal_id> [--takeover]",
     ) {
         Ok(parsed) => parsed,
         Err(code) => return Ok(code),
@@ -687,7 +693,7 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
     match args.first().map(|arg| arg.as_str()) {
         Some("set") => {
             if args.len() != 2 {
-                eprintln!("usage: herdr terminal title set <title>");
+                eprintln!("usage: hicodeerd terminal title set <title>");
                 return Ok(2);
             }
             print_response(&send_request(&Request {
@@ -699,7 +705,7 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
         }
         Some("clear") => {
             if args.len() != 1 {
-                eprintln!("usage: herdr terminal title clear");
+                eprintln!("usage: hicodeerd terminal title clear");
                 return Ok(2);
             }
             print_response(&send_request(&Request {
@@ -708,13 +714,13 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
             })?)
         }
         Some("help" | "--help" | "-h") => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
+            eprintln!("usage: hicodeerd terminal title set <title>");
+            eprintln!("       hicodeerd terminal title clear");
             Ok(0)
         }
         _ => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
+            eprintln!("usage: hicodeerd terminal title set <title>");
+            eprintln!("       hicodeerd terminal title clear");
             Ok(2)
         }
     }
@@ -1028,27 +1034,27 @@ fn print_session_error(code: &str, message: &str) {
 }
 
 fn print_config_help() {
-    eprintln!("herdr config commands:");
-    eprintln!("  herdr config check  validate config.toml and print diagnostics");
-    eprintln!("  herdr config reset-keys  back up config.toml and remove custom keybindings");
+    eprintln!("hicodeerd config commands:");
+    eprintln!("  hicodeerd config check  validate config.toml and print diagnostics");
+    eprintln!("  hicodeerd config reset-keys  back up config.toml and remove custom keybindings");
 }
 
 fn print_terminal_help() {
-    eprintln!("herdr terminal commands:");
-    eprintln!("  herdr terminal attach <terminal_id> [--takeover]");
-    eprintln!("  herdr terminal session control <target> [--takeover] [--cols N] [--rows N]");
-    eprintln!("  herdr terminal session observe <target> [--cols N] [--rows N]");
-    eprintln!("  herdr terminal title set <title>");
-    eprintln!("  herdr terminal title clear");
+    eprintln!("hicodeerd terminal commands:");
+    eprintln!("  hicodeerd terminal attach <terminal_id> [--takeover]");
+    eprintln!("  hicodeerd terminal session control <target> [--takeover] [--cols N] [--rows N]");
+    eprintln!("  hicodeerd terminal session observe <target> [--cols N] [--rows N]");
+    eprintln!("  hicodeerd terminal title set <title>");
+    eprintln!("  hicodeerd terminal title clear");
     eprintln!("  detach from direct attach with ctrl+b q; send literal ctrl+b with ctrl+b ctrl+b");
 }
 
 fn print_session_help() {
-    eprintln!("herdr session commands:");
-    eprintln!("  herdr session list [--json]");
-    eprintln!("  herdr session attach <name>");
-    eprintln!("  herdr session stop <name> [--json]");
-    eprintln!("  herdr session delete <name> [--json]");
+    eprintln!("hicodeerd session commands:");
+    eprintln!("  hicodeerd session list [--json]");
+    eprintln!("  hicodeerd session attach <name>");
+    eprintln!("  hicodeerd session stop <name> [--json]");
+    eprintln!("  hicodeerd session delete <name> [--json]");
     eprintln!("  use 'default' as <name> to target the default session for stop");
 }
 

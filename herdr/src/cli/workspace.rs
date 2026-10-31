@@ -7,7 +7,7 @@ use crate::api::schema::{
 pub(super) fn run_workspace_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
         print_workspace_help();
-        return Ok(2);
+        return Ok(0);
     };
 
     match subcommand {
@@ -31,7 +31,7 @@ pub(super) fn run_workspace_command(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_list(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: herdr workspace list");
+        eprintln!("usage: hicodeerd workspace list");
         return Ok(2);
     }
 
@@ -105,11 +105,11 @@ fn workspace_create(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_get(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_workspace_id) = args.first() else {
-        eprintln!("usage: herdr workspace get <workspace_id>");
+        eprintln!("usage: hicodeerd workspace get <workspace_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr workspace get <workspace_id>");
+        eprintln!("usage: hicodeerd workspace get <workspace_id>");
         return Ok(2);
     }
 
@@ -118,11 +118,11 @@ fn workspace_get(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_focus(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_workspace_id) = args.first() else {
-        eprintln!("usage: herdr workspace focus <workspace_id>");
+        eprintln!("usage: hicodeerd workspace focus <workspace_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr workspace focus <workspace_id>");
+        eprintln!("usage: hicodeerd workspace focus <workspace_id>");
         return Ok(2);
     }
 
@@ -131,7 +131,7 @@ fn workspace_focus(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_rename(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: herdr workspace rename <workspace_id> <label>");
+        eprintln!("usage: hicodeerd workspace rename <workspace_id> <label>");
         return Ok(2);
     }
 
@@ -143,7 +143,7 @@ fn workspace_rename(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_report_metadata(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_workspace_id) = args.first() else {
-        eprintln!("usage: herdr workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+        eprintln!("usage: hicodeerd workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
         return Ok(2);
     };
     let workspace_id = super::normalize_workspace_id(raw_workspace_id);
@@ -231,7 +231,7 @@ fn workspace_close(args: &[String]) -> std::io::Result<i32> {
         [workspace_id] => (workspace_id, false),
         [workspace_id, flag] if flag == "--group" => (workspace_id, true),
         _ => {
-            eprintln!("usage: herdr workspace close <workspace_id> [--group]");
+            eprintln!("usage: hicodeerd workspace close <workspace_id> [--group]");
             return Ok(2);
         }
     };
@@ -243,12 +243,12 @@ fn workspace_close(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn print_workspace_help() {
-    eprintln!("herdr workspace commands:");
-    eprintln!("  herdr workspace list");
-    eprintln!("  herdr workspace create [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]");
-    eprintln!("  herdr workspace get <workspace_id>");
-    eprintln!("  herdr workspace focus <workspace_id>");
-    eprintln!("  herdr workspace rename <workspace_id> <label>");
-    eprintln!("  herdr workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
-    eprintln!("  herdr workspace close <workspace_id> [--group]");
+    eprintln!("hicodeerd workspace commands:");
+    eprintln!("  hicodeerd workspace list");
+    eprintln!("  hicodeerd workspace create [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]");
+    eprintln!("  hicodeerd workspace get <workspace_id>");
+    eprintln!("  hicodeerd workspace focus <workspace_id>");
+    eprintln!("  hicodeerd workspace rename <workspace_id> <label>");
+    eprintln!("  hicodeerd workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+    eprintln!("  hicodeerd workspace close <workspace_id> [--group]");
 }

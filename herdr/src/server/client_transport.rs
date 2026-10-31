@@ -795,7 +795,7 @@ pub(crate) fn handle_client_handshake(
                 version: PROTOCOL_VERSION,
                 encoding: RenderEncoding::SemanticFrame,
                 error: Some(
-                    "this client predates the stable endpoint protocol; upgrade the Herdr client"
+                    "this client predates the stable endpoint protocol; upgrade the HiCodeer client"
                         .to_owned(),
                 ),
             };

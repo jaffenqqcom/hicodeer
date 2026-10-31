@@ -1774,7 +1774,7 @@ pub fn check_client_version(client_version: u32) -> VersionCheck {
         ))
     } else {
         VersionCheck::Incompatible(format!(
-            "client version {client_version} is newer than server version {PROTOCOL_VERSION}; please upgrade the herdr server"
+            "client version {client_version} is newer than server version {PROTOCOL_VERSION}; please upgrade the hicodeerd server"
         ))
     }
 }
@@ -2810,7 +2810,7 @@ mod tests {
                 preview: false,
             }),
             update_available: Some("0.8.3".into()),
-            update_install_command: "herdr update".into(),
+            update_install_command: "hicodeerd update".into(),
             server_keybindings_toml: Some("[keys]\nprefix = \"ctrl+a\"\n".into()),
             latest_release_notes_available: true,
             integration_updates_available: true,
@@ -2941,7 +2941,7 @@ mod tests {
 
     #[test]
     fn server_window_title_roundtrip() {
-        for title in [Some("herdr api".to_owned()), None] {
+        for title in [Some("hicodeerd api".to_owned()), None] {
             let msg = ServerMessage::WindowTitle { title };
             let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
             let (decoded, _): (ServerMessage, _) =

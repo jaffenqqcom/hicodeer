@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=10
+// HERDR_INTEGRATION_VERSION=11
 // @ts-nocheck
 
 import net from "node:net";
@@ -13,7 +13,7 @@ const socketPath = process.env.HICODEER_AGENT_SOCKET_PATH;
 const socketEndpoint =
   process.platform === "win32" && socketPath ? `\\\\.\\pipe\\${socketPath}` : socketPath;
 const paneId = process.env.HERDR_PANE_ID;
-const source = "herdr:pi";
+const source = "hicodeer:pi";
 
 function enabled() {
   return HERDR_ENV === "1" && !!socketPath && !!paneId;
@@ -208,7 +208,7 @@ export default function (pi) {
     queueState(next.state, next.message);
   }
 
-  pi.events.on("herdr:blocked", (data) => {
+  pi.events.on("hicodeer:blocked", (data) => {
     if (!rootSession) {
       return;
     }
@@ -227,9 +227,9 @@ export default function (pi) {
   });
 
   pi.on("session_start", async (event, ctx) => {
-    // TUI only: RPC/JSON/print modes are headless (no PTY herdr can display),
-    // and RPC still reports hasUI=true, so mode is the reliable gate.
-    if (ctx?.mode !== "tui") {
+    // TUI only: print and RPC modes are headless. `ExtensionContext` exposes
+    // `hasUI` for this and has no `mode` field, so `hasUI` is the gate.
+    if (ctx?.hasUI !== true) {
       return;
     }
     rootSession = true;

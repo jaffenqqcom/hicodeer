@@ -563,7 +563,7 @@ fn unique_scrollback_path(attempt: u32) -> std::path::PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     std::env::temp_dir().join(format!(
-        "herdr-scrollback-{}-{nanos}-{attempt}.txt",
+        "hicodeer-scrollback-{}-{nanos}-{attempt}.txt",
         std::process::id()
     ))
 }

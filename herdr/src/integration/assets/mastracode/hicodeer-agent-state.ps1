@@ -26,9 +26,9 @@ $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else
 try {
     if ($Action -eq "session") {
         if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
-        & $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:mastracode --agent mastracode --seq $seq --session-start-source startup --agent-session-id $sessionId 2>$null | Out-Null
+        & $herdr pane report-agent-session $env:HERDR_PANE_ID --source hicodeer:mastracode --agent mastracode --seq $seq --session-start-source startup --agent-session-id $sessionId 2>$null | Out-Null
     } else {
-        $args = @("pane", "report-agent", $env:HERDR_PANE_ID, "--source", "herdr:mastracode", "--agent", "mastracode", "--state", $Action, "--seq", "$seq")
+        $args = @("pane", "report-agent", $env:HERDR_PANE_ID, "--source", "hicodeer:mastracode", "--agent", "mastracode", "--state", $Action, "--seq", "$seq")
         if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
             $args += @("--agent-session-id", $sessionId)
         }

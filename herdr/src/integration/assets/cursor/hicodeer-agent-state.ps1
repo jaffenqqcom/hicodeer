@@ -44,7 +44,7 @@ if ([string]::IsNullOrWhiteSpace($sessionId)) { Exit-Hook }
 $seq = [DateTime]::UtcNow.Ticks
 $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
 try {
-    & $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:cursor --agent cursor --seq $seq --agent-session-id $sessionId 2>$null | Out-Null
+    & $herdr pane report-agent-session $env:HERDR_PANE_ID --source hicodeer:cursor --agent cursor --seq $seq --agent-session-id $sessionId 2>$null | Out-Null
 } catch {
 }
 

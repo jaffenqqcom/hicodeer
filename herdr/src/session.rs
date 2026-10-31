@@ -44,10 +44,10 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
             return Ok(args.to_vec());
         }
         let Some(name) = args.get(3) else {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err("usage: hicodeerd session attach <name>".to_string());
         };
         if args.len() != 4 {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err("usage: hicodeerd session attach <name>".to_string());
         }
         apply_explicit_name(name)?;
         return Ok(cleaned);
@@ -104,8 +104,8 @@ pub fn active_name() -> Option<String> {
 
 pub fn local_attach_command() -> String {
     match active_name() {
-        Some(name) => format!("herdr session attach {name}"),
-        None => "herdr".to_string(),
+        Some(name) => format!("hicodeerd session attach {name}"),
+        None => "hicodeerd".to_string(),
     }
 }
 
@@ -115,15 +115,15 @@ pub fn local_stop_command() -> String {
 
 pub fn stop_command_for(name: Option<&str>) -> String {
     match name {
-        Some(name) => format!("herdr session stop {name}"),
-        None => "herdr server stop".to_string(),
+        Some(name) => format!("hicodeerd session stop {name}"),
+        None => "hicodeerd server stop".to_string(),
     }
 }
 
 pub fn restart_after_update_guidance(stop_command: &str, attach_command: Option<&str>) -> String {
     let restart = match attach_command {
         Some(command) => format!("Run `{stop_command}`, then run `{command}` again."),
-        None => format!("Run `{stop_command}`, then restart Herdr with the same socket override."),
+        None => format!("Run `{stop_command}`, then restart HiCodeer with the same socket override."),
     };
     format!(
         "Stop the old server to use the new version.\nStopping exits pane processes.\n{restart}"
@@ -135,7 +135,7 @@ pub fn active_restart_after_update_guidance() -> String {
         if let Ok(socket_path) = std::env::var(crate::api::SOCKET_PATH_ENV_VAR) {
             return restart_after_update_guidance(
                 &format!(
-                    "{}={} herdr server stop",
+                    "{}={} hicodeerd server stop",
                     crate::api::SOCKET_PATH_ENV_VAR,
                     socket_path
                 ),
@@ -169,7 +169,7 @@ pub fn data_dir_for(name: Option<&str>) -> PathBuf {
 }
 
 pub fn api_socket_path_for(name: Option<&str>) -> PathBuf {
-    data_dir_for(name).join("herdr.sock")
+    data_dir_for(name).join("hicodeer.sock")
 }
 
 pub fn active_api_socket_path() -> PathBuf {
@@ -183,7 +183,7 @@ pub fn active_api_socket_path() -> PathBuf {
 }
 
 pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
-    data_dir_for(name).join("herdr-client.sock")
+    data_dir_for(name).join("hicodeer-client.sock")
 }
 
 pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
@@ -313,7 +313,7 @@ pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
     let Some(dir) = exact_session_dir_for_delete(name)? else {
         return Ok(session_info(Some(name)));
     };
-    let socket_path = dir.join("herdr.sock");
+    let socket_path = dir.join("hicodeer.sock");
     if is_running_at(&socket_path) {
         return Err(format!(
             "session {name} is running; stop it before deleting"
@@ -345,7 +345,7 @@ fn exact_session_dir_for_delete(name: &str) -> Result<Option<PathBuf>, String> {
     // filesystems. Never probe its socket or delete it without an exact entry.
     match std::fs::symlink_metadata(sessions_dir.join(name)) {
         Ok(_) => Err(format!(
-            "session {name} does not match an exact session name; use the spelling shown by `herdr session list`"
+            "session {name} does not match an exact session name; use the spelling shown by `hicodeerd session list`"
         )),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.to_string()),
@@ -874,7 +874,7 @@ mod tests {
             active_api_socket_path(),
             config_home
                 .join(crate::config::app_dir_name())
-                .join("herdr.sock")
+                .join("hicodeer.sock")
         );
         std::env::remove_var("XDG_CONFIG_HOME");
         std::env::remove_var(SESSION_ENV_VAR);
@@ -925,7 +925,7 @@ mod tests {
             active_api_socket_path(),
             config_home
                 .join(crate::config::app_dir_name())
-                .join("herdr.sock")
+                .join("hicodeer.sock")
         );
         std::env::remove_var("XDG_CONFIG_HOME");
         std::env::remove_var(SESSION_ENV_VAR);
@@ -938,7 +938,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::remove_var(SESSION_ENV_VAR);
 
-        assert_eq!(local_attach_command(), "herdr");
+        assert_eq!(local_attach_command(), "hicodeerd");
     }
 
     #[test]
@@ -946,7 +946,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::set_var(SESSION_ENV_VAR, "work");
 
-        assert_eq!(local_attach_command(), "herdr session attach work");
+        assert_eq!(local_attach_command(), "hicodeerd session attach work");
 
         std::env::remove_var(SESSION_ENV_VAR);
     }
@@ -956,7 +956,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::remove_var(SESSION_ENV_VAR);
 
-        assert_eq!(local_stop_command(), "herdr server stop");
+        assert_eq!(local_stop_command(), "hicodeerd server stop");
 
         std::env::remove_var(SESSION_ENV_VAR);
     }
@@ -966,7 +966,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::set_var(SESSION_ENV_VAR, "work");
 
-        assert_eq!(local_stop_command(), "herdr session stop work");
+        assert_eq!(local_stop_command(), "hicodeerd session stop work");
 
         std::env::remove_var(SESSION_ENV_VAR);
     }
@@ -975,23 +975,23 @@ mod tests {
     fn restart_after_update_guidance_names_stop_and_attach_commands() {
         assert_eq!(
             restart_after_update_guidance(
-                "herdr session stop work",
-                Some("herdr session attach work")
+                "hicodeerd session stop work",
+                Some("hicodeerd session attach work")
             ),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `herdr session stop work`, then run `herdr session attach work` again."
+            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `hicodeerd session stop work`, then run `hicodeerd session attach work` again."
         );
     }
 
     #[test]
     fn active_restart_after_update_guidance_respects_socket_override() {
         let _guard = env_lock().lock().unwrap();
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/custom-herdr.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/custom-hicodeer.sock");
         std::env::remove_var(SESSION_ENV_VAR);
         clear_explicit_session_for_test();
 
         assert_eq!(
             active_restart_after_update_guidance(),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `HERDR_SOCKET_PATH=/tmp/custom-herdr.sock herdr server stop`, then restart Herdr with the same socket override."
+            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `HICODEER_AGENT_SOCKET_PATH=/tmp/custom-hicodeer.sock hicodeerd server stop`, then restart HiCodeer with the same socket override."
         );
 
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
@@ -1015,7 +1015,7 @@ mod tests {
                 .join(crate::config::app_dir_name())
                 .join("sessions")
                 .join("work")
-                .join("herdr.sock")
+                .join("hicodeer.sock")
         );
         std::env::remove_var("XDG_CONFIG_HOME");
         std::env::remove_var(SESSION_ENV_VAR);
@@ -1045,7 +1045,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::set_var(SESSION_ENV_VAR, "bad/name");
         clear_explicit_session_for_test();
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/herdr.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/hicodeer.sock");
         let args = vec![
             "herdr".to_string(),
             "workspace".to_string(),
@@ -1056,7 +1056,7 @@ mod tests {
 
         assert_eq!(cleaned, vec!["herdr", "workspace", "list"]);
         assert!(!explicit_session_requested());
-        assert_eq!(active_api_socket_path(), PathBuf::from("/tmp/herdr.sock"));
+        assert_eq!(active_api_socket_path(), PathBuf::from("/tmp/hicodeer.sock"));
         assert_eq!(std::env::var(SESSION_ENV_VAR).as_deref(), Ok("bad/name"));
 
         std::env::remove_var(SESSION_ENV_VAR);

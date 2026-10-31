@@ -9,7 +9,7 @@ import os
 import subprocess
 import time
 
-_SOURCE = "herdr:hermes"
+_SOURCE = "hicodeer:hermes"
 _AGENT = "hermes"
 _INTERACTIVE_PLATFORMS = {"cli", "tui", "desktop", "acp"}
 

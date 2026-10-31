@@ -31,9 +31,9 @@ $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else
 try {
     if ($Action -eq "session") {
         if ($null -eq $payload -or [string]::IsNullOrWhiteSpace($payload.session_id)) { exit 0 }
-        & $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:qwen --agent qwen --agent-session-id $payload.session_id --seq $seq 2>$null | Out-Null
+        & $herdr pane report-agent-session $env:HERDR_PANE_ID --source hicodeer:qwen --agent qwen --agent-session-id $payload.session_id --seq $seq 2>$null | Out-Null
     } else {
-        & $herdr pane report-agent $env:HERDR_PANE_ID --source herdr:qwen --agent qwen --state $Action --seq $seq 2>$null | Out-Null
+        & $herdr pane report-agent $env:HERDR_PANE_ID --source hicodeer:qwen --agent qwen --state $Action --seq $seq 2>$null | Out-Null
     }
 } catch {
 }

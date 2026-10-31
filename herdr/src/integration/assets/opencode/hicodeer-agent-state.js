@@ -6,7 +6,7 @@
 
 import net from "node:net";
 
-const SOURCE = "herdr:opencode";
+const SOURCE = "hicodeer:opencode";
 const AGENT = "opencode";
 let reportSeq = Date.now() * 1000;
 let requestChain = Promise.resolve();

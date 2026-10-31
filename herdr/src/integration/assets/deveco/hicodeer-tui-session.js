@@ -6,7 +6,7 @@
 
 import net from "node:net";
 
-const SOURCE = "herdr:deveco";
+const SOURCE = "hicodeer:deveco";
 const AGENT = "deveco";
 const POLL_INTERVAL_MS = 250;
 const SOCKET_TIMEOUT_MS = 500;

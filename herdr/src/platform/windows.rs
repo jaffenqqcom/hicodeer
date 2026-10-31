@@ -139,7 +139,7 @@ pub(crate) fn local_server_connection_error(error: std::io::Error) -> std::io::E
         error.kind(),
         format!(
             "For an elevated server, use an administrator terminal. Sharing with ordinary \
-             clients requires stopping it there and restarting its `herdr server` command \
+             clients requires stopping it there and restarting its `hicodeerd server` command \
              with --allow-unelevated-clients (closes panes). {error}"
         ),
     )
@@ -4115,7 +4115,7 @@ mod tests {
     fn windows_process_cwd_reads_normalized_child_launch_directory() {
         use std::path::PathBuf;
 
-        let name = format!("Herdr-Cwd-Case-{}", std::process::id());
+        let name = format!("HiCodeer-Cwd-Case-{}", std::process::id());
         let cwd = std::env::temp_dir().join(&name);
         fs::create_dir_all(&cwd).expect("create cwd fixture");
         let cwd = super::normalize_cwd_for_launch_platform(&cwd);

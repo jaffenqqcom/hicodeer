@@ -49,8 +49,8 @@ profile, not the resume table.
 `agent_session` is asserted by default: `resume_session` is turned into a
 `PersistedAgentSession` and written before `agent.start` returns
 (herdr/src/app/agents.rs:237-243, :337), so a resumed pane reports
-`{source: "herdr:<label>", agent: "<label>", kind: "id", value: "<session id>"}`.
-Antigravity is the one source exception (`herdr:antigravity_cli`). An empty
+`{source: "hicodeer:<label>", agent: "<label>", kind: "id", value: "<session id>"}`.
+Antigravity is the one source exception (`hicodeer:antigravity_cli`). An empty
 `agent_session` is a real failure: it means the launch settled out, the process
 died, or the agent opened a different session. `--no-require-agent-session`
 skips the assertion (do not use it to paper over that).
@@ -122,9 +122,9 @@ READY_POLL_INTERVAL = 1.0
 # case; a longer wait would turn a real failure into a slow one.
 AGENT_SESSION_POLL_SECONDS = 3.0
 
-# `official_source_for` maps every agent to `herdr:<label>` except Antigravity,
-# whose CLI label is `agy` while its integration is `herdr:antigravity_cli`.
-SOURCE_OVERRIDES = {"agy": "herdr:antigravity_cli"}
+# `official_source_for` maps every agent to `hicodeer:<label>` except Antigravity,
+# whose CLI label is `agy` while its integration is `hicodeer:antigravity_cli`.
+SOURCE_OVERRIDES = {"agy": "hicodeer:antigravity_cli"}
 
 
 def expected_session_source(agent, label):
@@ -134,7 +134,7 @@ def expected_session_source(agent, label):
         return override
     if not label:
         return None
-    return "herdr:%s" % label
+    return "hicodeer:%s" % label
 
 
 def expected_resume_argv(agent, session_id):
@@ -677,12 +677,7 @@ def resume_one(harness, args):
 
 def body(harness, args):
     if args.all:
-        try:
-            return resume_all(harness, args)
-        finally:
-            # Nothing written into the shell startup file may outlive the run,
-            # including the abnormal exits `run_guarded` turns into exit codes.
-            remove_shell_environment()
+        return resume_all(harness, args)
     if not args.agent or not args.session:
         raise agent_rpc.EnvironmentNotMet(
             "--agent 与 --session 必须同时给出，或改用 --all 跑全部 agent"
@@ -698,20 +693,6 @@ SWEPT_AGENTS_SKIPPED = {
     "`dsh tui --resume` 无法执行；等官方发布后再打开这条",
 }
 
-# Environment a pane needs before its CLI can start at all. `agent.start` has no
-# env parameter and a pane only reads the shell's startup files, so the value is
-# written into `~/.zshrc` for the duration of that one check and removed right
-# after (`apply_shell_environment`). Agents listed here run last, so the file is
-# touched for the shortest possible window.
-AGENT_SHELL_ENVIRONMENT = {
-    # ZCode binds a broker socket under `os.tmpdir()`; /storage is hmdfs, where
-    # that listen fails with EPERM.
-    "zcode": {"TMPDIR": "/data/storage/el2/base/haps/entry/files/tmp"},
-}
-
-SHELL_ENVIRONMENT_MARKER = "herdr-test-env"
-
-
 # Environment an agent needs before it can be *used*, as opposed to started: the
 # CLI comes up either way, but a missing key turns the first message into an
 # error. The pane inherits the shell's startup files, not this script's
@@ -722,60 +703,6 @@ AGENT_ENVIRONMENT = {
     "qwen": ("OPENAI_API_KEY",),
     "opendesk": ("OPENDESK_PROVIDER_API_KEY",),
 }
-
-
-def shell_startup_path():
-    import os
-
-    return os.path.expanduser("~/.zshrc")
-
-
-def remove_shell_environment():
-    """Drop the managed block, leaving the rest of the file untouched."""
-    path = shell_startup_path()
-    try:
-        with open(path, "r", encoding="utf-8") as startup:
-            text = startup.read()
-    except OSError:
-        return
-    begin = "# >>> %s" % SHELL_ENVIRONMENT_MARKER
-    if begin not in text:
-        return
-    head, _, rest = text.partition(begin)
-    end = "# <<< %s <<<" % SHELL_ENVIRONMENT_MARKER
-    _, _, tail = rest.partition(end)
-    # `apply_shell_environment` prefixes the block with a blank line, so the
-    # restored text is byte-for-byte what it was before (`tail` already starts
-    # with the newline that closed the block).
-    with open(path, "w", encoding="utf-8") as startup:
-        startup.write(head.rstrip("\n") + "\n" + tail.lstrip("\n"))
-
-
-def apply_shell_environment(harness, agent):
-    """Make the agent's variables visible to the pane it is about to start.
-
-    A pane is a fresh shell started by the daemon: it sees `~/.zshrc` and the
-    daemon's own environment, never this script's, so writing the file is the
-    only way to reach it. The caller's `finally` removes the block, which keeps
-    the change scoped to this run.
-    """
-    variables = AGENT_SHELL_ENVIRONMENT.get(agent)
-    remove_shell_environment()
-    if not variables:
-        return
-    block = ["", "# >>> %s (written for one check, removed afterwards) >>>" % SHELL_ENVIRONMENT_MARKER]
-    block.extend('export %s="%s"' % (name, value) for name, value in variables.items())
-    block.append("# <<< %s <<<" % SHELL_ENVIRONMENT_MARKER)
-    try:
-        with open(shell_startup_path(), "a", encoding="utf-8") as startup:
-            startup.write("\n".join(block) + "\n")
-    except OSError as error:
-        harness.warn("%s：无法写入 shell 启动文件（%s）" % (agent, error))
-        return
-    harness.info(
-        "%s：临时写入 shell 启动文件 %s（本条检查结束后删除）"
-        % (agent, ", ".join("%s=%s" % item for item in variables.items()))
-    )
 
 
 def clean_spaces(harness, rpc):
@@ -861,13 +788,7 @@ def resume_all(harness, args):
     covered = []
     uncovered = []
     skipped = []
-    # Agents that need a shell-startup change run last: the file is edited for
-    # their check only, so keeping them at the end narrows that window.
-    ordered = [agent for agent in test_scan.DEFAULT_AGENTS if agent not in AGENT_SHELL_ENVIRONMENT]
-    ordered.extend(
-        agent for agent in test_scan.DEFAULT_AGENTS if agent in AGENT_SHELL_ENVIRONMENT
-    )
-    for agent in ordered:
+    for agent in test_scan.DEFAULT_AGENTS:
         reason = SWEPT_AGENTS_SKIPPED.get(agent)
         if reason:
             skipped.append(agent)
@@ -893,11 +814,7 @@ def resume_all(harness, args):
         run.cleanup = True
         run.isolate_workspace = True
         run.expect_known_failure = False
-        apply_shell_environment(harness, agent)
-        try:
-            resume_one(harness, run)
-        finally:
-            remove_shell_environment()
+        resume_one(harness, run)
 
     extra = sorted(set(newest) - set(test_scan.DEFAULT_AGENTS))
     if extra:

@@ -965,7 +965,7 @@ action = "open"
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!("hicodeer-{name}-{}-{nanos}", std::process::id()))
     }
 
     fn canonical_path_string(path: &std::path::Path) -> String {
@@ -1339,7 +1339,7 @@ command = ["echo", " a", "first "]
                 "plugin-missing-min-herdr",
                 r#"
 id = "example.missing-min-herdr"
-name = "Missing Min Herdr"
+name = "Missing Min HiCodeer"
 version = "0.1.0"
 platforms = ["linux", "macos", "windows"]
 "#,
@@ -1349,7 +1349,7 @@ platforms = ["linux", "macos", "windows"]
                 "plugin-invalid-min-herdr",
                 r#"
 id = "example.invalid-min-herdr"
-name = "Invalid Min Herdr"
+name = "Invalid Min HiCodeer"
 version = "0.1.0"
 min_herdr_version = "soon"
 platforms = ["linux", "macos", "windows"]
@@ -1360,7 +1360,7 @@ platforms = ["linux", "macos", "windows"]
                 "plugin-future-min-herdr",
                 r#"
 id = "example.future-min-herdr"
-name = "Future Min Herdr"
+name = "Future Min HiCodeer"
 version = "0.1.0"
 min_herdr_version = "999.0.0"
 platforms = ["linux", "macos", "windows"]
@@ -1876,7 +1876,7 @@ command = ["sh", "-c", '"$HERDR_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" 
             assert_eq!(
                 (action_status.trim(), pane_status.trim()),
                 ("0", "0"),
-                "plugin action and pane must launch Herdr after its executable is replaced"
+                "plugin action and pane must launch HiCodeer after its executable is replaced"
             );
             return;
         }
@@ -1890,7 +1890,7 @@ command = ["sh", "-c", '"$HERDR_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" 
                 .as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let executable = root.join("herdr test");
+        let executable = root.join("hicodeer test");
         std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
         let result = std::process::Command::new(&executable)
             .args([

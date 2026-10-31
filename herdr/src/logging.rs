@@ -22,19 +22,24 @@ pub(crate) fn init_file_logging(file_name: &str) {
     let filter =
         EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("herdr=info"));
 
+    // The target defaults to the module path, which starts with the upstream
+    // crate name. Every event already carries a `subsystem` field naming the
+    // area it came from, so the target is dropped instead of leaking that name
+    // into every line. Filtering is unaffected: `EnvFilter` reads the target
+    // from the event metadata, not from what the formatter prints.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(make_writer)
         .with_ansi(false)
-        .with_target(true)
+        .with_target(false)
         .try_init();
 }
 
 pub(crate) fn help_log_paths_summary() -> String {
     let dir = crate::session::data_dir();
     format!(
-        "{} (plus herdr-client.log, herdr-server.log)",
-        dir.join("herdr.log").display()
+        "{} (plus hicodeer-client.log, hicodeer-server.log)",
+        dir.join("hicodeer.log").display()
     )
 }
 
@@ -44,7 +49,7 @@ pub(crate) fn startup(role: &'static str) {
         subsystem = role,
         outcome = "started",
         pid = std::process::id(),
-        "herdr starting"
+        "hicodeer agent starting"
     );
 }
 
@@ -54,7 +59,7 @@ pub(crate) fn shutdown(role: &'static str) {
         subsystem = role,
         outcome = "completed",
         pid = std::process::id(),
-        "herdr exiting"
+        "hicodeer agent exiting"
     );
 }
 
@@ -562,7 +567,7 @@ mod tests {
 
     fn temp_log_path(name: &str) -> PathBuf {
         let unique = format!(
-            "herdr-logging-tests-{}-{}-{}",
+            "hicodeer-logging-tests-{}-{}-{}",
             name,
             std::process::id(),
             std::time::SystemTime::now()
@@ -570,15 +575,15 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        std::env::temp_dir().join(unique).join("herdr.log")
+        std::env::temp_dir().join(unique).join("hicodeer.log")
     }
 
     #[test]
     fn rotated_log_path_appends_numeric_suffix() {
-        let path = PathBuf::from("/tmp/herdr.log");
+        let path = PathBuf::from("/tmp/hicodeer.log");
         assert_eq!(
             rotated_log_path(&path, 2),
-            PathBuf::from("/tmp/herdr.log.2")
+            PathBuf::from("/tmp/hicodeer.log.2")
         );
     }
 
@@ -618,7 +623,7 @@ mod tests {
         let dir = path.parent().unwrap().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
-        let writer = RotatingFileMakeWriter::new(dir.clone(), "herdr.log", 8, 0).unwrap();
+        let writer = RotatingFileMakeWriter::new(dir.clone(), "hicodeer.log", 8, 0).unwrap();
         {
             let mut guard = writer.make_writer();
             guard.write_all(b"12345678").unwrap();

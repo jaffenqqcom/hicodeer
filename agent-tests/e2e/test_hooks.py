@@ -8,7 +8,7 @@
   2. 新建独立 space，`agent.start` 起该 agent 的 TUI，等 pane 识别出 agent。
   3. `pane.send_text` + `pane.send_keys` 发一轮提示，轮询 `pane.get` 的
      `agent_status`，要求先出现 `working`、再回到 `idle`。
-  4. 断言 `agent_session` 的 `source` 是 `herdr:<agent>`，即上报来自我们装的 hook。
+  4. 断言 `agent_session` 的 `source` 是 `hicodeer:<agent>`，即上报来自我们装的 hook。
 
 覆盖有 hook 的四个 agent：zcode / codewhale / atomcode / deveco。
 openclaw 在 `agent --local` 下两套 hook 都不触发（2026-10-28 实测），不在此列。
@@ -25,15 +25,6 @@ DEFAULT_PROMPT = "用 bash 执行 echo hi，然后只回复两个字：成功"
 
 # 按配置复杂度排，简单的前面先跑。
 HOOK_AGENTS = ["deveco", "atomcode", "codewhale", "zcode"]
-
-# pane 是 daemon 起的 shell，只读启动文件，脚本里的 export 传不进去。
-# zcode 要在 os.tmpdir() 下 bind 一个 broker socket，而 /storage 是 hmdfs，
-# listen 直接 EPERM；所以跑它之前临时把 TMPDIR 指到 /data。
-AGENT_SHELL_ENVIRONMENT = {
-    "zcode": {"TMPDIR": "/data/storage/el2/base/haps/entry/files/tmp"},
-}
-SHELL_ENVIRONMENT_MARKER = "# >>> herdr-test-env"
-SHELL_ENVIRONMENT_END = "# <<< herdr-test-env"
 
 # 启动提示的轮询是 0.5 秒一轮；连续这么多轮没看到提示就认为启动提示已经处理完。
 QUIET_ROUNDS_BEFORE_DONE = 12
@@ -76,46 +67,6 @@ DEVECO_CONFIG_PATH = os.path.join(
     os.path.expanduser("~"), ".config", "deveco", "deveco.jsonc"
 )
 DEVECO_PERMISSION_ENTRY = '  "permission": {"bash": "ask"},\n'
-
-
-class ShellEnvironment(object):
-    """在 shell 启动文件里加一个托管块，退出时按原字节还原。"""
-
-    def __init__(self, variables):
-        self.variables = variables
-        self.originals = {}
-
-    def __enter__(self):
-        if not self.variables:
-            return self
-        for path in self.startup_paths():
-            try:
-                with open(path, encoding="utf-8") as handle:
-                    text = handle.read()
-            except OSError:
-                continue
-            self.originals[path] = text
-            if SHELL_ENVIRONMENT_MARKER in text:
-                continue
-            lines = [SHELL_ENVIRONMENT_MARKER]
-            for key, value in self.variables.items():
-                lines.append('export %s="%s"' % (key, value))
-            lines.append(SHELL_ENVIRONMENT_END)
-            updated = text.rstrip("\n") + "\n" + "\n".join(lines) + "\n"
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(updated)
-        return self
-
-    def __exit__(self, *_error):
-        for path, text in self.originals.items():
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(text)
-        return False
-
-    @staticmethod
-    def startup_paths():
-        home = os.environ.get("HOME") or os.path.expanduser("~")
-        return [os.path.join(home, name) for name in (".zshrc", ".bashrc")]
 
 
 class DevecoPermissionAsk(object):
@@ -383,7 +334,7 @@ def check_agent(harness, rpc, args, agent):
 
         harness.equal(
             "%s agent_session.source" % agent,
-            "herdr:%s" % agent,
+            "hicodeer:%s" % agent,
             session.get("source"),
         )
         harness.equal(
@@ -463,7 +414,7 @@ def check_blocked(harness, rpc, args, agent):
             session = pane.get("agent_session") or {}
             harness.equal(
                 "%s blocked 时 agent_session.source" % agent,
-                "herdr:%s" % agent,
+                "hicodeer:%s" % agent,
                 session.get("source"),
             )
         finally:
@@ -488,13 +439,9 @@ def body(harness, args):
         if agent not in HOOK_AGENTS:
             harness.warn("跳过 %s：这个脚本只覆盖 %s" % (agent, ", ".join(HOOK_AGENTS)))
             continue
-        # The shell environment has to cover both rounds: a TUI started without
-        # it can fail to come up at all (zcode binds a broker socket under
-        # TMPDIR, which /storage refuses to listen on).
-        with ShellEnvironment(AGENT_SHELL_ENVIRONMENT.get(agent, {})):
-            check_agent(harness, rpc, args, agent)
-            if args.blocked and agent in BLOCKED_AGENTS:
-                check_blocked(harness, rpc, args, agent)
+        check_agent(harness, rpc, args, agent)
+        if args.blocked and agent in BLOCKED_AGENTS:
+            check_blocked(harness, rpc, args, agent)
 
     return harness.finish()
 

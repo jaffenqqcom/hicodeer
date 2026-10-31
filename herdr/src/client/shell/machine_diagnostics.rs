@@ -101,9 +101,9 @@ impl ClientShellState {
             return true;
         };
         let command = if crate::remote::ssh_error_requires_authentication(error) {
-            format!("herdr machine reconnect {profile_id}")
+            format!("hicodeerd machine reconnect {profile_id}")
         } else {
-            format!("herdr machine status {profile_id}")
+            format!("hicodeerd machine status {profile_id}")
         };
         let code = format!("machine-diagnostic:{}", profile_id);
         // An explicit click can reopen its diagnostic, but must not replace another notice.

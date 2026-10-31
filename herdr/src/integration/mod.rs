@@ -24,7 +24,8 @@ pub(crate) use env::{
 };
 pub(crate) use registry::{
     experimental_letta_integration_status, installed_integration_statuses,
-    integration_recommendations, integration_target_label, print_outdated_update_notice,
+    integration_recommendations, integration_target_from_label, integration_target_label,
+    integration_target_labels, print_outdated_update_notice,
 };
 use std::path::{Path, PathBuf};
 
@@ -65,7 +66,7 @@ const PI_EXTENSION_INSTALL_NAME: &str = "hicodeer-agent-state.ts";
 /// extensions directory so an upgrade does not leave a second reporter behind.
 pub(crate) const LEGACY_PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
 const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/hicodeer-agent-state.ts");
-const PI_INTEGRATION_VERSION: u32 = 10;
+const PI_INTEGRATION_VERSION: u32 = 11;
 const OMP_EXTENSION_INSTALL_NAME: &str = "hicodeer-omp-agent-state.ts";
 /// The OMP extension file name used before the rename. Install removes it, so an
 /// upgrade cannot run the previous copy beside the current one.
@@ -93,7 +94,11 @@ const ZCODE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/zcode/hicodeer-agent-state.sh")
 };
-const ZCODE_INTEGRATION_VERSION: u32 = 1;
+// These three shipped a hook whose own header claimed version 15 while the
+// constant said 1, so every installed copy already reports 15. The expected
+// version has to stay above that: `installed >= expected` is what marks a hook
+// current, and a value of 1 would leave the old hook in place forever.
+const ZCODE_INTEGRATION_VERSION: u32 = 16;
 const CODEWHALE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -104,7 +109,7 @@ const CODEWHALE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/codewhale/hicodeer-agent-state.sh")
 };
-const CODEWHALE_INTEGRATION_VERSION: u32 = 1;
+const CODEWHALE_INTEGRATION_VERSION: u32 = 16;
 const ATOMCODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -115,7 +120,7 @@ const ATOMCODE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/atomcode/hicodeer-agent-state.sh")
 };
-const ATOMCODE_INTEGRATION_VERSION: u32 = 1;
+const ATOMCODE_INTEGRATION_VERSION: u32 = 16;
 const DEVECO_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
 const DEVECO_PLUGIN_ASSET: &str = include_str!("assets/deveco/hicodeer-agent-state.js");
 /// DevEco Code runs its TUI as a separate plugin host: `tui.json` plugins only
@@ -439,7 +444,7 @@ const GROK_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
 } else {
     "hicodeer-agent-state.sh"
 };
-const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "herdr.json";
+const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "hicodeer.json";
 const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/hicodeer-agent-state.ps1")
 } else {

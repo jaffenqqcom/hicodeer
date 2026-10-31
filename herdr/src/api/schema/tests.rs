@@ -32,7 +32,7 @@ fn rewrite_schema_refs(value: &mut serde_json::Value, schema_name: &str) {
 fn protocol_schema_document() -> serde_json::Value {
     serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Herdr API",
+        "title": "HiCodeer API",
         "schema_version": 1,
         "protocol": crate::protocol::PROTOCOL_VERSION,
         "schemas": {
@@ -355,12 +355,12 @@ fn client_window_title_requests_round_trip() {
     let set = Request {
         id: "req_title_set".into(),
         method: Method::ClientWindowTitleSet(ClientWindowTitleSetParams {
-            title: "herdr api".into(),
+            title: "hicodeerd api".into(),
         }),
     };
     let json = serde_json::to_value(&set).unwrap();
     assert_eq!(json["method"], "client.window_title.set");
-    assert_eq!(json["params"]["title"], "herdr api");
+    assert_eq!(json["params"]["title"], "hicodeerd api");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, set);
 

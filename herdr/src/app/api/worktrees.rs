@@ -191,7 +191,7 @@ impl App {
             let space = crate::workspace::git_space_metadata(&path).ok_or_else(|| {
                 ApiFailure::new(
                     "not_git_worktree",
-                    "Herdr worktree actions require a path inside a Git work tree",
+                    "HiCodeer worktree actions require a path inside a Git work tree",
                 )
             })?;
             if space.is_linked_worktree {
@@ -256,7 +256,7 @@ impl App {
         let Some(space) = git_space else {
             return Err(ApiFailure::new(
                 "not_git_worktree",
-                "Herdr worktree actions require a workspace inside a Git work tree",
+                "HiCodeer worktree actions require a workspace inside a Git work tree",
             ));
         };
         if space.is_linked_worktree {
@@ -626,7 +626,7 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         run_git(&repo, &["init", "--quiet"]);
         run_git(&repo, &["config", "user.email", "herdr@example.invalid"]);
-        run_git(&repo, &["config", "user.name", "Herdr Test"]);
+        run_git(&repo, &["config", "user.name", "HiCodeer Test"]);
         std::fs::write(repo.join("README.md"), "test\n").unwrap();
         run_git(&repo, &["add", "README.md"]);
         run_git(&repo, &["commit", "--quiet", "-m", "initial"]);
@@ -1073,7 +1073,7 @@ mod tests {
             .event_tx
             .try_send(AppEvent::UpdateReady {
                 version: "9.9.9".into(),
-                install_command: "herdr update".into(),
+                install_command: "hicodeerd update".into(),
             })
             .is_ok()
         {}

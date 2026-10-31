@@ -1054,7 +1054,7 @@ impl AppState {
                 pane_infos: Vec::new(),
             },
             update_available: None,
-            update_install_command: "herdr update".into(),
+            update_install_command: "hicodeerd update".into(),
             latest_release_notes_available: false,
             update_dismissed: false,
             config_diagnostic: None,

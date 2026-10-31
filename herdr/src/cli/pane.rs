@@ -12,7 +12,7 @@ use crate::api::schema::{
 pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
         print_pane_help();
-        return Ok(2);
+        return Ok(0);
     };
 
     match subcommand {
@@ -81,11 +81,11 @@ fn pane_list(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_get(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane get <pane_id>");
+        eprintln!("usage: hicodeerd pane get <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr pane get <pane_id>");
+        eprintln!("usage: hicodeerd pane get <pane_id>");
         return Ok(2);
     }
 
@@ -283,7 +283,7 @@ fn parse_pane_neighbor_args(args: &[String]) -> Result<PaneNeighborParams, Strin
 
     let Some(direction) = direction else {
         return Err(
-            "usage: herdr pane neighbor --direction left|right|up|down [--pane ID|--current]"
+            "usage: hicodeerd pane neighbor --direction left|right|up|down [--pane ID|--current]"
                 .into(),
         );
     };
@@ -293,7 +293,7 @@ fn parse_pane_neighbor_args(args: &[String]) -> Result<PaneNeighborParams, Strin
 
 fn parse_pane_focus_args(args: &[String]) -> Result<PaneFocusDirectionParams, String> {
     let params = parse_pane_neighbor_args(args).map_err(|_| {
-        "usage: herdr pane focus --direction left|right|up|down [--pane ID|--current]".to_string()
+        "usage: hicodeerd pane focus --direction left|right|up|down [--pane ID|--current]".to_string()
     })?;
     Ok(PaneFocusDirectionParams {
         pane_id: params.pane_id,
@@ -346,7 +346,7 @@ fn parse_pane_resize_args(args: &[String]) -> Result<PaneResizeParams, String> {
 
     let Some(direction) = direction else {
         return Err(
-            "usage: herdr pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
+            "usage: hicodeerd pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
                 .into(),
         );
     };
@@ -429,11 +429,11 @@ fn parse_pane_zoom_args(args: &[String]) -> Result<PaneZoomParams, String> {
 
 fn pane_rename(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane rename <pane_id> <label>|--clear");
+        eprintln!("usage: hicodeerd pane rename <pane_id> <label>|--clear");
         return Ok(2);
     };
     if args.len() < 2 {
-        eprintln!("usage: herdr pane rename <pane_id> <label>|--clear");
+        eprintln!("usage: hicodeerd pane rename <pane_id> <label>|--clear");
         return Ok(2);
     }
     let label = if args.len() == 2 && args[1] == "--clear" {
@@ -466,7 +466,7 @@ fn pane_read(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn parse_pane_read_args(args: &[String]) -> Result<PaneReadParams, String> {
-    const USAGE: &str = "usage: herdr pane read <pane_id> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi] [--raw]";
+    const USAGE: &str = "usage: hicodeerd pane read <pane_id> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi] [--raw]";
 
     let args = super::expand_equals_args(args, &["--source", "--lines", "--format"]);
     let mut pane_id = None;
@@ -553,7 +553,7 @@ fn parse_pane_input_args(
     env_pane_id: Option<&str>,
 ) -> Result<PaneInputSetParams, String> {
     const USAGE: &str =
-        "usage: herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane";
+        "usage: hicodeerd pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane";
 
     let args = super::expand_equals_args(args, &["--pane", "--right-click"]);
     let mut pane_id = None;
@@ -722,7 +722,7 @@ fn parse_pane_split_args(
 
     let Some(direction) = direction else {
         return Err(
-            "usage: herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
+            "usage: hicodeerd pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
                 .into(),
         );
     };
@@ -908,7 +908,7 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
 }
 
 fn pane_move_usage() -> String {
-    "usage: herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]"
+    "usage: hicodeerd pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]\n       hicodeerd pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]\n       hicodeerd pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]"
         .into()
 }
 
@@ -973,7 +973,7 @@ fn parse_pane_swap_args(args: &[String]) -> Result<PaneSwapParams, String> {
             })
         }
         _ => Err(
-            "usage: herdr pane swap --direction left|right|up|down [--pane ID|--current]\n       herdr pane swap --source-pane ID --target-pane ID"
+            "usage: hicodeerd pane swap --direction left|right|up|down [--pane ID|--current]\n       hicodeerd pane swap --source-pane ID --target-pane ID"
                 .into(),
         ),
     }
@@ -1003,11 +1003,11 @@ fn parse_pane_direction(value: &str) -> Result<PaneDirection, String> {
 
 fn pane_close(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane close <pane_id>");
+        eprintln!("usage: hicodeerd pane close <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr pane close <pane_id>");
+        eprintln!("usage: hicodeerd pane close <pane_id>");
         return Ok(2);
     }
 
@@ -1016,7 +1016,7 @@ fn pane_close(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: herdr pane send-text <pane_id> <text>");
+        eprintln!("usage: hicodeerd pane send-text <pane_id> <text>");
         return Ok(2);
     }
 
@@ -1027,7 +1027,7 @@ fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_send_keys(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: herdr pane send-keys <pane_id> <key> [key ...]");
+        eprintln!("usage: hicodeerd pane send-keys <pane_id> <key> [key ...]");
         return Ok(2);
     }
 
@@ -1038,7 +1038,7 @@ fn pane_send_keys(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_run(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: herdr pane run <pane_id> <command>");
+        eprintln!("usage: hicodeerd pane run <pane_id> <command>");
         return Ok(2);
     }
 
@@ -1067,7 +1067,7 @@ fn pane_wait_output(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParams, String> {
-    const USAGE: &str = "usage: herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]";
+    const USAGE: &str = "usage: hicodeerd pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]";
 
     let args = super::expand_equals_args(
         args,
@@ -1156,7 +1156,7 @@ fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParam
 }
 
 fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
-    const USAGE: &str = "usage: herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [-- <resume-command...>]";
+    const USAGE: &str = "usage: hicodeerd pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [-- <resume-command...>]";
 
     let (args, resume_argv) = split_resume_argv(args);
     let args = super::expand_equals_args(
@@ -1295,7 +1295,7 @@ fn split_resume_argv(args: &[String]) -> (&[String], Option<Vec<String>>) {
 }
 
 fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
-    const USAGE: &str = "usage: herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE] [-- <resume-command...>]";
+    const USAGE: &str = "usage: hicodeerd pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE] [-- <resume-command...>]";
 
     let (args, resume_argv) = split_resume_argv(args);
     let args = super::expand_equals_args(
@@ -1415,7 +1415,7 @@ fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_release_agent(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
+        eprintln!("usage: hicodeerd pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
         return Ok(2);
     };
 
@@ -1480,7 +1480,7 @@ fn pane_release_agent(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+        eprintln!("usage: hicodeerd pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
         return Ok(2);
     };
 
@@ -1670,39 +1670,39 @@ fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn print_pane_help() {
-    eprintln!("herdr pane commands:");
-    eprintln!("  herdr pane list [--workspace <workspace_id>]");
-    eprintln!("  herdr pane current [--pane ID|--current]");
-    eprintln!("  herdr pane get <pane_id>");
-    eprintln!("  herdr pane layout [--pane ID|--current]");
-    eprintln!("  herdr pane process-info [--pane ID|--current]");
-    eprintln!("  herdr pane neighbor --direction left|right|up|down [--pane ID|--current]");
-    eprintln!("  herdr pane edges [--pane ID|--current]");
-    eprintln!("  herdr pane focus --direction left|right|up|down [--pane ID|--current]");
+    eprintln!("hicodeerd pane commands:");
+    eprintln!("  hicodeerd pane list [--workspace <workspace_id>]");
+    eprintln!("  hicodeerd pane current [--pane ID|--current]");
+    eprintln!("  hicodeerd pane get <pane_id>");
+    eprintln!("  hicodeerd pane layout [--pane ID|--current]");
+    eprintln!("  hicodeerd pane process-info [--pane ID|--current]");
+    eprintln!("  hicodeerd pane neighbor --direction left|right|up|down [--pane ID|--current]");
+    eprintln!("  hicodeerd pane edges [--pane ID|--current]");
+    eprintln!("  hicodeerd pane focus --direction left|right|up|down [--pane ID|--current]");
     eprintln!(
-        "  herdr pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
+        "  hicodeerd pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
     );
-    eprintln!("  herdr pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]");
-    eprintln!("  herdr pane rename <pane_id> <label>|--clear");
-    eprintln!("  herdr pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
-    eprintln!("  herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane");
+    eprintln!("  hicodeerd pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]");
+    eprintln!("  hicodeerd pane rename <pane_id> <label>|--clear");
+    eprintln!("  hicodeerd pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
+    eprintln!("  hicodeerd pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane");
     eprintln!(
-        "  herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
+        "  hicodeerd pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
     );
-    eprintln!("  herdr pane swap --direction left|right|up|down [--pane ID|--current]");
-    eprintln!("  herdr pane swap --source-pane ID --target-pane ID");
-    eprintln!("  herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]");
-    eprintln!("  herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]");
-    eprintln!("  herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]");
-    eprintln!("  herdr pane close <pane_id>");
-    eprintln!("  herdr pane send-text <pane_id> <text>");
-    eprintln!("  herdr pane send-keys <pane_id> <key> [key ...]");
-    eprintln!("  herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]");
-    eprintln!("  herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
-    eprintln!("  herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
-    eprintln!("  herdr pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
-    eprintln!("  herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
-    eprintln!("  herdr pane run <pane_id> <command>");
+    eprintln!("  hicodeerd pane swap --direction left|right|up|down [--pane ID|--current]");
+    eprintln!("  hicodeerd pane swap --source-pane ID --target-pane ID");
+    eprintln!("  hicodeerd pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]");
+    eprintln!("  hicodeerd pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]");
+    eprintln!("  hicodeerd pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]");
+    eprintln!("  hicodeerd pane close <pane_id>");
+    eprintln!("  hicodeerd pane send-text <pane_id> <text>");
+    eprintln!("  hicodeerd pane send-keys <pane_id> <key> [key ...]");
+    eprintln!("  hicodeerd pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]");
+    eprintln!("  hicodeerd pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
+    eprintln!("  hicodeerd pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
+    eprintln!("  hicodeerd pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
+    eprintln!("  hicodeerd pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+    eprintln!("  hicodeerd pane run <pane_id> <command>");
 }
 
 #[cfg(test)]
@@ -1889,7 +1889,7 @@ mod tests {
         ]))
         .unwrap_err();
 
-        assert!(err.contains("usage: herdr pane swap"));
+        assert!(err.contains("usage: hicodeerd pane swap"));
     }
 
     #[test]
@@ -1926,7 +1926,7 @@ mod tests {
         let err =
             parse_pane_move_args(&args(&["issue-1", "--target-pane", "issue-2"])).unwrap_err();
 
-        assert!(err.contains("usage: herdr pane move"));
+        assert!(err.contains("usage: hicodeerd pane move"));
     }
 
     #[test]

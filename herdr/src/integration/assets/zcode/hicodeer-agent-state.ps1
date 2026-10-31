@@ -2,7 +2,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=zcode
-# HERDR_INTEGRATION_VERSION=14
+# HERDR_INTEGRATION_VERSION=16
 
 param([string]$Action = "")
 
@@ -43,7 +43,7 @@ try {
             "report-agent-session",
             $env:HERDR_PANE_ID,
             "--source",
-            "herdr:zcode",
+            "hicodeer:zcode",
             "--agent",
             "zcode",
             "--seq",
@@ -63,7 +63,7 @@ try {
             "report-agent",
             $env:HERDR_PANE_ID,
             "--source",
-            "herdr:zcode",
+            "hicodeer:zcode",
             "--agent",
             "zcode",
             "--state",

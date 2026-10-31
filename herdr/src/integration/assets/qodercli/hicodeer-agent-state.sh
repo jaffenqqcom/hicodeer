@@ -25,7 +25,7 @@ try:
         [
             os.environ.get("HERDR_BIN_PATH") or "herdr",
             "pane", "report-agent-session", os.environ["HERDR_PANE_ID"],
-            "--source", "herdr:qodercli", "--agent", "qodercli",
+            "--source", "hicodeer:qodercli", "--agent", "qodercli",
             "--agent-session-id", session_id, "--seq", str(time.time_ns()),
         ],
         stdin=subprocess.DEVNULL,

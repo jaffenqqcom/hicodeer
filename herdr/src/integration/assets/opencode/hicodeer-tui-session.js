@@ -5,7 +5,7 @@
 
 import net from "node:net";
 
-const SOURCE = "herdr:opencode";
+const SOURCE = "hicodeer:opencode";
 const AGENT = "opencode";
 const ROUTE_POLL_INTERVAL_MS = 100;
 const SELECTION_RETRY_DELAYS_MS = [100, 400, 1_000];

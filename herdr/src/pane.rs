@@ -2162,7 +2162,7 @@ fn resolve_shell_for_login_mode(shell: &str) -> io::Result<String> {
 /// The original prompt must be invoked before any other statement in the
 /// wrapper: anything that runs first resets `$?`, so a status-aware user
 /// prompt would show success after a failed command (verified on 5.1).
-pub(crate) const WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND: &str = r"if ($null -eq $global:__HerdrOriginalPrompt) { $global:__HerdrOriginalPrompt = $function:prompt; function global:prompt { $out = @(& $global:__HerdrOriginalPrompt) -join ' '; $loc = $ExecutionContext.SessionState.Path.CurrentLocation; if ($loc.Provider.Name -eq 'FileSystem') { try { [Environment]::CurrentDirectory = $loc.ProviderPath } catch {}; $esc = [string][char]27; $out += $esc + ']9;9;' + $loc.ProviderPath + $esc + '\' }; $out } }";
+pub(crate) const WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND: &str = r"if ($null -eq $global:__HiCodeerOriginalPrompt) { $global:__HiCodeerOriginalPrompt = $function:prompt; function global:prompt { $out = @(& $global:__HiCodeerOriginalPrompt) -join ' '; $loc = $ExecutionContext.SessionState.Path.CurrentLocation; if ($loc.Provider.Name -eq 'FileSystem') { try { [Environment]::CurrentDirectory = $loc.ProviderPath } catch {}; $esc = [string][char]27; $out += $esc + ']9;9;' + $loc.ProviderPath + $esc + '\' }; $out } }";
 
 /// Login flags appended when launching POSIX-style shells on Windows.
 ///
@@ -5241,11 +5241,11 @@ mod tests {
         let osc_report = script.find("]9;9;").expect("wrapper must emit OSC 9;9");
         assert!(cwd_sync < osc_report, "cwd sync must precede OSC report");
         assert!(
-            script.contains("$global:__HerdrOriginalPrompt = $function:prompt"),
+            script.contains("$global:__HiCodeerOriginalPrompt = $function:prompt"),
             "must wrap the profile-defined prompt: {script}"
         );
         assert!(
-            script.contains("$null -eq $global:__HerdrOriginalPrompt"),
+            script.contains("$null -eq $global:__HiCodeerOriginalPrompt"),
             "wrap must be idempotent for nested sessions: {script}"
         );
         assert!(
@@ -5338,7 +5338,7 @@ mod tests {
     fn login_shell_builder_resolves_bare_shell_names_from_path() {
         let _lock = crate::integration::integration_env_lock();
         let base = std::env::temp_dir().join(format!(
-            "herdr-login-shell-path-{}-{}",
+            "hicodeer-login-shell-path-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -6882,7 +6882,7 @@ mod tests {
 
         tx.try_send(AppEvent::UpdateReady {
             version: "9.9.9".into(),
-            install_command: "herdr update".into(),
+            install_command: "hicodeerd update".into(),
         })
         .unwrap();
 

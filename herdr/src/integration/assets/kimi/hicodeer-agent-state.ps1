@@ -27,12 +27,12 @@ $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else
 try {
     if ($Action -eq "session") {
         if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
-        & $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:kimi --agent kimi --agent-session-id $sessionId --session-start-source startup --seq $seq 2>$null | Out-Null
+        & $herdr pane report-agent-session $env:HERDR_PANE_ID --source hicodeer:kimi --agent kimi --agent-session-id $sessionId --session-start-source startup --seq $seq 2>$null | Out-Null
     } else {
         if ([string]::IsNullOrWhiteSpace($sessionId)) {
-            & $herdr pane report-agent $env:HERDR_PANE_ID --source herdr:kimi --agent kimi --state $Action --seq $seq 2>$null | Out-Null
+            & $herdr pane report-agent $env:HERDR_PANE_ID --source hicodeer:kimi --agent kimi --state $Action --seq $seq 2>$null | Out-Null
         } else {
-            & $herdr pane report-agent $env:HERDR_PANE_ID --source herdr:kimi --agent kimi --state $Action --agent-session-id $sessionId --seq $seq 2>$null | Out-Null
+            & $herdr pane report-agent $env:HERDR_PANE_ID --source hicodeer:kimi --agent kimi --state $Action --agent-session-id $sessionId --seq $seq 2>$null | Out-Null
         }
     }
 } catch {

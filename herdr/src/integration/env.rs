@@ -341,7 +341,12 @@ impl Drop for IntegrationEnvLock {
 #[cfg(test)]
 pub(crate) fn integration_env_lock() -> IntegrationEnvLock {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    // A test that panics while holding this lock would otherwise poison it and
+    // fail every later test with a lock error instead of its own result.
+    let guard = LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     IntegrationEnvLock {
         _guard: guard,
         #[cfg(windows)]

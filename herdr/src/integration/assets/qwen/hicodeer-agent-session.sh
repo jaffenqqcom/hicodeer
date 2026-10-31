@@ -30,7 +30,7 @@ try:
     command = os.environ.get("HERDR_BIN_PATH") or "herdr"
     args = [
         command, "pane", "report-agent-session", os.environ["HERDR_PANE_ID"],
-        "--source", "herdr:qwen", "--agent", "qwen",
+        "--source", "hicodeer:qwen", "--agent", "qwen",
         "--agent-session-id", session_id, "--seq", str(time.time_ns()),
     ]
     if source in ("startup", "resume", "clear", "compact", "branch"):

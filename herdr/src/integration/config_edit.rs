@@ -134,7 +134,7 @@ pub(crate) fn ensure_flat_command_hook(
         "type": "command",
         "command": command,
         "timeout": timeout_ms,
-        "description": "Report MastraCode agent state to Herdr",
+        "description": "Report MastraCode agent state to HiCodeer",
     }));
     Ok(())
 }
@@ -910,13 +910,16 @@ pub(crate) fn remove_kimi_config_block(content: &str) -> String {
     let mut removed_block = false;
 
     for line in content.lines() {
-        if line.trim() == KIMI_CONFIG_BLOCK_BEGIN {
+        // The block header names the product, and that name changed once. Match
+        // on the shape (`# >>> <brand> kimi integration`) so blocks written by
+        // earlier builds are removed instead of lingering next to the new one.
+        if is_kimi_config_block_marker(line, "# >>> ") {
             in_block = true;
             removed_block = true;
             continue;
         }
         if in_block {
-            if line.trim() == KIMI_CONFIG_BLOCK_END {
+            if is_kimi_config_block_marker(line, "# <<< ") {
                 in_block = false;
             }
             continue;
@@ -937,6 +940,11 @@ pub(crate) fn remove_kimi_config_block(content: &str) -> String {
     } else {
         result
     }
+}
+
+fn is_kimi_config_block_marker(line: &str, prefix: &str) -> bool {
+    let line = line.trim();
+    line.starts_with(prefix) && line.ends_with(" kimi integration")
 }
 
 pub(crate) fn toml_basic_string(value: &str) -> String {

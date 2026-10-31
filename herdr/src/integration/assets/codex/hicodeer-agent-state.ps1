@@ -35,7 +35,7 @@ try {
         "report-agent-session",
         $env:HERDR_PANE_ID,
         "--source",
-        "herdr:codex",
+        "hicodeer:codex",
         "--agent",
         "codex",
         "--seq",

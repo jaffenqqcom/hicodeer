@@ -639,7 +639,7 @@ mod tests {
             return;
         }
         run_git(&root, &["config", "user.email", "herdr@example.invalid"]);
-        run_git(&root, &["config", "user.name", "Herdr Test"]);
+        run_git(&root, &["config", "user.name", "HiCodeer Test"]);
         run_git(&root, &["commit", "--allow-empty", "-m", "initial"]);
 
         let fingerprint = git_status_fingerprint(&root).unwrap();
@@ -666,7 +666,7 @@ mod tests {
         run_git(&base, &["init", "--bare", &remote_arg]);
         run_git(&repo, &["init"]);
         run_git(&repo, &["config", "user.email", "herdr@example.invalid"]);
-        run_git(&repo, &["config", "user.name", "Herdr Test"]);
+        run_git(&repo, &["config", "user.name", "HiCodeer Test"]);
         run_git(&repo, &["commit", "--allow-empty", "-m", "initial"]);
         run_git(&repo, &["branch", "-M", "main"]);
         run_git(&repo, &["remote", "add", "origin", &remote_arg]);

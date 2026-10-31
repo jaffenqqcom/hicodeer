@@ -300,7 +300,7 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
             .event_tx
             .try_send(AppEvent::UpdateReady {
                 version: format!("4.0.{i}"),
-                install_command: "herdr install".into(),
+                install_command: "hicodeerd install".into(),
             })
             .unwrap();
     }
@@ -556,10 +556,10 @@ fn api_window_title_wins_until_it_is_cleared() {
     let (mut server, control_rx) = window_title_test_server();
     server.app.configure_window_title("{workspace}");
 
-    server.handle_client_window_title_api("set".into(), Some("herdr api".into()));
+    server.handle_client_window_title_api("set".into(), Some("hicodeerd api".into()));
     assert_eq!(
         next_window_title(&control_rx),
-        Some(Some("herdr api".to_string()))
+        Some(Some("hicodeerd api".to_string()))
     );
 
     server.app.state.workspaces[0].custom_name = Some("ops".into());
@@ -581,10 +581,10 @@ fn clearing_the_api_title_falls_back_to_herdr_when_window_titles_are_disabled() 
     let (mut server, control_rx) = window_title_test_server();
     server.app.configure_window_title("");
 
-    server.handle_client_window_title_api("set".into(), Some("herdr api".into()));
+    server.handle_client_window_title_api("set".into(), Some("hicodeerd api".into()));
     assert_eq!(
         next_window_title(&control_rx),
-        Some(Some("herdr api".to_string()))
+        Some(Some("hicodeerd api".to_string()))
     );
 
     server.handle_client_window_title_api("clear".into(), None);
@@ -3457,7 +3457,7 @@ async fn deferred_worktree_open_disconnect_keeps_other_clients_focus() {
         "-C",
         repo.to_str().unwrap(),
         "-c",
-        "user.name=Herdr Test",
+        "user.name=HiCodeer Test",
         "-c",
         "user.email=herdr@example.invalid",
         "commit",
@@ -4956,7 +4956,7 @@ fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
         terminal.respawn_shell_on_exit = true;
         terminal.set_agent_name("codex".into());
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:codex".into(),
+            source: "hicodeer:codex".into(),
             agent: "codex".into(),
             session_ref: crate::agent_resume::AgentSessionRef::id("previous-session").unwrap(),
         });
@@ -4973,7 +4973,7 @@ fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
             .get_mut(&terminal_id)
             .unwrap()
             .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-                source: "herdr:codex".into(),
+                source: "hicodeer:codex".into(),
                 agent: "codex".into(),
                 session_ref: crate::agent_resume::AgentSessionRef::id("shutdown-session").unwrap(),
             });
@@ -6193,7 +6193,7 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
         .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
         agent: "codex".into(),
         argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
-        dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+        dedupe_key: "hicodeer:codex\0codex\0Id\0codex-session".into(),
     });
 
     server.render_and_stream();
@@ -7385,7 +7385,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     ) {
         ServerMessage::ClientShellError { message } => assert_eq!(
             message,
-            "Paste rejected: Input message is 5000012 bytes; Herdr's limit is 1048576 bytes"
+            "Paste rejected: Input message is 5000012 bytes; HiCodeer's limit is 1048576 bytes"
         ),
         other => panic!("expected client shell paste error, got {other:?}"),
     }
@@ -7415,7 +7415,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     ) {
         ServerMessage::ClientShellError { message } => assert_eq!(
             message,
-            "Paste rejected: Input message is 7000000 bytes; Herdr's limit is 1048576 bytes"
+            "Paste rejected: Input message is 7000000 bytes; HiCodeer's limit is 1048576 bytes"
         ),
         other => panic!("expected client shell paste error, got {other:?}"),
     }
@@ -7450,7 +7450,7 @@ fn update_notification_reaches_client_shell_independent_of_delivery() {
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
         version: "9.9.9".to_string(),
-        install_command: "herdr update".into(),
+        install_command: "hicodeerd update".into(),
     });
 
     assert!(changed);
@@ -7487,7 +7487,7 @@ fn update_notification_is_semantic_for_system_delivery() {
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
         version: "9.9.9".to_string(),
-        install_command: "herdr update".into(),
+        install_command: "hicodeerd update".into(),
     });
 
     assert!(changed);
@@ -7501,10 +7501,10 @@ fn update_notification_is_semantic_for_system_delivery() {
                 notification.kind,
                 protocol::SemanticNotificationKind::UpdateInstalled
             );
-            assert_eq!(notification.title, "Herdr v9.9.9 available");
+            assert_eq!(notification.title, "HiCodeer v9.9.9 available");
             assert_eq!(
                 notification.body.as_deref(),
-                Some("detach, run `herdr update`, then run Herdr again to reconnect")
+                Some("detach, run `hicodeerd update`, then run HiCodeer again to reconnect")
             );
         }
         other => panic!("expected semantic update notification, got {other:?}"),
@@ -7911,7 +7911,7 @@ fn api_resume_argv_is_ignored_when_its_session_report_is_refused() {
     let report = |session: &str| {
         api::schema::Method::PaneReportAgentSession(api::schema::PaneReportAgentSessionParams {
             pane_id: public_pane_id.clone(),
-            source: "herdr:claude".into(),
+            source: "hicodeer:claude".into(),
             agent: "claude".into(),
             seq: None,
             agent_session_id: Some(session.into()),
@@ -8031,13 +8031,13 @@ fn completion_guard_api_session_replacement_does_not_notify_finished() {
                     .unwrap();
             let new_session = cwd.join("completion-new.jsonl").display().to_string();
             terminal.set_persisted_agent_session(PersistedAgentSession {
-                source: "herdr:pi".into(),
+                source: "hicodeer:pi".into(),
                 agent: "pi".into(),
                 session_ref: old_session.clone(),
             });
             terminal
                 .set_hook_authority_with_session_ref(
-                    "herdr:pi".into(),
+                    "hicodeer:pi".into(),
                     "pi".into(),
                     AgentState::Idle,
                     None,
@@ -8050,7 +8050,7 @@ fn completion_guard_api_session_replacement_does_not_notify_finished() {
                 &mut server,
                 Method::PaneReportAgentSession(PaneReportAgentSessionParams {
                     pane_id: public_pane_id.clone(),
-                    source: "herdr:pi".into(),
+                    source: "hicodeer:pi".into(),
                     agent: "pi".into(),
                     seq: Some(11),
                     agent_session_id: None,
@@ -8061,7 +8061,7 @@ fn completion_guard_api_session_replacement_does_not_notify_finished() {
             );
             let mut report = PaneReportAgentParams {
                 pane_id: public_pane_id,
-                source: "herdr:pi".into(),
+                source: "hicodeer:pi".into(),
                 agent: "pi".into(),
                 state: PaneAgentState::Idle,
                 message: None,
@@ -8204,7 +8204,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
         .get_mut(&terminal_id)
         .unwrap()
         .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:pi".into(),
+            source: "hicodeer:pi".into(),
             agent: "pi".into(),
             session_ref: crate::agent_resume::AgentSessionRef::path(
                 std::env::current_dir()
@@ -8222,7 +8222,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
         .get_mut(&terminal_id)
         .unwrap()
         .set_hook_authority(
-            "herdr:pi".into(),
+            "hicodeer:pi".into(),
             "pi".into(),
             crate::detect::AgentState::Working,
             None,
@@ -8252,7 +8252,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
             id: "stale".into(),
             method: api::schema::Method::PaneReportAgent(api::schema::PaneReportAgentParams {
                 pane_id: public_pane_id,
-                source: "herdr:pi".into(),
+                source: "hicodeer:pi".into(),
                 agent: "pi".into(),
                 state: api::schema::PaneAgentState::Idle,
                 message: None,

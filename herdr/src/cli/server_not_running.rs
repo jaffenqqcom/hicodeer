@@ -32,7 +32,7 @@ pub(super) fn response(request_id: &str, socket_path: &Path) -> ErrorResponse {
         error: ErrorBody {
             code: "server_not_running".into(),
             message: format!(
-                "no herdr server is running at {}; run `{attach_command}` to start or attach it",
+                "no hicodeerd server is running at {}; run `{attach_command}` to start or attach it",
                 socket_path.display()
             ),
         },
@@ -48,7 +48,7 @@ fn startup_command(socket_path: &Path) -> String {
         // A socket override wins over an inherited HERDR_SESSION. Keep the
         // command in the current environment so it starts the overridden
         // target instead of directing the user to an unrelated session.
-        "herdr".to_string()
+        "hicodeerd".to_string()
     }
 }
 

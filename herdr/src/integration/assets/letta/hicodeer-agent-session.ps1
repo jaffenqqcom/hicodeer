@@ -30,7 +30,7 @@ $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else
 $source = if ($payload.is_new_session -eq $true) { "new" } else { "resume" }
 $commandArgs = @(
     "pane", "report-agent-session", $env:HERDR_PANE_ID,
-    "--source", "herdr:letta", "--agent", "letta",
+    "--source", "hicodeer:letta", "--agent", "letta",
     "--agent-session-id", $sessionId,
     "--seq", [string][DateTime]::UtcNow.Ticks,
     "--session-start-source", $source

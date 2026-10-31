@@ -1,6 +1,6 @@
 # agent-tests/e2e
 
-端到端脚本：直接对 `hicodeerd` 内嵌的 herdr agent API 发 JSON-RPC，校验历史会话的扫描、面板状态、恢复三条链路。
+端到端脚本：两类入口——直接对 `hicodeerd` 内嵌的 herdr agent API 发 JSON-RPC（扫描 / 面板状态 / 恢复 / hook 上报），以及把 `hicodeerd` 当 CLI 调（技能文档校验 / hook 装卸 / plugin 装卸）。
 
 只用 python3 标准库（`socket` / `json` / `subprocess` / `argparse`），没有第三方依赖，也不编译、不装包、不重启 daemon。
 
@@ -48,7 +48,7 @@ python3 -c "import agent_rpc,sys,json;r=agent_rpc.AgentRpc();print(json.dumps(r.
 - `HistoryState`：面板自己的 `history.json`（pin / archive / 历史标题），没有对应 RPC，见下面「方法清单」。
 - `Harness`：收集断言、打印「期望 vs 实际」、给出退出码。
 
-三个脚本共享两个参数：`--socket`（覆盖 socket 路径）与 `--timeout`（单次 RPC 读超时，默认 15 秒；`agent.start` 会按启动超时自动放宽）。
+所有脚本共享两个参数：`--socket`（覆盖 socket 路径）与 `--timeout`（单次 RPC 读超时，默认 15 秒；`agent.start` 会按启动超时自动放宽）。
 
 ### `test_scan.py` — 扫描校验（只读）
 
@@ -111,10 +111,7 @@ python3 test_resume.py --agent openclaw --session <id> --expect-known-failure
 
 跑之前它会**关闭 daemon 里所有 space**（`--keep-spaces` 可关掉这个行为）。原因：pane 和它的 agent 进程活在 hicodeerd 里，杀面板应用没用（应用只是客户端，实测杀完 daemon 里仍是 21 个 agent / 12 个 space）；而残留的 pane 会继续占着它恢复过的会话，下一轮就报 `session … is open in another window`。关掉 space 才会真正回收 pane 与进程组（实测 12 个 space 关完，agent 归 0、进程全清）。
 
-个别 agent 需要 shell 启动文件才能生效的变量，这类由脚本**在该条检查前后临时写入并删除**，不留在用户环境里，且排在最后跑：
-
-- `zcode` → `TMPDIR=/data/storage/el2/base/haps/entry/files/tmp`。它要在 `os.tmpdir()` 下 bind 一个 broker socket，`/storage` 是 hmdfs，`listen` 直接 `EPERM`；而 `~/.zshrc` 默认把 TMPDIR 指到 `/storage/Users/currentUser/tmp`。
-- 实现：写一个 `# >>> herdr-test-env` 托管块到 `~/.zshrc`，`finally` 里删掉；`body` 外层还有一层 `finally`，异常退出也会清理。pane 是 daemon 起的 shell，只读启动文件，所以这是唯一能让它看到变量的方式——脚本自己 `export` 对 pane 无效。
+`zcode` 这类要在 `os.tmpdir()` 下 bind broker socket 的 agent，不再需要脚本特殊处理：`~/.zshrc` 已把 `TMPDIR` 固定到 `/data/storage/el2/base/haps/entry/files/tmp`（`/storage` 是 hmdfs，`listen` 直接 `EPERM`），新开的 pane 自然带上。
 
 两个判定上的硬约束：
 
@@ -213,9 +210,73 @@ blocked 那一轮会先确认权限注入成功：配置不存在、读不了、
 - **deveco 每次 TUI 启动都问一次目录信任**（`Safety Check:` 提示，只有 session 级选项，没有持久化开关）。脚本在 `STARTUP_PROMPTS` 里登记了 `down` + `enter` 自动应答，只对 deveco 生效。不处理的话会一直停在提示上，`agent.start` 之后的断言全部拿不到数据。
 - **deveco 还有第二个迟到的提示**：启动几秒后会弹「Update Available」，同样挡住输入框。所以脚本在开始输入之前会再扫一次启动提示，而不是只在启动时扫一次。
 - **deveco 有两套插件、两个落点**：`deveco.jsonc` 的 `plugin` 只在 headless server 生效，`tui.json` 的 `plugin` 只在 TUI 生效；而 `plugins/` 目录下的每个文件都会被当成 server 插件加载，所以 TUI 插件放在配置目录根下（`hicodeer-tui-session.js`），不能放进 `plugins/`。
-- **zcode 需要 `TMPDIR` 指到 `/data`**（见 `test_resume.py` 同款说明），脚本用同一套 `ShellEnvironment` 托管块在跑 zcode 前后临时写入并删除。这个托管块必须覆盖**两轮**（正常轮 + blocked 轮）：少了它 zcode 会在 `listen EPERM` 上直接崩掉，pane 退回 shell、`agent` 变成 `None`。
+- **zcode 依赖 `TMPDIR` 指到 `/data`**：`~/.zshrc` 里已固定，脚本不再自己写托管块。换机器时如果没配，zcode 会在 `listen EPERM` 上直接崩掉，pane 退回 shell、`agent` 变成 `None`。
 
 `openclaw` 不在覆盖范围：`agent --local` 下单进程直跑，两套 hook 都挂在 Gateway 生命周期上，实测都不触发（2026-10-28）。
+
+### `test_hook_lifecycle.py` — hook 安装 / 卸载闭环（可选运行）
+
+```bash
+python3 test_hook_lifecycle.py                      # 全部已装 target，只做装卸（几秒一个）
+python3 test_hook_lifecycle.py --agents claude,kimi # 只跑指定 target
+python3 test_hook_lifecycle.py --run                # 额外跑运行阶段（起 TUI 发一轮提示）
+python3 test_hook_lifecycle.py --run --run-agents deveco,atomcode,codewhale
+```
+
+`test_hooks.py` 只验「装好之后能不能上报」，本脚本补的是**卸载**这一半：每个 target 走 `uninstall → 断言清干净 → install → 断言装回来`，最后再装一次确认可重复。
+
+每个 target 的断言：
+
+1. `integration uninstall` 退出码 0，hook 文件（`HOOK_CONFIG_FILES` 里登记的路径）已删除。
+2. 配置文件里 `agent-state` 出现次数归零。`opencode` / `deveco` / `pi` 的注册位置由 daemon 持有，文件里查不到，脚本给 WARN 而不是失败。
+3. `integration install` 退出码 0，hook 文件重新存在。
+4. 文件头里的 `HERDR_INTEGRATION_VERSION` 等于 `integration status` 报的当前版本——不一致意味着「版本号永远 >= 期望值」，以后永不重装。
+5. 文件里写死的上报前缀是 `hicodeer:<target>`。
+6. 再装一次，`integration status` 仍报 `current`。
+
+`--run` 复用 `test_hooks.py` 的链路：建 workspace、`agent.start`、发一轮提示、断言出现过 `working`、收尾回 `idle`/`done`、`agent_session.source == "hicodeer:<target>"`。默认只对 `RUNNABLE_AGENTS`（`deveco` / `atomcode` / `codewhale` / `zcode`）跑，可用 `--run-agents` 改名单。
+
+运行阶段不是重写，而是直接 `import test_hooks` 复用它的 `dismiss_startup_prompt` / `run_prompt_round` / `start_agent_when_shell_ready`：新 pane 的 `agent_pane_busy` 重试、deveco 的目录信任与更新提示、TUI 吞回车后的补发，这些坑只在 `test_hooks.py` 里维护一份。`test_hooks.py` 顶部没有副作用，导入安全。
+
+**`zcode` 的环境**：它在 `os.tmpdir()` 下 bind 一个 broker socket，而 `/storage` 是 hmdfs，`listen` 直接 `EPERM`。本机 `~/.zshrc` 已把 `TMPDIR` 固定到 `/data/storage/el2/base/haps/entry/files/tmp`（2026-10-31），新开的 pane 自然带对值，产品路径 `agent start --kind zcode` 实测可跑（idle → working → done，`agent_session.source == hicodeer:zcode`）。脚本不再自己处理这件事。
+
+`zcode` 还需要一点启动预热（`STARTUP_SETTLE_SECONDS`，8 秒）：首帧没画完时它会把送进去的文字丢掉，之后补发的回车落在空输入框里，表现为「agent 起来了但永远不 working」。
+
+### `test_skill.py` — SKILL.md 命令校验（只读，不连 daemon）
+
+```bash
+python3 test_skill.py                            # 默认读仓库里的 herdr/skills/herdr/SKILL.md
+python3 test_skill.py --skill-path <path>        # 校验装到别处的副本
+python3 test_skill.py --binary <path>            # 指定 hicodeerd
+python3 test_skill.py --skip-skill-match         # 跳过「--skill 输出与文件逐字节一致」
+```
+
+把 SKILL.md 里所有 ```bash 代码块中的 `hicodeerd ...` 命令行抽出来，逐条核对：
+
+1. `<group> <sub> --help` 退出码 0——命令确实存在，不是文档里编的。
+2. 该命令行里出现的每个 `--flag` 都能在同一份 `--help` 里找到。`--help` / `--version` 本身不算待查参数。
+3. `hicodeerd --help` 里列出了文档提到的每个命令组。
+4. 裸组名（`hicodeerd pane`）退出码 0，`hicodeerd pane nosuchsubcommand` 退出码 2。
+5. `hicodeerd --skill` 的输出与仓库里的 SKILL.md 逐字节一致（`--skip-skill-match` 可关）——不一致说明装机版本没跟上文档。
+
+**已知边界**：脚本只能验「命令存在、参数写对」，验不了运行时前置（例如 `--current` 要 `HERDR_PANE_ID`、`pane run` 不往 stdout 写东西）。这些写在 SKILL.md 的注意事项里，靠人读。
+
+### `test_plugin.py` — plugin 安装 / 运行 / 卸载闭环
+
+```bash
+python3 test_plugin.py           # 全流程，结束无条件清场
+python3 test_plugin.py --keep    # 保留临时插件目录，便于排查
+```
+
+在 `$TMPDIR` 下造一个最小合法清单（`id` / `name` / `version` / `min_herdr_version` 必填，最后一项取 `hicodeerd --version`，否则被 `plugin_requires_newer_herdr` 拒掉），然后：
+
+1. `plugin link <dir>` → 返回 `plugin_linked`；`plugin list` 能看到，默认 enabled。
+2. `plugin action list` 能识别清单里声明的 action。
+3. `plugin action invoke <action> --plugin <id>` → **真跑一次**：action 命令写一个标记文件，脚本读回内容；再查 `plugin log list --plugin <id>` 断言 `status == succeeded` 且 `exit_code == 0`。invoke 是异步的（返回 `running`），脚本轮询最多 30 秒。
+4. `plugin disable` / `plugin enable` → enabled 标记跟着变。
+5. `plugin unlink` → `plugin list` 回到空，`action list` 也随之消失。
+
+**这些命令要连 daemon**：脚本会给子进程显式带上 `HICODEER_AGENT_SOCKET_PATH`（取 `agent_rpc.default_socket_path()`）。普通 shell 里没有这个变量，`hicodeerd` 会退回 `config_dir()/hicodeer.sock`——那个路径 daemon 从不 bind，于是所有 `plugin` 子命令都报 `server_not_running`。`plugin list` 是例外，它读本地 `plugins.json`，不需要 server，所以「list 能用但 unlink 不能用」正是缺这个环境变量的指纹。
 
 ## 退出码
 
@@ -246,7 +307,7 @@ blocked 那一轮会先确认权限注入成功：配置不存在、读不了、
 
 删除校验必须先造一条属于自己的会话。各 agent 的可复现命令、必需 env、配置位置与会话落盘路径记在记忆文件 `reference_agent_launch_recipes.md`（`~/.codebuddy/projects/storage-Users-currentUser-workspace-hicodeer/memory/`），这里只列要点：
 
-- 通用前提：`PATH` 加上 `~/npm/bin` 与 `~/.harmonybrew/bin`；`TMPDIR` 指到 `/data/storage/el2/base/haps/entry/files/tmp`（`/storage` 是 hmdfs，绑 UDS 会 `EPERM`）。
+- 通用前提：`PATH` 加上 `~/npm/bin` 与 `~/.harmonybrew/bin`；`TMPDIR` 已由 `~/.zshrc` 指到 `/data/storage/el2/base/haps/entry/files/tmp`（`/storage` 是 hmdfs，绑 UDS 会 `EPERM`）。
 - 删除能力由产出会话的 store 决定（即 `agent.sessions` 的 `deletable`），删掉的东西随存储形态不同：`.jsonl` / `.json` 会话就是 unlink 那个文件；codewhale 删文档 + 同名目录 + `session_boot_owners.json` 里的条目；atomcode 删同 stem 的全部 sidecar；opendesk 删 task 文档 + 其子任务 + 从 `task_list.json` 移除条目；deveco / zcode / minimax 走 `sqlite3` 删行（外键级联）。每个实现都先确认路径在该 store 根内，且排除该 store 自己的簿记文件（索引、boot owner 表）。
 - 造会话的例子：codebuddy 用 `codebuddy -p "只回复两个字：成功" --port 62966`，会话在 `~/.codebuddy/projects/<slug>/<id>.jsonl`；claude 同理，落在 `~/.claude/projects/*.jsonl`。其它 agent 的命令见上面那份记忆文件。
 - **codebuddy 必须带 `--port`**：它默认在一个固定端口上起本地 server，只要机器上已有一个 codebuddy 实例（面板里的 pane、用户自己的终端），新实例就会 `listen EADDRINUSE 127.0.0.1:62965` 直接退出 1。换一个没被占用的端口即可。

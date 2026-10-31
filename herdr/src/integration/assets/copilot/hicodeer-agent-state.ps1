@@ -71,7 +71,7 @@ $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
 if ($Action -eq "session") {
     if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
-    & $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:copilot --agent copilot --agent-session-id $sessionId --seq $seq 2>$null | Out-Null
+    & $herdr pane report-agent-session $env:HERDR_PANE_ID --source hicodeer:copilot --agent copilot --agent-session-id $sessionId --seq $seq 2>$null | Out-Null
 } else {
-    & $herdr pane report-agent $env:HERDR_PANE_ID --source herdr:copilot --agent copilot --state $Action --seq $seq 2>$null | Out-Null
+    & $herdr pane report-agent $env:HERDR_PANE_ID --source hicodeer:copilot --agent copilot --state $Action --seq $seq 2>$null | Out-Null
 }

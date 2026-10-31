@@ -34,7 +34,7 @@ if not isinstance(session_id, str) or not session_id:
 seq = time.time_ns()
 params = {
     "pane_id": os.environ["HERDR_PANE_ID"],
-    "source": "herdr:kimi",
+    "source": "hicodeer:kimi",
     "agent": "kimi",
     "seq": seq,
 }
@@ -49,7 +49,7 @@ else:
 if session_id is not None:
     params["agent_session_id"] = session_id
 
-request = json.dumps({"id": f"herdr:kimi:{seq}", "method": method, "params": params})
+request = json.dumps({"id": f"hicodeer:kimi:{seq}", "method": method, "params": params})
 try:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(0.5)

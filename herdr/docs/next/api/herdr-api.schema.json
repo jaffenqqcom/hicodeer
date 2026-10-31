@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Herdr API",
+  "title": "HiCodeer API",
   "schema_version": 1,
   "protocol": 22,
   "schemas": {
@@ -4716,7 +4716,11 @@
             "mastracode",
             "antigravity_cli",
             "grok",
-            "code_buddy"
+            "code_buddy",
+            "atomcode",
+            "deveco",
+            "codewhale",
+            "zcode"
           ]
         },
         "IntegrationUninstallParams": {
@@ -8690,7 +8694,11 @@
             "mastracode",
             "antigravity_cli",
             "grok",
-            "code_buddy"
+            "code_buddy",
+            "atomcode",
+            "deveco",
+            "codewhale",
+            "zcode"
           ]
         },
         "IntegrationState": {

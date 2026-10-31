@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn handoff_commands_remove_even_an_inherited_launch_marker() {
-        let mut command = Command::new("herdr");
+        let mut command = Command::new("hicodeerd");
         command.args(["server", "--handoff-import", "socket", "token"]);
         command.env(SERVER_CONTEXT_ENV, USER_CONTEXT);
         crate::platform::detach_server_daemon_command(&mut command);
@@ -295,9 +295,9 @@ mod tests {
 
     #[test]
     fn only_detached_server_commands_request_user_context() {
-        let direct = Command::new("herdr");
+        let direct = Command::new("hicodeerd");
         assert!(!direct.get_envs().any(|(key, _)| key == SERVER_CONTEXT_ENV));
-        let mut detached = Command::new("herdr");
+        let mut detached = Command::new("hicodeerd");
         crate::platform::detach_server_daemon_command(&mut detached);
         assert!(detached.get_envs().any(|(key, value)| {
             key == SERVER_CONTEXT_ENV && value == Some(OsStr::new(USER_CONTEXT))

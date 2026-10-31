@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn windows_batch_command_captures_output() {
         let root = std::env::temp_dir().join(format!(
-            "herdr plugin command output {}",
+            "hicodeerd plugin command output {}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create batch fixture directory");

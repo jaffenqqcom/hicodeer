@@ -95,6 +95,71 @@ const AGENT_SOCKET_ARGUMENT: &str = "--socket";
 /// Hidden subcommand: run the agent TUI client in the calling terminal against
 /// this daemon's embedded server. Not a listener mode; it exits with the TUI.
 const AGENT_TUI_SUBCOMMAND: &str = "agent-tui";
+
+/// Name the embedded CLI reports as its own program name.
+const CLI_PROGRAM_NAME: &str = "hicodeerd";
+
+/// CLI groups the embedded agent server accepts. The daemon forwards any of
+/// these to that server instead of starting a second instance, so an agent
+/// running inside a pane can drive the session from the same executable.
+const AGENT_CLI_SUBCOMMANDS: &[&str] = &[
+    "api",
+    "status",
+    "completion",
+    "completions",
+    "config",
+    "channel",
+    "machine",
+    "workspace",
+    "worktree",
+    "tab",
+    "notification",
+    "agent",
+    "terminal",
+    "pane",
+    "plugin",
+    "integration",
+    "session",
+    "update",
+];
+
+/// Top-level CLI options that operate on the running session rather than
+/// configuring the daemon. `--help` stays with the daemon: it documents the
+/// listener this binary starts.
+const AGENT_CLI_OPTIONS: &[&str] = &["--skill", "--version", "-V", "--default-config"];
+
+/// Refused subcommand: the daemon owns its own lifetime, and the embedded
+/// server's `server` group starts or stops servers.
+const SERVER_SUBCOMMAND: &str = "server";
+
+fn is_agent_cli(args: &[String]) -> bool {
+    // Global options come before the group name (`--session work pane list`).
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--session" | "--machine" | "--remote" => index += 2,
+            _ => break,
+        }
+    }
+    let Some(first) = args.get(index) else {
+        return false;
+    };
+    AGENT_CLI_SUBCOMMANDS.contains(&first.as_str()) || AGENT_CLI_OPTIONS.contains(&first.as_str())
+}
+
+fn run_agent_cli(args: &[String]) -> i32 {
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push(CLI_PROGRAM_NAME.to_string());
+    argv.extend(args.iter().cloned());
+    match agent_server::run_cli_with_args(argv) {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("{CLI_PROGRAM_NAME}: {err}");
+            1
+        }
+    }
+}
+
 /// Name the TUI client gives its own process. The client and the daemon are the
 /// same executable by design (the client is spawned from a terminal pane the
 /// daemon hosts), so without this `ps` lists two identical `hicodeerd` entries
@@ -183,6 +248,16 @@ fn main() {
         }
         return;
     }
+    if args.first().map(String::as_str) == Some(SERVER_SUBCOMMAND) {
+        eprintln!(
+            "{CLI_PROGRAM_NAME} {SERVER_SUBCOMMAND}: refused; this process is the daemon, \
+             which manages its own lifetime"
+        );
+        std::process::exit(2);
+    }
+    if is_agent_cli(&args) {
+        std::process::exit(run_agent_cli(&args));
+    }
     if args.iter().any(|arg| arg == "--help") {
         print_help();
         return;
@@ -237,6 +312,13 @@ fn print_help() {
     println!("Subcommands:");
     println!("  {AGENT_TUI_SUBCOMMAND}  Run the agent TUI client in the calling terminal, attached to");
     println!("                this daemon's embedded server. Internal: not a listener mode.");
+    println!();
+    println!("Command groups forwarded to the embedded agent server:");
+    for group in AGENT_CLI_SUBCOMMANDS {
+        println!("  {group}");
+    }
+    println!();
+    println!("Run `hicodeerd <group> --help` for the commands inside a group.");
 }
 
 /// Root of the package this executable was installed into: the directory that

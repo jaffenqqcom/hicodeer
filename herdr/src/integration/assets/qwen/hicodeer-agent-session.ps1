@@ -27,7 +27,7 @@ $seq = [DateTime]::UtcNow.Ticks
 $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
 $commandArgs = @(
     "pane", "report-agent-session", $env:HERDR_PANE_ID,
-    "--source", "herdr:qwen", "--agent", "qwen",
+    "--source", "hicodeer:qwen", "--agent", "qwen",
     "--agent-session-id", [string]$payload.session_id,
     "--seq", [string]$seq
 )

@@ -119,7 +119,7 @@ pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
             Ok(())
         }
         _ => Err(io::Error::other(format!(
-            "remote Herdr server is stopped or incompatible; run `{}`",
+            "remote HiCodeer server is stopped or incompatible; run `{}`",
             super::saved_ssh_bootstrap_command(target, session),
         ))),
     }
@@ -187,7 +187,7 @@ impl SavedSshSetup {
             }
         }
         Err(io::Error::other(format!(
-            "could not discover remote Herdr sessions: {failure}; specify --remote-session to continue"
+            "could not discover remote HiCodeer sessions: {failure}; specify --remote-session to continue"
         )))
     }
 
@@ -735,7 +735,7 @@ pub(crate) fn ssh_authentication_command(target: &str) -> io::Result<SshAuthenti
         ));
     }
     if !crate::platform::remote_ssh_config_paths().multiplexing {
-        return Err(io::Error::new(io::ErrorKind::Unsupported, "interactive SSH recovery requires Unix OpenSSH multiplexing; authenticate outside Herdr on this platform"));
+        return Err(io::Error::new(io::ErrorKind::Unsupported, "interactive SSH recovery requires Unix OpenSSH multiplexing; authenticate outside HiCodeer on this platform"));
     }
     if !crate::config::Config::load()
         .config
@@ -1146,7 +1146,7 @@ fn remote_install_commit_script(tmp_path: &str, dest_path: &str) -> String {
 
 fn windows_remote_install_prepare_command() -> String {
     windows_powershell_script_command(&format!(
-        "$remoteInstallDir = Join-Path ([System.IO.Path]::GetTempPath()) ('herdr-remote-' + [System.Guid]::NewGuid().ToString('N')); [System.IO.Directory]::CreateDirectory($remoteInstallDir) | Out-Null; $encodedInstallDir = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($remoteInstallDir)); [Console]::Out.WriteLine('{WINDOWS_REMOTE_INSTALL_DIR_MARKER}' + $encodedInstallDir); exit 0"
+        "$remoteInstallDir = Join-Path ([System.IO.Path]::GetTempPath()) ('hicodeer-remote-' + [System.Guid]::NewGuid().ToString('N')); [System.IO.Directory]::CreateDirectory($remoteInstallDir) | Out-Null; $encodedInstallDir = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($remoteInstallDir)); [Console]::Out.WriteLine('{WINDOWS_REMOTE_INSTALL_DIR_MARKER}' + $encodedInstallDir); exit 0"
     ))
 }
 
@@ -1173,7 +1173,7 @@ fn windows_remote_install_command(remote_dir: &str, identity: &str, sha256: &str
     let package =
         crate::platform::quote_powershell_arg(&format!(r"{remote_dir}\herdr-windows-x86_64.zip"));
     windows_powershell_script_command(&format!(
-        r#"$herdrInstaller = {installer}; $herdrPackage = {package}; & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $herdrInstaller -Channel {channel} -LocalPackagePath $herdrPackage -LocalPackageFormat zip -LocalPackageIdentity {identity} -LocalPackageSha256 {sha256}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $herdrHome = if ([string]::IsNullOrWhiteSpace($env:HERDR_HOME)) {{ Join-Path $env:USERPROFILE '.herdr' }} else {{ $env:HERDR_HOME }}; $activeJunction = Join-Path $herdrHome 'packages\standalone\current'; $activeTarget = [string](Get-Item -LiteralPath $activeJunction -Force -ErrorAction Stop).Target; if ([string]::IsNullOrWhiteSpace($activeTarget)) {{ throw 'Herdr installer did not activate a concrete release.' }}; $installedHerdr = Join-Path $activeTarget 'herdr.exe'; if (-not (Test-Path -LiteralPath $installedHerdr -PathType Leaf)) {{ throw 'Herdr installer result does not contain herdr.exe.' }}; $encodedResult = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($installedHerdr))); [Console]::Out.WriteLine('{WINDOWS_REMOTE_INSTALL_RESULT_MARKER}' + $encodedResult); exit 0"#,
+        r#"$herdrInstaller = {installer}; $herdrPackage = {package}; & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $herdrInstaller -Channel {channel} -LocalPackagePath $herdrPackage -LocalPackageFormat zip -LocalPackageIdentity {identity} -LocalPackageSha256 {sha256}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $herdrHome = if ([string]::IsNullOrWhiteSpace($env:HERDR_HOME)) {{ Join-Path $env:USERPROFILE '.herdr' }} else {{ $env:HERDR_HOME }}; $activeJunction = Join-Path $herdrHome 'packages\standalone\current'; $activeTarget = [string](Get-Item -LiteralPath $activeJunction -Force -ErrorAction Stop).Target; if ([string]::IsNullOrWhiteSpace($activeTarget)) {{ throw 'HiCodeer installer did not activate a concrete release.' }}; $installedHiCodeer = Join-Path $activeTarget 'herdr.exe'; if (-not (Test-Path -LiteralPath $installedHiCodeer -PathType Leaf)) {{ throw 'HiCodeer installer result does not contain herdr.exe.' }}; $encodedResult = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($installedHiCodeer))); [Console]::Out.WriteLine('{WINDOWS_REMOTE_INSTALL_RESULT_MARKER}' + $encodedResult); exit 0"#,
         channel = crate::platform::quote_powershell_arg(current_channel()),
         identity = crate::platform::quote_powershell_arg(identity),
         sha256 = crate::platform::quote_powershell_arg(sha256),
@@ -1405,7 +1405,7 @@ pub(super) fn find_installed_remote_herdr(ssh: &RemoteSsh) -> io::Result<RemoteH
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         format!(
-            "matching Herdr is not ready on {}; run `herdr --remote {}` interactively to install or update it",
+            "matching HiCodeer is not ready on {}; run `hicodeerd --remote {}` interactively to install or update it",
             ssh.target(),
             ssh.target()
         ),
@@ -1499,7 +1499,7 @@ pub(super) fn discover_remote_api_metadata(
         if !metadata.is_valid() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "invalid remote Herdr executable path",
+                "invalid remote HiCodeer executable path",
             ));
         }
         return Ok(metadata);
@@ -1523,7 +1523,7 @@ pub(super) fn discover_remote_api_metadata(
     }
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "remote Herdr does not support machine API forwarding; update Herdr on this machine",
+        "remote HiCodeer does not support machine API forwarding; update HiCodeer on this machine",
     ))
 }
 
@@ -2012,11 +2012,11 @@ fn confirm_remote_install_with_running_server(
         Err(err) => {
             if !io::stdin().is_terminal() {
                 return Err(io::Error::other(format!(
-                    "could not inspect the running remote herdr server on {target} before installing: {err}; run from an interactive terminal to approve updating the remote binary"
+                    "could not inspect the running remote hicodeerd server on {target} before installing: {err}; run from an interactive terminal to approve updating the remote binary"
                 )));
             }
             eprintln!(
-                "could not inspect the running remote herdr server on {target} before installing: {err}"
+                "could not inspect the running remote hicodeerd server on {target} before installing: {err}"
             );
             eprint!("continue installing the remote herdr binary? [y/N] ");
             io::stderr().flush()?;
@@ -2027,7 +2027,7 @@ fn confirm_remote_install_with_running_server(
             if answer != "y" && answer != "yes" {
                 return Err(io::Error::new(
                     io::ErrorKind::Interrupted,
-                    "remote herdr install cancelled",
+                    "remote hicodeerd install cancelled",
                 ));
             }
             return Ok(false);
@@ -2056,10 +2056,10 @@ fn confirm_remote_install_with_running_server(
 
     if plan == RemoteInstallRunningServerPlan::KeepRunning {
         if io::stdin().is_terminal() {
-            eprintln!("remote herdr server on {target} is already compatible:");
+            eprintln!("remote hicodeerd server on {target} is already compatible:");
             eprintln!("  server: v{}", version_label(version.as_deref()));
             eprintln!(
-                "Herdr will install {} without stopping the running remote server.",
+                "HiCodeer will install {} without stopping the running remote server.",
                 current_version()
             );
         }
@@ -2071,7 +2071,7 @@ fn confirm_remote_install_with_running_server(
             RemoteInstallRunningServerPlan::LiveHandoff => return Ok(false),
             RemoteInstallRunningServerPlan::StopRequired(_) => {
                 return Err(io::Error::other(format!(
-                    "remote herdr server on {target} is running v{}; run from an interactive terminal to approve stopping it for the update",
+                    "remote hicodeerd server on {target} is running v{}; run from an interactive terminal to approve stopping it for the update",
                     version_label(version.as_deref())
                 )));
             }
@@ -2080,19 +2080,19 @@ fn confirm_remote_install_with_running_server(
     }
 
     if plan == RemoteInstallRunningServerPlan::LiveHandoff {
-        eprintln!("remote herdr server on {target} is currently running:");
+        eprintln!("remote hicodeerd server on {target} is currently running:");
         eprintln!("  server: v{}", version_label(version.as_deref()));
         eprintln!(
-            "Herdr will install {} and hand off live pane processes to the prepared server.",
+            "HiCodeer will install {} and hand off live pane processes to the prepared server.",
             current_version()
         );
         return Ok(false);
     }
 
-    eprintln!("remote herdr server on {target} is currently running:");
+    eprintln!("remote hicodeerd server on {target} is currently running:");
     eprintln!("  server: v{}", version_label(version.as_deref()));
     eprintln!(
-        "To complete the remote update, Herdr must stop the running remote server after installing."
+        "To complete the remote update, HiCodeer must stop the running remote server after installing."
     );
     eprintln!("This stops active remote pane processes, including shells, agents, dev servers, and tests.");
     eprintln!();
@@ -2108,7 +2108,7 @@ fn confirm_remote_install_with_running_server(
     if answer != "y" && answer != "yes" {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote herdr install cancelled",
+            "remote hicodeerd install cancelled",
         ));
     }
 
@@ -2293,19 +2293,19 @@ fn confirm_remote_server_stop(
     if !io::stdin().is_terminal() {
         if required_upgrade {
             return Err(io::Error::other(format!(
-                "remote herdr server on {target} needs one final update before this client can attach; run from an interactive terminal to approve updating it"
+                "remote hicodeerd server on {target} needs one final update before this client can attach; run from an interactive terminal to approve updating it"
             )));
         }
 
         eprintln!(
-            "remote herdr server on {target} is still running v{}; it will use {} after it restarts.",
+            "remote hicodeerd server on {target} is still running v{}; it will use {} after it restarts.",
             version_label(version),
             current_version()
         );
         return Ok(false);
     }
 
-    eprintln!("remote herdr server on {target} is currently running:");
+    eprintln!("remote hicodeerd server on {target} is currently running:");
     eprintln!("  server: v{}", version_label(version));
     eprintln!("  prepared binary: {}", current_version());
     eprintln!();
@@ -2313,7 +2313,7 @@ fn confirm_remote_server_stop(
     match reason {
         RemoteServerRestartReason::EndpointProtocol => {
             eprintln!(
-                "the remote server predates Herdr's stable endpoint protocol and must update before this client can attach."
+                "the remote server predates HiCodeer's stable endpoint protocol and must update before this client can attach."
             );
         }
         RemoteServerRestartReason::SurfaceInterest => {
@@ -2346,7 +2346,7 @@ fn confirm_remote_server_stop(
     if required_upgrade {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote herdr server stop cancelled",
+            "remote hicodeerd server stop cancelled",
         ));
     }
 
@@ -2374,7 +2374,7 @@ fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io
     }
 
     eprintln!(
-        "handed off the remote herdr server on {}; reconnecting to the prepared server.",
+        "handed off the remote hicodeerd server on {}; reconnecting to the prepared server.",
         ssh.target()
     );
     Ok(())
@@ -2391,7 +2391,7 @@ fn stop_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result
 
     wait_for_remote_server_shutdown(ssh, remote_herdr)?;
     eprintln!(
-        "stopped the remote herdr server on {}; it will restart when the remote client bridge attaches.",
+        "stopped the remote hicodeerd server on {}; it will restart when the remote client bridge attaches.",
         ssh.target()
     );
     Ok(())
@@ -2407,7 +2407,7 @@ fn wait_for_remote_server_shutdown(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) 
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!(
-                    "shutdown was requested, but the old remote herdr server on {target} is still responding after {} seconds",
+                    "shutdown was requested, but the old remote hicodeerd server on {target} is still responding after {} seconds",
                     REMOTE_SERVER_SHUTDOWN_CONFIRM_TIMEOUT.as_secs(),
                     target = ssh.target()
                 ),
@@ -2430,7 +2430,7 @@ fn warn_if_remote_bin_not_on_path(ssh: &RemoteSsh) -> io::Result<()> {
     }
 
     eprintln!(
-        "herdr: installed remote binary to ~/.local/bin/herdr, but the remote shell does not resolve `herdr` to that path"
+        "hicodeer: installed remote binary to ~/.local/bin/herdr, but the remote shell does not resolve `herdr` to that path"
     );
     Ok(())
 }
@@ -2508,7 +2508,7 @@ fn preview_assets_for_build<'a>(
     }
     let build = manifest.builds.get(build_id).ok_or_else(|| {
         io::Error::other(format!(
-            "preview manifest no longer includes build {build_id}; run `herdr update` locally or set {REMOTE_BINARY_ENV_VAR}=target/release/herdr"
+            "preview manifest no longer includes build {build_id}; run `hicodeerd update` locally or set {REMOTE_BINARY_ENV_VAR}=target/release/herdr"
         ))
     })?;
     Ok((build.protocol, &build.assets))
@@ -2517,7 +2517,7 @@ fn preview_assets_for_build<'a>(
 fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
     if crate::build_info::is_preview() {
         let build_id = crate::build_info::build_id().ok_or_else(|| {
-            io::Error::other("preview client has no build id; set HERDR_REMOTE_BINARY or install Herdr on the remote manually")
+            io::Error::other("preview client has no build id; set HERDR_REMOTE_BINARY or install HiCodeer on the remote manually")
         })?;
         let manifest_bytes = fetch_remote_manifest(PREVIEW_UPDATE_MANIFEST_URL)?;
         let manifest: RemotePreviewManifest =
@@ -2527,7 +2527,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
         let (protocol, assets) = preview_assets_for_build(&manifest, build_id)?;
         if protocol != CURRENT_PROTOCOL {
             return Err(io::Error::other(format!(
-                "preview manifest has build {build_id} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdr or install a matching Herdr on the remote host manually"
+                "preview manifest has build {build_id} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdr or install a matching HiCodeer on the remote host manually"
             )));
         }
         return assets.get(asset_key).map(remote_asset_info).ok_or_else(|| {
@@ -2668,7 +2668,7 @@ for candidate in $candidates; do
         exit 0
     fi
 done
-printf '%s\n' 'remote Herdr does not support machine API forwarding; update Herdr on this machine' >&2
+printf '%s\n' 'remote HiCodeer does not support machine API forwarding; update HiCodeer on this machine' >&2
 exit 2"#,
         discovery = known_remote_binary_candidate_script(platform),
         session = shell_quote(session),
@@ -2846,7 +2846,7 @@ impl SshStdioBridge {
                             if noninteractive {
                                 tracing::warn!(error = %err, "saved SSH endpoint bridge failed");
                             } else {
-                                eprintln!("herdr: remote bridge failed: {err}");
+                                eprintln!("hicodeer: remote bridge failed: {err}");
                             }
                         }
                     }
@@ -2857,7 +2857,7 @@ impl SshStdioBridge {
                         if noninteractive {
                             tracing::warn!(error = %err, "saved SSH endpoint listener failed");
                         } else {
-                            eprintln!("herdr: remote bridge listener failed: {err}");
+                            eprintln!("hicodeer: remote bridge listener failed: {err}");
                         }
                         break;
                     }
@@ -3476,7 +3476,7 @@ mod tests {
             configure_remote_client_environment(
                 &mut command,
                 &root.join(bridge),
-                "herdr --remote dev",
+                "hicodeerd --remote dev",
                 RemoteKeybindings::Local,
                 "dev",
                 "agents",
@@ -4769,13 +4769,13 @@ mod tests {
             windows_scp_target("example", r"C:\Temp\A+B%20 C\install.ps1"),
             "example:C:/Temp/A+B%20 C/install.ps1"
         );
-        let remote_dir = r"C:\Temp\Herdr O'Brien\测试";
+        let remote_dir = r"C:\Temp\HiCodeer O'Brien\测试";
         assert_eq!(
             windows_scp_target(
                 "user@example",
                 &format!(r"{remote_dir}\herdr-windows-x86_64.zip")
             ),
-            "user@example:C:/Temp/Herdr O'Brien/测试/herdr-windows-x86_64.zip"
+            "user@example:C:/Temp/HiCodeer O'Brien/测试/herdr-windows-x86_64.zip"
         );
         assert_eq!(
             windows_scp_target("ssh://user@example:2222", r"C:\Temp\install.ps1"),
@@ -4940,7 +4940,7 @@ function Get-Process {
                 RemoteKeybindings::Local,
                 false,
             ),
-            "herdr --remote 'host name'"
+            "hicodeerd --remote 'host name'"
         );
         assert_eq!(
             reattach_command(
@@ -4950,7 +4950,7 @@ function Get-Process {
                 RemoteKeybindings::Server,
                 false,
             ),
-            "herdr --remote host --remote-keybindings server"
+            "hicodeerd --remote host --remote-keybindings server"
         );
         assert_eq!(
             reattach_command(
@@ -4960,7 +4960,7 @@ function Get-Process {
                 RemoteKeybindings::Local,
                 true,
             ),
-            "herdr --remote host --handoff"
+            "hicodeerd --remote host --handoff"
         );
     }
 
@@ -4970,7 +4970,7 @@ function Get-Process {
         let executable = std::env::current_exe().expect("current test executable");
         assert_eq!(
             reattach_command(
-                r"C:\Program Files\Herdr\herdr.exe",
+                r"C:\Program Files\HiCodeer\herdr.exe",
                 "host'name",
                 "work'name",
                 RemoteKeybindings::Local,

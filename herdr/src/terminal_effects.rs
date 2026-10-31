@@ -39,7 +39,7 @@ mod tests {
     fn window_title_strips_terminators_and_defaults_to_herdr() {
         let mut output = Vec::new();
         write_window_title(&mut output, Some("herdr\x1b api\u{7}\u{9c}")).unwrap();
-        assert_eq!(output, b"\x1b]0;herdr api\x07");
+        assert_eq!(output, b"\x1b]0;hicodeerd api\x07");
 
         output.clear();
         write_window_title(&mut output, None).unwrap();

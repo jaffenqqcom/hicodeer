@@ -43,7 +43,7 @@ try {
         "report-agent-session",
         $env:HERDR_PANE_ID,
         "--source",
-        "herdr:antigravity_cli",
+        "hicodeer:antigravity_cli",
         "--agent",
         "agy",
         "--seq",

@@ -16,6 +16,30 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 
 #[test]
+fn every_registry_target_resolves_from_its_cli_label() {
+    // The CLI used to spell the target list out by hand, so targets added to
+    // the registry afterwards were rejected as unknown.
+    for target in crate::api::schema::IntegrationTarget::ALL {
+        let label = integration_target_label(target);
+        assert_eq!(
+            integration_target_from_label(label),
+            Some(target),
+            "label {label} must resolve back to its target"
+        );
+    }
+    assert_eq!(
+        integration_target_from_label("antigravity_cli"),
+        Some(crate::api::schema::IntegrationTarget::AntigravityCli),
+        "the underscored spelling an earlier build accepted still resolves"
+    );
+    assert_eq!(integration_target_from_label("not-a-target"), None);
+    assert_eq!(
+        integration_target_labels().len(),
+        crate::api::schema::IntegrationTarget::ALL.len()
+    );
+}
+
+#[test]
 fn windows_powershell_encoded_hook_command_preserves_script_invocation() {
     use base64::Engine;
 
@@ -934,6 +958,25 @@ fn install_pi_errors_when_extension_dir_missing() {
     let _ = fs::remove_dir_all(base);
 }
 
+// `install` splits PreToolUse into two entries: `blocked` for the
+// AskUserQuestion tool that parks the turn, and `working` for every other tool.
+fn assert_claude_pre_tool_use_hooks(settings: &Value) {
+    let entries = settings["hooks"]["PreToolUse"]
+        .as_array()
+        .expect("PreToolUse should be an array");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["matcher"], "^AskUserQuestion$");
+    assert!(entries[0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with(" blocked"));
+    assert_eq!(entries[1]["matcher"], "^(?!AskUserQuestion$).*$");
+    assert!(entries[1]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with(" working"));
+}
+
 #[test]
 fn install_claude_writes_hook_and_updates_settings() {
     let _lock = integration_env_lock();
@@ -968,7 +1011,7 @@ fn install_claude_writes_hook_and_updates_settings() {
         .unwrap()
         .contains(" session"));
     assert!(settings["hooks"].get("UserPromptSubmit").is_none());
-    assert!(settings["hooks"].get("PreToolUse").is_none());
+    assert_claude_pre_tool_use_hooks(&settings);
     assert!(settings["hooks"].get("PermissionRequest").is_none());
     assert!(settings["hooks"].get("PostToolUse").is_none());
     assert!(settings["hooks"].get("PostToolUseFailure").is_none());
@@ -1020,7 +1063,7 @@ fn install_claude_is_idempotent_for_hook_entries() {
         1
     );
     assert!(settings["hooks"].get("UserPromptSubmit").is_none());
-    assert!(settings["hooks"].get("PreToolUse").is_none());
+    assert_claude_pre_tool_use_hooks(&settings);
     assert!(settings["hooks"].get("PermissionRequest").is_none());
     assert!(settings["hooks"].get("PostToolUse").is_none());
     assert!(settings["hooks"].get("PostToolUseFailure").is_none());
@@ -1102,7 +1145,7 @@ fn install_claude_removes_deprecated_completion_hooks_and_preserves_user_hooks()
         "echo keep-session-end"
     );
     assert!(settings["hooks"].get("UserPromptSubmit").is_none());
-    assert!(settings["hooks"].get("PreToolUse").is_none());
+    assert_claude_pre_tool_use_hooks(&settings);
     assert!(settings["hooks"].get("Stop").is_none());
 
     std::env::remove_var("HOME");
@@ -1132,7 +1175,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(9));
-    assert_eq!(claude.expected_version, 12);
+    assert_eq!(claude.expected_version, CLAUDE_INTEGRATION_VERSION);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     install_claude().unwrap();
@@ -1141,7 +1184,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
         hook_path,
         CLAUDE_INTEGRATION_VERSION,
     );
-    assert_eq!(status.installed_version, Some(11));
+    assert_eq!(status.installed_version, Some(CLAUDE_INTEGRATION_VERSION));
     assert_eq!(status.state, IntegrationStatusKind::Current);
 
     std::env::remove_var("HOME");
@@ -1171,7 +1214,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 12);
+    assert_eq!(claude.expected_version, CLAUDE_INTEGRATION_VERSION);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1820,6 +1863,43 @@ fn uninstall_kimi_removes_hook_and_config_block_preserves_other_hooks() {
 }
 
 #[test]
+fn uninstall_kimi_removes_a_block_written_under_the_previous_brand() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let kimi_dir = home.join(".kimi-code");
+    fs::create_dir_all(&kimi_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    // The block header names the product, and that name changed once, so a
+    // config written by an earlier build carries a header this version no
+    // longer emits. Leaving it behind would point the agent at a script the
+    // uninstall just deleted.
+    let legacy_block = concat!(
+        "default_model = \"moonshot\"\n\n",
+        "# >>> hicodeer-agent kimi integration\n",
+        "[[hooks]]\n",
+        "event = \"Stop\"\n",
+        "command = \"bash '/home/test/.kimi-code/hooks/hicodeer-agent-state.sh' idle\"\n",
+        "timeout = 10\n\n",
+        "# <<< hicodeer-agent kimi integration\n",
+    );
+    fs::write(kimi_dir.join("config.toml"), legacy_block).unwrap();
+
+    uninstall_kimi().unwrap();
+
+    let config = fs::read_to_string(kimi_dir.join("config.toml")).unwrap();
+    assert!(
+        !config.contains("agent-state"),
+        "legacy block must be removed with the hook file: {config}"
+    );
+    assert!(config.contains("default_model = \"moonshot\""));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn install_kimi_errors_when_config_dir_missing() {
     let _lock = integration_env_lock();
     let base = unique_base();
@@ -1871,11 +1951,21 @@ fn install_copilot_writes_hook_and_updates_settings() {
     assert_eq!(settings["theme"], "dark");
     assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
     assert_eq!(settings["hooks"]["PreToolUse"][0]["command"], "echo keep");
-    assert!(settings["hooks"]["SessionStart"][0][direct_command_field()]
+    // The stale sessionStart command names the same hook path, so install must
+    // replace that entry instead of appending a duplicate.
+    assert_eq!(
+        settings["hooks"]["sessionStart"].as_array().unwrap().len(),
+        1
+    );
+    assert!(settings["hooks"]["sessionStart"][0][direct_command_field()]
         .as_str()
         .unwrap()
         .contains(COPILOT_HOOK_INSTALL_NAME));
     for event in COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS {
+        // Events we still install are rewritten, not dropped.
+        if COPILOT_HOOK_EVENTS.contains(&event) {
+            continue;
+        }
         if let Some(entries) = settings["hooks"].get(event) {
             assert!(
                 !entries.to_string().contains(COPILOT_HOOK_INSTALL_NAME),
@@ -1883,7 +1973,7 @@ fn install_copilot_writes_hook_and_updates_settings() {
             );
         }
     }
-    assert!(settings["hooks"].get("sessionStart").is_none());
+    assert!(settings["hooks"].get("SessionStart").is_none());
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -1938,17 +2028,26 @@ fn install_copilot_uses_copilot_home_env_and_is_idempotent() {
         installed.hook_path,
         copilot_dir.join("hooks").join(COPILOT_HOOK_INSTALL_NAME)
     );
-    assert_eq!(
-        settings["hooks"]["SessionStart"].as_array().unwrap().len(),
-        1
-    );
+    // Reinstalling must update each event in place rather than stacking entries.
+    for event in COPILOT_HOOK_EVENTS {
+        assert_eq!(
+            settings["hooks"][event].as_array().unwrap().len(),
+            1,
+            "expected exactly one hooks.{event} entry after two installs"
+        );
+    }
     for event in COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS {
+        // Events we still install are written on purpose; only the retired ones
+        // must stay away.
+        if COPILOT_HOOK_EVENTS.contains(&event) {
+            continue;
+        }
         assert!(
             settings["hooks"].get(event).is_none(),
             "expected hooks.{event} to be absent"
         );
     }
-    assert!(settings["hooks"].get("sessionStart").is_none());
+    assert!(settings["hooks"].get("SessionStart").is_none());
 
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
@@ -2305,10 +2404,34 @@ fn install_droid_writes_hook_to_settings_and_cleans_legacy_hooks_json() {
     assert!(settings["hooks"]["SessionStart"][0]
         .get("matcher")
         .is_none());
-    for (event, _matcher, action) in DROID_HOOK_EVENTS {
-        let command = settings["hooks"][event][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap();
+    // PreToolUse carries two entries: the blocked matcher reports
+    // AskUserQuestion-style tool calls, the working matcher covers every other
+    // tool.
+    let pre_tool_use = settings["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(
+        pre_tool_use.len(),
+        2,
+        "PreToolUse holds one blocked and one working entry"
+    );
+    assert_eq!(pre_tool_use[0]["matcher"], "^AskUser$");
+    assert!(pre_tool_use[0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("blocked"));
+    assert_eq!(pre_tool_use[1]["matcher"], "^(?!AskUser$).*$");
+    assert!(pre_tool_use[1]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("working"));
+    for (event, matcher, action) in DROID_HOOK_EVENTS {
+        let entries = settings["hooks"][event].as_array().unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.get("matcher").and_then(Value::as_str) == matcher)
+            .unwrap_or_else(|| {
+                panic!("expected droid {event} entry with matcher {matcher:?}, got {entries:?}")
+            });
+        let command = entry["hooks"][0]["command"].as_str().unwrap();
         assert!(
             command.contains(DROID_HOOK_INSTALL_NAME) && command.ends_with(action),
             "expected droid {event} hook command to end with {action}, got {command}"
@@ -2337,10 +2460,26 @@ fn install_droid_is_idempotent_for_hook_entries() {
         serde_json::from_str(&fs::read_to_string(droid_dir.join("settings.json")).unwrap())
             .unwrap();
     for (event, _, _) in DROID_HOOK_EVENTS {
+        let mut expected_matchers = DROID_HOOK_EVENTS
+            .iter()
+            .filter(|(other, _, _)| *other == event)
+            .map(|(_, matcher, _)| *matcher)
+            .collect::<Vec<_>>();
+        let entries = settings["hooks"][event].as_array().unwrap();
         assert_eq!(
-            settings["hooks"][event].as_array().unwrap().len(),
-            1,
+            entries.len(),
+            expected_matchers.len(),
             "expected hooks.{event} to be idempotent"
+        );
+        let mut installed_matchers = entries
+            .iter()
+            .map(|entry| entry.get("matcher").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        expected_matchers.sort_unstable();
+        installed_matchers.sort_unstable();
+        assert_eq!(
+            installed_matchers, expected_matchers,
+            "expected hooks.{event} matchers to stay idempotent"
         );
     }
 
@@ -4000,7 +4139,7 @@ fn install_qwen_writes_state_hook_and_preserves_settings() {
     let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
     assert!(hook_asset.contains("HERDR_INTEGRATION_ID=qwen"));
     assert!(hook_asset.contains("HERDR_INTEGRATION_VERSION=6"));
-    assert!(hook_asset.contains("herdr:qwen"));
+    assert!(hook_asset.contains("hicodeer:qwen"));
 
     install_qwen().unwrap();
     let settings: Value =
@@ -4158,7 +4297,7 @@ fn letta_session_hook_is_silent_and_encodes_default_conversation() {
         .arg("session")
         .env("HERDR_ENV", "1")
         .env("HERDR_PANE_ID", "w1:p2")
-        .env("HICODEER_AGENT_SOCKET_PATH", "/tmp/herdr.sock")
+        .env("HICODEER_AGENT_SOCKET_PATH", "/tmp/hicodeer.sock")
         .env("HERDR_BIN_PATH", &fake_herdr)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -4179,7 +4318,7 @@ fn letta_session_hook_is_silent_and_encodes_default_conversation() {
     assert!(output.stderr.is_empty());
     let args = fs::read_to_string(capture).unwrap();
     assert!(args.contains("report-agent-session w1:p2"));
-    assert!(args.contains("--source herdr:letta --agent letta"));
+    assert!(args.contains("--source hicodeer:letta --agent letta"));
     assert!(args.contains("--agent-session-id default:agent-123"));
     assert!(args.contains("--session-start-source resume"));
 
@@ -4454,7 +4593,7 @@ fn install_mastracode_writes_hook_and_updates_hooks_json() {
     let hooks = hooks_file.as_object().unwrap();
     for (event, action) in MASTRACODE_HOOK_EVENTS {
         let entries = hooks.get(event).and_then(Value::as_array).unwrap();
-        assert_eq!(entries.len(), 1, "{event} should have one Herdr hook");
+        assert_eq!(entries.len(), 1, "{event} should have one HiCodeer hook");
         let command = entries[0].get("command").and_then(Value::as_str).unwrap();
         assert_eq!(
             command,
@@ -4839,7 +4978,7 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
 
     for (event, matcher, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
         let entries = block.get(event).and_then(Value::as_array).unwrap();
-        assert_eq!(entries.len(), 1, "{event} should hold one Herdr entry");
+        assert_eq!(entries.len(), 1, "{event} should hold one HiCodeer entry");
         // Tool events carry the matcher/hooks wrapper; the other events must
         // stay flat or Antigravity CLI rejects the whole file.
         let handler = if matcher.is_some() {
@@ -4870,16 +5009,37 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
         );
     }
 
-    // The integration is session-only. Antigravity CLI cannot express blocked
-    // state, skips PostInvocation on interruption, and fires Stop at end of
-    // turn rather than process exit, so Herdr never claims lifecycle authority
-    // here and screen detection owns agent state.
-    for event in ["PreToolUse", "PostToolUse", "PostInvocation", "Stop"] {
-        assert!(
-            block.get(event).is_none(),
-            "{event} must not be registered; lifecycle stays with screen detection"
-        );
-    }
+    // The block registers exactly the lifecycle events Herdr owns today: one
+    // flat session handler, the tool events, and end of turn. Anything else
+    // (PostInvocation in particular) stays unregistered because Antigravity CLI
+    // skips it on interruption.
+    let mut registered_events = block.keys().map(String::as_str).collect::<Vec<_>>();
+    let mut expected_events = ANTIGRAVITY_CLI_HOOK_EVENTS
+        .iter()
+        .map(|(event, _, _)| *event)
+        .collect::<Vec<_>>();
+    registered_events.sort_unstable();
+    expected_events.sort_unstable();
+    assert_eq!(
+        registered_events, expected_events,
+        "Herdr block must register exactly the lifecycle events it owns"
+    );
+    assert!(
+        block.get("PostInvocation").is_none(),
+        "PostInvocation must not be registered; Antigravity CLI skips it on interruption"
+    );
+    // Only the tool events accept the matcher/hooks wrapper, and only the
+    // AskUserQuestion-style tool call reports blocked.
+    let pre_tool_use = block["PreToolUse"].as_array().unwrap();
+    assert_eq!(pre_tool_use.len(), 1);
+    assert_eq!(
+        pre_tool_use[0].get("matcher").and_then(Value::as_str),
+        Some("^ask_question$")
+    );
+    assert!(pre_tool_use[0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("blocked"));
 
     // Other named hooks are left untouched.
     assert_eq!(
@@ -4945,7 +5105,7 @@ fn install_antigravity_cli_rewrites_stale_herdr_block() {
     .unwrap();
     std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
 
-    install_antigravity_cli().unwrap();
+    let installed = install_antigravity_cli().unwrap();
 
     let hooks_file: Value =
         serde_json::from_str(&fs::read_to_string(agy_dir.join("hooks.json")).unwrap()).unwrap();
@@ -4955,22 +5115,47 @@ fn install_antigravity_cli_rewrites_stale_herdr_block() {
         .unwrap();
 
     // The block is Herdr-owned and rewritten wholesale, so a stale lifecycle
-    // install is migrated to session-only rather than merged with.
+    // install is replaced by the events Herdr owns today rather than merged
+    // with. `Legacy` and `PostInvocation` from the stale install are gone.
+    let mut rewritten_events = block.keys().map(String::as_str).collect::<Vec<_>>();
+    let mut expected_events = ANTIGRAVITY_CLI_HOOK_EVENTS
+        .iter()
+        .map(|(event, _, _)| *event)
+        .collect::<Vec<_>>();
+    rewritten_events.sort_unstable();
+    expected_events.sort_unstable();
     assert_eq!(
-        block.keys().map(String::as_str).collect::<Vec<_>>(),
-        vec!["PreInvocation"],
-        "stale lifecycle events should be gone"
+        rewritten_events, expected_events,
+        "stale lifecycle events should be replaced by the current event set"
     );
-    let entries = block
-        .get("PreInvocation")
-        .and_then(Value::as_array)
-        .unwrap();
-    assert_eq!(entries.len(), 1);
-    assert!(entries[0].get("hooks").is_none());
-    assert!(entries[0]
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|command| command != "stale" && command != "stale idle"));
+    for (event, matcher, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
+        let entries = block.get(event).and_then(Value::as_array).unwrap();
+        assert_eq!(entries.len(), 1, "{event} should hold one HiCodeer entry");
+        let handler = if matcher.is_some() {
+            assert_eq!(
+                entries[0].get("matcher").and_then(Value::as_str),
+                matcher,
+                "{event} matcher mismatch"
+            );
+            &entries[0]["hooks"][0]
+        } else {
+            assert!(
+                entries[0].get("matcher").is_none() && entries[0].get("hooks").is_none(),
+                "{event} must be a flat handler, got {}",
+                entries[0]
+            );
+            &entries[0]
+        };
+        let command = handler.get("command").and_then(Value::as_str).unwrap();
+        assert_eq!(
+            command,
+            antigravity_cli_hook_command(&installed.hook_path, action)
+        );
+        assert!(
+            command != "stale" && command != "stale idle",
+            "{event} still points at a stale handler: {command}"
+        );
+    }
 
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     let _ = fs::remove_dir_all(base);

@@ -167,7 +167,7 @@ pub(super) fn remote_error(error: io::Error) -> io::Error {
 
 pub(super) fn restart_guidance() -> String {
     TARGET.with(|target| match target.borrow().as_ref() {
-        Some(target) => format!("Update Herdr and restart the server on machine '{}' (session {}). Stopping the server exits its pane processes.", target.profile.label, target.profile.session),
+        Some(target) => format!("Update HiCodeer and restart the server on machine '{}' (session {}). Stopping the server exits its pane processes.", target.profile.label, target.profile.session),
         None => crate::session::active_restart_after_update_guidance(),
     })
 }
@@ -250,7 +250,7 @@ fn parse_machine_prefix(args: &[String]) -> Result<Option<(String, Vec<String>)>
         return Err("--machine cannot be combined with other launch options; it uses the saved machine's session".into());
     }
     if index >= args.len() || args[index] == "--" {
-        return Err("usage: herdr --machine <label-or-id> <command>".into());
+        return Err("usage: hicodeerd --machine <label-or-id> <command>".into());
     }
     let mut cleaned = vec![args[0].clone()];
     cleaned.extend_from_slice(&args[index..]);
@@ -270,7 +270,7 @@ pub(super) fn resolve_machine<'a>(
         let mut matches = profiles.iter().filter(|profile| profile.label == selector);
         let profile = matches
             .next()
-            .ok_or_else(|| format!("unknown machine '{selector}'; use `herdr machine list`"))?;
+            .ok_or_else(|| format!("unknown machine '{selector}'; use `hicodeerd machine list`"))?;
         if matches.next().is_some() {
             return Err(format!(
                 "machine label '{selector}' is ambiguous; use its profile ID"

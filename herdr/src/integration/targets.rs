@@ -1580,7 +1580,7 @@ fn letta_install_artifact_path(path: &Path, role: &str) -> io::Result<PathBuf> {
         .file_name()
         .ok_or_else(|| io::Error::other(format!("invalid install path: {}", path.display())))?;
     let mut artifact_name = file_name.to_os_string();
-    artifact_name.push(format!(".herdr-install-{}-{role}", std::process::id()));
+    artifact_name.push(format!(".hicodeer-install-{}-{role}", std::process::id()));
     Ok(path.with_file_name(artifact_name))
 }
 

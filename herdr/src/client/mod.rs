@@ -266,7 +266,7 @@ fn run_client_with_mode(
         setup_terminal(mouse_capture)
     }
     .map_err(|err| {
-        eprintln!("herdr: failed to set up terminal: {err}");
+        eprintln!("hicodeer: failed to set up terminal: {err}");
         err
     })?;
     loop_config.host_escape_disambiguation_active =
@@ -377,7 +377,7 @@ fn run_client_with_mode(
     let terminal_restore_failed = terminal_guard.restore().is_err();
 
     if let Err(err) = result {
-        let _ = writeln!(io::stderr(), "herdr: {err}");
+        let _ = writeln!(io::stderr(), "hicodeer: {err}");
         rt.shutdown_timeout(Duration::from_millis(100));
         crate::logging::shutdown("client");
 

@@ -38,11 +38,11 @@ if session_id is None:
 
 seq = time.time_ns()
 request = json.dumps({
-    "id": f"herdr:cursor:{seq}",
+    "id": f"hicodeer:cursor:{seq}",
     "method": "pane.report_agent_session",
     "params": {
         "pane_id": os.environ["HERDR_PANE_ID"],
-        "source": "herdr:cursor",
+        "source": "hicodeer:cursor",
         "agent": "cursor",
         "seq": seq,
         "agent_session_id": session_id,

@@ -47,7 +47,7 @@ try {
         if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
         $herdrArgs = @(
             "pane", "report-agent-session", $env:HERDR_PANE_ID,
-            "--source", "herdr:grok",
+            "--source", "hicodeer:grok",
             "--agent", "grok",
             "--seq", "$seq",
             "--agent-session-id", "$sessionId"
@@ -59,7 +59,7 @@ try {
     } else {
         $herdrArgs = @(
             "pane", "report-agent", $env:HERDR_PANE_ID,
-            "--source", "herdr:grok",
+            "--source", "hicodeer:grok",
             "--agent", "grok",
             "--state", "$Action",
             "--seq", "$seq"

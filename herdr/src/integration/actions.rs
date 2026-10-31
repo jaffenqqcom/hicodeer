@@ -60,12 +60,12 @@ pub(crate) fn uninstall_experimental_letta() -> io::Result<Vec<String>> {
         }
         if result.updated_settings {
             messages.push(format!(
-                "removed herdr letta hook entry from {}",
+                "removed hicodeer letta hook entry from {}",
                 result.settings_path.display()
             ));
         } else {
             messages.push(format!(
-                "no herdr letta hook entry found in {}",
+                "no hicodeer letta hook entry found in {}",
                 result.settings_path.display()
             ));
         }
@@ -203,7 +203,7 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             ];
             if installed.updated_legacy_hooks {
                 messages.push(format!(
-                    "removed legacy herdr droid hook entries from {}",
+                    "removed legacy hicodeer droid hook entries from {}",
                     installed.hooks_path.display()
                 ));
             }
@@ -445,12 +445,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr claude hook entries from {}",
+                    "removed hicodeer claude hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr claude hook entries found in {}",
+                    "no hicodeer claude hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -472,12 +472,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr codebuddy hook entries from {}",
+                    "removed hicodeer codebuddy hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr codebuddy hook entries found in {}",
+                    "no hicodeer codebuddy hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -499,12 +499,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr codex hook entries from {}",
+                    "removed hicodeer codex hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr codex hook entries found in {}",
+                    "no hicodeer codex hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
@@ -530,12 +530,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr copilot hook entries from {}",
+                    "removed hicodeer copilot hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr copilot hook entries found in {}",
+                    "no hicodeer copilot hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -557,12 +557,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr devin hook entries from {}",
+                    "removed hicodeer devin hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr devin hook entries found in {}",
+                    "no hicodeer devin hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -584,12 +584,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_config {
                 messages.push(format!(
-                    "removed herdr kimi hook entries from {}",
+                    "removed hicodeer kimi hook entries from {}",
                     result.config_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr kimi hook entries found in {}",
+                    "no hicodeer kimi hook entries found in {}",
                     result.config_path.display()
                 ));
             }
@@ -611,23 +611,23 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed legacy herdr droid hook entries from {}",
+                    "removed legacy hicodeer droid hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no legacy herdr droid hook entries found in {}",
+                    "no legacy hicodeer droid hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr droid hook entries from {}",
+                    "removed hicodeer droid hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr droid hook entries found in {}",
+                    "no hicodeer droid hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -659,7 +659,7 @@ pub(crate) fn uninstall_target(
             });
             for path in result.updated_tui_configs {
                 messages.push(format!(
-                    "removed herdr opencode plugin entry from {}",
+                    "removed hicodeer opencode plugin entry from {}",
                     path.display()
                 ));
             }
@@ -722,12 +722,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr qodercli hook entries from {}",
+                    "removed hicodeer qodercli hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr qodercli hook entries found in {}",
+                    "no hicodeer qodercli hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -749,12 +749,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr qwen hook entries from {}",
+                    "removed hicodeer qwen hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr qwen hook entries found in {}",
+                    "no hicodeer qwen hook entries found in {}",
                     result.settings_path.display()
                 ));
             }
@@ -776,12 +776,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr cursor hook entries from {}",
+                    "removed hicodeer cursor hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr cursor hook entries found in {}",
+                    "no hicodeer cursor hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
@@ -803,12 +803,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr mastracode hook entries from {}",
+                    "removed hicodeer mastracode hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr mastracode hook entries found in {}",
+                    "no hicodeer mastracode hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
@@ -830,12 +830,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr antigravity-cli hook entries from {}",
+                    "removed hicodeer antigravity-cli hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr antigravity-cli hook entries found in {}",
+                    "no hicodeer antigravity-cli hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
@@ -884,12 +884,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_config {
                 messages.push(format!(
-                    "removed herdr deveco plugin entry from {}",
+                    "removed hicodeer deveco plugin entry from {}",
                     result.config_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr deveco plugin entry found in {}",
+                    "no hicodeer deveco plugin entry found in {}",
                     result.config_path.display()
                 ));
             }
@@ -906,12 +906,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_tui_config {
                 messages.push(format!(
-                    "removed herdr deveco tui plugin entry from {}",
+                    "removed hicodeer deveco tui plugin entry from {}",
                     result.tui_config_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr deveco tui plugin entry found in {}",
+                    "no hicodeer deveco tui plugin entry found in {}",
                     result.tui_config_path.display()
                 ));
             }
@@ -933,12 +933,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr atomcode hook entries from {}",
+                    "removed hicodeer atomcode hook entries from {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr atomcode hook entries found in {}",
+                    "no hicodeer atomcode hook entries found in {}",
                     result.hooks_path.display()
                 ));
             }
@@ -960,12 +960,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_config {
                 messages.push(format!(
-                    "removed herdr codewhale hook entries from {}",
+                    "removed hicodeer codewhale hook entries from {}",
                     result.config_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr codewhale hook entries found in {}",
+                    "no hicodeer codewhale hook entries found in {}",
                     result.config_path.display()
                 ));
             }
@@ -987,12 +987,12 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr zcode hook entries from {}",
+                    "removed hicodeer zcode hook entries from {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr zcode hook entries found in {}",
+                    "no hicodeer zcode hook entries found in {}",
                     result.settings_path.display()
                 ));
             }

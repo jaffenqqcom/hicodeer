@@ -357,7 +357,7 @@ test("Pi settlement preserves explicit blocked-state precedence", async () => {
   idle = false;
   handlers.get("agent_start")?.({}, context);
   await waitFor(() => requestStates(requests).length === 2);
-  eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" }, context);
+  eventHandlers.get("hicodeer:blocked")?.({ active: true, label: "approval" }, context);
   await waitFor(() => requestStates(requests).length === 3);
 
   idle = true;
@@ -365,7 +365,7 @@ test("Pi settlement preserves explicit blocked-state precedence", async () => {
   await Bun.sleep(25);
   expect(requestStates(requests)).toEqual(["idle", "working", "blocked"]);
 
-  eventHandlers.get("herdr:blocked")?.({ active: false }, context);
+  eventHandlers.get("hicodeer:blocked")?.({ active: false }, context);
   await waitFor(() => requestStates(requests).length === 4);
   expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "idle"]);
 });

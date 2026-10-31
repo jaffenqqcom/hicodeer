@@ -83,7 +83,7 @@ mod tests {
         assert_eq!(
             after_spawn,
             before + 1,
-            "portable-pty setup should leave only the Herdr-owned master fd in the parent: {:?}",
+            "portable-pty setup should leave only the HiCodeer-owned master fd in the parent: {:?}",
             parent_pty_fd_targets()
         );
 

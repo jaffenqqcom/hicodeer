@@ -6,7 +6,7 @@
 
 import net from "node:net";
 
-const SOURCE = "herdr:kilo";
+const SOURCE = "hicodeer:kilo";
 const AGENT = "kilo";
 let reportSeq = Date.now() * 1000;
 

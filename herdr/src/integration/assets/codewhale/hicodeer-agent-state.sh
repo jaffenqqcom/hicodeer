@@ -3,12 +3,12 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codewhale
-# HERDR_INTEGRATION_VERSION=15
+# HERDR_INTEGRATION_VERSION=16
 
 set -eu
 
 action="${1:-}"
-hook_input_file="$(mktemp "${TMPDIR:-/tmp}/herdr-hook.XXXXXX")" || exit 0
+hook_input_file="$(mktemp "${TMPDIR:-/tmp}/hicodeer-hook.XXXXXX")" || exit 0
 trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
@@ -29,7 +29,7 @@ import random
 import socket
 import time
 
-source = "herdr:codewhale"
+source = "hicodeer:codewhale"
 action = os.environ.get("HERDR_ACTION", "")
 pane_id = os.environ.get("HERDR_PANE_ID")
 socket_path = os.environ.get("HICODEER_AGENT_SOCKET_PATH")

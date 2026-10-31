@@ -109,16 +109,16 @@ fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
 #[test]
 fn remote_client_preferences_keep_the_same_identity_across_bridge_processes() {
     let first = ClientShellConfig::from_config(&Config::default()).with_endpoint_preferences(
-        std::path::Path::new("/tmp/herdr-remote-100-dev-agents.sock"),
+        std::path::Path::new("/tmp/hicodeer-remote-100-dev-agents.sock"),
         Some(r#"["dev", "agents"]"#),
     );
     let next = ClientShellConfig::from_config(&Config::default()).with_endpoint_preferences(
-        std::path::Path::new("/tmp/herdr-remote-200-dev-agents.sock"),
+        std::path::Path::new("/tmp/hicodeer-remote-200-dev-agents.sock"),
         Some(r#"["dev", "agents"]"#),
     );
     assert_eq!(first.preferences_path, next.preferences_path);
     let root =
-        std::env::temp_dir().join(format!("herdr-remote-preferences-{}", std::process::id()));
+        std::env::temp_dir().join(format!("hicodeer-remote-preferences-{}", std::process::id()));
     let first_path = root.join(
         first
             .preferences_path

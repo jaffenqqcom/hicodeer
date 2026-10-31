@@ -8,7 +8,7 @@
 set -eu
 
 action="${1:-}"
-hook_input_file="$(mktemp "${TMPDIR:-/tmp}/herdr-droid-hook.XXXXXX")" || exit 0
+hook_input_file="$(mktemp "${TMPDIR:-/tmp}/hicodeer-droid-hook.XXXXXX")" || exit 0
 trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
@@ -29,7 +29,7 @@ import random
 import socket
 import time
 
-source = "herdr:droid"
+source = "hicodeer:droid"
 pane_id = os.environ.get("HERDR_PANE_ID")
 socket_path = os.environ.get("HICODEER_AGENT_SOCKET_PATH")
 hook_input_file = os.environ.get("HERDR_HOOK_INPUT_FILE")

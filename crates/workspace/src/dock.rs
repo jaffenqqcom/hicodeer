@@ -24,6 +24,15 @@ use util::ResultExt as _;
 
 pub(crate) const RESIZE_HANDLE_SIZE: Pixels = px(6.);
 
+/// Gap between a side dock's content and the resize handle on its edge.
+///
+/// The handle occludes pointer events, so a scrollbar drawn flush against the
+/// edge cannot be clicked where the two overlap. The gap is one scrollbar wide,
+/// which keeps the scrollbar usable while the handle stays where the drag
+/// expects it. The bottom dock keeps the upstream layout.
+#[cfg(target_env = "ohos")]
+const PANEL_EDGE_INSET: Pixels = px(9.);
+
 pub enum PanelEvent {
     ZoomIn,
     ZoomOut,
@@ -1409,6 +1418,28 @@ impl Render for Dock {
                             Axis::Horizontal => this.w_full().h_full(),
                             Axis::Vertical => this.h_full().w_full(),
                         })
+                        // [OHOS PORT BEGIN] keep panel content clear of the
+                        // resize handle on this dock's edge. To restore the
+                        // upstream behaviour, delete this block.
+                        .map(|this| {
+                            #[cfg(target_env = "ohos")]
+                            {
+                                // A dock's scrollbar is drawn at the right edge of
+                                // its content, so the side docks keep the gap on
+                                // that side. The bottom dock is left as upstream.
+                                match self.position() {
+                                    DockPosition::Left | DockPosition::Right => {
+                                        this.pr(PANEL_EDGE_INSET)
+                                    }
+                                    DockPosition::Bottom => this,
+                                }
+                            }
+                            #[cfg(not(target_env = "ohos"))]
+                            {
+                                this
+                            }
+                        })
+                        // [OHOS PORT END]
                         .child(
                             entry
                                 .panel

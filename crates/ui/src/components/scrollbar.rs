@@ -372,7 +372,15 @@ impl ScrollbarRevealPolicy {
 impl ScrollbarStyle {
     pub const fn to_pixels(&self) -> Pixels {
         match self {
+            // [OHOS PORT BEGIN] One and a half times the upstream width: the
+            // panel scrollbars are the main pointer target on this device and
+            // the stock width is hard to hit. To restore upstream, delete the
+            // OHOS arm.
+            #[cfg(target_env = "ohos")]
+            ScrollbarStyle::Regular => px(9.),
+            #[cfg(not(target_env = "ohos"))]
             ScrollbarStyle::Regular => px(6.),
+            // [OHOS PORT END]
             ScrollbarStyle::Editor => px(15.),
         }
     }

@@ -1979,7 +1979,9 @@ delay_seconds = {}
     #[test]
     fn missing_onboarding_shows_setup() {
         let config = Config::default();
-        assert!(config.should_show_onboarding());
+        // Standalone builds show onboarding when the setting is absent; the
+        // embedded agent-TUI build never shows it.
+        assert_eq!(config.should_show_onboarding(), !cfg!(target_env = "ohos"));
     }
 
     #[test]

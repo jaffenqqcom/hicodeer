@@ -90,9 +90,23 @@ pub(crate) fn test_config_env_lock() -> &'static std::sync::Mutex<()> {
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
+/// Whether the first-run onboarding screen should appear for a given build.
+///
+/// The HiCodeer build embeds this crate as the editor's agent TUI rather than
+/// shipping it as a standalone terminal workspace manager. In that build the
+/// first-run guidance (agent integrations, notification routing) is owned by
+/// the editor's Agent panel, so the standalone onboarding screen must never
+/// appear regardless of the persisted `onboarding` setting.
+fn onboarding_enabled_for_build(embedded_agent_tui: bool, onboarding: Option<bool>) -> bool {
+    if embedded_agent_tui {
+        return false;
+    }
+    onboarding.unwrap_or(true)
+}
+
 impl Config {
     pub fn should_show_onboarding(&self) -> bool {
-        self.onboarding.unwrap_or(true)
+        onboarding_enabled_for_build(cfg!(target_env = "ohos"), self.onboarding)
     }
 
     pub fn kitty_graphics_enabled(&self) -> bool {
@@ -199,6 +213,17 @@ pub(crate) fn keybindings_from_profile_toml(profile: &str) -> Result<LiveKeybind
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_agent_tui_never_shows_onboarding() {
+        // The embedded agent-TUI build skips onboarding regardless of the
+        // persisted setting; standalone builds keep the default (show) and the
+        // explicit opt-out (hide) behavior.
+        assert!(!onboarding_enabled_for_build(true, None));
+        assert!(!onboarding_enabled_for_build(true, Some(true)));
+        assert!(onboarding_enabled_for_build(false, None));
+        assert!(!onboarding_enabled_for_build(false, Some(false)));
+    }
 
     #[test]
     fn local_keybindings_profile_preserves_plus_prefixes() {

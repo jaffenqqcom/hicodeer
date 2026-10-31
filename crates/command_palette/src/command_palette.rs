@@ -128,7 +128,7 @@ impl CommandPalette {
                 }
 
                 Some(Command {
-                    name: SharedString::from(humanize_action_name(action.name())),
+                    name: SharedString::from(palette_command_name(action.name())),
                     action,
                     usage: None,
                 })
@@ -931,6 +931,24 @@ pub fn humanize_action_name(name: &str) -> String {
     result
 }
 
+/// Builds the command palette display name, rebranding `zed` as `hicodeer`
+/// while leaving the underlying action ids untouched.
+fn palette_command_name(action_name: &str) -> String {
+    let humanized = humanize_action_name(action_name);
+    if !humanized.contains("zed") {
+        return humanized;
+    }
+    humanized
+        .split(' ')
+        .map(|word| match word {
+            "zed" => "hicodeer",
+            "zed:" => "hicodeer:",
+            _ => word,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl std::fmt::Debug for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Command")
@@ -979,6 +997,16 @@ mod tests {
             humanize_action_name("editor::OpenURLParser"),
             "editor: open URL parser"
         );
+    }
+
+    #[test]
+    fn test_palette_command_name_rebrands_zed() {
+        assert_eq!(
+            palette_command_name("zed::OpenSettings"),
+            "hicodeer: open settings"
+        );
+        assert_eq!(palette_command_name("zed::OpenZedUrl"), "hicodeer: open hicodeer url");
+        assert_eq!(palette_command_name("editor::Backspace"), "editor: backspace");
     }
 
     #[test]

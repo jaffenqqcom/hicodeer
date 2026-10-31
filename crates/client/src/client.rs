@@ -60,14 +60,9 @@ pub use rpc::*;
 pub use telemetry_events::Event;
 pub use user::*;
 
-// [OHOS PORT BEGIN] Neither override is read on this platform: the server
-// address is forced empty and the RPC URL is never taken from the environment.
-#[cfg(not(target_env = "ohos"))]
 static ZED_SERVER_URL: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("ZED_SERVER_URL").ok());
-#[cfg(not(target_env = "ohos"))]
 static ZED_RPC_URL: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("ZED_RPC_URL").ok());
-// [OHOS PORT END]
 
 pub static IMPERSONATE_LOGIN: LazyLock<Option<String>> = LazyLock::new(|| {
     std::env::var("ZED_IMPERSONATE")
@@ -121,28 +116,17 @@ pub struct ClientSettings {
 
 impl Settings for ClientSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
+        if let Some(server_url) = &*ZED_SERVER_URL {
+            return Self {
+                server_url: server_url.clone(),
+                credentials_url: content.credentials_url.clone(),
+            };
+        }
         Self {
-            server_url: server_url_for_platform(content),
+            server_url: content.server_url.clone().unwrap(),
             credentials_url: content.credentials_url.clone(),
         }
     }
-}
-
-// [OHOS PORT BEGIN] No Zed service is reachable from this build: the setting and
-// the `ZED_SERVER_URL` escape hatch are both ignored, so every URL derived from
-// the server base fails to build instead of reaching zed.dev.
-#[cfg(target_env = "ohos")]
-fn server_url_for_platform(_content: &settings::SettingsContent) -> String {
-    String::new()
-}
-// [OHOS PORT END]
-
-#[cfg(not(target_env = "ohos"))]
-fn server_url_for_platform(content: &settings::SettingsContent) -> String {
-    if let Some(server_url) = &*ZED_SERVER_URL {
-        return server_url.clone();
-    }
-    content.server_url.clone().unwrap_or_default()
 }
 
 #[derive(Deserialize, Default, RegisterSetting)]
@@ -1340,13 +1324,9 @@ impl Client {
                 return Ok(url);
             }
 
-            // [OHOS PORT BEGIN] Ignore the environment override as well: this
-            // build has no Zed server to talk to.
-            #[cfg(not(target_env = "ohos"))]
             if let Some(url) = &*ZED_RPC_URL {
                 return Url::parse(url).context("invalid rpc url");
             }
-            // [OHOS PORT END]
 
             let mut url = http.build_url("/rpc");
             if let Some(preview_param) =

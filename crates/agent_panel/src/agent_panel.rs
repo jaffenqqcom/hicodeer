@@ -24,9 +24,10 @@ use audio::{Audio, Sound};
 use editor::{Editor, actions::SelectAll};
 use fs::Fs;
 use gpui::{
-    Action, AnyElement, App, AsyncWindowContext, Context, ElementId, Entity, EventEmitter,
-    FocusHandle, Focusable, FontWeight, MouseButton, Pixels, Render, SharedString, Subscription,
-    Task, TaskExt, WeakEntity, Window, actions, div, prelude::*, px,
+    Action, AnyElement, App, AsyncWindowContext, ClipboardItem, Context, ElementId, Entity,
+    EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, Pixels, Render, SharedString,
+    Subscription, Task, TaskExt, WeakEntity, Window, actions, div, prelude::*, px,
+    transparent_black,
 };
 use menu;
 #[cfg(target_env = "ohos")]
@@ -94,6 +95,13 @@ const SPACE_LABEL_SIZE: LabelSize = LabelSize::Default;
 /// (CJK) character wider than upstream's 224px, so a Chinese label plus its
 /// row padding does not get truncated.
 const DEFAULT_PANEL_WIDTH: Pixels = px(238.0);
+/// First line written to the clipboard ahead of the skill file, so the pasted
+/// text reads as an instruction to the agent rather than a bare file. This is
+/// a fixed protocol line, not user-facing copy, so it is not localized.
+const ADD_SKILL_CLIPBOARD_HEADER: &str = "Add the skill as global skill of agent:";
+/// The hicodeer skill definition, embedded at build time so the clipboard
+/// copy always matches the herdr tree this build ships with.
+const HICODEER_SKILL_MD: &str = include_str!("../../../herdr/skills/herdr/SKILL.md");
 /// Key the onboarding flow writes once the user finishes it. Mirrors
 /// `onboarding::FIRST_OPEN`; spelled out here so this crate does not depend on
 /// the onboarding crate.
@@ -413,6 +421,8 @@ pub struct AgentPanel {
     /// Set while a history scan is in flight, so collapsing and expanding a
     /// group in quick succession does not queue two scans.
     history_loading: bool,
+    /// Whether the "add skill" helper popover is showing below the actions row.
+    show_add_skill_popover: bool,
 }
 
 impl AgentPanel {
@@ -490,6 +500,7 @@ impl AgentPanel {
             // The archive group is folded by design; everything else starts open.
             expanded_history_groups: HashSet::new(),
             history_loading: false,
+            show_add_skill_popover: false,
         }
     }
 
@@ -2604,20 +2615,149 @@ impl AgentPanel {
     /// Settings live in the editor's own settings page, so the panel has no
     /// entry of its own.
     fn render_actions(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // No horizontal padding here: the rows below it carry their own side
-        // padding, and an extra layer shifted this row 4px right of the tree.
+        let popover = if self.show_add_skill_popover {
+            Some(self.render_add_skill_popover(cx).into_any_element())
+        } else {
+            None
+        };
+        let colors = cx.theme().colors();
+
+        // No horizontal padding here: the two entries carry their own side
+        // padding. The row is split into two same-styled entries so the add
+        // skill button never falls inside the new space click target.
         v_flex()
             .id("agent-panel-actions")
             .w_full()
             .py_1()
             .gap_0p5()
             .child(
-                row_container("agent-panel-new-space", px(0.0), false, cx)
-                    .child(action_content(
-                        IconName::Plus,
-                        localization::localized_str!("New Space"),
-                    ))
-                    .on_click(cx.listener(|this, _, _window, cx| this.create_space(cx))),
+                h_flex()
+                    .id("agent-panel-actions-row")
+                    .w_full()
+                    .child(
+                        div()
+                            .id("agent-panel-new-space")
+                            .flex_1()
+                            .min_w_0()
+                            .py_1()
+                            .pl(ROW_SIDE_PADDING)
+                            .pr(ROW_SIDE_PADDING)
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(transparent_black())
+                            .cursor_pointer()
+                            .hover(|style| style.bg(colors.ghost_element_hover))
+                            .active(|style| style.bg(colors.ghost_element_active))
+                            .child(action_content(
+                                IconName::Plus,
+                                localization::localized_str!("New Space"),
+                            ))
+                            .on_click(cx.listener(|this, _, _window, cx| this.create_space(cx))),
+                    )
+                    .child(
+                        div()
+                            .id("agent-panel-add-skill")
+                            .py_1()
+                            .pl(ROW_SIDE_PADDING)
+                            .pr(ROW_SIDE_PADDING)
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(transparent_black())
+                            .tab_index(0)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(colors.ghost_element_hover))
+                            .active(|style| style.bg(colors.ghost_element_active))
+                            .focus_visible(|style| style.border_color(colors.border_focused))
+                            .child(action_content(
+                                IconName::Plus,
+                                localization::localized_str!("Add Skill"),
+                            ))
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.copy_add_skill(cx);
+                            })),
+                    ),
+            )
+            .children(popover)
+    }
+
+    /// Copies the skill instructions to the system clipboard and opens the
+    /// helper popover that tells the user where to paste them.
+    fn copy_add_skill(&mut self, cx: &mut Context<Self>) {
+        let text = format!("{ADD_SKILL_CLIPBOARD_HEADER}\n{HICODEER_SKILL_MD}");
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.show_add_skill_popover = true;
+        cx.notify();
+    }
+
+    /// The helper popover shown after "add skill" is clicked: a close button,
+    /// the paste instruction, and a note that the clipboard was written.
+    fn render_add_skill_popover(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let colors = cx.theme().colors();
+        v_flex()
+            .id("agent-panel-add-skill-popover")
+            .w_full()
+            .px_1()
+            .child(
+                v_flex()
+                    .elevation_2(cx)
+                    .overflow_hidden()
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .items_center()
+                            .px_2()
+                            .py_1()
+                            .border_b_1()
+                            .border_color(colors.border)
+                            .child(
+                                Label::new(localization::localized_str!("Add Skill"))
+                                    .size(LabelSize::Small),
+                            )
+                            .child(
+                                IconButton::new("agent-panel-add-skill-close", IconName::Close)
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(move |_, cx| {
+                                        Tooltip::simple(localization::localized_str!("Close"), cx)
+                                    })
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.show_add_skill_popover = false;
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .p_2()
+                            .gap_1()
+                            .child(
+                                Label::new(localization::localized_str!(
+                                    "Paste it into the Agent input to add /hicodeer SKILL to the agent, giving it the ability to launch and control any other agent for collaborative work in the Agent TUI."
+                                ))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .pt_1()
+                                    .border_t_1()
+                                    .border_color(colors.border)
+                                    .child(
+                                        Icon::new(IconName::Check)
+                                            .size(IconSize::Small)
+                                            .color(Color::Success),
+                                    )
+                                    .child(
+                                        Label::new(localization::localized_str!(
+                                            "Copied to clipboard"
+                                        ))
+                                        .size(LabelSize::Small)
+                                        .color(Color::Success),
+                                    ),
+                            ),
+                    ),
             )
     }
 }

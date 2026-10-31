@@ -3099,6 +3099,43 @@ mod tests {
     }
 
     #[test]
+    fn pane_close_request_for_an_agent_pane_closes_its_tab_and_keeps_the_others() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("api-agent-pane-close");
+        let agent_tab = workspace.test_add_tab(Some("agent"));
+        let agent_pane = workspace.tabs[agent_tab].root_pane;
+        let agent_terminal = workspace.tabs[agent_tab].panes[&agent_pane]
+            .attached_terminal_id
+            .clone();
+        let first_tab_pane = workspace.tabs[0].root_pane;
+        workspace.switch_tab(agent_tab);
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state
+            .terminals
+            .get_mut(&agent_terminal)
+            .unwrap()
+            .agent_name = Some("reviewer".into());
+
+        let target_pane_id = app.pane_info(0, agent_pane).unwrap().pane_id;
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_agent_pane_close".into(),
+            method: crate::api::schema::Method::PaneClose(crate::api::schema::PaneTarget {
+                pane_id: target_pane_id,
+            }),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(response["result"]["type"], "ok");
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_eq!(app.state.workspaces[0].tabs[0].root_pane, first_tab_pane);
+        assert_eq!(app.state.workspaces[0].display_name(), "api-agent-pane-close");
+    }
+
+    #[test]
     fn pane_close_request_closes_workspace_when_it_removes_the_last_pane() {
         let mut app = test_app();
         let workspace = Workspace::test_new("api-pane-close-last");

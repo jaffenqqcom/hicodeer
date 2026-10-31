@@ -1311,7 +1311,7 @@ impl AgentPanel {
                                         "agent-space-close-button-{}",
                                         space.id
                                     ))),
-                                    IconName::Trash,
+                                    IconName::Close,
                                 )
                                 .icon_size(IconSize::Small)
                                 .icon_color(Color::Muted)
@@ -1424,6 +1424,7 @@ impl AgentPanel {
 
         let row_id = SharedString::from(format!("agent-row-{}", agent.id));
         let rename_panel = panel.clone();
+        let close_panel = panel.clone();
         row_container(ElementId::Name(row_id.clone()), AGENT_INDENT, focused, cx)
             .group(row_id.clone())
             .child(
@@ -1482,6 +1483,32 @@ impl AgentPanel {
                                         move |_, window, cx| {
                                             let _ = panel.update(cx, |panel, cx| {
                                                 panel.begin_agent_rename(&target, window, cx);
+                                            });
+                                        }
+                                    }),
+                                )
+                                .child(
+                                    IconButton::new(
+                                        ElementId::Name(SharedString::from(format!(
+                                            "agent-close-button-{}",
+                                            agent.pane_id
+                                        ))),
+                                        IconName::Close,
+                                    )
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(move |_, cx| {
+                                        Tooltip::simple(
+                                            localization::localized_str!("Close"),
+                                            cx,
+                                        )
+                                    })
+                                    .on_click({
+                                        let panel = close_panel;
+                                        let target = agent.pane_id.clone();
+                                        move |_, _, cx| {
+                                            let _ = panel.update(cx, |panel, cx| {
+                                                panel.close_agent(target.clone(), cx);
                                             });
                                         }
                                     }),
@@ -2515,6 +2542,21 @@ impl AgentPanel {
                     .await
             {
                 log_client_error("close space", err);
+            }
+        })
+        .detach();
+    }
+
+    /// Closes the pane one agent occupies. The server ends the agent with its
+    /// pane and closes the tab when that pane was the tab's last one; the rest
+    /// of the space is left alone.
+    fn close_agent(&self, pane_id: String, cx: &mut Context<Self>) {
+        cx.spawn(async move |_this, cx| {
+            if let Err(err) =
+                cx.background_spawn(async move { client::close_agent_pane(&pane_id) })
+                    .await
+            {
+                log_client_error("close agent", err);
             }
         })
         .detach();

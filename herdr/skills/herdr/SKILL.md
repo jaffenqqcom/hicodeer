@@ -1,5 +1,5 @@
 ---
-name: hicodeerd
+name: hicodeer
 description: "Control HiCodeer, a terminal multiplexer for coding agents. Use only when the user explicitly mentions HiCodeer or asks to use HiCodeer to inspect or control panes, tabs, workspaces, commands, or another agent. Do not use merely because a task could benefit from a background terminal, delegation, or parallel work. Requires HERDR_ENV=1."
 ---
 

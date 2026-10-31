@@ -104,6 +104,15 @@ pub(crate) fn rename_agent(pane_id: &str, name: &str) -> Result<(), ClientError>
     Ok(())
 }
 
+/// Closes the pane one agent occupies, which ends that agent and leaves the
+/// rest of its space alone. The server closes the tab with the pane when the
+/// pane was the tab's last one.
+pub(crate) fn close_agent_pane(pane_id: &str) -> Result<(), ClientError> {
+    let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
+    call(&control, "pane.close", json!({ "pane_id": pane_id }))?;
+    Ok(())
+}
+
 /// Closes one space.
 pub(crate) fn close_space(workspace_id: &str) -> Result<(), ClientError> {
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;

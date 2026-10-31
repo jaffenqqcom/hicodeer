@@ -6631,14 +6631,12 @@ mod ohos_agent_settings {
     /// Height of one grid cell, matching the medium button height the base
     /// keymap selector uses.
     const AGENT_CELL_HEIGHT_PX: f32 = 28.;
-    /// Width allowed for an agent's name: thirteen characters at the small
-    /// label size, which covers the longest target the terminal reports.
-    const AGENT_NAME_WIDTH_PX: f32 = 92.;
     /// One character of inset between a cell's border and its content.
     const AGENT_CELL_INSET_PX: f32 = 8.;
-    /// Width of one cell: the inset on both sides, the agent's mark, the gaps
-    /// between the three parts, the name, and the installed check.
-    const AGENT_CELL_WIDTH_PX: f32 = 140.;
+    /// Number of columns in an agent grid. Cells share the row width equally,
+    /// so the table's top and left borders end exactly where the cells end
+    /// instead of running past the last column.
+    const AGENT_COLUMNS: u16 = 4;
     /// Mark shown for an installed integration.
     const INSTALLED_MARK: &str = "✓";
 
@@ -6871,9 +6869,10 @@ mod ohos_agent_settings {
     /// integration list uses. Read-only: it says what "Show History" covers,
     /// so it follows the switch instead of duplicating it.
     fn scannable_grid(border: gpui::Hsla) -> AnyElement {
-        let mut grid = h_flex()
+        let mut grid = div()
             .w_full()
-            .flex_wrap()
+            .grid()
+            .grid_cols(AGENT_COLUMNS)
             .border_t_1()
             .border_l_1()
             .border_color(border);
@@ -6891,8 +6890,7 @@ mod ohos_agent_settings {
     fn scannable_cell(agent: &str, cell_index: usize, border: gpui::Hsla) -> AnyElement {
         h_flex()
             .id(("scannable-agent", cell_index))
-            .flex_none()
-            .w(rems_from_px(AGENT_CELL_WIDTH_PX))
+            .w_full()
             .items_center()
             .justify_start()
             .gap_1p5()
@@ -6910,7 +6908,7 @@ mod ohos_agent_settings {
             )
             .child(
                 div()
-                    .w(rems_from_px(AGENT_NAME_WIDTH_PX))
+                    .flex_1()
                     .min_w_0()
                     .overflow_hidden()
                     .child(
@@ -6942,9 +6940,10 @@ mod ohos_agent_settings {
         ordered_integrations.sort_by_cached_key(|integration| {
             agent_panel::agent_display::integration_name(&integration.label).to_lowercase()
         });
-        let mut grid = h_flex()
+        let mut grid = div()
             .w_full()
-            .flex_wrap()
+            .grid()
+            .grid_cols(AGENT_COLUMNS)
             .border_t_1()
             .border_l_1()
             .border_color(border);
@@ -6969,8 +6968,7 @@ mod ohos_agent_settings {
         let target = integration.target.clone();
         h_flex()
             .id(("agent-cell", cell_index))
-            .flex_none()
-            .w(rems_from_px(AGENT_CELL_WIDTH_PX))
+            .w_full()
             .items_center()
             .justify_start()
             .gap_1p5()
@@ -6997,7 +6995,7 @@ mod ohos_agent_settings {
             )
             .child(
                 div()
-                    .w(rems_from_px(AGENT_NAME_WIDTH_PX))
+                    .flex_1()
                     .min_w_0()
                     .overflow_hidden()
                     .child(Label::new(name).size(LabelSize::Small).truncate()),

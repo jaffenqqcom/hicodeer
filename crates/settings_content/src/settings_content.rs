@@ -776,6 +776,10 @@ pub struct AgentPanelSettingsContent {
     ///
     /// Default: true
     pub show_history: Option<bool>,
+    /// Whether to keep the screen awake while an agent task is running.
+    ///
+    /// Default: true
+    pub prevent_idle_sleep: Option<bool>,
 }
 // [OHOS PORT END]
 

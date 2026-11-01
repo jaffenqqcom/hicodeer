@@ -6718,8 +6718,7 @@ fn close_settings_tab_in_workspace(
 mod ohos_agent_settings {
     use agent_panel::herdr_settings::{self, ToastDelivery};
     use ui::{
-        Button, ButtonSize, ButtonStyle, Color, Divider, DividerColor, Icon, IconSize, Label,
-        LabelSize, Switch, ToggleState,
+        Color, Divider, DividerColor, Icon, IconSize, Label, LabelSize, Switch, ToggleState,
     };
 
     use super::*;
@@ -6740,23 +6739,17 @@ mod ohos_agent_settings {
     fn toast_description() -> &'static str {
         localization::localized_str!("Show agent notifications outside the terminal")
     }
-    fn integrations_title() -> &'static str {
-        localization::localized_str!("Agent Integrations")
+    fn prevent_idle_sleep_title() -> &'static str {
+        localization::localized_str!("Prevent Sleep")
     }
-    fn integrations_description() -> &'static str {
-        localization::localized_str!("Enable session restore and, where supported, direct status updates")
-    }
-    fn check_title() -> &'static str {
-        localization::localized_str!("Check Now")
-    }
-    fn checking_title() -> &'static str {
-        localization::localized_str!("Checking…")
+    fn prevent_idle_sleep_description() -> &'static str {
+        localization::localized_str!("While the app is in the foreground and an agent is running a task, the system stays awake")
     }
     fn auto_install_title() -> &'static str {
-        localization::localized_str!("Install Automatically")
+        localization::localized_str!("Agent Status Notifications")
     }
     fn auto_install_description() -> &'static str {
-        localization::localized_str!("Install an integration as soon as its agent command is present")
+        localization::localized_str!("Automatically install task status notification scripts into agents")
     }
     fn show_history_title() -> &'static str {
         localization::localized_str!("Show History")
@@ -6793,6 +6786,8 @@ mod ohos_agent_settings {
                     "integration",
                     "agent",
                     "history",
+                    "sleep",
+                    "awake",
                 ],
             }),
         ]
@@ -6806,8 +6801,8 @@ mod ohos_agent_settings {
         let settings = herdr_settings::snapshot(cx);
 
         // The panel is what usually performs the first check; opening this page
-        // on its own would otherwise sit on "Not checked yet" until the user
-        // presses Check Now.
+        // on its own would otherwise sit on "Not checked yet" until the switch
+        // is toggled.
         if !settings.integrations_checked && !cx.global::<agent_panel::herdr_settings::AgentIntegrations>().checking {
             herdr_settings::refresh_integrations(cx, settings.auto_install_integrations);
         }
@@ -6864,6 +6859,36 @@ mod ohos_agent_settings {
         })
         .into_any_element();
 
+        let prevent_idle_sleep = Switch::new(
+            "agent-terminal-prevent-idle-sleep",
+            if settings.prevent_idle_sleep {
+                ToggleState::Selected
+            } else {
+                ToggleState::Unselected
+            },
+        )
+        .tab_index(0_isize)
+        .aria_label(prevent_idle_sleep_title())
+        .aria_description(prevent_idle_sleep_description())
+        .on_click(move |state, window, cx| {
+            let enabled = *state == ToggleState::Selected;
+            if let Err(error) = update_settings_file(
+                SettingsUiFile::User,
+                None,
+                window,
+                cx,
+                move |settings, _| {
+                    settings
+                        .agent_panel
+                        .get_or_insert_with(Default::default)
+                        .prevent_idle_sleep = Some(enabled);
+                },
+            ) {
+                log::warn!("agent settings: cannot save prevent idle sleep: {error}");
+            }
+        })
+        .into_any_element();
+
         let auto_install = Switch::new(
             "agent-terminal-auto-install",
             if settings.auto_install_integrations {
@@ -6891,31 +6916,10 @@ mod ohos_agent_settings {
             ) {
                 log::warn!("agent settings: cannot save auto install: {error}");
             }
-        })
-        .into_any_element();
-
-        // A check installs one target at a time, so it can take a while; the
-        // button says so instead of swallowing the next click silently.
-        let checking = cx
-            .global::<agent_panel::herdr_settings::AgentIntegrations>()
-            .checking;
-        let check_now = Button::new(
-            "agent-terminal-check",
-            if checking {
-                checking_title()
-            } else {
-                check_title()
-            },
-        )
-        .style(ButtonStyle::Outlined)
-        .size(ButtonSize::Default)
-        .disabled(checking)
-        .on_click({
-            let auto_install = settings.auto_install_integrations;
-            move |_, _window, cx| {
-                herdr_settings::refresh_integrations(cx, auto_install);
-                cx.refresh_windows();
-            }
+            // The switch is also the moment to look for targets, which is what
+            // the separate "check now" button used to be for.
+            herdr_settings::refresh_integrations(cx, enabled);
+            cx.refresh_windows();
         })
         .into_any_element();
 
@@ -6961,9 +6965,9 @@ mod ohos_agent_settings {
             .child(block(setting_row(toast_title(), toast_description(), toast)))
             .child(divider())
             .child(block(setting_row(
-                integrations_title(),
-                integrations_description(),
-                check_now,
+                prevent_idle_sleep_title(),
+                prevent_idle_sleep_description(),
+                prevent_idle_sleep,
             )))
             .child(divider())
             .child(block(setting_row(

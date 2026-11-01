@@ -17,6 +17,9 @@ use ui::{
 };
 use vim_mode_setting::VimModeSetting;
 
+#[cfg(target_env = "ohos")]
+use agent_panel::AgentPanelSettings;
+
 #[cfg(not(target_env = "ohos"))]
 use crate::{
     ImportCursorSettings, ImportVsCodeSettings, SettingsImportState,
@@ -394,6 +397,84 @@ fn render_base_keymap_section(tab_index: &mut isize, cx: &mut App) -> impl IntoE
     }
 }
 
+// [OHOS PORT BEGIN] The agent panel keeps two switches on the Panels page; a
+// fresh install decides them here as well, with the same wording, so the first
+// run does not depend on the user finding that page later.
+#[cfg(target_env = "ohos")]
+fn render_prevent_idle_sleep_switch(tab_index: &mut isize, cx: &mut App) -> impl IntoElement {
+    let toggle_state = if AgentPanelSettings::get_global(cx).prevent_idle_sleep {
+        ui::ToggleState::Selected
+    } else {
+        ui::ToggleState::Unselected
+    };
+    SwitchField::new(
+        "onboarding-prevent-idle-sleep",
+        Some(localization::localized_str!("Prevent Sleep")),
+        Some(localization::localized_str!("While the app is in the foreground and an agent is running a task, the system stays awake").into()),
+        toggle_state,
+        {
+            let fs = <dyn Fs>::global(cx);
+            move |&selection, _, cx| {
+                let enabled = match selection {
+                    ToggleState::Selected => true,
+                    ToggleState::Unselected => false,
+                    ToggleState::Indeterminate => {
+                        return;
+                    }
+                };
+                update_settings_file(fs.clone(), cx, move |setting, _| {
+                    setting
+                        .agent_panel
+                        .get_or_insert_with(Default::default)
+                        .prevent_idle_sleep = Some(enabled);
+                });
+            }
+        },
+    )
+    .tab_index({
+        *tab_index += 1;
+        *tab_index - 1
+    })
+}
+
+#[cfg(target_env = "ohos")]
+fn render_agent_integrations_switch(tab_index: &mut isize, cx: &mut App) -> impl IntoElement {
+    let toggle_state = if AgentPanelSettings::get_global(cx).auto_install_integrations {
+        ui::ToggleState::Selected
+    } else {
+        ui::ToggleState::Unselected
+    };
+    SwitchField::new(
+        "onboarding-auto-install-integrations",
+        Some(localization::localized_str!("Agent Status Notifications")),
+        Some(localization::localized_str!("Automatically install task status notification scripts into agents").into()),
+        toggle_state,
+        {
+            let fs = <dyn Fs>::global(cx);
+            move |&selection, _, cx| {
+                let enabled = match selection {
+                    ToggleState::Selected => true,
+                    ToggleState::Unselected => false,
+                    ToggleState::Indeterminate => {
+                        return;
+                    }
+                };
+                update_settings_file(fs.clone(), cx, move |setting, _| {
+                    setting
+                        .agent_panel
+                        .get_or_insert_with(Default::default)
+                        .auto_install_integrations = Some(enabled);
+                });
+            }
+        },
+    )
+    .tab_index({
+        *tab_index += 1;
+        *tab_index - 1
+    })
+}
+// [OHOS PORT END]
+
 fn render_vim_mode_switch(tab_index: &mut isize, cx: &mut App) -> impl IntoElement {
     let toggle_state = if VimModeSetting::get_global(cx).0 {
         ui::ToggleState::Selected
@@ -552,6 +633,14 @@ pub(crate) fn render_basics_page(_user_store: &Entity<UserStore>, cx: &mut App) 
     // section is not offered.
     #[cfg(not(target_env = "ohos"))]
     let page = page.child(render_import_settings_section(&mut tab_index, cx));
+    // [OHOS PORT END]
+
+    // [OHOS PORT BEGIN] Agent panel switches precede Vim mode, so the agent
+    // settings are decided in the same pass as the editor basics.
+    #[cfg(target_env = "ohos")]
+    let page = page
+        .child(render_prevent_idle_sleep_switch(&mut tab_index, cx))
+        .child(render_agent_integrations_switch(&mut tab_index, cx));
     // [OHOS PORT END]
 
     let page = page

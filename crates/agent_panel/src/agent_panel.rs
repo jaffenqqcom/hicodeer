@@ -21,6 +21,8 @@ use std::path::PathBuf;
 
 #[cfg(target_env = "ohos")]
 use audio::{Audio, Sound};
+#[cfg(target_env = "ohos")]
+use gpui::ActivityGuard;
 use editor::{Editor, actions::SelectAll};
 use fs::Fs;
 use gpui::{
@@ -226,6 +228,9 @@ pub struct AgentPanelSettings {
     /// build reads. Written by the settings page; the scan itself is skipped
     /// while this is off, so the daemon is not asked for a list nobody shows.
     pub show_history: bool,
+    /// Whether to keep the screen awake while an agent task is running.
+    /// Written by the settings page and by the onboarding page.
+    pub prevent_idle_sleep: bool,
 }
 
 impl Settings for AgentPanelSettings {
@@ -241,6 +246,7 @@ impl Settings for AgentPanelSettings {
             starts_open: panel.starts_open.unwrap_or(true),
             auto_install_integrations: panel.auto_install_integrations.unwrap_or(true),
             show_history: panel.show_history.unwrap_or(true),
+            prevent_idle_sleep: panel.prevent_idle_sleep.unwrap_or(true),
         }
     }
 }
@@ -327,6 +333,20 @@ struct OptimisticOpenSession {
     pane_id: String,
 }
 
+/// Whether this panel is holding an idle-sleep inhibitor for a working agent.
+///
+/// The platform returns a guard whose drop releases the inhibitor, so this
+/// state exists to keep that guard alive, to acquire it at most once per
+/// working stretch, and to remember a failure instead of retrying it on every
+/// refresh.
+#[cfg(target_env = "ohos")]
+enum IdleSleepPrevention {
+    Inactive,
+    Acquiring { _task: Task<()> },
+    Active { _guard: ActivityGuard },
+    Failed,
+}
+
 pub struct AgentPanel {
     focus_handle: FocusHandle,
     workspace: WeakEntity<Workspace>,
@@ -398,6 +418,10 @@ pub struct AgentPanel {
     /// because the panel has no window when it is constructed.
     #[cfg(target_env = "ohos")]
     window_activation: Option<gpui::Subscription>,
+    /// Whether the screen is being held awake for a working agent, or the
+    /// in-flight request that will hold it.
+    #[cfg(target_env = "ohos")]
+    idle_sleep_prevention: IdleSleepPrevention,
     /// History-session state store and view builder (design doc §5).
     session_service: SessionService,
     /// The history view as of the last session scan. `None` until the first
@@ -495,6 +519,8 @@ impl AgentPanel {
             window_active: false,
             #[cfg(target_env = "ohos")]
             window_activation: None,
+            #[cfg(target_env = "ohos")]
+            idle_sleep_prevention: IdleSleepPrevention::Inactive,
             session_service: SessionService::load(state_path),
             history: None,
             last_sessions: Vec::new(),
@@ -581,7 +607,58 @@ impl AgentPanel {
                 self.clear_history();
             }
         }
+        #[cfg(target_env = "ohos")]
+        self.update_idle_sleep_prevention(cx);
         cx.notify();
+    }
+
+    /// Keeps the screen awake while any agent is working, when the setting
+    /// allows it and the server is reachable.
+    ///
+    /// Storing `Inactive` is also what releases the screen: the platform guard
+    /// hands it back when dropped. A failed refresh keeps the previous
+    /// snapshot, so it counts as "cannot confirm an agent is running" and
+    /// releases the guard rather than holding it on stale data.
+    #[cfg(target_env = "ohos")]
+    fn update_idle_sleep_prevention(&mut self, cx: &mut Context<Self>) {
+        let enabled = AgentPanelSettings::get_global(cx).prevent_idle_sleep;
+        let server_reachable = self.unavailable.is_none();
+        let any_agent_working = self
+            .spaces
+            .iter()
+            .any(|space| space.agents.iter().any(|agent| agent.status == AgentStatus::Working));
+        if !enabled || !server_reachable || !any_agent_working {
+            self.idle_sleep_prevention = IdleSleepPrevention::Inactive;
+            return;
+        }
+        // A request already in flight, a guard already held, or a failure that
+        // has been logged once: none of them should start another acquisition
+        // on the next one-second refresh.
+        if !matches!(self.idle_sleep_prevention, IdleSleepPrevention::Inactive) {
+            return;
+        }
+        let acquisition = cx.prevent_idle_sleep("Agent task in progress");
+        self.idle_sleep_prevention = IdleSleepPrevention::Acquiring {
+            _task: cx.spawn(async move |panel, cx| {
+                let result = acquisition.await;
+                let updated = panel.update(cx, |panel, _| {
+                    panel.idle_sleep_prevention = match result {
+                        Ok(guard) => IdleSleepPrevention::Active { _guard: guard },
+                        Err(error) => {
+                            log::error!("agent panel: cannot prevent idle sleep: {error:#}");
+                            IdleSleepPrevention::Failed
+                        }
+                    };
+                });
+                // The panel owns this task, so an ordinary close cancels it
+                // before this line runs; reaching the error means the panel
+                // went away with the request still in flight, where the guard
+                // drops with the state and the screen is handed back.
+                if let Err(error) = updated {
+                    log::debug!("agent panel: idle-sleep state update dropped: {error:#}");
+                }
+            }),
+        };
     }
 
     /// Turns one refresh into at most one notification.

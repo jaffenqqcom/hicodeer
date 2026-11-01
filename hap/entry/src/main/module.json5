@@ -22,6 +22,9 @@
         "startWindowIcon": "$media:foreground",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
+        "backgroundModes": [
+          "taskKeeping"
+        ],
         "metadata": [
           {
             "name": "ohos.ability.window.isMaximize",
@@ -138,6 +141,9 @@
       },
       {
         "name": "ohos.permission.RUNNING_LOCK"
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       },
       {
         "name": "ohos.permission.MICROPHONE",

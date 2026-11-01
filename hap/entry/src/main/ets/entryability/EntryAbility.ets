@@ -10,7 +10,8 @@ import { ImePlugin } from '@ohos-rs/ability-plugin-ime';
 import { UrlPlugin } from '@ohos-rs/ability-plugin-url';
 import { PlayNotificationPlugin } from '@ohos-rs/ability-plugin-play-notification';
 import { PermissionPlugin } from '@ohos-rs/ability-plugin-permission';
-import { Want, AbilityConstant, ConfigurationConstant } from '@kit.AbilityKit';
+import { Want, AbilityConstant, ConfigurationConstant, wantAgent, WantAgent } from '@kit.AbilityKit';
+import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import common from '@ohos.app.ability.common';
 import hilog from '@ohos.hilog';
 import window from '@ohos.window';
@@ -51,6 +52,10 @@ export default class EntryAbility extends NativeAbility {
     new LazyPlugin((): BridgePlugin => new PermissionPlugin()),
   ];
 
+  // Whether a continuous task is held right now. The system shows a notification
+  // for the task's whole lifetime, so it is only requested while backgrounded.
+  private keepsBackgroundTask: boolean = false;
+
   // 冷启动：系统带 want（含要打开的文件 URI）启动。必须先让基类完成会话初始化，
   // 再把 want 交给 fileLaunch 处理（若插件尚未 onInstall，会在内部暂存）。
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -68,6 +73,67 @@ export default class EntryAbility extends NativeAbility {
       hilog.error(DOMAIN, TAG, 'setColorMode(COLOR_MODE_NOT_SET) failed: %{public}s', String(error));
     }
     fileLaunch.openFromWant(want);
+  }
+
+  onForeground(): void {
+    super.onForeground();
+    this.stopBackgroundKeepAlive();
+  }
+
+  onBackground(): void {
+    super.onBackground();
+    this.startBackgroundKeepAlive();
+  }
+
+  /**
+   * Requests a continuous task once the app leaves the foreground, so agent
+   * work keeps running while the window is gone.
+   *
+   * The task owns a system notification for as long as it is held, so it is
+   * requested only while the app is in the background and released again on
+   * return. This does not keep the screen on: OHOS exposes keep-screen-on at
+   * the window level only. Failure is expected on devices that do not support
+   * `taskKeeping`, so the request only logs.
+   */
+  private async startBackgroundKeepAlive(): Promise<void> {
+    if (this.keepsBackgroundTask) {
+      return;
+    }
+    try {
+      const context = this.context as common.UIAbilityContext;
+      const wantAgentInfo: wantAgent.WantAgentInfo = {
+        wants: [
+          {
+            bundleName: context.abilityInfo.bundleName,
+            abilityName: context.abilityInfo.name,
+          },
+        ],
+        actionType: wantAgent.OperationType.START_ABILITY,
+        requestCode: 0,
+        actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG],
+      };
+      const agent: WantAgent = await wantAgent.getWantAgent(wantAgentInfo);
+      await backgroundTaskManager.startBackgroundRunning(
+        context,
+        backgroundTaskManager.BackgroundMode.TASK_KEEPING,
+        agent,
+      );
+      this.keepsBackgroundTask = true;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'background keep-alive unavailable: %{public}s', String(error));
+    }
+  }
+
+  private async stopBackgroundKeepAlive(): Promise<void> {
+    if (!this.keepsBackgroundTask) {
+      return;
+    }
+    this.keepsBackgroundTask = false;
+    try {
+      await backgroundTaskManager.stopBackgroundRunning(this.context);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'background keep-alive stop failed: %{public}s', String(error));
+    }
   }
 
   // 已运行时再次收到打开请求（如文件管理器“打开方式”选 HiCodeer）。

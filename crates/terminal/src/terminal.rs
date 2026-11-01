@@ -5991,7 +5991,9 @@ mod tests {
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
                 // Set initial expected hovered word
                 cx.write_output_lines(OUTPUT_ZED_DEV, 1);
-                Some(Expected(Wakeups(2), Notifies(0)))
+                // Writing output under a stationary pointer queues one hover
+                // re-probe, which adds a wakeup and a notification.
+                Some(Expected(Wakeups(3), Notifies(1)))
             });
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
                 cx.assert_display_offset(0);

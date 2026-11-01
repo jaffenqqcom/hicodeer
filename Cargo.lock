@@ -16063,6 +16063,7 @@ dependencies = [
  "theme_settings",
  "thiserror 2.0.21",
  "unicode-general-category",
+ "unicode-width 0.2.2",
  "url",
  "urlencoding",
  "urlocator",

@@ -13,7 +13,7 @@ use notifications::status_toast::StatusToast;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use settings::{SettingsStore, VsCodeSettingsSource};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 #[cfg(not(target_env = "ohos"))]
 use ui::{Vector, VectorName};
 use ui::{
@@ -25,7 +25,6 @@ pub use workspace::welcome::ShowWelcome;
 use workspace::welcome::WelcomePage;
 use workspace::{
     AppState, Workspace, WorkspaceId,
-    dock::DockPosition,
     item::{Item, ItemEvent},
     notifications::NotifyResultExt as _,
     open_new, register_serializable_item, with_active_or_new_workspace,
@@ -55,6 +54,8 @@ pub struct ImportCursorSettings {
     pub skip_prompt: bool,
 }
 
+/// Key written once the user finishes setup. While it is absent the setup page
+/// is shown and panels that stay hidden during setup stay closed.
 pub const FIRST_OPEN: &str = "first_open";
 
 // [OHOS PORT BEGIN] HiCodeer shows its own product name and tagline at the top
@@ -227,13 +228,15 @@ pub fn init(cx: &mut App) {
 
 pub fn show_onboarding_view(app_state: Arc<AppState>, cx: &mut App) -> Task<anyhow::Result<()>> {
     telemetry::event!("Onboarding Page Opened");
-    open_new(
+    let onboarding_workspace: Arc<Mutex<Option<gpui::EntityId>>> = Arc::new(Mutex::new(None));
+    let workspace_slot = onboarding_workspace.clone();
+    let task = open_new(
         Default::default(),
         app_state,
         cx,
-        |workspace, window, cx| {
+        move |workspace, window, cx| {
+            *workspace_slot.lock().unwrap() = Some(cx.entity_id());
             {
-                workspace.toggle_dock(DockPosition::Left, window, cx);
                 let onboarding_page = Onboarding::new(workspace, cx);
                 workspace.add_item_to_center(Box::new(onboarding_page.clone()), window, cx);
 
@@ -241,13 +244,41 @@ pub fn show_onboarding_view(app_state: Arc<AppState>, cx: &mut App) -> Task<anyh
 
                 cx.notify();
             };
-            let kvp = KeyValueStore::global(cx);
-            db::write_and_log(cx, move || async move {
-                kvp.write_kvp(FIRST_OPEN.to_string(), "false".to_string())
-                    .await
-            });
         },
-    )
+    );
+
+    // Setup owns the whole window: no dock is shown while the page is up. This
+    // runs once the window is fully built, so the default dock state restored
+    // for an empty workspace is undone too.
+    cx.spawn(async move |cx| {
+        task.await?;
+        let Some(target) = onboarding_workspace.lock().unwrap().take() else {
+            return anyhow::Ok(());
+        };
+        cx.update(|cx| {
+            for window in cx.windows() {
+                let Some(window) = window.downcast::<workspace::MultiWorkspace>() else {
+                    continue;
+                };
+                let closed = window
+                    .update(cx, |multi_workspace, window, cx| {
+                        let workspace = multi_workspace.workspace().clone();
+                        if workspace.entity_id() != target {
+                            return false;
+                        }
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.close_all_docks(window, cx);
+                        });
+                        true
+                    })
+                    .unwrap_or(false);
+                if closed {
+                    break;
+                }
+            }
+        });
+        anyhow::Ok(())
+    })
 }
 
 struct Onboarding {
@@ -285,6 +316,14 @@ impl Onboarding {
 
     fn on_finish(_: &Finish, _: &mut Window, cx: &mut App) {
         telemetry::event!("Finish Setup");
+        // Setup is done. This is the value that decides both whether the setup
+        // page is shown again and whether panels that stay hidden during setup
+        // may open.
+        let kvp = KeyValueStore::global(cx);
+        db::write_and_log(cx, move || async move {
+            kvp.write_kvp(FIRST_OPEN.to_string(), "true".to_string())
+                .await
+        });
         // [OHOS PORT BEGIN] The Agent panel stays closed while setup is on
         // screen, so finishing setup is what opens it.
         #[cfg(target_env = "ohos")]

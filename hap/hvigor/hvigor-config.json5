@@ -18,5 +18,12 @@
   "nodeOptions": {
     // "maxOldSpaceSize": 8192                  /* Enable nodeOptions maxOldSpaceSize compilation. Unit M. Used for the daemon process. Default: 8192*/
     // "exposeGC": true                         /* Enable to trigger garbage collection explicitly. Default: true*/
+  },
+  "properties": {
+    // Disable the optional Rust module resolver. Its prebuilt Linux/musl binary cannot load on
+    // OHOS (it needs libgcc_s.so.1 and the glibc SONAME libc.so.6), so hvigor would only print
+    // "load native resolver failed" and fall back to the JS resolver anyway. Keeping the flag
+    // false makes that fallback explicit and removes the misleading warning.
+    "ohos.nativeResolver": false
   }
 }

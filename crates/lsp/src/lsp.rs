@@ -1,5 +1,10 @@
 mod input_handler;
 
+// [OHOS PORT BEGIN] language servers are installed by the command daemon.
+#[cfg(target_env = "ohos")]
+pub mod ohos_lsp_install;
+// [OHOS PORT END]
+
 pub use lsp_types::request::*;
 pub use lsp_types::*;
 
@@ -876,7 +881,18 @@ impl LanguageServer {
 
         #[allow(deprecated)]
         InitializeParams {
-            process_id: Some(std::process::id()),
+            // [OHOS PORT BEGIN] Language servers run under the daemon's uid, so
+            // `process.kill(pid, 0)` against the application's pid fails with
+            // EPERM. vscode-languageserver treats any failure of that check as
+            // "the editor is gone" and exits silently after its first tick.
+            // Reporting no pid skips the watchdog; the daemon still tears the
+            // server down when the application's channel closes.
+            process_id: if cfg!(target_env = "ohos") {
+                None
+            } else {
+                Some(std::process::id())
+            },
+            // [OHOS PORT END]
             root_path: Some(
                 self.root_uri
                     .to_file_path()

@@ -473,6 +473,15 @@ fn main() {
             open_listener.open(RawOpenRequest {
                 urls,
                 diff_paths: Vec::new(),
+                // [OHOS PORT BEGIN] OHOS has a single window, so an external open must
+                // never create a second one. `Add` matches broadly and falls back to the
+                // existing window when the path belongs to no open worktree; the default
+                // `ExistingWindow` matches exactly and would open a new window instead.
+                // This deliberately overrides `cli_default_open_behavior`: on this
+                // platform a second window cannot exist, so there is nothing to choose.
+                #[cfg(target_env = "ohos")]
+                open_behavior: Some(cli::OpenBehavior::Add),
+                // [OHOS PORT END]
                 ..Default::default()
             })
         }

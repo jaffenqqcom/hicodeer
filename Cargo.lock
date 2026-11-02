@@ -8604,6 +8604,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
+ "async-io",
  "async-pipe",
  "collections",
  "ctor",
@@ -20475,7 +20476,7 @@ dependencies = [
 
 [[package]]
 name = "zed"
-version = "1.24.2"
+version = "1.25.5"
 dependencies = [
  "action_log",
  "activity_indicator",

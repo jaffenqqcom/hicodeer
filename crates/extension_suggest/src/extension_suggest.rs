@@ -269,7 +269,8 @@ const SUGGESTIONS_BY_LANGUAGE: &[LanguageAdditionSuggestion] = &[LanguageAdditio
 fn suggested_extensions() -> &'static HashMap<&'static str, Arc<str>> {
     static SUGGESTIONS_BY_PATH_SUFFIX: OnceLock<HashMap<&str, Arc<str>>> = OnceLock::new();
     SUGGESTIONS_BY_PATH_SUFFIX.get_or_init(|| {
-        SUGGESTIONS_BY_EXTENSION_ID
+        #[allow(unused_mut)]
+        let mut suggestions: HashMap<&'static str, Arc<str>> = SUGGESTIONS_BY_EXTENSION_ID
             .iter()
             .flat_map(|(name, path_suffixes)| {
                 let name = Arc::<str>::from(*name);
@@ -277,7 +278,13 @@ fn suggested_extensions() -> &'static HashMap<&'static str, Arc<str>> {
                     .iter()
                     .map(move |suffix| (*suffix, name.clone()))
             })
-            .collect()
+            .collect();
+        // [OHOS PORT BEGIN] `.ets` is covered by the `arkts` extension, which the
+        // static registry ships but the upstream table does not list.
+        #[cfg(target_env = "ohos")]
+        suggestions.entry("ets").or_insert_with(|| Arc::from("arkts"));
+        // [OHOS PORT END]
+        suggestions
     })
 }
 

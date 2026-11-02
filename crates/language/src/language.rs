@@ -832,6 +832,97 @@ where
             // We only want to cache when we fall back to the global one,
             // because we don't want to download and overwrite our global one
             // for each worktree we might have open.
+
+            // [OHOS PORT BEGIN] Language servers run under the command daemon,
+            // which cannot read the application sandbox. `which` is therefore the
+            // only existence check, and a missing server is installed with npm
+            // globally so the daemon can execute it.
+            #[cfg(target_env = "ohos")]
+            {
+                // OHOS has no sandbox directory the daemon can execute from, so
+                // lookup and install always go through the daemon. This ignores
+                // `allow_path_lookup` (there is no separate Zed-installed copy to
+                // prefer) but honours `allow_binary_download`: installing is a
+                // download, and a user who disabled downloads must not get one.
+                let mut binary = self
+                    .check_if_user_installed(&delegate, toolchain.clone(), &mut cx)
+                    .await;
+                if binary.is_none() {
+                    if !binary_options.allow_binary_download {
+                        return (
+                            Err(anyhow::anyhow!("downloading language servers disabled")),
+                            None,
+                        );
+                    }
+
+                    delegate.update_status(self.name(), BinaryStatus::Downloading);
+                    // Installing runs npm for tens of seconds. Keep it on the
+                    // background executor: the daemon connection hand-off is
+                    // synchronous, and doing it here would stall the window.
+                    let server_name = self.name().0.to_string();
+                    let outcome = cx
+                        .background_executor()
+                        .spawn(async move {
+                            lsp::ohos_lsp_install::ensure_installed(&server_name).await
+                        })
+                        .await;
+                    delegate.update_status(self.name(), BinaryStatus::None);
+
+                    match outcome {
+                        lsp::ohos_lsp_install::InstallOutcome::Installed => {
+                            binary = self
+                                .check_if_user_installed(&delegate, toolchain.clone(), &mut cx)
+                                .await;
+                            if binary.is_none() {
+                                // Installed but still not resolvable: the npm
+                                // prefix is not on the daemon's PATH. Logged so
+                                // this is distinguishable from "never installed".
+                                log::warn!(
+                                    "ohos_lsp_install: {} installed but not resolvable on the \
+                                     daemon PATH",
+                                    self.name().0
+                                );
+                            }
+                        }
+                        lsp::ohos_lsp_install::InstallOutcome::DaemonUnavailable => {
+                            return (
+                                Err(anyhow::anyhow!(
+                                    "language server {} cannot be started: hicodeerd is not \
+                                     running. Start hicodeerd from the system command line \
+                                     terminal, then restart the language server.",
+                                    self.name().0
+                                )),
+                                None,
+                            );
+                        }
+                        lsp::ohos_lsp_install::InstallOutcome::NoPackage
+                        | lsp::ohos_lsp_install::InstallOutcome::Failed => {}
+                    }
+                }
+
+                return match binary {
+                    Some(binary) => {
+                        log::info!(
+                            "language server for {}: path: {:?}, arguments: {:?}",
+                            self.name().0,
+                            binary.path,
+                            binary.arguments
+                        );
+                        (Ok(binary), None)
+                    }
+                    None => (
+                        Err(anyhow::anyhow!(
+                            "language server \"{}\" is not installed. Install it with brew, or \
+                             add it in PATH if it is installed. Then restart the language \
+                             server.",
+                            self.name().0
+                        )),
+                        None,
+                    ),
+                };
+            }
+            // [OHOS PORT END]
+
             if binary_options.allow_path_lookup
                 && let Some(binary) = self
                     .check_if_user_installed(&delegate, toolchain, &mut cx)

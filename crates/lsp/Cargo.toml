@@ -34,6 +34,11 @@ serde.workspace = true
 serde_json.workspace = true
 util.workspace = true
 
+# Only `ohos_lsp_install` uses a timer, and that module is OHOS-only, so the
+# dependency is scoped the same way instead of being pulled into every build.
+[target.'cfg(target_env = "ohos")'.dependencies]
+async-io.workspace = true
+
 [dev-dependencies]
 async-pipe.workspace = true
 gpui_util.workspace = true

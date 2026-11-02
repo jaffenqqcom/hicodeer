@@ -74,6 +74,14 @@ static LOCAL_TOOL_NAMES: OnceLock<Vec<String>> = OnceLock::new();
 /// the tool set is private-only.
 const LOCAL_TOOL_BIN_DIRS: &[&str] = &["/data/app/bin"];
 
+/// The application's own data directory in this process's mount view.
+///
+/// Everything below it belongs to this process alone: the daemon runs under a
+/// different uid with its own view of `/data/storage`, so the same string names
+/// another directory there. A program found under this directory is therefore
+/// handed to the daemon by name instead of by path.
+const APP_DATA_DIR: &str = "/data/storage/el2/base/haps/entry/files";
+
 /// Scan the private HNP install dir and record every present executable name,
 /// so a later [`Command::spawn`] can route it locally without re-reading the
 /// directory. Call once at startup (idempotent): the snapshot is taken on the
@@ -521,18 +529,21 @@ impl Command {
 
 /// Program name to hand the daemon for `program`.
 ///
-/// A path under the private HNP mount (`/data/app/bin`) exists only in the
-/// application's own mount view: the daemon runs under a different uid and
-/// cannot open that directory, so passing the absolute path remotely makes
-/// every exec fail with ENOENT. Such a path is reduced to its basename so the
-/// daemon resolves the same tool from its own PATH; everything else (a bare
-/// name, or a path both sides can reach) is forwarded unchanged.
+/// A path under the private HNP mount (`/data/app/bin`) or under the
+/// application data directory exists only in this process's own mount view: the
+/// daemon runs under a different uid and cannot open it, so passing the absolute
+/// path remotely makes every exec fail with ENOENT. Such a path is reduced to its
+/// basename so the daemon resolves the same name from its own PATH - which is
+/// also what lets a system-installed copy of an extension-shipped tool stand in
+/// for the copy in the application data directory. Everything else (a bare name,
+/// or a path both sides can reach) is forwarded unchanged.
 fn daemon_program_name(program: &OsStr) -> String {
     let path = Path::new(program);
-    let in_private_mount = path
+    let absent_from_daemon_view = path
         .parent()
-        .is_some_and(|parent| LOCAL_TOOL_BIN_DIRS.iter().any(|dir| Path::new(dir) == parent));
-    if in_private_mount
+        .is_some_and(|parent| LOCAL_TOOL_BIN_DIRS.iter().any(|dir| Path::new(dir) == parent))
+        || path.starts_with(APP_DATA_DIR);
+    if absent_from_daemon_view
         && let Some(name) = path.file_name()
     {
         return name.to_string_lossy().into_owned();

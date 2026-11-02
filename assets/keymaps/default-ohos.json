@@ -922,6 +922,8 @@
     "context": "Terminal",
     "bindings": {
       "ctrl-alt-space": "terminal::ShowCharacterPalette",
+      "ctrl-alt-z": "terminal::QuickInput",
+      "ctrl-alt-o": "terminal::InsertFilePaths",
       "copy": "terminal::Copy",
       "ctrl-insert": "terminal::Copy",
       "ctrl-shift-c": "terminal::Copy",
@@ -963,6 +965,17 @@
       "ctrl-alt-r": "terminal::RerunTask",
       "alt-t": "terminal::RerunTask",
       "ctrl-shift-5": "pane::SplitRight",
+    },
+  },
+  {
+    // Quick input modal: rebind the keys the focused editor would otherwise
+    // swallow so they reach the modal's actions. Bindings declared later win.
+    "context": "Editor && QuickInput",
+    "bindings": {
+      "up": "terminal::QuickInputUp",
+      "down": "terminal::QuickInputDown",
+      "enter": "terminal::QuickInputSubmit",
+      "escape": "terminal::QuickInputCancel",
     },
   },
   {

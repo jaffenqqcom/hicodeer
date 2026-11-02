@@ -16101,6 +16101,7 @@ dependencies = [
  "localization",
  "log",
  "menu",
+ "paths",
  "pretty_assertions",
  "project",
  "regex",

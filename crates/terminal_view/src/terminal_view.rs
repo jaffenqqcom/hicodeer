@@ -1,4 +1,6 @@
 mod persistence;
+mod quick_input;
+mod quick_input_ui;
 pub mod terminal_element;
 pub mod terminal_panel;
 mod terminal_path_like_target;
@@ -11,7 +13,8 @@ use editor::{
 use gpui::{
     Action, AnyElement, App, ClipboardEntry, Corners, DismissEvent, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, Font, KeyContext, KeyDownEvent, Keystroke, MouseButton,
-    MouseDownEvent, PathPromptOptions, Pixels, Point as GpuiPoint, Rems, Render, ScrollWheelEvent,
+    KeyBinding, MouseDownEvent, PathPromptOptions, Pixels, Point as GpuiPoint, Rems, Render,
+    ScrollWheelEvent,
     SharedString, Styled, Subscription, Task, TaskExt, WeakEntity, actions, anchored, deferred,
     div,
 };
@@ -45,7 +48,8 @@ use terminal_panel::TerminalPanel;
 use terminal_path_like_target::{hover_path_like_target, open_path_like_target};
 use terminal_scrollbar::TerminalScrollHandle;
 use ui::{
-    ContextMenu, Divider, ScrollAxes, Scrollbars, Tooltip, WithScrollbar,
+    ButtonCommon, ButtonLike, ButtonStyle, Color, ContextMenu, Divider, Icon, IconName, IconSize,
+    ScrollAxes, Scrollbars, Tooltip, WithScrollbar,
     prelude::*,
     scrollbars::{self, ScrollbarVisibility},
 };
@@ -98,6 +102,14 @@ actions!(
     [
         /// Reruns the last executed task in the terminal.
         RerunTask,
+        /// Opens the list of saved phrases.
+        QuickInput,
+        QuickInputUp,
+        QuickInputDown,
+        QuickInputSubmit,
+        QuickInputCancel,
+        /// Opens the file picker and inserts the chosen paths.
+        InsertFilePaths,
     ]
 );
 
@@ -108,6 +120,18 @@ pub struct RenameTerminal;
 
 pub fn init(cx: &mut App) {
     terminal_panel::init(cx);
+
+    // Runtime bindings scoped to the modal's context. They are added after the
+    // default keymap and GPUI gives later bindings precedence, so arrows and
+    // Enter reach the modal instead of the focused editor. Escape normally goes
+    // through `quick_input_ui`'s keystroke interceptor (which runs first); the
+    // binding below is the fallback for when that interceptor declines.
+    cx.bind_keys([
+        KeyBinding::new("escape", QuickInputCancel, Some("QuickInput")),
+        KeyBinding::new("enter", QuickInputSubmit, Some("QuickInput")),
+        KeyBinding::new("up", QuickInputUp, Some("QuickInput")),
+        KeyBinding::new("down", QuickInputDown, Some("QuickInput")),
+    ]);
 
     register_serializable_item::<TerminalView>(cx);
 
@@ -169,6 +193,7 @@ pub struct TerminalView {
     self_handle: WeakEntity<Self>,
     rename_editor: Option<Entity<Editor>>,
     rename_editor_subscription: Option<Subscription>,
+    quick_input: quick_input_ui::QuickInputState,
     _subscriptions: Vec<Subscription>,
     _terminal_subscriptions: Vec<Subscription>,
 }
@@ -437,6 +462,7 @@ impl TerminalView {
             self_handle: cx.entity().downgrade(),
             rename_editor: None,
             rename_editor_subscription: None,
+            quick_input: quick_input_ui::QuickInputState::default(),
             _subscriptions: subscriptions,
             _terminal_subscriptions: terminal_subscriptions,
         }
@@ -1188,6 +1214,15 @@ impl TerminalView {
     }
 
     fn dispatch_context(&self, cx: &App) -> KeyContext {
+        // While the quick input modal is open the terminal must not claim any
+        // keystrokes: dropping the `Terminal` context here means the keymap's
+        // send-to-pty bindings cannot match before the modal sees the key.
+        if self.quick_input_is_open() {
+            let mut context = KeyContext::new_with_defaults();
+            context.add("QuickInput");
+            return context;
+        }
+
         let mut dispatch_context = KeyContext::new_with_defaults();
         dispatch_context.add("Terminal");
 
@@ -1488,6 +1523,10 @@ const FLOATING_CONTROL_OPACITY: f32 = 0.7;
 struct FloatingButton {
     id: &'static str,
     icon: IconName,
+    tooltip: &'static str,
+    /// Backs the tooltip's key hint, so it follows the keymap rather than
+    /// repeating the shortcut in the label.
+    action: Box<dyn Action>,
     bottom: Pixels,
     right: Pixels,
 }
@@ -1504,8 +1543,22 @@ impl TerminalView {
         vec![
             self.render_floating_button(
                 FloatingButton {
+                    id: "terminal-quick-input",
+                    icon: IconName::BoltOutlined,
+                    tooltip: localization::localized_str!("Quick Input"),
+                    action: Box::new(QuickInput),
+                    bottom: px(16.),
+                    right: px(124.),
+                },
+                |this, window, cx| this.toggle_quick_input(window, cx),
+                cx,
+            ),
+            self.render_floating_button(
+                FloatingButton {
                     id: "terminal-insert-files",
                     icon: IconName::FolderOpen,
+                    tooltip: localization::localized_str!("Insert Files"),
+                    action: Box::new(InsertFilePaths),
                     bottom: px(16.),
                     right: px(76.),
                 },
@@ -1516,6 +1569,8 @@ impl TerminalView {
                 FloatingButton {
                     id: "terminal-scroll-to-bottom",
                     icon: IconName::ArrowDown,
+                    tooltip: localization::localized_str!("Bottom"),
+                    action: Box::new(ScrollToBottom),
                     bottom: px(16.),
                     right: px(28.),
                 },
@@ -1532,6 +1587,10 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = cx.theme().colors();
+        let tooltip = Tooltip::for_action_title(button.tooltip, button.action.as_ref());
+        let handler = Rc::new(on_click);
+        let view = cx.entity().downgrade();
+
         div()
             // Split panes can show several terminals at once, so the id must
             // include the terminal.
@@ -1540,9 +1599,6 @@ impl TerminalView {
             .bottom(button.bottom)
             .right(button.right)
             .size(px(40.))
-            .flex()
-            .items_center()
-            .justify_center()
             .rounded_full()
             .bg(colors.element_background.opacity(FLOATING_CONTROL_OPACITY))
             .border_1()
@@ -1554,14 +1610,25 @@ impl TerminalView {
             // selection at the tapped cell.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                Icon::new(button.icon)
-                    .size(IconSize::Medium)
-                    .color(Color::Muted),
+                // The tooltip lives on the button so the circle keeps its own
+                // hover styling.
+                ButtonLike::new((button.id, 0usize))
+                    .style(ButtonStyle::Transparent)
+                    .width(px(40.))
+                    .height(px(40.).into())
+                    .tooltip(tooltip)
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        let handler = handler.clone();
+                        view.update(cx, |this, cx| handler(this, window, cx))
+                            .ok();
+                    })
+                    .child(
+                        Icon::new(button.icon)
+                            .size(IconSize::Medium)
+                            .color(Color::Muted),
+                    ),
             )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                cx.stop_propagation();
-                on_click(this, window, cx);
-            }))
             .into_any_element()
     }
 
@@ -1651,6 +1718,13 @@ impl TerminalView {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // The quick input modal owns the keyboard while it is open; anything
+        // that reaches the terminal here would otherwise be typed into the pty
+        // behind it.
+        if self.quick_input_is_open() {
+            return;
+        }
+
         self.clear_bell(cx);
         self.pause_cursor_blinking(window, cx);
 
@@ -1723,6 +1797,7 @@ impl Render for TerminalView {
 
         // See `render_floating_controls`.
         let floating_controls = self.render_floating_controls(cx);
+        let quick_input = self.render_quick_input(window, cx);
 
         div()
             .id("terminal-view")
@@ -1748,6 +1823,24 @@ impl Render for TerminalView {
             .on_action(cx.listener(TerminalView::show_character_palette))
             .on_action(cx.listener(TerminalView::select_all))
             .on_action(cx.listener(TerminalView::rerun_task))
+            .on_action(cx.listener(|this, _: &QuickInput, window, cx| {
+                this.toggle_quick_input(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &QuickInputUp, _, cx| {
+                this.move_quick_input_selection(-1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &QuickInputDown, _, cx| {
+                this.move_quick_input_selection(1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &QuickInputSubmit, window, cx| {
+                this.submit_quick_input(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &QuickInputCancel, window, cx| {
+                this.cancel_quick_input(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &InsertFilePaths, window, cx| {
+                this.insert_picked_paths(window, cx);
+            }))
             .on_action(cx.listener(TerminalView::rename_terminal))
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_down(
@@ -1815,6 +1908,7 @@ impl Render for TerminalView {
                     }),
             )
             .children(floating_controls)
+            .children(quick_input)
             .children(self.context_menu.as_ref().map(|(menu, position, _)| {
                 deferred(
                     anchored()

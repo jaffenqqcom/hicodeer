@@ -2168,7 +2168,9 @@ impl AgentPanel {
 
         v_flex()
             .w_full()
-            .pt_3()
+            // pt_3 plus two row heights: History used to sit too close to the
+            // space list above it.
+            .pt(px(12.0 + 2.0 * 34.0))
             .border_t_1()
             .border_color(cx.theme().colors().border)
             .child(history_section)
@@ -2855,6 +2857,10 @@ fn row_container(
     cx: &App,
 ) -> gpui::Stateful<Div> {
     let colors = cx.theme().colors();
+    // The same cue the settings rows use for keyboard-reachable controls: a
+    // focus-coloured border that follows the theme, plus the selected fill.
+    // The border stays present but transparent when unselected so rows do not
+    // shift by a pixel when selection moves.
     div()
         .id(id)
         .w_full()
@@ -2862,8 +2868,14 @@ fn row_container(
         .pl(ROW_SIDE_PADDING + indent)
         .pr(ROW_SIDE_PADDING)
         .rounded_sm()
+        .border_1()
+        .border_color(if selected {
+            colors.border_focused
+        } else {
+            colors.border_focused.opacity(0.0)
+        })
         .cursor_pointer()
-        .when(selected, |this| this.bg(colors.ghost_element_selected))
+        .when(selected, |this| this.bg(colors.element_selected))
         .hover(|style| style.bg(colors.ghost_element_hover))
 }
 

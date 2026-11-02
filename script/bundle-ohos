@@ -20,6 +20,9 @@ project's libs directory, and runs hvigor assembleHap.
 
 Options:
   --release         Build in release mode (default: debug)
+  --ver <x.y.z>     Set both the Rust crate version (crates/zed/Cargo.toml) and
+                    the HAP versionName (hap/AppScope/app.json5) before building.
+                    VersionCode is left untouched. Omit to keep both as they are.
   --hap-only        Skip Rust builds; only run ohpm install + hvigor assembleHap
   --rebuild-golden  Force a rebuild of the guest golden disk (also done
                     automatically when guest-init is newer than the golden)
@@ -40,6 +43,7 @@ IS_RELEASE=false
 MODE="all"
 REBUILD_GOLDEN=false
 CHECK_TLS=false
+TARGET_VERSION=""
 
 # ==================== 嵌入式 QEMU 客户机后端开关 ====================
 # 默认关闭。关闭时 QEMU 客户机相关的一切都不参与：launch-zed 不带 qemu-agent
@@ -87,6 +91,22 @@ while [[ $# -gt 0 ]]; do
       CHECK_TLS=true
       shift
       ;;
+    --ver)
+      if [ $# -lt 2 ] || [[ "$2" == -* ]]; then
+        echo "Missing value for --ver (expected MAJOR.MINOR.PATCH)" >&2
+        exit 1
+      fi
+      TARGET_VERSION="$2"
+      shift 2
+      ;;
+    --ver=*)
+      TARGET_VERSION="${1#--ver=}"
+      if [ -z "$TARGET_VERSION" ]; then
+        echo "Missing value for --ver (expected MAJOR.MINOR.PATCH)" >&2
+        exit 1
+      fi
+      shift
+      ;;
     --)
       shift
       break
@@ -116,6 +136,53 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"            # .../HiCodeer/script
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"           # .../HiCodeer
 HAP_DIR="$PROJECT_ROOT/hap"
+
+# ==================== 版本号（--ver） ====================
+# 版本号写在两处：Rust crate 在 crates/zed/Cargo.toml，HAP 在 hap/AppScope/app.json5。
+# 只改 versionName；versionCode 是安装器比较升级用的整数（app.json5 里单独一行），
+# 属于发布决策，不由字符串推导。
+if [ -n "$TARGET_VERSION" ]; then
+  if ! printf '%s' "$TARGET_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "Invalid --ver value '$TARGET_VERSION': expected MAJOR.MINOR.PATCH" >&2
+    exit 1
+  fi
+  python3 - "$PROJECT_ROOT/crates/zed/Cargo.toml" "$HAP_DIR/AppScope/app.json5" "$TARGET_VERSION" <<'PY'
+import re
+import sys
+
+cargo_toml, app_json5, version = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+targets = [
+    (cargo_toml, r'^version = "([^"]*)"$', f'version = "{version}"'),
+    (app_json5, r'"versionName": "([^"]*)"', f'"versionName": "{version}"'),
+]
+
+# Locate every version line before writing any of them: a file whose layout
+# changed halfway through the pair would otherwise leave the two versions
+# disagreeing, which is exactly what this option exists to prevent.
+located = []
+for path, pattern, replacement in targets:
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+    match = re.search(pattern, text, flags=re.MULTILINE)
+    if match is None:
+        sys.exit(f"{path}: version line not found; nothing was written")
+    located.append((path, text, match, replacement))
+
+reports = []
+for path, text, match, replacement in located:
+    old_value = match.group(1)
+    if match.group(0) == replacement:
+        reports.append(f"{old_value} (unchanged)")
+        continue
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text[: match.start()] + replacement + text[match.end() :])
+    reports.append(f"{old_value} -> {version}")
+
+print(f"version: rust {reports[0]}, hap {reports[1]}")
+PY
+fi
 # daemon 载荷目录（入库）：垫片源码与编出的 .so 同居于此，打包时进 HNP 的
 # <pkg>/shim/，运行时由 daemon 从自身 /proc/self/exe 推出的包根取用（见
 # hicodeerd/src/shim.rs）。定义在平台配置段之前 —— 该段的 SHIM_C 要引用它。

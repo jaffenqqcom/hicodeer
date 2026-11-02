@@ -3187,6 +3187,10 @@ pub(super) fn ghostty_normalize_buffer_symbol(
         crate::ghostty::CellWide::Narrow | crate::ghostty::CellWide::SpacerHead => 1,
         crate::ghostty::CellWide::SpacerTail => 0,
     };
+    if symbol.chars().any(char::is_control) {
+        return ghostty_blank_symbol_for_width(wide).to_string();
+    }
+
     let actual_width = symbol.width();
     if actual_width == expected_width {
         return symbol.to_string();
@@ -3244,10 +3248,16 @@ fn ghostty_buffer_symbol_into<'a>(
         crate::ghostty::CellWide::SpacerTail => 0,
     };
     let actual_width = symbol_scratch.width();
-    if actual_width != expected_width
-        && !(wide == crate::ghostty::CellWide::Narrow && actual_width == 2)
-        && !(wide == crate::ghostty::CellWide::Wide
-            && is_halfwidth_katakana_voiced_grapheme(symbol_scratch))
+    // Control characters are not renderable in a cell: ratatui's
+    // `Cell::set_symbol` does not filter them and treats a single-byte control
+    // symbol as one column wide, which trips its width assertion while diffing
+    // the buffer. Replace them with blanks of the expected width instead.
+    let has_control = symbol_scratch.chars().any(char::is_control);
+    if has_control
+        || (actual_width != expected_width
+            && !(wide == crate::ghostty::CellWide::Narrow && actual_width == 2)
+            && !(wide == crate::ghostty::CellWide::Wide
+                && is_halfwidth_katakana_voiced_grapheme(symbol_scratch)))
     {
         symbol_scratch.clear();
         symbol_scratch.push_str(ghostty_blank_symbol_for_width(wide));
@@ -5700,6 +5710,14 @@ mod tests {
         assert_eq!(
             ghostty_normalize_buffer_symbol("xx", crate::ghostty::CellWide::SpacerHead),
             " "
+        );
+        assert_eq!(
+            ghostty_normalize_buffer_symbol("\u{1b}", crate::ghostty::CellWide::Narrow),
+            " "
+        );
+        assert_eq!(
+            ghostty_normalize_buffer_symbol("\u{7f}", crate::ghostty::CellWide::Wide),
+            "  "
         );
         assert_eq!(
             ghostty_normalize_buffer_symbol("ｶ\u{ff9e}", crate::ghostty::CellWide::Wide),

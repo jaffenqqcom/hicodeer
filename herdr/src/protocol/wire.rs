@@ -880,7 +880,15 @@ impl FrameData {
                 let idx = (row as usize) * (self.width as usize) + (col as usize);
                 let cell_data = &self.cells[idx];
                 let cell = buffer.cell_mut((col, row)).expect("cell within bounds");
-                cell.set_symbol(&cell_data.symbol);
+                // Frame data can come from either endpoint, so a symbol is not
+                // guaranteed to be renderable. Ratatui does not filter symbols
+                // written through `Cell::set_symbol` and asserts on single-byte
+                // control symbols, so blank them out here as well.
+                if cell_data.symbol.chars().any(char::is_control) {
+                    cell.set_symbol(" ");
+                } else {
+                    cell.set_symbol(&cell_data.symbol);
+                }
                 cell.fg = u32_to_color(cell_data.fg);
                 cell.bg = u32_to_color(cell_data.bg);
                 cell.modifier = u16_to_modifier(cell_data.modifier);
@@ -3441,6 +3449,34 @@ mod tests {
         assert_eq!(restored.cell((1, 0)).unwrap().symbol(), "i");
         assert_eq!(restored.cell((2, 0)).unwrap().symbol(), "!");
         assert_eq!(restored.cell((2, 0)).unwrap().fg, Color::Rgb(255, 128, 0));
+    }
+
+    #[test]
+    fn frame_data_blanks_control_symbols_when_rebuilding_buffer() {
+        let frame = FrameData {
+            cells: ["\u{1b}", "\u{7f}", "A"]
+                .into_iter()
+                .map(|symbol| CellData {
+                    symbol: symbol.to_owned(),
+                    fg: 0,
+                    bg: 0,
+                    modifier: 0,
+                    skip: false,
+                    hyperlink: None,
+                })
+                .collect(),
+            width: 3,
+            height: 1,
+            cursor: None,
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+
+        let buffer = frame.to_ratatui_buffer().expect("should reconstruct");
+
+        assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), " ");
+        assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), " ");
+        assert_eq!(buffer.cell((2, 0)).unwrap().symbol(), "A");
     }
 
     #[test]

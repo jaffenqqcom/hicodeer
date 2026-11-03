@@ -220,6 +220,9 @@ if [ "$BUILD_PLATFORM" = "harmonyos" ]; then
   # 设备侧 hnp 服务判定 signMap 为空而拒收（安装报 9568407）。
   SIGN_TOOL_JAR="$SDK_HOME/default/openharmony/toolchains/lib/hap-sign-tool.jar"
   HNPCLI="$SDK_HOME/default/openharmony/toolchains/hnpcli"
+  # 官方 HAP 打包工具。hvigor 的 PackageHap 不传 --hnp-path（插件里没有 hnp 逻辑），
+  # hnp 只能由它显式打进 HAP，所以 HNP 装配段直接调用它。
+  OHOS_PACKING_TOOL="$SDK_HOME/default/openharmony/toolchains/lib/ohos_packing_tool"
   # TLS shim（绕过 libc 128 pthread key 上限；rustc/cargo 编译期用）。
   # 源码入库在 $DAEMON_SHIM_DIR；产物先落 cargo 的 scratch 目录（路径在下方 SHIM 段
   # 拼出，与 target 同在 <项目根>/target/ohos 下），再同步一份入库充当 HNP 载荷。
@@ -246,6 +249,7 @@ else
   export HARMONYBREW_SDK="$TOOLCHAIN/sdk"
   SIGN_TOOL_JAR="$TOOLCHAIN/sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar"
   HNPCLI="$TOOLCHAIN/sdk/default/openharmony/toolchains/hnpcli"
+  OHOS_PACKING_TOOL="$TOOLCHAIN/sdk/default/openharmony/toolchains/lib/ohos_packing_tool"
   # virtiofs 元数据 shim（放行共享盘 EPERM）；随交叉工具链走，就地复用它的产物
   SHIM_C="$TOOLCHAIN/tool/shim/ohos-meta-shim.c"
   SHIM_SO="$TOOLCHAIN/tool/shim/ohos-meta-shim.so"
@@ -1124,53 +1128,76 @@ $NO_SHIM "$NODE_CMD" "$HVIGORW_JS" \
     find "$CMAKE_STAGING_DIR" -depth -delete 2>/dev/null || true
   fi
 
-  # ==================== HNP 装配（注入载荷 + 重签，默认执行） ====================
-  # hvigor 只把 module.json 的 hnpPackages 写进产物、不嵌 .hnp 实体；这里把
-  # hap/entry/hnp/arm64-v8a/<pkg>.hnp 追加进 HAP，再用调试证书整体重签。
-  # 载荷缺失 / 证书未配齐都会显式报错，不产出“看似可装”的包。
+  # ==================== HNP 装配（官方打包工具重打 + 重签，默认执行） ====================
+  # hvigor 不接 hnp：PackageHap 拼打包命令时从不传 --hnp-path（插件 src 里没有 hnp
+  # 字样），官方文档也写明 IDE 侧「暂不支持」，所以 assembleHap 产出的 unsigned HAP
+  # 必然不含 .hnp 实体。官方能力在 SDK 的 ohos_packing_tool 上，这里按 hvigor 的
+  # 同一条命令重打一次并补 --hnp-path，让 hnp 由官方打包器写入：hnp 条目以 Stored
+  # 原样存储，并走它对 hnpPackages 的一致性校验。
+  #
+  # 参数集必须与 hvigor 完全一致（来源：.hvigor/outputs/build-logs/build.log 里
+  # PackageHap 的实际命令行）。漏一项就会丢条目——例如漏 --pkg-context-path 会少
+  # pkgContextInfo.json——所以重打后逐条比对 unsigned HAP，缺项/多项都直接失败。
+  # 载荷缺失 / 证书未配齐同样显式报错，不产出“看似可装”的包。
   HNP_SRC_DIR="$HAP_DIR/entry/hnp/arm64-v8a"
   if [ -d "$HNP_SRC_DIR" ] && ls "$HNP_SRC_DIR"/*.hnp >/dev/null 2>&1; then
-    # Only the bare hvigor unsigned.hap is a valid injection source: the derived
-    # -packed/-signed copies already carry hnp entries, so injecting into them
-    # again appends duplicate hnp/arm64-v8a entries. The old fallback to a glob
-    # silently picked the -packed copy when the bare file was missing; it is gone
-    # on purpose, so a missing source fails loudly instead of shipping a wrong
-    # package. The bare file is deleted after a successful injection (see below),
-    # and hvigor regenerates it on every assembleHap run.
+    # unsigned HAP 是条目比对的基准，必须由本次 assembleHap 重新产出。
     UNSIGNED_HAP="$HAP_DIR/entry/build/default/outputs/default/entry-default-unsigned.hap"
     if [ ! -f "$UNSIGNED_HAP" ]; then
-      echo "[hicodeer-ohos-build] ERROR: $UNSIGNED_HAP 不存在；拒绝注入（对已注入的包重复注入会产生重复的 hnp 条目）" >&2
+      echo "[hicodeer-ohos-build] ERROR: $UNSIGNED_HAP 不存在；拒绝重打（它是条目比对的基准）" >&2
       exit 1
     fi
+    if [ ! -x "$OHOS_PACKING_TOOL" ]; then
+      echo "[hicodeer-ohos-build] ERROR: 官方打包工具不可用: $OHOS_PACKING_TOOL" >&2
+      exit 1
+    fi
+    HAP_INTERMEDIATES="$HAP_DIR/entry/build/default/intermediates"
+    HAP_OUTPUT_DIR="$HAP_DIR/entry/build/default/outputs/default"
     PACKED_HAP="${UNSIGNED_HAP%.hap}-packed.hap"
-    echo "[hicodeer-ohos-build] inject hnp payloads: $UNSIGNED_HAP -> $PACKED_HAP"
-    # Copy the HAP verbatim (streaming cp, not an in-memory zip rewrite) and
-    # append each hnp payload as a NEW zip entry. Rewriting every entry with
-    # ZipFile("w") + zin.read() pulled the largest STORED payload wholly into
-    # RAM (~1.3G pre-strip libcore.so), which stacked with hvigor/node and
-    # the signer JVM to OOM the 11G host. Appending only rewrites the tail
-    # central directory, so memory stays O(hnp size).
-    cp -f "$UNSIGNED_HAP" "$PACKED_HAP"
-    python3 - "$PACKED_HAP" "$HNP_SRC_DIR" <<'PY'
-import json, os, sys, zipfile
-hap, tools = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(hap, "a", allowZip64=True) as zout:
-    module_json = json.loads(zout.read("module.json"))
-    declared = [h["package"] for h in module_json.get("module", {}).get("hnpPackages", [])]
-    injected = 0
-    for pkg in declared:
-        payload = os.path.join(tools, pkg)
-        if not os.path.isfile(payload):
-            raise SystemExit("declared hnpPackages entry missing payload: " + payload)
-        entry = zipfile.ZipInfo("hnp/arm64-v8a/" + pkg)
-        # Preserve the source file's permission bits (bin/* must stay 0o755),
-        # otherwise the installed ELF is not executable.
-        entry.external_attr = (os.stat(payload).st_mode & 0xFFFF) << 16
-        entry.compress_type = zipfile.ZIP_DEFLATED
-        with open(payload, "rb") as payload_file:
-            zout.writestr(entry, payload_file.read())
-        injected += 1
-print("injected %d hnp payload(s): %s" % (injected, ", ".join(declared)))
+    echo "[hicodeer-ohos-build] repack with hnp: $UNSIGNED_HAP -> $PACKED_HAP"
+    rm -f "$PACKED_HAP"
+    $NO_SHIM "$OHOS_PACKING_TOOL" pack --mode hap --force true \
+      --lib-path "$HAP_INTERMEDIATES/stripped_native_libs/default" \
+      --json-path "$HAP_INTERMEDIATES/package/default/module.json" \
+      --resources-path "$HAP_INTERMEDIATES/res/default/resources" \
+      --index-path "$HAP_INTERMEDIATES/res/default/resources.index" \
+      --pack-info-path "$HAP_OUTPUT_DIR/pack.info" \
+      --out-path "$PACKED_HAP" \
+      --ets-path "$HAP_INTERMEDIATES/loader_out/default/ets" \
+      --pkg-context-path "$HAP_INTERMEDIATES/loader/default/pkgContextInfo.json" \
+      --hnp-path "$HAP_DIR/entry/hnp"
+    python3 - "$PACKED_HAP" "$UNSIGNED_HAP" "$HNP_SRC_DIR" arm64-v8a <<'PY'
+import os, sys, zipfile
+packed, unsigned, hnp_dir, abi = sys.argv[1:5]
+# 官方打包器把 hnp 放到 HAP 根的 hnp/<abi>/ 下，条目名用 ABI 目录下的相对路径
+# （module.json5 的 hnpPackages.package 也是这个口径，支持子目录）。
+payloads = {}
+for root, _dirs, files in os.walk(hnp_dir):
+    for name in files:
+        if name.endswith(".hnp"):
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, hnp_dir).replace(os.sep, "/")
+            payloads["hnp/%s/%s" % (abi, rel)] = full
+if not payloads:
+    sys.exit("no .hnp payload found under " + hnp_dir)
+with zipfile.ZipFile(unsigned) as baseline_zip:
+    baseline = set(baseline_zip.namelist())
+with zipfile.ZipFile(packed) as packed_zip:
+    actual = set(packed_zip.namelist())
+    missing = (baseline | set(payloads)) - actual
+    extra = actual - baseline - set(payloads)
+    if missing:
+        sys.exit("repacked HAP is missing entries: " + ", ".join(sorted(missing)))
+    if extra:
+        sys.exit("repacked HAP has unexpected entries: " + ", ".join(sorted(extra)))
+    for entry, source in sorted(payloads.items()):
+        info = packed_zip.getinfo(entry)
+        # hnp 自身已是压缩包，官方打包器原样存储。Deflate 说明包不是官方工具产的。
+        if info.compress_type != zipfile.ZIP_STORED:
+            sys.exit("%s is not stored (compress_type=%d)" % (entry, info.compress_type))
+        if info.file_size != os.path.getsize(source):
+            sys.exit("%s size mismatch: %d != %d" % (entry, info.file_size, os.path.getsize(source)))
+print("verified %d hnp payload(s): %s" % (len(payloads), ", ".join(sorted(payloads))))
 PY
     # 签名材料以 hap/build-profile.json5 的 signingConfigs[0] 为准（certpath /
     # profile / storeFile / keyAlias 四个字段），与 DevEco「自动签名」写下的内容同源，

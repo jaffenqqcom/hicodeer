@@ -3,10 +3,11 @@ use std::process::Command;
 
 fn main() {
     // ===== [OHOS PORT BEGIN] CARGO_BIN_NAME for the lib target =====
-    // This crate builds src/main.rs as both the `zed` bin and the `zed` lib
-    // (see the `[lib]` section in Cargo.toml). Cargo only sets CARGO_BIN_NAME
-    // for bin targets, but src/main.rs asserts on it, so provide it uniformly.
-    println!("cargo:rustc-env=CARGO_BIN_NAME=zed");
+    // src/main.rs asserts CARGO_BIN_NAME == paths::APP_NAME_LOWERCASE. Cargo does
+    // not set it for the lib target, so provide it per platform here.
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let bin_name = if target_env == "ohos" { "hicodeer" } else { "zed" };
+    println!("cargo:rustc-env=CARGO_BIN_NAME={bin_name}");
     // ===== [OHOS PORT END] =====
 
     // ===== [OHOS PORT] OHOS reports target_os = "linux" but has neither pkg-config nor the libva/egl webrtc-sys libraries, so skip the rpath probe there =====

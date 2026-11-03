@@ -253,9 +253,6 @@ pub fn init(cx: &mut App) {
     {
         cx.set_global(herdr_settings::AgentIntegrations::default());
         cx.set_global(herdr_settings::TerminalSettingsCache::default());
-        // Runs before the agent client can start, so a fresh install opens on
-        // the terminal instead of the client's welcome screen.
-        herdr_settings::disable_startup_onboarding();
     }
 
     cx.observe_new(|workspace: &mut Workspace, _, cx| {

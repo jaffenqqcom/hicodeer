@@ -69,7 +69,7 @@ const REKEY_TIME_LIMIT: std::time::Duration =
     std::time::Duration::from_secs(365 * 24 * 60 * 60);
 /// Directory under the host application's home holding the embedded agent
 /// server's state.
-const AGENT_STATE_DIR: &str = ".hicodeer";
+const AGENT_STATE_DIR: &str = ".agentpanel";
 /// Subdirectory of [`AGENT_STATE_DIR`] that holds the sockets.
 const AGENT_RUN_DIR: &str = "agent";
 /// Variable the agent server reads for its JSON API socket; the client socket

@@ -15,6 +15,12 @@ pub const EDITORCONFIG_NAME: &str = ".editorconfig";
 /// and state directory paths.
 ///
 /// Forks should change this to avoid colliding with Zed's user data.
+///
+/// OHOS uses HiCodeer for its data/config directory names; other platforms
+/// keep the upstream name.
+#[cfg(target_env = "ohos")]
+pub const APP_NAME: &str = "HiCodeer";
+#[cfg(not(target_env = "ohos"))]
 pub const APP_NAME: &str = "Zed";
 
 /// Lowercased form of [`APP_NAME`], for use in XDG-style paths on

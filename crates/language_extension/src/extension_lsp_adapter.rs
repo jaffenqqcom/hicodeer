@@ -176,6 +176,12 @@ impl DynLspInstaller for ExtensionLspAdapter {
     ) -> LanguageServerBinaryLocations {
         async move {
             let ret = maybe!(async move {
+                // [OHOS PORT BEGIN] Kept aside before `delegate` is wrapped for
+                // the extension: resolving a program through the delegate is the
+                // same query the built-in adapters use.
+                #[cfg(target_env = "ohos")]
+                let which_delegate = delegate.clone();
+                // [OHOS PORT END]
                 let language_server_status_source = delegate.status_source_id();
                 let delegate = Arc::new(WorktreeDelegateAdapter(delegate.clone())) as _;
                 let command = self
@@ -214,6 +220,36 @@ impl DynLspInstaller for ExtensionLspAdapter {
                     command.command.as_ref()
                 };
                 let path = self.extension.path_from_extension(command_path);
+
+                // [OHOS PORT BEGIN] An extension ships its language server inside
+                // its own directory, which the daemon cannot execute by path. A
+                // failed remote spawn also reports nothing here (the spawn is
+                // issued asynchronously), so the caller would see a server that
+                // exits at once. Resolve the same name from the daemon's PATH
+                // before spawning, and report the standard message when it is
+                // absent. A result that still names a private path is the local
+                // PATH scan finding a copy in the sandbox, which cannot be run
+                // either, so it counts as absent.
+                #[cfg(target_env = "ohos")]
+                let path = if util::command::is_app_private_path(&path) {
+                    let system_path = match path.file_name().map(|name| name.to_owned()) {
+                        Some(name) => which_delegate.which(name.as_os_str()).await,
+                        None => None,
+                    };
+                    match system_path {
+                        Some(system_path) if !util::command::is_app_private_path(&system_path) => {
+                            system_path
+                        }
+                        _ => {
+                            return Err(lsp::language_server_not_installed(
+                                &self.language_server_id.0,
+                            ));
+                        }
+                    }
+                } else {
+                    path
+                };
+                // [OHOS PORT END]
 
                 Ok(LanguageServerBinary {
                     path,

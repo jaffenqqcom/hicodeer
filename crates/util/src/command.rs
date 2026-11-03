@@ -14,8 +14,8 @@ mod ohos;
 #[cfg(target_env = "ohos")]
 // pub use ohos::{Child, Command, Stdio}; // +init re-exported for launch-zed's cmd-agent client setup
 pub use ohos::{
-    Child, Command, LocalToolStatus, Stdio, init, init_local_tools, local_tool_programs,
-    local_tool_status,
+    Child, Command, LocalToolStatus, Stdio, init, init_local_tools, is_app_private_path,
+    local_tool_programs, local_tool_status,
 };
 
 #[cfg(target_os = "windows")]

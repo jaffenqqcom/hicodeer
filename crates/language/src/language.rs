@@ -911,12 +911,7 @@ where
                         (Ok(binary), None)
                     }
                     None => (
-                        Err(anyhow::anyhow!(
-                            "language server \"{}\" is not installed. Install it with brew, or \
-                             add it in PATH if it is installed. Then restart the language \
-                             server.",
-                            self.name().0
-                        )),
+                        Err(lsp::language_server_not_installed(&self.name().0)),
                         None,
                     ),
                 };

@@ -82,6 +82,18 @@ const LOCAL_TOOL_BIN_DIRS: &[&str] = &["/data/app/bin"];
 /// handed to the daemon by name instead of by path.
 const APP_DATA_DIR: &str = "/data/storage/el2/base/haps/entry/files";
 
+/// Whether `path` names a location only this process's mount view has.
+///
+/// Both the private HNP mount and everything under [`APP_DATA_DIR`] belong to
+/// this process alone, so a program found there cannot be executed by the
+/// daemon by path - it has to be resolved from the daemon's own PATH by name.
+pub fn is_app_private_path(path: &Path) -> bool {
+    path.starts_with(APP_DATA_DIR)
+        || path
+            .parent()
+            .is_some_and(|parent| LOCAL_TOOL_BIN_DIRS.iter().any(|dir| Path::new(dir) == parent))
+}
+
 /// Scan the private HNP install dir and record every present executable name,
 /// so a later [`Command::spawn`] can route it locally without re-reading the
 /// directory. Call once at startup (idempotent): the snapshot is taken on the
@@ -530,7 +542,8 @@ impl Command {
 /// Program name to hand the daemon for `program`.
 ///
 /// A path under the private HNP mount (`/data/app/bin`) or under the
-/// application data directory exists only in this process's own mount view: the
+/// application data directory (see [`is_app_private_path`]) exists only in this
+/// process's own mount view: the
 /// daemon runs under a different uid and cannot open it, so passing the absolute
 /// path remotely makes every exec fail with ENOENT. Such a path is reduced to its
 /// basename so the daemon resolves the same name from its own PATH - which is
@@ -539,11 +552,7 @@ impl Command {
 /// or a path both sides can reach) is forwarded unchanged.
 fn daemon_program_name(program: &OsStr) -> String {
     let path = Path::new(program);
-    let absent_from_daemon_view = path
-        .parent()
-        .is_some_and(|parent| LOCAL_TOOL_BIN_DIRS.iter().any(|dir| Path::new(dir) == parent))
-        || path.starts_with(APP_DATA_DIR);
-    if absent_from_daemon_view
+    if is_app_private_path(path)
         && let Some(name) = path.file_name()
     {
         return name.to_string_lossy().into_owned();

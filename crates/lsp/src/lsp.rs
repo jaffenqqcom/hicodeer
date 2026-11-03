@@ -103,6 +103,18 @@ pub struct LanguageServerBinary {
     pub env: Option<HashMap<String, String>>,
 }
 
+/// Error reported when no copy of a language server can be resolved.
+///
+/// Shared by the regular lookup and the OHOS path (which resolves an
+/// extension-shipped program against the daemon's PATH before spawning), so a
+/// server that is absent always reads the same way.
+pub fn language_server_not_installed(name: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "language server \"{name}\" is not installed. Install it with brew, or, if it is already \
+         installed, add it to PATH. Then restart the language server."
+    )
+}
+
 /// Configures the search (and installation) of language servers.
 #[derive(Debug, Clone)]
 pub struct LanguageServerBinaryOptions {

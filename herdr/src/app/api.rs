@@ -1149,6 +1149,12 @@ impl App {
             Method::PaneMove(params) => return self.handle_pane_move(request.id, params),
             Method::PaneZoom(params) => return self.handle_pane_zoom(request.id, params),
             Method::PaneLayout(params) => return self.handle_pane_layout(request.id, params),
+            Method::PaneContextMenu(params) => {
+                return self.handle_pane_context_menu(request.id, params);
+            }
+            Method::PaneContextMenuInvoke(params) => {
+                return self.handle_pane_context_menu_invoke(request.id, params);
+            }
             Method::PaneProcessInfo(params) => {
                 return self.handle_pane_process_info(request.id, params);
             }

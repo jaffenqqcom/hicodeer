@@ -21,6 +21,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) mobile_width_threshold: u16,
     pub(super) tab_bar_position: TabBarPositionConfig,
     pub(super) hide_tab_bar_when_single_tab: bool,
+    pub(super) show_tab_bar: bool,
+    pub(super) context_menu_owner: crate::config::ContextMenuOwnerConfig,
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
@@ -525,6 +527,26 @@ pub(super) enum ClientContextMenuAction {
     Zoom,
     ToggleRightClickPassthrough,
     ClosePane,
+}
+
+impl ClientContextMenuAction {
+    /// Maps the stable action ids shared with the API server back to a TUI
+    /// action. Unknown ids are ignored, so a newer server cannot crash an old
+    /// client with an item it does not know how to run.
+    pub(super) fn from_context_menu_id(id: &str) -> Option<Self> {
+        use crate::api::schema as schema;
+        Some(match id {
+            schema::RENAME_PANE => Self::RenamePane,
+            schema::CLEAR_PANE_NAME => Self::ClearPaneName,
+            schema::SWAP_WITH_FOCUSED_PANE => Self::SwapWithFocusedPane,
+            schema::SPLIT_RIGHT => Self::SplitRight,
+            schema::SPLIT_DOWN => Self::SplitDown,
+            schema::ZOOM => Self::Zoom,
+            schema::TOGGLE_RIGHT_CLICK => Self::ToggleRightClickPassthrough,
+            schema::CLOSE_PANE => Self::ClosePane,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug)]

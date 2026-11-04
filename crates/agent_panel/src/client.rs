@@ -14,6 +14,8 @@ use std::time::Duration;
 use cmd_client::protocol::{AGENT_CONTROL_TOKEN_PREFIX, AgentControl};
 use serde_json::{Value, json};
 
+use terminal_view::{PaneContextMenuEntry, PaneScrollMetrics};
+
 use crate::herdr_settings::{Integration, IntegrationState};
 use crate::snapshot::Snapshot;
 
@@ -54,7 +56,21 @@ pub(crate) fn fetch() -> Result<Snapshot, ClientError> {
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
     let workspaces = call(&control, "workspace.list", json!({}))?;
     let agents = call(&control, "agent.list", json!({}))?;
-    Snapshot::from_api(&workspaces, &agents)
+    // Tabs are an OHOS-only view: desktop herdr still draws its own tab strip,
+    // so duplicating it as `Terminal-*` rows would be wrong. On OHOS a failed
+    // `tab.list` must not fail the whole snapshot either, so it degrades to no
+    // terminal rows instead.
+    #[cfg(target_env = "ohos")]
+    let tabs = match call(&control, "tab.list", json!({})) {
+        Ok(tabs) => tabs,
+        Err(err) => {
+            log::warn!("agent panel: tab.list failed, listing no terminal tabs: {err}");
+            json!({ "tabs": [] })
+        }
+    };
+    #[cfg(not(target_env = "ohos"))]
+    let tabs = json!({ "tabs": [] });
+    Snapshot::from_api(&workspaces, &agents, &tabs)
 }
 
 /// Focuses one space, which switches the TUI to it.
@@ -121,6 +137,43 @@ pub(crate) fn close_space(workspace_id: &str) -> Result<(), ClientError> {
         "workspace.close",
         json!({ "workspace_id": workspace_id }),
     )?;
+    Ok(())
+}
+
+/// Creates a tab inside one space. The server names it with the next free
+/// number, so the panel never has to invent a label.
+pub(crate) fn create_tab(workspace_id: &str) -> Result<(), ClientError> {
+    let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
+    call(
+        &control,
+        "tab.create",
+        json!({ "workspace_id": workspace_id, "focus": true }),
+    )?;
+    Ok(())
+}
+
+/// Brings one tab to the front.
+pub(crate) fn focus_tab(tab_id: &str) -> Result<(), ClientError> {
+    let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
+    call(&control, "tab.focus", json!({ "tab_id": tab_id }))?;
+    Ok(())
+}
+
+/// Renames one tab, addressed by its public tab id.
+pub(crate) fn rename_tab(tab_id: &str, label: &str) -> Result<(), ClientError> {
+    let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
+    call(
+        &control,
+        "tab.rename",
+        json!({ "tab_id": tab_id, "label": label }),
+    )?;
+    Ok(())
+}
+
+/// Closes one tab, including every pane in it.
+pub(crate) fn close_tab(tab_id: &str) -> Result<(), ClientError> {
+    let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
+    call(&control, "tab.close", json!({ "tab_id": tab_id }))?;
     Ok(())
 }
 
@@ -467,6 +520,148 @@ fn parse_integrations(result: &Value) -> Result<Vec<Integration>, ClientError> {
         });
     }
     Ok(integrations)
+}
+
+/// The Agent terminal's right-click menu. The server owns both the hit test
+/// and the item list; the host only renders what comes back. `row`/`col` are
+/// terminal cells relative to the pane surface.
+pub(crate) fn pane_context_menu(
+    row: u16,
+    col: u16,
+) -> Result<(String, Vec<PaneContextMenuEntry>), String> {
+    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    let result = call(
+        &control,
+        "pane.context_menu",
+        json!({ "row": row, "col": col }),
+    )
+    .map_err(|err| err.to_string())?;
+    let pane_id = result
+        .get("pane_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let items = result
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "pane.context_menu carried no items".to_string())?
+        .iter()
+        .map(|item| PaneContextMenuEntry {
+            id: item
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            label: item
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
+        .collect();
+    Ok((pane_id, items))
+}
+
+/// Executes one host-rendered menu item. A `Some` result means the host must
+/// open its own rename input and then call `rename_pane` with the edited text.
+pub(crate) fn invoke_pane_context_menu(
+    pane_id: &str,
+    action_id: &str,
+) -> Result<Option<String>, String> {
+    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    let result = call(
+        &control,
+        "pane.context_menu.invoke",
+        json!({ "pane_id": pane_id, "action_id": action_id }),
+    )
+    .map_err(|err| err.to_string())?;
+    if result.get("type").and_then(Value::as_str) == Some("pane_context_menu_rename") {
+        return Ok(Some(
+            result
+                .get("current_label")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ));
+    }
+    Ok(None)
+}
+
+/// Renames one pane after the host's inline rename input is confirmed.
+pub(crate) fn rename_pane(pane_id: &str, label: &str) -> Result<(), String> {
+    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    call(
+        &control,
+        "pane.rename",
+        json!({ "pane_id": pane_id, "label": label }),
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+/// Scroll metrics of the pane in front, for the host-drawn scrollbar thumb.
+/// `pane.list` is used instead of `pane.current` because the latter omits the
+/// scroll field for a pane whose runtime has not reported metrics yet. The
+/// pane id comes back too, so dragging the thumb can write the offset back.
+pub(crate) fn focused_pane_scroll() -> Result<PaneScrollMetrics, String> {
+    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    let result = call(&control, "pane.list", json!({})).map_err(|err| err.to_string())?;
+    let panes = result
+        .get("panes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "pane.list carried no panes".to_string())?;
+    // Only the focused pane's scroll belongs to this terminal. Falling back to
+    // the first pane would attach the scrollbar to an unrelated pane and write
+    // drags to it, so report an error instead; the poll then hides the thumb.
+    let Some(pane) = panes.iter().find(|pane| {
+        pane.get("focused")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) else {
+        return Err("pane.list reported no focused pane".to_string());
+    };
+    let pane_id = pane
+        .get("pane_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let Some(scroll) = pane.get("scroll") else {
+        // No scrollback yet: at the bottom with nothing to scroll, the same
+        // state in which herdr hides its own thumb.
+        return Ok(PaneScrollMetrics {
+            pane_id,
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 0,
+            viewport_rows: 0,
+        });
+    };
+    Ok(PaneScrollMetrics {
+        pane_id,
+        offset_from_bottom: scroll
+            .get("offset_from_bottom")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        max_offset_from_bottom: scroll
+            .get("max_offset_from_bottom")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        viewport_rows: scroll
+            .get("viewport_rows")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    })
+}
+
+/// Writes a new scroll position after the host's scrollbar thumb is dragged.
+pub(crate) fn set_pane_scroll(pane_id: &str, offset: u64) -> Result<(), String> {
+    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    call(
+        &control,
+        "pane.scroll",
+        json!({ "pane_id": pane_id, "offset_from_bottom": offset }),
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 /// One request over a fresh bridge connection. The token line comes first; the

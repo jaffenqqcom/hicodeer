@@ -886,6 +886,38 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "pane.context_menu"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneContextMenuParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "pane.context_menu.invoke"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneContextMenuInvokeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "pane.process_info"
             },
             "params": {
@@ -3039,6 +3071,52 @@
               ]
             }
           }
+        },
+        "PaneContextMenuParams": {
+          "type": "object",
+          "properties": {
+            "tab_id": {
+              "description": "Public tab id the right-click happened in. When omitted the server uses\nthe tab currently in front, which is what an outer application that\ndoes not track herdr's tab ids needs.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "row": {
+              "description": "Row/column in terminal cells, relative to the pane surface. `None`\nresolves to the tab's focused pane.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "col": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          }
+        },
+        "PaneContextMenuInvokeParams": {
+          "type": "object",
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "action_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "action_id"
+          ]
         },
         "PaneProcessInfoParams": {
           "type": "object",
@@ -5713,6 +5791,51 @@
               "properties": {
                 "type": {
                   "type": "string",
+                  "const": "pane_context_menu"
+                },
+                "pane_id": {
+                  "type": "string"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PaneContextMenuItem"
+                  }
+                }
+              },
+              "required": [
+                "type",
+                "pane_id",
+                "items"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "pane_context_menu_rename"
+                },
+                "pane_id": {
+                  "type": "string"
+                },
+                "current_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "pane_id"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
                   "const": "pane_process_info"
                 },
                 "process_info": {
@@ -7509,6 +7632,21 @@
             "single_pane",
             "already_zoomed",
             "already_unzoomed"
+          ]
+        },
+        "PaneContextMenuItem": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "label"
           ]
         },
         "PaneProcessInfo": {

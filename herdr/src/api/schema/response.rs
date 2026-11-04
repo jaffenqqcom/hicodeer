@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::agents::AgentInfo;
 use super::common::{ClientWindowTitleReason, NotificationShowReason};
+use super::context_menu::PaneContextMenuItem;
 use super::events::EventEnvelope;
 use super::integrations::{
     IntegrationInstallResult, IntegrationTarget, IntegrationUninstallResult,
@@ -164,6 +165,14 @@ pub enum ResponseResult {
     },
     PaneLayout {
         layout: PaneLayoutSnapshot,
+    },
+    PaneContextMenu {
+        pane_id: String,
+        items: Vec<PaneContextMenuItem>,
+    },
+    PaneContextMenuRename {
+        pane_id: String,
+        current_label: Option<String>,
     },
     PaneProcessInfo {
         process_info: PaneProcessInfo,

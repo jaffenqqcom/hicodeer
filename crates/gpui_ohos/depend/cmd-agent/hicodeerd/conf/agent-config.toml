@@ -13,8 +13,13 @@ name = "dracula"
 [ui]
 sidebar_start_collapsed = true
 sidebar_collapsed_mode = "hidden"
-# The tab row stays. It is the server's own tab switcher, and the space name it
-# repeat is not the thing to remove -- that is the narrow-screen header below.
+# HiCodeer draws the tab switcher in its Agent panel, the right-click menu with
+# its own ContextMenu, and the pane scrollbar with its own scrollbar style, so
+# the TUI client stops drawing all three. The menu contents still come from the
+# server over `pane.context_menu`.
+show_tab_bar = false
+context_menu_owner = "host"
+pane_scrollbars = false
 hide_tab_bar_when_single_tab = false
 # Leave the terminal title alone. Any format here is picked up by the server as
 # the pane's title and drawn on its top border, which costs a row and only

@@ -52,7 +52,7 @@ use workspace::{
 use crate::client::ClientError;
 use crate::controller::AgentController as _;
 use crate::session_service::{HistoryView, SessionKey, SessionService};
-use crate::snapshot::{Agent, AgentStatus, Snapshot, Space};
+use crate::snapshot::{Agent, AgentStatus, Snapshot, Space, TerminalEntry};
 
 /// Cadence of the refresh loop. The API path used here has no push channel for
 /// agent status, so the tree is re-read at this interval: fast enough that a
@@ -110,6 +110,12 @@ const HICODEER_SKILL_MD: &str = include_str!("../../../herdr/skills/herdr/SKILL.
 /// scrollbar. The scrollbar is drawn over the content, so without this gutter
 /// it would sit on top of the trailing buttons of a row.
 const SCROLLBAR_GUTTER: Pixels = px(9.);
+/// The single spacing value for the action buttons at the right edge of every
+/// row. Spaces, agents, empty-terminal tabs, history rows and archived rows all
+/// use these two values, so the icons keep the same gap and line up on the same
+/// right edge across the whole Agent panel.
+const ROW_ACTION_GAP: Pixels = px(2.);
+const ROW_ACTION_SIDE_PADDING: Pixels = px(4.);
 /// Key written once the user finishes setup. While it is absent the panel stays
 /// closed. Spelled out here because this crate cannot depend on the onboarding
 /// crate, which depends on this one.
@@ -151,9 +157,11 @@ struct PendingFocus {
     at: Instant,
 }
 
-/// A space whose label is being edited in place.
-struct RenameTarget {
-    workspace_id: String,
+/// A row whose label is being edited in place. Spaces and empty-terminal tabs
+/// share the one in-place editor, but write back through different API calls.
+enum RenameTarget {
+    Space { workspace_id: String },
+    Tab { tab_id: String },
 }
 
 /// What the panel shows while it has no tree to draw.
@@ -253,6 +261,16 @@ pub fn init(cx: &mut App) {
     {
         cx.set_global(herdr_settings::AgentIntegrations::default());
         cx.set_global(herdr_settings::TerminalSettingsCache::default());
+        // The Agent terminal draws its right-click menu and scrollbar, but the
+        // data and actions come from the agent server. Register the hooks the
+        // terminal view calls so that crate does not need the agent client.
+        cx.set_global(terminal_view::agent_chrome::AgentChromeHooks {
+            context_menu: client::pane_context_menu,
+            invoke: client::invoke_pane_context_menu,
+            scroll: client::focused_pane_scroll,
+            set_scroll: client::set_pane_scroll,
+            rename_pane: client::rename_pane,
+        });
     }
 
     cx.observe_new(|workspace: &mut Workspace, _, cx| {
@@ -1038,16 +1056,24 @@ impl AgentPanel {
         .detach();
     }
 
-    /// Starts editing one space's label in place. The editor is created here
+    /// Starts editing one row's label in place. The editor is created here
     /// rather than in `render` so the row can draw it and route its confirm and
     /// cancel actions to `finish_renaming`.
-    fn begin_rename(&mut self, workspace_id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(label) = self
-            .spaces
-            .iter()
-            .find(|space| space.id == workspace_id)
-            .map(|space| space.label.clone())
-        else {
+    fn begin_rename(&mut self, target: RenameTarget, window: &mut Window, cx: &mut Context<Self>) {
+        let label = match &target {
+            RenameTarget::Space { workspace_id } => self
+                .spaces
+                .iter()
+                .find(|space| space.id.as_str() == workspace_id.as_str())
+                .map(|space| space.label.clone()),
+            RenameTarget::Tab { tab_id } => self
+                .spaces
+                .iter()
+                .flat_map(|space| space.terminals.iter())
+                .find(|terminal| terminal.tab_id.as_str() == tab_id.as_str())
+                .map(|terminal| terminal.label.clone()),
+        };
+        let Some(label) = label else {
             return;
         };
 
@@ -1072,9 +1098,7 @@ impl AgentPanel {
             }
         });
 
-        self.renaming = Some(RenameTarget {
-            workspace_id: workspace_id.to_string(),
-        });
+        self.renaming = Some(target);
         self.rename_editor = Some(editor.clone());
         self.rename_subscription = Some(subscription);
 
@@ -1098,10 +1122,15 @@ impl AgentPanel {
 
         if save {
             let label = editor.read(cx).text(cx).trim().to_string();
-            // An empty label would erase the space's name; the server treats that as
-            // "no change" too, so keep the old one.
+            // An empty label would erase the row's name; the server treats that
+            // as "no change" too, so keep the old one.
             if !label.is_empty() {
-                self.rename_space(target.workspace_id, label, cx);
+                match target {
+                    RenameTarget::Space { workspace_id } => {
+                        self.rename_space(workspace_id, label, cx);
+                    }
+                    RenameTarget::Tab { tab_id } => self.rename_tab(tab_id, label, cx),
+                }
             }
         }
         cx.notify();
@@ -1115,6 +1144,18 @@ impl AgentPanel {
                 .await
             {
                 log_client_error("rename space", err);
+            }
+        })
+        .detach();
+    }
+
+    fn rename_tab(&self, tab_id: String, label: String, cx: &mut Context<Self>) {
+        cx.spawn(async move |_this, cx| {
+            if let Err(err) = cx
+                .background_spawn(async move { client::rename_tab(&tab_id, &label) })
+                .await
+            {
+                log_client_error("rename tab", err);
             }
         })
         .detach();
@@ -1286,11 +1327,10 @@ impl AgentPanel {
     /// rename and close. Rename edits the label in place, in the row itself.
     fn render_space(&self, space: &Space, cx: &mut Context<Self>) -> AnyElement {
         let id = space.id.clone();
-        let rename_editor = if self
-            .renaming
-            .as_ref()
-            .is_some_and(|target| target.workspace_id == space.id)
-        {
+        let rename_editor = if self.renaming.as_ref().is_some_and(|target| {
+            matches!(target, RenameTarget::Space { workspace_id }
+                if workspace_id.as_str() == space.id.as_str())
+        }) {
             self.rename_editor.clone()
         } else {
             None
@@ -1368,10 +1408,33 @@ impl AgentPanel {
                             .top_0()
                             .bottom_0()
                             .items_center()
-                            .gap_0p5()
-                            .px_1()
+                            .gap(ROW_ACTION_GAP)
+                            .px(ROW_ACTION_SIDE_PADDING)
                             .bg(cx.theme().colors().ghost_element_hover)
                             .visible_on_hover(row_id.clone())
+                            .child(
+                                IconButton::new(
+                                    ElementId::Name(SharedString::from(format!(
+                                        "agent-space-new-tab-button-{}",
+                                        space.id
+                                    ))),
+                                    IconName::Plus,
+                                )
+                                .icon_size(IconSize::Small)
+                                .icon_color(Color::Muted)
+                                .tooltip(move |_, cx| {
+                                    Tooltip::simple(localization::localized_str!("New Tab"), cx)
+                                })
+                                .on_click({
+                                    let panel = panel.clone();
+                                    let workspace_id = space.id.clone();
+                                    move |_, _, cx| {
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            panel.create_tab_in_space(workspace_id.clone(), cx);
+                                        });
+                                    }
+                                }),
+                            )
                             .child(
                                 IconButton::new(
                                     ElementId::Name(SharedString::from(format!(
@@ -1390,7 +1453,13 @@ impl AgentPanel {
                                     let target = space.id.clone();
                                     move |_, window, cx| {
                                         let _ = panel.update(cx, |panel, cx| {
-                                            panel.begin_rename(&target, window, cx);
+                                            panel.begin_rename(
+                                                RenameTarget::Space {
+                                                    workspace_id: target.clone(),
+                                                },
+                                                window,
+                                                cx,
+                                            );
                                         });
                                     }
                                 }),
@@ -1548,7 +1617,8 @@ impl AgentPanel {
                                 .top_0()
                                 .bottom_0()
                                 .items_center()
-                                .px_1()
+                                .gap(ROW_ACTION_GAP)
+                                .px(ROW_ACTION_SIDE_PADDING)
                                 .bg(cx.theme().colors().ghost_element_hover)
                                 .visible_on_hover(row_id.clone())
                                 .child(
@@ -1610,6 +1680,160 @@ impl AgentPanel {
                 let _ = panel.update(cx, |panel, cx| panel.focus_agent(pane_id.clone(), window, cx));
             })
             .into_any_element()
+    }
+
+    /// One tab with no agent, drawn at the same level as the agent rows. It
+    /// renames in place through the shared editor and closes the whole tab.
+    fn render_terminal_row(&self, terminal: &TerminalEntry, cx: &mut Context<Self>) -> AnyElement {
+        let tab_id = terminal.tab_id.clone();
+        let panel = cx.entity();
+        let (marker, marker_color) = status_marker(terminal.status);
+        let renaming = self.renaming.as_ref().is_some_and(|target| {
+            matches!(target, RenameTarget::Tab { tab_id }
+                if tab_id.as_str() == terminal.tab_id.as_str())
+        });
+        let editor = if renaming {
+            self.rename_editor.clone()
+        } else {
+            None
+        };
+        let label =
+            localization::format_message("Terminal-{}", &[("0", terminal.label.clone())]);
+
+        let title: AnyElement = if let Some(editor) = editor {
+            let confirm_panel = panel.clone();
+            let cancel_panel = panel.clone();
+            div()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "agent-terminal-rename-{}",
+                    terminal.tab_id
+                ))))
+                .relative()
+                .flex_1()
+                .h_6()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(editor)
+                        .on_action(move |_: &menu::Confirm, window, cx| {
+                            let _ = confirm_panel.update(cx, |panel, cx| {
+                                panel.finish_renaming(true, window, cx)
+                            });
+                        })
+                        .on_action(move |_: &menu::Cancel, window, cx| {
+                            let _ = cancel_panel.update(cx, |panel, cx| {
+                                panel.finish_renaming(false, window, cx)
+                            });
+                        }),
+                )
+                .into_any_element()
+        } else {
+            h_flex()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "agent-terminal-title-{}",
+                    terminal.tab_id
+                ))))
+                .flex_1()
+                .min_w_0()
+                .h_6()
+                .child(Label::new(label.clone()).single_line().truncate())
+                .tooltip(Tooltip::text(label))
+                .into_any_element()
+        };
+
+        let row_id = SharedString::from(format!("agent-terminal-row-{}", terminal.tab_id));
+        let rename_panel = panel.clone();
+        let close_panel = panel.clone();
+        row_container(
+            ElementId::Name(row_id.clone()),
+            AGENT_INDENT,
+            terminal.focused,
+            cx,
+        )
+        .group(row_id.clone())
+        .child(
+            h_flex()
+                .relative()
+                .w_full()
+                .gap_1p5()
+                .child(status_slot(marker, marker_color))
+                .child(title)
+                .when(!renaming, |this| {
+                    this.child(
+                        h_flex()
+                            .absolute()
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .items_center()
+                            .gap(ROW_ACTION_GAP)
+                            .px(ROW_ACTION_SIDE_PADDING)
+                            .bg(cx.theme().colors().ghost_element_hover)
+                            .visible_on_hover(row_id.clone())
+                            .child(
+                                IconButton::new(
+                                    ElementId::Name(SharedString::from(format!(
+                                        "agent-terminal-rename-button-{}",
+                                        terminal.tab_id
+                                    ))),
+                                    IconName::Pencil,
+                                )
+                                .icon_size(IconSize::Small)
+                                .icon_color(Color::Muted)
+                                .tooltip(move |_, cx| {
+                                    Tooltip::simple(localization::localized_str!("Rename"), cx)
+                                })
+                                .on_click({
+                                    let panel = rename_panel;
+                                    let tab_id = terminal.tab_id.clone();
+                                    move |_, window, cx| {
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            panel.begin_rename(
+                                                RenameTarget::Tab { tab_id: tab_id.clone() },
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                }),
+                            )
+                            .child(
+                                IconButton::new(
+                                    ElementId::Name(SharedString::from(format!(
+                                        "agent-terminal-close-button-{}",
+                                        terminal.tab_id
+                                    ))),
+                                    IconName::Close,
+                                )
+                                .icon_size(IconSize::Small)
+                                .icon_color(Color::Muted)
+                                .tooltip(move |_, cx| {
+                                    Tooltip::simple(localization::localized_str!("Close"), cx)
+                                })
+                                .on_click({
+                                    let panel = close_panel;
+                                    let tab_id = terminal.tab_id.clone();
+                                    move |_, _, cx| {
+                                        let _ = panel.update(cx, |panel, cx| {
+                                            panel.close_tab_entry(tab_id.clone(), cx);
+                                        });
+                                    }
+                                }),
+                            ),
+                    )
+                }),
+        )
+        .on_click(move |_, window, cx| {
+            let _ = panel.update(cx, |panel, cx| {
+                panel.focus_tab_entry(tab_id.clone(), window, cx)
+            });
+        })
+        .into_any_element()
     }
 
     /// Whether this agent's row should wear the attention bell.
@@ -2475,8 +2699,8 @@ impl AgentPanel {
                         .top_0()
                         .bottom_0()
                         .items_center()
-                        .gap_0p5()
-                        .px_1()
+                        .gap(ROW_ACTION_GAP)
+                        .px(ROW_ACTION_SIDE_PADDING)
                         .bg(cx.theme().colors().ghost_element_hover)
                         .visible_on_hover(row_id.clone())
                         .when(!archived, |this| {
@@ -2649,6 +2873,48 @@ impl AgentPanel {
                     .await
             {
                 log_client_error("close agent", err);
+            }
+        })
+        .detach();
+    }
+
+    /// Creates a tab inside one space. The server names it and focuses it, so
+    /// the next refresh is the only thing needed to show the new row.
+    fn create_tab_in_space(&self, workspace_id: String, cx: &mut Context<Self>) {
+        cx.spawn(async move |_this, cx| {
+            if let Err(err) = cx
+                .background_spawn(async move { client::create_tab(&workspace_id) })
+                .await
+            {
+                log_client_error("create tab", err);
+            }
+        })
+        .detach();
+    }
+
+    /// Brings one tab to the front, revealing the Agent terminal so the switch
+    /// is visible.
+    fn focus_tab_entry(&mut self, tab_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.reveal_agent_terminal(window, cx);
+        cx.spawn(async move |_this, cx| {
+            if let Err(err) = cx
+                .background_spawn(async move { client::focus_tab(&tab_id) })
+                .await
+            {
+                log_client_error("focus tab", err);
+            }
+        })
+        .detach();
+    }
+
+    /// Closes one tab, including every pane in it.
+    fn close_tab_entry(&self, tab_id: String, cx: &mut Context<Self>) {
+        cx.spawn(async move |_this, cx| {
+            if let Err(err) = cx
+                .background_spawn(async move { client::close_tab(&tab_id) })
+                .await
+            {
+                log_client_error("close tab", err);
             }
         })
         .detach();
@@ -3035,8 +3301,18 @@ impl Render for AgentPanel {
                     block = block.pt_1();
                 }
                 block = block.child(self.render_space(space, cx));
+                // Agents and empty tabs are one flat list in tab order, not
+                // every agent first and then every empty tab.
+                let mut entries: Vec<(usize, AnyElement)> = Vec::new();
                 for agent in &space.agents {
-                    block = block.child(self.render_agent_row(agent, cx));
+                    entries.push((agent.tab_index, self.render_agent_row(agent, cx)));
+                }
+                for terminal in &space.terminals {
+                    entries.push((terminal.tab_index, self.render_terminal_row(terminal, cx)));
+                }
+                entries.sort_by_key(|(tab_index, _)| *tab_index);
+                for (_, entry) in entries {
+                    block = block.child(entry);
                 }
                 rows.push(block.into_any_element());
             }

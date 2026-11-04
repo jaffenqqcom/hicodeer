@@ -55,30 +55,17 @@ impl ClientContextMenuOverlay {
                 has_manual_label,
                 right_click_passthrough,
                 ..
-            } => {
-                let mut items = vec![item("Rename pane", Action::RenamePane)];
-                if *has_manual_label {
-                    items.push(item("Clear pane name", Action::ClearPaneName));
-                }
-                if source_pane_id.is_some() {
-                    items.push(item("Swap with focused pane", Action::SwapWithFocusedPane));
-                }
-                items.extend([
-                    item("Split right", Action::SplitRight),
-                    item("Split down", Action::SplitDown),
-                    item("Zoom", Action::Zoom),
-                    item(
-                        if *right_click_passthrough {
-                            "Use HiCodeer right-click menu"
-                        } else {
-                            "Send right-clicks to pane"
-                        },
-                        Action::ToggleRightClickPassthrough,
-                    ),
-                    item("Close pane", Action::ClosePane),
-                ]);
-                items
-            }
+            } => crate::api::schema::pane_context_menu_specs(
+                *has_manual_label,
+                source_pane_id.is_some(),
+                *right_click_passthrough,
+            )
+            .into_iter()
+            .filter_map(|spec| {
+                ClientContextMenuAction::from_context_menu_id(spec.id)
+                    .map(|action| item(spec.label, action))
+            })
+            .collect(),
         }
     }
 }

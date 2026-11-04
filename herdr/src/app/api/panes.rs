@@ -1,7 +1,8 @@
 use bytes::Bytes;
 
 use crate::api::schema::{
-    EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams, PaneCopyMotion,
+    EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams,
+    PaneContextMenuInvokeParams, PaneContextMenuItem, PaneContextMenuParams, PaneCopyMotion,
     PaneCopyMotionParams, PaneCopySearchDirection, PaneCopySearchParams, PaneCurrentParams,
     PaneDirection, PaneEdgesParams, PaneEdgesResult, PaneFocusDirectionParams,
     PaneFocusDirectionReason, PaneFocusDirectionResult, PaneInfo, PaneInputSetParams,
@@ -521,6 +522,186 @@ impl App {
         };
 
         encode_success(id, ResponseResult::PaneLayout { layout })
+    }
+
+    /// The menu an outer application renders for a right-click inside a pane.
+    /// The item list comes from the same source the TUI client uses, so the
+    /// client's own menu and the host-rendered menu cannot diverge.
+    pub(super) fn handle_pane_context_menu(
+        &self,
+        id: String,
+        params: PaneContextMenuParams,
+    ) -> String {
+        let (ws_idx, tab_idx) = match params.tab_id.as_deref() {
+            Some(tab_id) => {
+                let Some(found) = self.parse_tab_id(tab_id) else {
+                    return encode_error(id, "tab_not_found", "tab not found");
+                };
+                found
+            }
+            None => {
+                let Some(ws_idx) = self.state.active else {
+                    return encode_error(id, "no_active_workspace", "no active workspace");
+                };
+                let Some(tab_idx) = self.state.workspaces.get(ws_idx).map(|ws| ws.active_tab) else {
+                    return encode_error(id, "no_active_tab", "no active tab");
+                };
+                (ws_idx, tab_idx)
+            }
+        };
+        let Some(layout) = self.pane_layout_snapshot(ws_idx, tab_idx) else {
+            return encode_error(id, "pane_layout_unavailable", "pane layout unavailable");
+        };
+        let hit = match (params.row, params.col) {
+            (Some(row), Some(col)) => layout.panes.iter().find(|pane| {
+                let rect = pane.rect;
+                col >= rect.x
+                    && col < rect.x.saturating_add(rect.width)
+                    && row >= rect.y
+                    && row < rect.y.saturating_add(rect.height)
+            }),
+            _ => layout.panes.iter().find(|pane| pane.focused),
+        };
+        let Some(hit) = hit else {
+            return encode_error(id, "pane_not_found", "no pane at that position");
+        };
+        let pane_id = hit.pane_id.clone();
+        let has_swap_source = layout.focused_pane_id != pane_id;
+        let Some((_, internal_pane_id)) = self.parse_pane_id(&pane_id) else {
+            return pane_not_found(id, &pane_id);
+        };
+        let has_manual_label = self
+            .pane_info(ws_idx, internal_pane_id)
+            .and_then(|info| info.label)
+            .is_some();
+        let right_click_passthrough = self.state.workspaces[ws_idx]
+            .pane_state(internal_pane_id)
+            .is_some_and(|pane| pane.right_click_passthrough);
+        let items = crate::api::schema::pane_context_menu_specs(
+            has_manual_label,
+            has_swap_source,
+            right_click_passthrough,
+        )
+        .into_iter()
+        .map(|spec| PaneContextMenuItem {
+            id: spec.id.to_string(),
+            label: spec.label.to_string(),
+        })
+        .collect();
+        encode_success(id, ResponseResult::PaneContextMenu { pane_id, items })
+    }
+
+    /// Executes one item from the host-rendered menu. Each arm reuses the
+    /// existing pane handlers so the API and the TUI client perform the same
+    /// actions. `rename_pane` is left to the host: it needs a text input.
+    pub(super) fn handle_pane_context_menu_invoke(
+        &mut self,
+        id: String,
+        params: PaneContextMenuInvokeParams,
+    ) -> String {
+        use crate::api::schema as schema;
+
+        let pane_id = params.pane_id;
+        let action_id = params.action_id;
+        match action_id.as_str() {
+            schema::RENAME_PANE => {
+                let current_label = self
+                    .parse_pane_id(&pane_id)
+                    .and_then(|(ws_idx, internal)| self.pane_info(ws_idx, internal))
+                    .and_then(|info| info.label);
+                encode_success(
+                    id,
+                    ResponseResult::PaneContextMenuRename {
+                        pane_id,
+                        current_label,
+                    },
+                )
+            }
+            schema::CLEAR_PANE_NAME => self.handle_pane_rename(
+                id,
+                PaneRenameParams {
+                    pane_id,
+                    label: None,
+                },
+            ),
+            schema::SWAP_WITH_FOCUSED_PANE => {
+                let Some((ws_idx, target)) = self.parse_pane_id(&pane_id) else {
+                    return pane_not_found(id, &pane_id);
+                };
+                let Some(source) = self
+                    .state
+                    .workspaces
+                    .get(ws_idx)
+                    .and_then(|ws| ws.focused_pane_id())
+                    .filter(|focused| *focused != target)
+                    .and_then(|source| self.public_pane_id(ws_idx, source))
+                else {
+                    return encode_error(id, "pane_not_found", "no other focused pane");
+                };
+                let swapped = self.handle_pane_swap(
+                    id.clone(),
+                    PaneSwapParams {
+                        pane_id: None,
+                        direction: None,
+                        source_pane_id: Some(source.clone()),
+                        target_pane_id: Some(pane_id.clone()),
+                    },
+                );
+                // A failed swap must surface instead of being followed by a
+                // focus response that looks like success.
+                if serde_json::from_str::<serde_json::Value>(&swapped)
+                    .is_ok_and(|value| value.get("error").is_some())
+                {
+                    return swapped;
+                }
+                self.handle_pane_focus(id, PaneTarget { pane_id: source })
+            }
+            schema::SPLIT_RIGHT | schema::SPLIT_DOWN => self.handle_pane_split(
+                id,
+                PaneSplitParams {
+                    workspace_id: None,
+                    target_pane_id: Some(pane_id),
+                    direction: if action_id == schema::SPLIT_RIGHT {
+                        crate::api::schema::SplitDirection::Right
+                    } else {
+                        crate::api::schema::SplitDirection::Down
+                    },
+                    ratio: None,
+                    cwd: None,
+                    focus: true,
+                    right_click: Default::default(),
+                    env: Default::default(),
+                },
+            ),
+            schema::ZOOM => self.handle_pane_zoom(
+                id,
+                PaneZoomParams {
+                    pane_id: Some(pane_id),
+                    mode: PaneZoomMode::Toggle,
+                },
+            ),
+            schema::TOGGLE_RIGHT_CLICK => {
+                let enabled = self
+                    .parse_pane_id(&pane_id)
+                    .and_then(|(ws_idx, internal)| {
+                        self.state.workspaces.get(ws_idx)?.pane_state(internal)
+                    })
+                    .is_some_and(|pane| pane.right_click_passthrough);
+                self.handle_pane_input_set(
+                    id,
+                    PaneInputSetParams {
+                        pane_id,
+                        right_click: if enabled {
+                            crate::api::schema::PaneRightClickTarget::Herdr
+                        } else {
+                            crate::api::schema::PaneRightClickTarget::Pane
+                        },
+                    },
+                )
+            }
+            schema::CLOSE_PANE => self.handle_pane_close(id, PaneTarget { pane_id }),
+            _ => encode_error(id, "unknown_context_menu_action", "unknown action id"),
+        }
     }
 
     pub(super) fn handle_pane_process_info(

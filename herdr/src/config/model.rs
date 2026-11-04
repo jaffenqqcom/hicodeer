@@ -880,6 +880,17 @@ pub enum TabBarPositionConfig {
     Bottom,
 }
 
+/// Who draws the pane right-click menu. `Host` is for an outer application
+/// that renders its own menu from the `pane.context_menu` API: the client then
+/// neither opens its overlay menu nor consumes the gesture for one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextMenuOwnerConfig {
+    #[default]
+    Herdr,
+    Host,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PaneBordersConfig {
     #[default]
@@ -982,6 +993,12 @@ pub struct UiConfig {
     pub show_agent_labels_on_pane_borders: bool,
     /// Hide the tab row when the workspace has one tab. Default: false.
     pub hide_tab_bar_when_single_tab: bool,
+    /// Draw the tab row at all. An outer application can own the tab switcher;
+    /// false reserves no row for it, so panes fill the whole surface.
+    /// Default: true.
+    pub show_tab_bar: bool,
+    /// Who draws the pane right-click menu. Default: herdr.
+    pub context_menu_owner: ContextMenuOwnerConfig,
     /// Desktop tab row placement. Default: top.
     pub tab_bar_position: TabBarPositionConfig,
     /// Ordered entries shown at the right edge of the desktop tab row. Empty by default.
@@ -1218,10 +1235,21 @@ impl Default for UiConfig {
             prompt_new_workspace_name: false,
             pane_borders: PaneBordersConfig::Auto,
             pane_outer_borders: true,
-            pane_scrollbars: true,
+            // [OHOS PORT] HiCodeer draws the tab strip, the right-click menu
+            // and the pane scrollbar itself. Gate the defaults here too: the
+            // TUI client reads a writable copy of the config that may predate
+            // these keys, and a missing key would otherwise fall back to the
+            // upstream "herdr draws everything" behaviour.
+            pane_scrollbars: !cfg!(target_env = "ohos"),
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
+            show_tab_bar: !cfg!(target_env = "ohos"),
+            context_menu_owner: if cfg!(target_env = "ohos") {
+                ContextMenuOwnerConfig::Host
+            } else {
+                ContextMenuOwnerConfig::Herdr
+            },
             tab_bar_position: TabBarPositionConfig::Top,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
@@ -1528,10 +1556,22 @@ status_indicators = "symbols"
         let default_config = Config::default();
         assert_eq!(default_config.ui.pane_borders, PaneBordersConfig::Auto);
         assert!(default_config.ui.pane_outer_borders);
-        assert!(default_config.ui.pane_scrollbars);
+        assert_eq!(
+            default_config.ui.pane_scrollbars,
+            !cfg!(target_env = "ohos")
+        );
         assert!(default_config.ui.pane_gaps);
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
         assert!(!default_config.ui.hide_tab_bar_when_single_tab);
+        assert_eq!(default_config.ui.show_tab_bar, !cfg!(target_env = "ohos"));
+        assert_eq!(
+            default_config.ui.context_menu_owner,
+            if cfg!(target_env = "ohos") {
+                ContextMenuOwnerConfig::Host
+            } else {
+                ContextMenuOwnerConfig::Herdr
+            }
+        );
         assert_eq!(
             default_config.ui.tab_bar_position,
             TabBarPositionConfig::Top
@@ -1547,6 +1587,8 @@ pane_scrollbars = false
 pane_gaps = true
 show_agent_labels_on_pane_borders = true
 hide_tab_bar_when_single_tab = true
+show_tab_bar = false
+context_menu_owner = "host"
 tab_bar_position = "bottom"
 tab_bar_right = [
   { type = "zoom" },
@@ -1564,6 +1606,11 @@ tab_bar_right_separator = " · "
         assert!(config.ui.pane_gaps);
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert!(config.ui.hide_tab_bar_when_single_tab);
+        assert!(!config.ui.show_tab_bar);
+        assert_eq!(
+            config.ui.context_menu_owner,
+            ContextMenuOwnerConfig::Host
+        );
         assert_eq!(config.ui.tab_bar_position, TabBarPositionConfig::Bottom);
         assert_eq!(config.ui.tab_bar_right.len(), 5);
         assert!(matches!(

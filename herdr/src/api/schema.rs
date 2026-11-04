@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub mod agents;
 pub mod commands;
 pub mod common;
+pub mod context_menu;
 pub mod events;
 pub mod integrations;
 pub mod panes;
@@ -17,6 +18,7 @@ pub mod worktrees;
 pub use agents::*;
 pub use commands::*;
 pub use common::*;
+pub use context_menu::*;
 pub use events::*;
 pub use integrations::*;
 pub use panes::*;
@@ -153,6 +155,10 @@ pub enum Method {
     PaneZoom(PaneZoomParams),
     #[serde(rename = "pane.layout")]
     PaneLayout(PaneLayoutParams),
+    #[serde(rename = "pane.context_menu")]
+    PaneContextMenu(PaneContextMenuParams),
+    #[serde(rename = "pane.context_menu.invoke")]
+    PaneContextMenuInvoke(PaneContextMenuInvokeParams),
     #[serde(rename = "pane.process_info")]
     PaneProcessInfo(PaneProcessInfoParams),
     #[serde(rename = "layout.export")]

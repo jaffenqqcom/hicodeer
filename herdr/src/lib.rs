@@ -322,6 +322,14 @@ const DEFAULT_CONFIG: &str = r##"# HiCodeer agent configuration
 # Set false to reclaim the scrollbar column and keep it out of terminal-native selections.
 # pane_scrollbars = true
 
+# Reserve a row for the tab strip. An outer application can own the tab
+# switcher; set false to let panes fill the whole surface.
+# show_tab_bar = true
+
+# Who draws the pane right-click menu. "host" leaves the gesture to an outer
+# application that renders the menu from the `pane.context_menu` API.
+# context_menu_owner = "herdr"
+
 # Keep split panes visually separated instead of sharing divider borders.
 # pane_gaps = true
 

@@ -1831,6 +1831,16 @@ impl ClientShellState {
                         });
                         return;
                     }
+                    // The outer application draws the pane right-click menu
+                    // from the `pane.context_menu` API. Do not open the client's
+                    // own pane overlay menu here. This stays inside the
+                    // pane-hit branch so workspace and tab right-clicks keep
+                    // their own menus.
+                    if self.config.context_menu_owner
+                        == crate::config::ContextMenuOwnerConfig::Host
+                    {
+                        return;
+                    }
                 }
                 if !self.config.mouse_capture {
                     return;

@@ -46,6 +46,21 @@ pub(crate) struct Space {
     #[cfg(target_env = "ohos")]
     pub active_tab_id: String,
     pub agents: Vec<Agent>,
+    /// Tabs in this space that run no agent at all. They are entries in the
+    /// same flat list as the agents, shown as `Terminal-<label>`.
+    pub terminals: Vec<TerminalEntry>,
+}
+
+/// One tab of a space with no agent running in any of its panes.
+#[derive(Clone)]
+pub(crate) struct TerminalEntry {
+    pub tab_id: String,
+    pub label: String,
+    pub status: AgentStatus,
+    pub focused: bool,
+    /// Position of this tab in the server's tab list, so the panel can draw
+    /// agents and empty tabs in tab order instead of agents first.
+    pub tab_index: usize,
 }
 
 /// One agent, named the way the server names it in its own sidebar.
@@ -68,8 +83,10 @@ pub(crate) struct Agent {
     pub focused: bool,
     /// The public id of the tab this agent is drawn in, matching the space's
     /// `active_tab_id`.
-    #[cfg(target_env = "ohos")]
     pub tab_id: String,
+    /// Position of this agent's tab in the server's tab list, so the panel can
+    /// draw agents and empty tabs in tab order.
+    pub tab_index: usize,
     /// The server's completion marker for the current idle transition.
     ///
     /// It is set when the transition completed work and left unset when the
@@ -98,9 +115,14 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
-    /// Joins the two API payloads. Agents keep the server's order inside their
-    /// space, so the panel nests them the way the TUI lists them.
-    pub(crate) fn from_api(workspaces: &Value, agents: &Value) -> Result<Self, ClientError> {
+    /// Joins the three API payloads. Agents keep the server's order inside
+    /// their space; a tab with no agent at all becomes a flat `Terminal-<label>`
+    /// entry in the same list.
+    pub(crate) fn from_api(
+        workspaces: &Value,
+        agents: &Value,
+        tabs: &Value,
+    ) -> Result<Self, ClientError> {
         let workspace_entries = workspaces
             .get("workspaces")
             .and_then(Value::as_array)
@@ -109,6 +131,17 @@ impl Snapshot {
             .get("agents")
             .and_then(Value::as_array)
             .ok_or_else(|| ClientError::Failed("agent.list carried no agents".into()))?;
+        let tab_entries = tabs
+            .get("tabs")
+            .and_then(Value::as_array)
+            .ok_or_else(|| ClientError::Failed("tab.list carried no tabs".into()))?;
+        // Position of each tab, so agents and empty tabs can be merged in tab
+        // order rather than listing every agent before every empty tab.
+        let tab_positions: std::collections::HashMap<String, usize> = tab_entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (text(entry, "tab_id"), index))
+            .collect();
 
         let mut spaces: Vec<Space> = workspace_entries
             .iter()
@@ -120,6 +153,7 @@ impl Snapshot {
                 #[cfg(target_env = "ohos")]
                 active_tab_id: text(entry, "active_tab_id"),
                 agents: Vec::new(),
+                terminals: Vec::new(),
             })
             .collect();
 
@@ -134,6 +168,7 @@ impl Snapshot {
             let Some(index) = index else {
                 continue;
             };
+            let tab_id = text(entry, "tab_id");
             spaces[index].agents.push(Agent {
                 id: text(entry, "terminal_id"),
                 pane_id: text(entry, "pane_id"),
@@ -141,8 +176,8 @@ impl Snapshot {
                 kind: text(entry, "agent"),
                 status: AgentStatus::parse(entry.get("agent_status")),
                 focused: flag(entry, "focused"),
-                #[cfg(target_env = "ohos")]
-                tab_id: text(entry, "tab_id"),
+                tab_index: tab_positions.get(&tab_id).copied().unwrap_or(usize::MAX),
+                tab_id,
                 #[cfg(target_env = "ohos")]
                 completion_seq: entry.get("completion_seq").and_then(Value::as_u64),
                 // The session the agent itself reports (source + value). The
@@ -158,6 +193,30 @@ impl Snapshot {
                     }),
                 launch_pending: flag(entry, "launch_pending"),
                 interactive_ready: flag(entry, "interactive_ready"),
+            });
+        }
+
+        // A tab that has an agent anywhere in it is represented by those agent
+        // rows alone; only tabs with no agent at all get a Terminal entry.
+        let tabs_with_agents: std::collections::HashSet<String> = spaces
+            .iter()
+            .flat_map(|space| space.agents.iter().map(|agent| agent.tab_id.clone()))
+            .collect();
+        for (position, entry) in tab_entries.iter().enumerate() {
+            let tab_id = text(entry, "tab_id");
+            if tabs_with_agents.contains(&tab_id) {
+                continue;
+            }
+            let workspace_id = text(entry, "workspace_id");
+            let Some(space) = spaces.iter_mut().find(|space| space.id == workspace_id) else {
+                continue;
+            };
+            space.terminals.push(TerminalEntry {
+                tab_id,
+                label: text(entry, "label"),
+                status: AgentStatus::parse(entry.get("agent_status")),
+                focused: flag(entry, "focused"),
+                tab_index: position,
             });
         }
 

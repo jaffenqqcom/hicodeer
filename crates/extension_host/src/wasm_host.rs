@@ -646,6 +646,21 @@ impl WasmHost {
         manifest: &Arc<ExtensionManifest>,
         cx: &AsyncApp,
     ) -> Task<Result<WasmExtension>> {
+        // [OHOS PORT BEGIN] Secure Shield mode forbids executable memory, so a
+        // component can never compile there. Skip the attempt instead of paying
+        // for a doomed compilation of every built-in extension. The log line is
+        // emitted once: every built-in extension hits this path.
+        #[cfg(target_env = "ohos")]
+        if !language::wasm_runtime_available() {
+            static SKIP_REPORTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            if SKIP_REPORTED.set(()).is_ok() {
+                log::info!("skipping wasm extensions: executable memory is unavailable");
+            }
+            return Task::ready(Err(anyhow!(
+                "wasm extensions are unavailable while executable memory is disabled"
+            )));
+        }
+        // [OHOS PORT END]
         let this = self.clone();
         let manifest = manifest.clone();
         let executor = cx.background_executor().clone();

@@ -47,6 +47,12 @@ vim_mode_setting.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true
 
+# [OHOS PORT BEGIN] Secure Shield mode query for the extensions page banner.
+# Delete this section to restore the upstream dependency set.
+[target.'cfg(target_env = "ohos")'.dependencies]
+openharmony-ability = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
+# [OHOS PORT END]
+
 [dev-dependencies]
 db = { workspace = true, features = ["test-support"] }
 editor = { workspace = true, features = ["test-support"] }
@@ -60,4 +66,4 @@ serde_json.workspace = true
 workspace = { workspace = true, features = ["test-support"] }
 
 [package.metadata.cargo-shear]
-ignored = ["component"]
+ignored = ["component", "openharmony-ability"]

@@ -82,7 +82,7 @@ use std::{
     ops::{DerefMut, Range},
     path::{Path, PathBuf},
     str,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, OnceLock},
 };
 use syntax_map::{QueryCursorHandle, SyntaxSnapshot, flattened_highlight_regions};
 use task::RunnableTag;
@@ -138,9 +138,19 @@ where
 {
     let mut parser = PARSERS.lock().pop().unwrap_or_else(|| {
         let mut parser = Parser::new();
+        // [OHOS PORT BEGIN] Secure Shield mode forbids executable memory, so a
+        // WASM store cannot be created there. Degrade to a parser without one:
+        // native grammars keep working and only WASM grammars fail to load.
+        // Delete this block to restore the upstream behavior.
+        #[cfg(target_env = "ohos")]
+        if let Some(store) = new_wasm_store() {
+            parser.set_wasm_store(store).unwrap();
+        }
+        #[cfg(not(target_env = "ohos"))]
         parser
             .set_wasm_store(WasmStore::new(&WASM_ENGINE).unwrap())
             .unwrap();
+        // [OHOS PORT END]
         parser
     });
     // Tree-sitter auto-resets the parser at the end of a successful parse,
@@ -166,6 +176,90 @@ where
 static WASM_ENGINE: LazyLock<wasmtime::Engine> = LazyLock::new(|| {
     wasmtime::Engine::new(&wasmtime::Config::new()).expect("Failed to create Wasmtime engine")
 });
+
+/// Cached answer to [`wasm_runtime_available`]; the probe creates a real store.
+#[cfg(target_env = "ohos")]
+static WASM_AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+/// Whether this process is able to create executable memory for WASM.
+///
+/// HarmonyOS Secure Shield mode forbids anonymous executable mappings, which
+/// makes every [`WasmStore`] construction fail. The answer is cached: entering
+/// or leaving that mode restarts the application, so it cannot change while
+/// this process is alive.
+#[cfg(target_env = "ohos")]
+pub fn wasm_runtime_available() -> bool {
+    if let Some(available) = WASM_AVAILABLE.get() {
+        return *available;
+    }
+
+    match WasmStore::new(&WASM_ENGINE) {
+        Ok(store) => {
+            drop(store);
+            let _ = WASM_AVAILABLE.set(true);
+            log::info!("wasm runtime is available");
+            true
+        }
+        Err(error) => {
+            let _ = WASM_AVAILABLE.set(false);
+            log::warn!("wasm runtime is unavailable: {error:?}");
+            false
+        }
+    }
+}
+
+/// WASM is always available outside HarmonyOS, so no probe is needed there.
+#[cfg(not(target_env = "ohos"))]
+pub fn wasm_runtime_available() -> bool {
+    true
+}
+
+/// Creates a WASM store for a fresh tree-sitter parser.
+///
+/// `None` means the platform forbids executable memory. The parser then works
+/// for native grammars only; WASM grammar loading reports a normal error.
+#[cfg(target_env = "ohos")]
+fn new_wasm_store() -> Option<WasmStore> {
+    if matches!(WASM_AVAILABLE.get(), Some(&false)) {
+        return None;
+    }
+
+    match WasmStore::new(&WASM_ENGINE) {
+        Ok(store) => {
+            let _ = WASM_AVAILABLE.set(true);
+            Some(store)
+        }
+        Err(error) => {
+            let _ = WASM_AVAILABLE.set(false);
+            log::warn!("wasm runtime is unavailable: {error:?}");
+            None
+        }
+    }
+}
+
+/// Loads a WASM grammar through the parser's WASM store.
+///
+/// A parser created without a WASM store (see [`new_wasm_store`]) has nothing
+/// to load into, which is reported as an error instead of a panic.
+pub fn load_wasm_grammar(
+    parser: &mut Parser,
+    grammar_name: &str,
+    wasm_bytes: &[u8],
+) -> Result<tree_sitter::Language> {
+    let Some(mut store) = parser.take_wasm_store() else {
+        log::warn!("wasm grammar {grammar_name} cannot load: no wasm store available");
+        return Err(anyhow::anyhow!(
+            "wasm grammar support is unavailable on this platform"
+        ));
+    };
+
+    let grammar = store.load_language(grammar_name, wasm_bytes);
+    parser
+        .set_wasm_store(store)
+        .map_err(|error| anyhow::anyhow!("failed to restore the wasm store: {error:?}"))?;
+    grammar
+        .map_err(|error| anyhow::anyhow!("failed to load wasm grammar {grammar_name}: {error:?}"))
+}
 
 /// A shared grammar for plain text, exposed for reuse by downstream crates.
 pub static PLAIN_TEXT: LazyLock<Arc<Language>> = LazyLock::new(|| {

@@ -1218,6 +1218,26 @@ impl ExtensionsPage {
             .into_any_element()
     }
 
+    /// Banner shown when Secure Shield mode blocks WASM extensions.
+    ///
+    /// That mode forbids executable memory, so no WASM extension can start;
+    /// turning the system setting off is the only way to restore them.
+    #[cfg(target_env = "ohos")]
+    fn render_secure_shield_banner() -> AnyElement {
+        div()
+            .pt_4()
+            .px_4()
+            .child(
+                Banner::new().severity(Severity::Warning).child(
+                    Label::new(localization::localized_str!(
+                        "Secure Shield mode is on. Some extension plugins cannot run. You can turn it off in Settings > Privacy and security > Secure Shield mode."
+                    ))
+                    .mt_0p5(),
+                ),
+            )
+            .into_any_element()
+    }
+
     fn render_feature_upsells(&self, cx: &Context<Self>) -> AnyElement {
         // [OHOS PORT BEGIN] every feature upsell banner links to zed.dev docs,
         // which this build does not own. To restore upstream behavior, delete
@@ -1517,6 +1537,17 @@ impl PickerDelegate for DevExtensionRebuildPickerDelegate {
 
 impl Render for ExtensionsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // [OHOS PORT BEGIN] Secure Shield mode forbids executable memory, so no
+        // WASM extension can start. Point the user at the system setting instead
+        // of letting every extension fail silently. Delete this block to restore
+        // the upstream behavior.
+        #[cfg(target_env = "ohos")]
+        let secure_shield_banner = openharmony_ability::is_secure_shield_mode_on()
+            .then(Self::render_secure_shield_banner);
+        #[cfg(not(target_env = "ohos"))]
+        let secure_shield_banner: Option<AnyElement> = None;
+        // [OHOS PORT END]
+
         v_flex()
             .size_full()
             .bg(cx.theme().colors().editor_background)
@@ -1652,6 +1683,7 @@ impl Render for ExtensionsPage {
                     ),
             )
             .child(self.render_feature_upsells(cx))
+            .children(secure_shield_banner)
             .child(v_flex().px_4().size_full().overflow_y_hidden().map(|this| {
                 let count = self.displayed_extensions.len();
 

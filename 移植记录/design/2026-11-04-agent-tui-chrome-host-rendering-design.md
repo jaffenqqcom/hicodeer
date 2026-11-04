@@ -1,7 +1,7 @@
 # Agent TUI 的 Tab 栏、右键菜单、滚动条改由 HiCodeer 绘制
 
 - 日期：2026-11-04
-- 状态：**已实现并实机验证通过，含第二至九轮实机反馈与检视修复**（2026-11-04 开发完成，2026-11-05 主人验证通过）。`cargo check --lib`（herdr）、`cargo check -p agent_panel -p terminal_view`、`bash ./script/bundle-ohos`（`EXIT=0` + `HAP BUILD SUCCESSFUL`）三项编译判据均通过。功能落地已提交为 `65f0a87 Agent TUI 外围界面改由 HiCodeer 绘制并补多语种`（36 文件，+2149/−90），结构收敛与图标更换为 `f91b2d1 Agent 终端界面收敛结构并更换终端条目图标`，图标的两次更正为 `9c12ffb 终端条目恢复状态点并用 14px 终端图标占 agent 图标位`。`./install-local.sh` 装包已执行，主人重启了 hicodeerd daemon（实测新映像已生效，见 §11 P11）；daemon 侧新 API 已实测可用。第二轮修复见 §11 P12（装包后需再重启 daemon），第三轮滚动条几何见 §11 P13，第四轮拖动/拇指长度/gutter 见 §11 P14，第五轮拖动跟手见 §11 P15，第六轮按 claude 只读检视结论全量修复并补 13 语言 i18n 见 §11 P16，第七轮按主人点评做架构收敛（抽 `agent_chrome.rs`、Space 条目单列表、滚动写入换 `postage::watch`、`invoke` 返回值定枚举）见 §11 P17，第八、九轮为终端条目图标的两次更正（状态点保留 + 14px 终端图标填 agent 图标位）也记在 P17。第三至九轮的宿主侧改动重启应用即生效；P16 另改了 herdr 侧（`mouse.rs` / `panes.rs` / `client_views.rs`），需再重启一次 daemon 才生效。实机目视验收（§8 的 8 条）由主人于 2026-11-05 完成并确认通过。开发后核对结论见 §9，实现与本文的偏差见 §11。
+- 状态：**已实现并实机验证通过，含第二至九轮实机反馈与检视修复**（2026-11-04 开发完成，2026-11-05 主人验证通过）。`cargo check --lib`（herdr）、`cargo check -p agent_panel -p terminal_view`、`bash ./script/bundle-ohos`（`EXIT=0` + `HAP BUILD SUCCESSFUL`）三项编译判据均通过。功能落地已提交为 `65f0a87 Agent TUI 外围界面改由 HiCodeer 绘制并补多语种`（36 文件，+2149/−90），结构收敛与图标更换为 `f91b2d1 Agent 终端界面收敛结构并更换终端条目图标`，图标的两次更正为 `9c12ffb 终端条目恢复状态点并用 14px 终端图标占 agent 图标位`。`./install-local.sh` 装包已执行，主人重启了 hicodeerd daemon（实测新映像已生效，见 §11 P11）；daemon 侧新 API 已实测可用。第二轮修复见 §11 P12（装包后需再重启 daemon），第三轮滚动条几何见 §11 P13，第四轮拖动/拇指长度/gutter 见 §11 P14，第五轮拖动跟手见 §11 P15，第六轮按 claude 只读检视结论全量修复并补 13 语言 i18n 见 §11 P16，第七轮按主人点评做架构收敛（抽 `agent_chrome.rs`、Space 条目单列表、滚动写入换 `postage::watch`、`invoke` 返回值定枚举）见 §11 P17，第八、九轮为终端条目图标的两次更正（状态点保留 + 14px 终端图标填 agent 图标位）也记在 P17，第十轮去掉 OHOS 上无效的右键透传开关见 §11 P18。第三至九轮的宿主侧改动重启应用即生效；P16 另改了 herdr 侧（`mouse.rs` / `panes.rs` / `client_views.rs`），需再重启一次 daemon 才生效。实机目视验收（§8 的 8 条）由主人于 2026-11-05 完成并确认通过。开发后核对结论见 §9，实现与本文的偏差见 §11。
 - 范围：
   - `herdr/`（vendored 上游 agent server 与 TUI 客户端）
   - `crates/gpui_ohos/depend/cmd-agent/hicodeerd/conf/agent-config.toml`
@@ -345,6 +345,14 @@ context_menu_owner = "host"
   - **编译判据**：`cargo check -p agent_panel -p terminal_view` 通过（①②③⑤ 与两次图标更正各跑一次；`agent_panel` 那条 warning 是环境的 `hard linking files in the incremental compilation cache failed`，非代码问题）；`bash ./script/bundle-ohos` → `EXIT=0` + `hvigor BUILD SUCCESSFUL` + `=== HAP BUILD SUCCESSFUL ===`（最新一次 HAP 186316974 字节）；`sh ./install-local.sh` → `install bundle successfully` / `start ability successfully`。本轮只动宿主侧（`terminal_view` / `agent_panel` / `Cargo.toml`）与本文，词典未再改，**不需要重启 daemon**；重启应用即生效。
 
   - **实机验证**：2026-11-05 主人确认通过。第八轮（状态点被误删）与第九轮（图标格 16px 撑宽导致与 agent 图标不同尺寸）两次更正均已装包复核；终端行最终形态为「状态点 + 14px 终端图标 + 标题」，与 agent 行逐列对齐。
+
+- **P18（第十轮：去掉右键菜单里的右键透传开关，2026-11-05）**
+  主人实机反馈：右键菜单里的「Send right-clicks to pane」与「Use HiCodeer right-click menu」两项切换后行为完全一样，都弹 HiCodeer 自己的菜单，问能否去掉。
+  - 原因：OHOS 上右键已整体由宿主接管。GPUI 层并不阻止右键 ANSI 发往 pty（P7），但 herdr 客户端在 `context_menu_owner = host` 时忽略 pane 的右键（P16 检视项 5 把这条判断收窄进 pane 命中块），因此无论 pane 的 `right_click_passthrough` 是真是假，用户看到的都是宿主菜单——这个开关在 OHOS 上没有可观察效果。
+  - 处置：`herdr/src/api/schema/context_menu.rs::pane_context_menu_specs` 在 `#[cfg(target_env = "ohos")]` 下不产出 `TOGGLE_RIGHT_CLICK`，菜单由 6 项变 5 项（Rename pane / Split right / Split down / Zoom / Close pane；有手工名或多 pane 时另有 Clear pane name / Swap with focused pane）。非 OHOS 完全不变，仍保留该开关。函数签名保留 `right_click_passthrough` 参数（非 OHOS 需要），OHOS 侧用 `let _ = right_click_passthrough;` 消掉未使用告警。
+  - 未动 `TOGGLE_RIGHT_CLICK` 的 action 分支（`app/api/panes.rs`）与 pane 状态字段：旧 API 调用仍可执行，宿主也不再有机会触发它；不清洗既有 pane 状态，避免无谓的状态迁移。
+  - 词典里 `Use HiCodeer right-click menu` / `Send right-clicks to pane` 两个 key 保留在 13 个语言包中：非 OHOS 平台仍是有效文案，且 `script/check-i18n` 只校验「代码要的 key 是否存在」，不校验冗余。
+  - 编译判据：`cargo check --manifest-path herdr/Cargo.toml --lib` 通过（4 条 warning 均为既有：`libc::time_t` / `ratatui::Cell::skip` 弃用、外部贡献者提示）。**改动在 daemon 内**，装包后必须重启 hicodeerd 才能让菜单少一项。
 
 **daemon 重启**：第一轮由主人于 20:52 完成，实测证据见 P11；第二轮改了 herdr 的 `Default`，装包后仍需按同一手法再重启一次 daemon 才能让 ①② 生效。后续若再改 herdr 侧 daemon 内代码，同样按 `project_hicodeerd_restart` 的实测手法重启 daemon：
 

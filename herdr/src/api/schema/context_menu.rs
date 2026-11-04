@@ -54,7 +54,8 @@ pub struct PaneContextMenuItem {
 ///
 /// `has_swap_source` is true when a different pane currently holds focus (the
 /// "Swap with focused pane" target). `right_click_passthrough` flips the label
-/// of the toggle item, matching the client's own menu.
+/// of the toggle item, matching the client's own menu; on OHOS the toggle is
+/// omitted and the flag is unused.
 pub fn pane_context_menu_specs(
     has_manual_label: bool,
     has_swap_source: bool,
@@ -68,17 +69,26 @@ pub fn pane_context_menu_specs(
     if has_swap_source {
         items.push(spec(SWAP_WITH_FOCUSED_PANE, "Swap with focused pane"));
     }
-    let toggle_label = if right_click_passthrough {
-        "Use HiCodeer right-click menu"
-    } else {
-        "Send right-clicks to pane"
-    };
     items.extend([
         spec(SPLIT_RIGHT, "Split right"),
         spec(SPLIT_DOWN, "Split down"),
         spec(ZOOM, "Zoom"),
-        spec(TOGGLE_RIGHT_CLICK, toggle_label),
-        spec(CLOSE_PANE, "Close pane"),
     ]);
+    // [OHOS PORT] The host draws this menu on OHOS and the pane never sees the
+    // raw right-click, so flipping the pane to passthrough changes nothing the
+    // user can observe. Hide the toggle rather than offer a no-op.
+    #[cfg(not(target_env = "ohos"))]
+    items.push(spec(
+        TOGGLE_RIGHT_CLICK,
+        if right_click_passthrough {
+            "Use HiCodeer right-click menu"
+        } else {
+            "Send right-clicks to pane"
+        },
+    ));
+    // The toggle is this flag's only reader, and OHOS has no toggle.
+    #[cfg(target_env = "ohos")]
+    let _ = right_click_passthrough;
+    items.push(spec(CLOSE_PANE, "Close pane"));
     items
 }

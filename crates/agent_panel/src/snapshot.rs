@@ -85,6 +85,7 @@ impl Space {
 pub(crate) struct TerminalEntry {
     pub tab_id: String,
     pub label: String,
+    pub status: AgentStatus,
     pub focused: bool,
 }
 
@@ -220,6 +221,7 @@ impl Snapshot {
                 space.entries.push(SpaceEntry::Terminal(TerminalEntry {
                     tab_id,
                     label: text(entry, "label"),
+                    status: AgentStatus::parse(entry.get("agent_status")),
                     focused: flag(entry, "focused"),
                 }));
             }

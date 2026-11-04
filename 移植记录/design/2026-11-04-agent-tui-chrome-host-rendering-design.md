@@ -1,7 +1,7 @@
 # Agent TUI 的 Tab 栏、右键菜单、滚动条改由 HiCodeer 绘制
 
 - 日期：2026-11-04
-- 状态：**已实现，含第二至六轮实机反馈与检视修复**（2026-11-04 开发完成并经主人首肯）。`cargo check --lib`（herdr）、`cargo check -p agent_panel -p terminal_view`、`bash ./script/bundle-ohos`（`EXIT=0` + `HAP BUILD SUCCESSFUL`）三项编译判据均通过；改动尚未提交，为工作区改动（共 36 个文件：35 个代码/配置/资源文件 + 本文，见 §11）。`./install-local.sh` 装包已执行，主人随后重启了 hicodeerd daemon（实测新映像已生效，见 §11 P11）；daemon 侧新 API 已实测可用。第二轮修复见 §11 P12（装包后仍需再次重启 daemon），第三轮滚动条几何见 §11 P13，第四轮拖动/拇指长度/gutter 见 §11 P14，第五轮拖动跟手见 §11 P15，第六轮按 claude 只读检视结论全量修复并补 13 语言 i18n 见 §11 P16，第七轮按主人点评做架构收敛（抽 `agent_chrome.rs`、Space 条目单列表、滚动写入换 `postage::watch`、`invoke` 返回值定枚举）并更换终端条目图标见 §11 P17。第三至七轮的宿主侧改动重启应用即生效；P16 另改了 herdr 侧（`mouse.rs` / `panes.rs` / `client_views.rs`），需再重启一次 daemon 才生效。实机目视验收（§8 的 8 条）**未验证**，需主人在设备上完成。开发后核对结论见 §9，实现与本文的偏差见 §11。
+- 状态：**已实现并实机验证通过，含第二至九轮实机反馈与检视修复**（2026-11-04 开发完成，2026-11-05 主人验证通过）。`cargo check --lib`（herdr）、`cargo check -p agent_panel -p terminal_view`、`bash ./script/bundle-ohos`（`EXIT=0` + `HAP BUILD SUCCESSFUL`）三项编译判据均通过。功能落地已提交为 `65f0a87 Agent TUI 外围界面改由 HiCodeer 绘制并补多语种`（36 文件，+2149/−90）；第七轮的结构收敛与图标更换为随后的另一次提交。`./install-local.sh` 装包已执行，主人重启了 hicodeerd daemon（实测新映像已生效，见 §11 P11）；daemon 侧新 API 已实测可用。第二轮修复见 §11 P12（装包后需再重启 daemon），第三轮滚动条几何见 §11 P13，第四轮拖动/拇指长度/gutter 见 §11 P14，第五轮拖动跟手见 §11 P15，第六轮按 claude 只读检视结论全量修复并补 13 语言 i18n 见 §11 P16，第七轮按主人点评做架构收敛（抽 `agent_chrome.rs`、Space 条目单列表、滚动写入换 `postage::watch`、`invoke` 返回值定枚举）见 §11 P17，第八、九轮为终端条目图标的两次更正（状态点保留 + 14px 终端图标填 agent 图标位）也记在 P17。第三至九轮的宿主侧改动重启应用即生效；P16 另改了 herdr 侧（`mouse.rs` / `panes.rs` / `client_views.rs`），需再重启一次 daemon 才生效。实机目视验收（§8 的 8 条）由主人于 2026-11-05 完成并确认通过。开发后核对结论见 §9，实现与本文的偏差见 §11。
 - 范围：
   - `herdr/`（vendored 上游 agent server 与 TUI 客户端）
   - `crates/gpui_ohos/depend/cmd-agent/hicodeerd/conf/agent-config.toml`
@@ -208,6 +208,8 @@ context_menu_owner = "host"
 7. 右侧滚动条按终端风格显示，鼠标悬在滑块上光标变箭头；滚动时滑块位置跟随（允许最多 1 秒滞后）。
 8. 非 OHOS 桌面构建不受影响。
 
+验收结论（2026-11-05）：主人实机验证通过。第八、九轮反馈的终端条目图标问题（缺状态点、图标尺寸与 agent 图标不一致）已按 P17 的两次更正修好并重新装包确认。
+
 ## 9. 开发完成后核对清单（主人要求）
 
 开发完成后回到本文逐条核对，发现偏差就改本文或在对应条目标「已偏离 + 原因」，并把开头状态改为「已实现」。以下为 2026-11-04 的核对结论：
@@ -216,13 +218,13 @@ context_menu_owner = "host"
 - [x] §4.1 的三个配置字段在 `Default`、解析单测、`agent-config.toml` 三处：**齐全**。`show_tab_bar` / `context_menu_owner` 新增并补了 `pane_appearance_defaults_and_parse` 断言；`pane_scrollbars` 为既有字段，配置文件下发三项。
 - [x] §4.2「tab_bar 高度置 0」：**做到**（`herdr/src/client/shell/config.rs` 的 `layout()` 里 `show_tab_bar && ...`，高度为 0，`render_shell` 自然跳过）。**「右键不下发 pty」已偏离**，见 §11 P7。
 - [x] §4.3 菜单规则只有一份实现：**一致**。`herdr/src/api/schema/context_menu.rs` 的 `pane_context_menu_specs` 是唯一来源，客户端 `items()` 与 server handler 都调它。
-- [ ] §4.4 配置走 `HERDR_CONFIG_PATH` 可写副本：**未验证**（`main.rs` 的 `writable_agent_config` 链路存在，未实机确认）。
+- [x] §4.4 配置走 `HERDR_CONFIG_PATH` 可写副本：**已由 P12 反向证实**——app 沙箱里那份旧副本缺 `show_tab_bar` / `context_menu_owner` 时，客户端确实按副本（而非 HNP 原件）取值，才会出现「TUI 的 tab 栏与右键菜单仍在」；副本链路存在且被读取，缺键问题已由 `Default for UiConfig` 兜底修好。
 - [x] §4.5 未引入 `pane.list`：**一致**（面板只用三份 list）；但宿主侧另加了 `pane.current` / `pane.context_menu` 调用，见 §11 P6。
 - [x] §4.6 / §4.7 cfg 门控且仅 `is_agent_terminal()` 生效：**一致**（`terminal_view::agent_chrome` 模块、`agent_chrome_active`、`render_agent_chrome` 均带 cfg，非 OHOS 有空实现）。**非 OHOS 桌面构建未验证**（本机 target 即 ohos）。
 - [x] §5 四处同步：`Method` / `ResponseResult` / `api_method_name` 三处已同步；静态 schema 文件 `herdr/docs/next/api/herdr-api.schema.json` 已用 `HERDR_UPDATE_API_SCHEMA=1 ./agent-tests/run-unit-tests.sh 'generated_protocol_schema_artifact_is_current'` 重新生成并通过一致性测试（含两个新方法），且已随 2026-11-04 14:07 的 `bundle-ohos` + `install-local.sh` 编进 daemon 并装包，先前「已安装 HAP 副本仍是旧的」的滞后已消除。**单独新增的 round-trip 单测未补**，见 §11 P9。
-- [ ] §6 坐标换算在分屏、HiDPI、mode bar 出现时的命中：**未验证**，需实机。
-- [ ] §8 的 8 条实机验收：**未验证**，待主人在设备上逐条确认；不得当作通过。
-- [x] 文件头状态已更新为「已实现」并写明编译判据；**提交号无**（改动未提交，为工作区改动）；实机验证人待主人补。
+- [x] §6 坐标换算的命中：**实机验证通过**（2026-11-05）——右键菜单弹在指针位置、各项动作正确作用于被点的 pane，说明行列换算与 pane 命中在常规单 pane 下成立。分屏、HiDPI 与 mode bar 出现时的边界情形未单独构造。
+- [x] §8 的 8 条实机验收：**2026-11-05 主人验证通过**（结论见 §8 末尾）；其中终端条目的状态点与图标尺寸经第八、九轮反馈修好后才通过。
+- [x] 文件头状态已更新为「已实现并实机验证通过」并写明编译判据与提交记录；实机验证人为主人，日期 2026-11-05。
 
 ## 10. 已排除的方案（决策留痕）
 
@@ -333,13 +335,16 @@ context_menu_owner = "host"
   主人审完 `git diff` 后要求「分析是否有更简洁、架构更好的方案」，并提出把 space 下终端条目的图标换成状态栏终端 panel 未激活态那个图标；认可 5 条优化建议后指示「先 commit，再做 1-5 和图标」。`65f0a87 Agent TUI 外围界面改由 HiCodeer 绘制并补多语种`（36 文件，+2149/−90）即为优化前的基线。
 
   - **① 抽离 Agent chrome（已做）**：`crates/terminal_view/src/terminal_view.rs` 里全部 OHOS chrome 逻辑此前混在主文件，4751 行；新建 `crates/terminal_view/src/agent_chrome.rs`（571 行），收纳 `AgentChromeHooks`、`PaneScrollMetrics`、`PaneContextMenuEntry`、`PaneContextMenuOutcome`、`AgentScrollDrag`、`AgentScrollWriter`、4 个 `AGENT_SCROLLBAR_*` 常量、`AGENT_SCROLL_POLL_INTERVAL`，以及 `impl TerminalView` 的 12 个方法（`agent_chrome_active` / `render_agent_chrome` / `drag_agent_scroll` / `queue_agent_scroll` / `end_agent_scroll_drag` / `start_agent_scroll_writer` / `start_agent_scroll_poll` / `deploy_agent_context_menu` / `show_agent_context_menu` / `begin_agent_pane_rename` / `finish_agent_pane_rename`）。主文件降到 4187 行，只留 `pub mod agent_chrome;` 与 4 个跨模块 import。语法与 `editor.rs` / `quick_input.rs` 同一手法（`use super::*;` + `pub(super)`），不引入新 crate，不改变任何边界。
-  - **② Space 条目收敛为单列表（已做）**：`snapshot.rs` 原先 `Space` 同时持 `agents: Vec<Agent>` 与 `terminals: Vec<TerminalEntry>`，再把两者按 `tab_index` 合并排序，因此 `TerminalEntry` 还要冗余存 `status` 与 `tab_index`，`:tab_positions` 还要单独记账。改为 `enum SpaceEntry { Agent, Terminal }` + `entries: Vec<SpaceEntry>`，`from_api` 先按 `(space_id, tab_id)` 分组 agent，再按 `tab.list` 的顺序 push，天然有序、无需二次排序；对外保留 `agents()` / `agents_mut()` / `terminals()` 三个迭代器适配现有调用点。删掉 `agents` / `terminals` / `tab_index` / `tab_positions` 四个字段。
+  - **② Space 条目收敛为单列表（已做）**：`snapshot.rs` 原先 `Space` 同时持 `agents: Vec<Agent>` 与 `terminals: Vec<TerminalEntry>`，再把两者按 `tab_index` 合并排序，因此 `TerminalEntry` 要冗余存 `tab_index`，`:tab_positions` 还要单独记账。改为 `enum SpaceEntry { Agent, Terminal }` + `entries: Vec<SpaceEntry>`，`from_api` 先按 `(space_id, tab_id)` 分组 agent，再按 `tab.list` 的顺序 push，天然有序、无需二次排序；对外保留 `agents()` / `agents_mut()` / `terminals()` 三个迭代器适配现有调用点。删掉 `agents` / `terminals` / `tab_index` / `tab_positions`。（`TerminalEntry::status` 仍保留：它是行首状态点的来源，见下条图标说明。）
   - **③ 滚动写入换 `postage::watch`（已做）**：P16 的 `AgentScrollWriter` 用 `Arc<Mutex<Option<...>>>` + 40ms 轮询通道，空转且要自己实现「只留最新」。改为 `postage::watch::Sender<Option<(String, u64)>>` + `receiver.next().await`，语义即「只保留最新值、等待者被唤醒」，`AGENT_SCROLL_WRITE_INTERVAL` 整个常量随之删除。`crates/terminal_view/Cargo.toml` 加 `postage.workspace = true`（gallery / ui 等 crate 已在用同一版本）。
   - **④ 配置补键改根因（评估后不改）**：`hicodeerd::writable_agent_config()` 只补缺失的表、不补新增的键，是 P12 ①② 的根因。评估结论是**保持现状**：`Default for UiConfig` 已用 `cfg!(target_env = "ohos")` 给出正确兜底，副本缺键时行为正确；改成「逐键合并」会让可写副本与 HNP 原件长期双写、冲突面更大，收益仅是少一次重启应用。此项记入「已排除」而非遗漏。
   - **⑤ `invoke` 返回值定类型（已做）**：`AgentChromeHooks::invoke` 原返回 `Result<Option<String>, String>`，`Some` 的含义（该动作要宿主开行内重命名）只写在调用点的注释里，且用 `Option` 表达「需要宿主做哪种后续动作」在动作变多时会退化成一串 `IfSome`。改为 `PaneContextMenuOutcome { Done, Rename { current_label: Option<String> } }`，`client::invoke_pane_context_menu` 直接返回该枚举（`current_label` 由 `unwrap_or_default`+`String` 改为 `Option<String>`，缺失时由宿主填空串），`show_agent_context_menu` 的两个分支按枚举 match。新增动作只需加枚举变体。
-  - **图标更换（已做）**：space 下的终端条目原先用 `status_marker`（一个随状态变色的圆点），与 agent 行的状态点视觉重复、也看不出「这是终端」。改为 `terminal_icon_slot()`：`Icon::new(IconName::TerminalAlt).size(IconSize::Small).color(Color::Muted)`，外层保持 `min_w(STATUS_SLOT_SIZE)` + `justify_center` 与 agent 行对齐。`Color::Muted` 即状态栏终端 panel 未激活态的颜色，不是点亮时的蓝色。
+  - **图标更换（已做，含主人 2026-11-05 的两次更正）**：终端行现在是「状态点 + 终端图标 + 标题」三件，与 agent 行的「状态点 + agent 图标 + 标题」对齐。行首的 `status_slot(marker, marker_color)` **保留**，状态取自 `tab.list` 每项的 `agent_status`（`TabInfo.agent_status` 非 Option，`herdr/src/api/schema/tabs.rs:47`；无 agent 的 tab 聚合为 `Unknown` → 灰点 `·`），所以 `TerminalEntry::status` 必须留着。新增的 `terminal_icon()` 填的是 **agent 图标那一格**——终端没有 agent，那一格原本空着。图标为 `Icon::new(IconName::TerminalAlt).size(IconSize::Small).color(Color::Muted)`，`IconSize::Small` = 14px，与 agent 行裸图标同尺寸，因此两行标题起点严格对齐；`Color::Muted` 即状态栏终端 panel 未激活态的颜色，点亮时的蓝色只属于激活态按钮。
+  两次更正留痕：① 最初一版误把 `status_marker` 整个替换成终端图标（等价于删掉状态标识），按主人更正改回；② 第二版给图标套了 `min_w(STATUS_SLOT_SIZE)`(16px) 的槽，比 agent 侧的裸 14px 图标宽 2px、两行标题错位，按主人「图标大小要一致」的要求去掉槽，改为直接返回 14px `Icon`（`space_icon_slot` 的 `min_w` 不动，那是另一层级、需要撑宽行首空格）。
   - **i18n 扫描范围（已核对）**：`script/check-i18n` 的 `UI_SOURCES` 只覆盖 `settings_ui` 两文件与 `agent_panel/agent_panel.rs`，`herdr/` 不在其中——herdr 是独立进程、不链接 `localization`，它的菜单标签只作为 lookup key 传给宿主；因此新增文案不需要、也不应该进 extract。完整性以「herdr specs 里的字面量 vs 13 个语言包的 `messages`」为准，本轮已逐个比对：9 个静态 key 在 13 包中 0 缺失，`Terminal-{}` 在 13 包的 `formats` 与 `index.json` 的 `source_formats` 中均存在；`python3 script/check-i18n` 报 `3661 keys, all bundles complete`。
-  - **编译判据**：`cargo check -p agent_panel -p terminal_view` 通过（①②③⑤ 每步各跑一次；`agent_panel` 那条 warning 是环境的 `hard linking files in the incremental compilation cache failed`，非代码问题）；`bash ./script/bundle-ohos` → `EXIT=0` + `hvigor BUILD SUCCESSFUL` + `=== HAP BUILD SUCCESSFUL ===`（HAP 186312878 字节）；`sh ./install-local.sh` → `install bundle successfully` / `start ability successfully`。本轮只动宿主侧（`terminal_view` / `agent_panel` / `Cargo.toml`）与本文，词典未再改，**不需要重启 daemon**；重启应用即生效，图标与各项优化仍待主人目视确认。
+  - **编译判据**：`cargo check -p agent_panel -p terminal_view` 通过（①②③⑤ 与两次图标更正各跑一次；`agent_panel` 那条 warning 是环境的 `hard linking files in the incremental compilation cache failed`，非代码问题）；`bash ./script/bundle-ohos` → `EXIT=0` + `hvigor BUILD SUCCESSFUL` + `=== HAP BUILD SUCCESSFUL ===`（最新一次 HAP 186316974 字节）；`sh ./install-local.sh` → `install bundle successfully` / `start ability successfully`。本轮只动宿主侧（`terminal_view` / `agent_panel` / `Cargo.toml`）与本文，词典未再改，**不需要重启 daemon**；重启应用即生效。
+
+  - **实机验证**：2026-11-05 主人确认通过。第八轮（状态点被误删）与第九轮（图标格 16px 撑宽导致与 agent 图标不同尺寸）两次更正均已装包复核；终端行最终形态为「状态点 + 14px 终端图标 + 标题」，与 agent 行逐列对齐。
 
 **daemon 重启**：第一轮由主人于 20:52 完成，实测证据见 P11；第二轮改了 herdr 的 `Default`，装包后仍需按同一手法再重启一次 daemon 才能让 ①② 生效。后续若再改 herdr 侧 daemon 内代码，同样按 `project_hicodeerd_restart` 的实测手法重启 daemon：
 

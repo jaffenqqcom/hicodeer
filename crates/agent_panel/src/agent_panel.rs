@@ -1687,6 +1687,7 @@ impl AgentPanel {
     fn render_terminal_row(&self, terminal: &TerminalEntry, cx: &mut Context<Self>) -> AnyElement {
         let tab_id = terminal.tab_id.clone();
         let panel = cx.entity();
+        let (marker, marker_color) = status_marker(terminal.status);
         let renaming = self.renaming.as_ref().is_some_and(|target| {
             matches!(target, RenameTarget::Tab { tab_id }
                 if tab_id.as_str() == terminal.tab_id.as_str())
@@ -1760,7 +1761,8 @@ impl AgentPanel {
                 .relative()
                 .w_full()
                 .gap_1p5()
-                .child(terminal_icon_slot())
+                .child(status_slot(marker, marker_color))
+                .child(terminal_icon())
                 .child(title)
                 .when(!renaming, |this| {
                     this.child(
@@ -3238,19 +3240,16 @@ fn space_icon_slot() -> impl IntoElement {
         )
 }
 
-/// The icon a terminal row starts with: the same one the Terminal panel wears
-/// in the status bar, so an empty tab reads as a terminal rather than an agent
-/// state marker. Kept muted; the highlighted variant belongs to the active
-/// status-bar button, not to a list row.
-fn terminal_icon_slot() -> impl IntoElement {
-    h_flex()
-        .min_w(STATUS_SLOT_SIZE)
-        .justify_center()
-        .child(
-            Icon::new(IconName::TerminalAlt)
-                .size(IconSize::Small)
-                .color(Color::Muted),
-        )
+/// The icon a terminal row shows where an agent row shows its agent icon: the
+/// same one the Terminal panel wears in the status bar, so an empty tab reads
+/// as a terminal rather than an agent. Bare `IconSize::Small` (14px) with no
+/// fixed-width slot, so it occupies exactly the width of an agent icon and both
+/// rows' titles start at the same x. Kept muted; the highlighted variant
+/// belongs to the active status-bar button, not to a list row.
+fn terminal_icon() -> impl IntoElement {
+    Icon::new(IconName::TerminalAlt)
+        .size(IconSize::Small)
+        .color(Color::Muted)
 }
 
 /// The status marker in its fixed-width slot, so every row's label starts at the

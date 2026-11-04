@@ -1,12 +1,12 @@
 # Agent TUI 的 Tab 栏、右键菜单、滚动条改由 HiCodeer 绘制
 
 - 日期：2026-11-04
-- 状态：**已实现，含第二至六轮实机反馈与检视修复**（2026-11-04 开发完成并经主人首肯）。`cargo check --lib`（herdr）、`cargo check -p agent_panel -p terminal_view`、`bash ./script/bundle-ohos`（`EXIT=0` + `HAP BUILD SUCCESSFUL`）三项编译判据均通过；改动尚未提交，为工作区改动（共 36 个文件：35 个代码/配置/资源文件 + 本文，见 §11）。`./install-local.sh` 装包已执行，主人随后重启了 hicodeerd daemon（实测新映像已生效，见 §11 P11）；daemon 侧新 API 已实测可用。第二轮修复见 §11 P12（装包后仍需再次重启 daemon），第三轮滚动条几何见 §11 P13，第四轮拖动/拇指长度/gutter 见 §11 P14，第五轮拖动跟手见 §11 P15，第六轮按 claude 只读检视结论全量修复并补 13 语言 i18n 见 §11 P16。第三至六轮的宿主侧改动重启应用即生效；P16 另改了 herdr 侧（`mouse.rs` / `panes.rs` / `client_views.rs`），需再重启一次 daemon 才生效。实机目视验收（§8 的 8 条）**未验证**，需主人在设备上完成。开发后核对结论见 §9，实现与本文的偏差见 §11。
+- 状态：**已实现，含第二至六轮实机反馈与检视修复**（2026-11-04 开发完成并经主人首肯）。`cargo check --lib`（herdr）、`cargo check -p agent_panel -p terminal_view`、`bash ./script/bundle-ohos`（`EXIT=0` + `HAP BUILD SUCCESSFUL`）三项编译判据均通过；改动尚未提交，为工作区改动（共 36 个文件：35 个代码/配置/资源文件 + 本文，见 §11）。`./install-local.sh` 装包已执行，主人随后重启了 hicodeerd daemon（实测新映像已生效，见 §11 P11）；daemon 侧新 API 已实测可用。第二轮修复见 §11 P12（装包后仍需再次重启 daemon），第三轮滚动条几何见 §11 P13，第四轮拖动/拇指长度/gutter 见 §11 P14，第五轮拖动跟手见 §11 P15，第六轮按 claude 只读检视结论全量修复并补 13 语言 i18n 见 §11 P16，第七轮按主人点评做架构收敛（抽 `agent_chrome.rs`、Space 条目单列表、滚动写入换 `postage::watch`、`invoke` 返回值定枚举）并更换终端条目图标见 §11 P17。第三至七轮的宿主侧改动重启应用即生效；P16 另改了 herdr 侧（`mouse.rs` / `panes.rs` / `client_views.rs`），需再重启一次 daemon 才生效。实机目视验收（§8 的 8 条）**未验证**，需主人在设备上完成。开发后核对结论见 §9，实现与本文的偏差见 §11。
 - 范围：
   - `herdr/`（vendored 上游 agent server 与 TUI 客户端）
   - `crates/gpui_ohos/depend/cmd-agent/hicodeerd/conf/agent-config.toml`
-  - `crates/agent_panel/src/`（`snapshot.rs`、`client.rs`、`agent_panel.rs`）
-  - `crates/terminal_view/src/terminal_view.rs`
+  - `crates/agent_panel/src/`（`snapshot.rs`、`client.rs`、`agent_panel.rs`、`controller.rs`）
+  - `crates/terminal_view/src/`（`terminal_view.rs`、`agent_chrome.rs`）
 - 结论：**让 herdr TUI 客户端停止绘制 tab 栏、右键菜单、pane 滚动条，把这三样的状态与动作改走 herdr 已有的 JSON API，由 HiCodeer 侧用 GPUI 绘制**。pane 内容仍由 herdr 渲染，不在两个进程之间传像素。
 
 ## 1. 背景：现在是谁在画
@@ -328,6 +328,18 @@ context_menu_owner = "host"
   - 词典：13 个语言包补 9 个静态 key（`New Tab` / `Rename pane` / `Clear pane name` / `Swap with focused pane` / `Use HiCodeer right-click menu` / `Send right-clicks to pane` / `Split right` / `Split down` / `Close pane`）与 `Terminal-{}` 的 `formats`；`index.json` 补 `Terminal-{}` 的 `source_formats`；`catalog_sha256` 未改。未走 extract / generate 全量重生成（主人选「手工补 13 语言译文」），diff 可控。
 
   编译与安装：`cargo check -p agent_panel -p terminal_view`、`cargo check --manifest-path herdr/Cargo.toml --lib`、`bash ./script/bundle-ohos`（`HAP BUILD SUCCESSFUL`）、`sh ./install-local.sh` 均通过。**daemon 重启**：本轮改了 herdr 侧（`mouse.rs` / `panes.rs` / `client_views.rs`），装包后需再重启一次 daemon 才生效；宿主侧（terminal_view / agent_panel / 词典）重启应用即生效。
+
+- **P17（第七轮：按主人点评做架构收敛 + 图标更换，2026-11-04）**
+  主人审完 `git diff` 后要求「分析是否有更简洁、架构更好的方案」，并提出把 space 下终端条目的图标换成状态栏终端 panel 未激活态那个图标；认可 5 条优化建议后指示「先 commit，再做 1-5 和图标」。`65f0a87 Agent TUI 外围界面改由 HiCodeer 绘制并补多语种`（36 文件，+2149/−90）即为优化前的基线。
+
+  - **① 抽离 Agent chrome（已做）**：`crates/terminal_view/src/terminal_view.rs` 里全部 OHOS chrome 逻辑此前混在主文件，4751 行；新建 `crates/terminal_view/src/agent_chrome.rs`（571 行），收纳 `AgentChromeHooks`、`PaneScrollMetrics`、`PaneContextMenuEntry`、`PaneContextMenuOutcome`、`AgentScrollDrag`、`AgentScrollWriter`、4 个 `AGENT_SCROLLBAR_*` 常量、`AGENT_SCROLL_POLL_INTERVAL`，以及 `impl TerminalView` 的 12 个方法（`agent_chrome_active` / `render_agent_chrome` / `drag_agent_scroll` / `queue_agent_scroll` / `end_agent_scroll_drag` / `start_agent_scroll_writer` / `start_agent_scroll_poll` / `deploy_agent_context_menu` / `show_agent_context_menu` / `begin_agent_pane_rename` / `finish_agent_pane_rename`）。主文件降到 4187 行，只留 `pub mod agent_chrome;` 与 4 个跨模块 import。语法与 `editor.rs` / `quick_input.rs` 同一手法（`use super::*;` + `pub(super)`），不引入新 crate，不改变任何边界。
+  - **② Space 条目收敛为单列表（已做）**：`snapshot.rs` 原先 `Space` 同时持 `agents: Vec<Agent>` 与 `terminals: Vec<TerminalEntry>`，再把两者按 `tab_index` 合并排序，因此 `TerminalEntry` 还要冗余存 `status` 与 `tab_index`，`:tab_positions` 还要单独记账。改为 `enum SpaceEntry { Agent, Terminal }` + `entries: Vec<SpaceEntry>`，`from_api` 先按 `(space_id, tab_id)` 分组 agent，再按 `tab.list` 的顺序 push，天然有序、无需二次排序；对外保留 `agents()` / `agents_mut()` / `terminals()` 三个迭代器适配现有调用点。删掉 `agents` / `terminals` / `tab_index` / `tab_positions` 四个字段。
+  - **③ 滚动写入换 `postage::watch`（已做）**：P16 的 `AgentScrollWriter` 用 `Arc<Mutex<Option<...>>>` + 40ms 轮询通道，空转且要自己实现「只留最新」。改为 `postage::watch::Sender<Option<(String, u64)>>` + `receiver.next().await`，语义即「只保留最新值、等待者被唤醒」，`AGENT_SCROLL_WRITE_INTERVAL` 整个常量随之删除。`crates/terminal_view/Cargo.toml` 加 `postage.workspace = true`（gallery / ui 等 crate 已在用同一版本）。
+  - **④ 配置补键改根因（评估后不改）**：`hicodeerd::writable_agent_config()` 只补缺失的表、不补新增的键，是 P12 ①② 的根因。评估结论是**保持现状**：`Default for UiConfig` 已用 `cfg!(target_env = "ohos")` 给出正确兜底，副本缺键时行为正确；改成「逐键合并」会让可写副本与 HNP 原件长期双写、冲突面更大，收益仅是少一次重启应用。此项记入「已排除」而非遗漏。
+  - **⑤ `invoke` 返回值定类型（已做）**：`AgentChromeHooks::invoke` 原返回 `Result<Option<String>, String>`，`Some` 的含义（该动作要宿主开行内重命名）只写在调用点的注释里，且用 `Option` 表达「需要宿主做哪种后续动作」在动作变多时会退化成一串 `IfSome`。改为 `PaneContextMenuOutcome { Done, Rename { current_label: Option<String> } }`，`client::invoke_pane_context_menu` 直接返回该枚举（`current_label` 由 `unwrap_or_default`+`String` 改为 `Option<String>`，缺失时由宿主填空串），`show_agent_context_menu` 的两个分支按枚举 match。新增动作只需加枚举变体。
+  - **图标更换（已做）**：space 下的终端条目原先用 `status_marker`（一个随状态变色的圆点），与 agent 行的状态点视觉重复、也看不出「这是终端」。改为 `terminal_icon_slot()`：`Icon::new(IconName::TerminalAlt).size(IconSize::Small).color(Color::Muted)`，外层保持 `min_w(STATUS_SLOT_SIZE)` + `justify_center` 与 agent 行对齐。`Color::Muted` 即状态栏终端 panel 未激活态的颜色，不是点亮时的蓝色。
+  - **i18n 扫描范围（已核对）**：`script/check-i18n` 的 `UI_SOURCES` 只覆盖 `settings_ui` 两文件与 `agent_panel/agent_panel.rs`，`herdr/` 不在其中——herdr 是独立进程、不链接 `localization`，它的菜单标签只作为 lookup key 传给宿主；因此新增文案不需要、也不应该进 extract。完整性以「herdr specs 里的字面量 vs 13 个语言包的 `messages`」为准，本轮已逐个比对：9 个静态 key 在 13 包中 0 缺失，`Terminal-{}` 在 13 包的 `formats` 与 `index.json` 的 `source_formats` 中均存在；`python3 script/check-i18n` 报 `3661 keys, all bundles complete`。
+  - **编译判据**：`cargo check -p agent_panel -p terminal_view` 通过（①②③⑤ 每步各跑一次；`agent_panel` 那条 warning 是环境的 `hard linking files in the incremental compilation cache failed`，非代码问题）；`bash ./script/bundle-ohos` → `EXIT=0` + `hvigor BUILD SUCCESSFUL` + `=== HAP BUILD SUCCESSFUL ===`（HAP 186312878 字节）；`sh ./install-local.sh` → `install bundle successfully` / `start ability successfully`。本轮只动宿主侧（`terminal_view` / `agent_panel` / `Cargo.toml`）与本文，词典未再改，**不需要重启 daemon**；重启应用即生效，图标与各项优化仍待主人目视确认。
 
 **daemon 重启**：第一轮由主人于 20:52 完成，实测证据见 P11；第二轮改了 herdr 的 `Default`，装包后仍需按同一手法再重启一次 daemon 才能让 ①② 生效。后续若再改 herdr 侧 daemon 内代码，同样按 `project_hicodeerd_restart` 的实测手法重启 daemon：
 

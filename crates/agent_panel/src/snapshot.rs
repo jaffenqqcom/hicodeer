@@ -28,6 +28,14 @@ impl AgentStatus {
     }
 }
 
+/// One entry in a space's flat list: a running agent, or a tab that runs none.
+/// The list is in tab order, so the panel does not have to merge two lists.
+#[derive(Clone)]
+pub(crate) enum SpaceEntry {
+    Agent(Agent),
+    Terminal(TerminalEntry),
+}
+
 /// One space: what the server calls a workspace.
 #[derive(Clone)]
 pub(crate) struct Space {
@@ -45,10 +53,31 @@ pub(crate) struct Space {
     /// `Agent::tab_id`.
     #[cfg(target_env = "ohos")]
     pub active_tab_id: String,
-    pub agents: Vec<Agent>,
-    /// Tabs in this space that run no agent at all. They are entries in the
-    /// same flat list as the agents, shown as `Terminal-<label>`.
-    pub terminals: Vec<TerminalEntry>,
+    /// Agents and empty tabs in one flat list, in tab order.
+    pub entries: Vec<SpaceEntry>,
+}
+
+impl Space {
+    pub(crate) fn agents(&self) -> impl Iterator<Item = &Agent> + '_ {
+        self.entries.iter().filter_map(|entry| match entry {
+            SpaceEntry::Agent(agent) => Some(agent),
+            SpaceEntry::Terminal(_) => None,
+        })
+    }
+
+    pub(crate) fn agents_mut(&mut self) -> impl Iterator<Item = &mut Agent> + '_ {
+        self.entries.iter_mut().filter_map(|entry| match entry {
+            SpaceEntry::Agent(agent) => Some(agent),
+            SpaceEntry::Terminal(_) => None,
+        })
+    }
+
+    pub(crate) fn terminals(&self) -> impl Iterator<Item = &TerminalEntry> + '_ {
+        self.entries.iter().filter_map(|entry| match entry {
+            SpaceEntry::Terminal(terminal) => Some(terminal),
+            SpaceEntry::Agent(_) => None,
+        })
+    }
 }
 
 /// One tab of a space with no agent running in any of its panes.
@@ -56,11 +85,7 @@ pub(crate) struct Space {
 pub(crate) struct TerminalEntry {
     pub tab_id: String,
     pub label: String,
-    pub status: AgentStatus,
     pub focused: bool,
-    /// Position of this tab in the server's tab list, so the panel can draw
-    /// agents and empty tabs in tab order instead of agents first.
-    pub tab_index: usize,
 }
 
 /// One agent, named the way the server names it in its own sidebar.
@@ -84,9 +109,6 @@ pub(crate) struct Agent {
     /// The public id of the tab this agent is drawn in, matching the space's
     /// `active_tab_id`.
     pub tab_id: String,
-    /// Position of this agent's tab in the server's tab list, so the panel can
-    /// draw agents and empty tabs in tab order.
-    pub tab_index: usize,
     /// The server's completion marker for the current idle transition.
     ///
     /// It is set when the transition completed work and left unset when the
@@ -135,13 +157,6 @@ impl Snapshot {
             .get("tabs")
             .and_then(Value::as_array)
             .ok_or_else(|| ClientError::Failed("tab.list carried no tabs".into()))?;
-        // Position of each tab, so agents and empty tabs can be merged in tab
-        // order rather than listing every agent before every empty tab.
-        let tab_positions: std::collections::HashMap<String, usize> = tab_entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| (text(entry, "tab_id"), index))
-            .collect();
 
         let mut spaces: Vec<Space> = workspace_entries
             .iter()
@@ -152,15 +167,67 @@ impl Snapshot {
                 focused: flag(entry, "focused"),
                 #[cfg(target_env = "ohos")]
                 active_tab_id: text(entry, "active_tab_id"),
-                agents: Vec::new(),
-                terminals: Vec::new(),
+                entries: Vec::new(),
             })
             .collect();
 
+        // Group agents by the tab they run in, keeping the server's order.
+        let mut agents_by_tab: std::collections::HashMap<(String, String), Vec<Agent>> =
+            std::collections::HashMap::new();
         for entry in agent_entries {
             let workspace_id = text(entry, "workspace_id");
-            // An agent whose workspace is missing still belongs somewhere; it
-            // goes last rather than being dropped from the list entirely.
+            let tab_id = text(entry, "tab_id");
+            agents_by_tab
+                .entry((workspace_id, tab_id.clone()))
+                .or_default()
+                .push(Agent {
+                    id: text(entry, "terminal_id"),
+                    pane_id: text(entry, "pane_id"),
+                    name: agent_name(entry),
+                    kind: text(entry, "agent"),
+                    status: AgentStatus::parse(entry.get("agent_status")),
+                    focused: flag(entry, "focused"),
+                    tab_id,
+                    #[cfg(target_env = "ohos")]
+                    completion_seq: entry.get("completion_seq").and_then(Value::as_u64),
+                    // The session the agent itself reports (source + value). The
+                    // value is the id the resume path knows; the history view
+                    // uses it to hide sessions that are already open.
+                    agent_session: entry.get("agent_session").and_then(|session| {
+                        Some((
+                            session.get("agent")?.as_str()?.to_owned(),
+                            session.get("value")?.as_str()?.to_owned(),
+                        ))
+                    }),
+                    launch_pending: flag(entry, "launch_pending"),
+                    interactive_ready: flag(entry, "interactive_ready"),
+                });
+        }
+
+        // Walk the tabs once, in the server's order, so agents and empty tabs
+        // interleave the way the tab strip shows them.
+        for entry in tab_entries {
+            let tab_id = text(entry, "tab_id");
+            let workspace_id = text(entry, "workspace_id");
+            let Some(space) = spaces.iter_mut().find(|space| space.id == workspace_id) else {
+                continue;
+            };
+            if let Some(agents) = agents_by_tab.remove(&(workspace_id, tab_id.clone())) {
+                space
+                    .entries
+                    .extend(agents.into_iter().map(SpaceEntry::Agent));
+            } else {
+                space.entries.push(SpaceEntry::Terminal(TerminalEntry {
+                    tab_id,
+                    label: text(entry, "label"),
+                    focused: flag(entry, "focused"),
+                }));
+            }
+        }
+
+        // An agent whose tab is not in `tab.list` yet still belongs somewhere;
+        // append it to its space (or the last one) rather than dropping it.
+        for ((workspace_id, _), agents) in agents_by_tab {
             let index = spaces
                 .iter()
                 .position(|space| space.id == workspace_id)
@@ -168,56 +235,9 @@ impl Snapshot {
             let Some(index) = index else {
                 continue;
             };
-            let tab_id = text(entry, "tab_id");
-            spaces[index].agents.push(Agent {
-                id: text(entry, "terminal_id"),
-                pane_id: text(entry, "pane_id"),
-                name: agent_name(entry),
-                kind: text(entry, "agent"),
-                status: AgentStatus::parse(entry.get("agent_status")),
-                focused: flag(entry, "focused"),
-                tab_index: tab_positions.get(&tab_id).copied().unwrap_or(usize::MAX),
-                tab_id,
-                #[cfg(target_env = "ohos")]
-                completion_seq: entry.get("completion_seq").and_then(Value::as_u64),
-                // The session the agent itself reports (source + value). The
-                // value is the id the resume path knows; the history view
-                // uses it to hide sessions that are already open.
-                agent_session: entry
-                    .get("agent_session")
-                    .and_then(|session| {
-                        Some((
-                            session.get("agent")?.as_str()?.to_owned(),
-                            session.get("value")?.as_str()?.to_owned(),
-                        ))
-                    }),
-                launch_pending: flag(entry, "launch_pending"),
-                interactive_ready: flag(entry, "interactive_ready"),
-            });
-        }
-
-        // A tab that has an agent anywhere in it is represented by those agent
-        // rows alone; only tabs with no agent at all get a Terminal entry.
-        let tabs_with_agents: std::collections::HashSet<String> = spaces
-            .iter()
-            .flat_map(|space| space.agents.iter().map(|agent| agent.tab_id.clone()))
-            .collect();
-        for (position, entry) in tab_entries.iter().enumerate() {
-            let tab_id = text(entry, "tab_id");
-            if tabs_with_agents.contains(&tab_id) {
-                continue;
-            }
-            let workspace_id = text(entry, "workspace_id");
-            let Some(space) = spaces.iter_mut().find(|space| space.id == workspace_id) else {
-                continue;
-            };
-            space.terminals.push(TerminalEntry {
-                tab_id,
-                label: text(entry, "label"),
-                status: AgentStatus::parse(entry.get("agent_status")),
-                focused: flag(entry, "focused"),
-                tab_index: position,
-            });
+            spaces[index]
+                .entries
+                .extend(agents.into_iter().map(SpaceEntry::Agent));
         }
 
         Ok(Self { spaces })

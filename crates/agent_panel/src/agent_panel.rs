@@ -52,7 +52,7 @@ use workspace::{
 use crate::client::ClientError;
 use crate::controller::AgentController as _;
 use crate::session_service::{HistoryView, SessionKey, SessionService};
-use crate::snapshot::{Agent, AgentStatus, Snapshot, Space, TerminalEntry};
+use crate::snapshot::{Agent, AgentStatus, Snapshot, Space, SpaceEntry, TerminalEntry};
 
 /// Cadence of the refresh loop. The API path used here has no push channel for
 /// agent status, so the tree is re-read at this interval: fast enough that a
@@ -637,7 +637,7 @@ impl AgentPanel {
         let any_agent_working = self
             .spaces
             .iter()
-            .any(|space| space.agents.iter().any(|agent| agent.status == AgentStatus::Working));
+            .any(|space| space.agents().any(|agent| agent.status == AgentStatus::Working));
         if !enabled || !server_reachable || !any_agent_working {
             self.idle_sleep_prevention = IdleSleepPrevention::Inactive;
             return;
@@ -682,7 +682,7 @@ impl AgentPanel {
     fn notify_agent_transitions(&mut self, spaces: &[Space], cx: &mut Context<Self>) {
         let mut current = HashMap::new();
         for space in spaces {
-            for agent in &space.agents {
+            for agent in space.agents() {
                 current.insert(agent.pane_id.clone(), agent.status);
             }
         }
@@ -707,7 +707,7 @@ impl AgentPanel {
         // switch, so a refresh carrying several events shows, rings and toasts
         // every one of them instead of letting one win.
         for space in spaces {
-            for agent in &space.agents {
+            for agent in space.agents() {
                 // A new working turn means the user has taken the agent over:
                 // they answered the block or sent the next prompt. The bell has
                 // done its job, even when the agent was opened from the client's
@@ -846,7 +846,7 @@ impl AgentPanel {
                 || self
                     .spaces
                     .iter()
-                    .flat_map(|space| space.agents.iter())
+                    .flat_map(|space| space.agents())
                     .any(|agent| agent.pane_id == pending.target && agent.focused)
         });
         if agent_confirmed {
@@ -1069,7 +1069,7 @@ impl AgentPanel {
             RenameTarget::Tab { tab_id } => self
                 .spaces
                 .iter()
-                .flat_map(|space| space.terminals.iter())
+                .flat_map(|space| space.terminals())
                 .find(|terminal| terminal.tab_id.as_str() == tab_id.as_str())
                 .map(|terminal| terminal.label.clone()),
         };
@@ -1270,7 +1270,7 @@ impl AgentPanel {
     ) {
         let mut session = None;
         for space in &mut self.spaces {
-            if let Some(agent) = space.agents.iter_mut().find(|agent| agent.pane_id == pane_id) {
+            if let Some(agent) = space.agents_mut().find(|agent| agent.pane_id == pane_id) {
                 agent.name = name.to_owned();
                 session = agent.agent_session.clone();
             }
@@ -1316,7 +1316,7 @@ impl AgentPanel {
     fn agent_row(&self, pane_id: &str) -> Option<&Agent> {
         self.spaces
             .iter()
-            .flat_map(|space| space.agents.iter())
+            .flat_map(|space| space.agents())
             .find(|agent| agent.pane_id == pane_id)
     }
 
@@ -1687,7 +1687,6 @@ impl AgentPanel {
     fn render_terminal_row(&self, terminal: &TerminalEntry, cx: &mut Context<Self>) -> AnyElement {
         let tab_id = terminal.tab_id.clone();
         let panel = cx.entity();
-        let (marker, marker_color) = status_marker(terminal.status);
         let renaming = self.renaming.as_ref().is_some_and(|target| {
             matches!(target, RenameTarget::Tab { tab_id }
                 if tab_id.as_str() == terminal.tab_id.as_str())
@@ -1761,7 +1760,7 @@ impl AgentPanel {
                 .relative()
                 .w_full()
                 .gap_1p5()
-                .child(status_slot(marker, marker_color))
+                .child(terminal_icon_slot())
                 .child(title)
                 .when(!renaming, |this| {
                     this.child(
@@ -1868,12 +1867,12 @@ impl AgentPanel {
         let reported: Vec<(String, String)> = snapshot
             .spaces
             .iter()
-            .flat_map(|space| space.agents.iter().filter_map(|agent| agent.agent_session.clone()))
+            .flat_map(|space| space.agents().filter_map(|agent| agent.agent_session.clone()))
             .collect();
         let live_panes: Vec<&str> = snapshot
             .spaces
             .iter()
-            .flat_map(|space| space.agents.iter().map(|agent| agent.pane_id.as_str()))
+            .flat_map(|space| space.agents().map(|agent| agent.pane_id.as_str()))
             .collect();
         // Keep the optimism only while it can still come true: drop it once the
         // session is reported, and also once its pane is gone from the list —
@@ -2036,7 +2035,7 @@ impl AgentPanel {
                         let agent = snapshot
                             .spaces
                             .iter()
-                            .flat_map(|space| space.agents.iter())
+                            .flat_map(|space| space.agents())
                             .find(|agent| agent.pane_id == watched_pane);
                         match agent {
                             // The only success signal the server reports.
@@ -3239,6 +3238,21 @@ fn space_icon_slot() -> impl IntoElement {
         )
 }
 
+/// The icon a terminal row starts with: the same one the Terminal panel wears
+/// in the status bar, so an empty tab reads as a terminal rather than an agent
+/// state marker. Kept muted; the highlighted variant belongs to the active
+/// status-bar button, not to a list row.
+fn terminal_icon_slot() -> impl IntoElement {
+    h_flex()
+        .min_w(STATUS_SLOT_SIZE)
+        .justify_center()
+        .child(
+            Icon::new(IconName::TerminalAlt)
+                .size(IconSize::Small)
+                .color(Color::Muted),
+        )
+}
+
 /// The status marker in its fixed-width slot, so every row's label starts at the
 /// same place whatever glyph it draws.
 fn status_slot(marker: SharedString, color: Color) -> impl IntoElement {
@@ -3301,18 +3315,14 @@ impl Render for AgentPanel {
                     block = block.pt_1();
                 }
                 block = block.child(self.render_space(space, cx));
-                // Agents and empty tabs are one flat list in tab order, not
-                // every agent first and then every empty tab.
-                let mut entries: Vec<(usize, AnyElement)> = Vec::new();
-                for agent in &space.agents {
-                    entries.push((agent.tab_index, self.render_agent_row(agent, cx)));
-                }
-                for terminal in &space.terminals {
-                    entries.push((terminal.tab_index, self.render_terminal_row(terminal, cx)));
-                }
-                entries.sort_by_key(|(tab_index, _)| *tab_index);
-                for (_, entry) in entries {
-                    block = block.child(entry);
+                // The entries are already in tab order.
+                for entry in &space.entries {
+                    block = block.child(match entry {
+                        SpaceEntry::Agent(agent) => self.render_agent_row(agent, cx),
+                        SpaceEntry::Terminal(terminal) => {
+                            self.render_terminal_row(terminal, cx)
+                        }
+                    });
                 }
                 rows.push(block.into_any_element());
             }

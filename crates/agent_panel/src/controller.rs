@@ -207,7 +207,7 @@ impl AgentController for HerdrController {
             .spaces
             .iter()
             .flat_map(|space| {
-                space.agents.iter().map(move |agent| AgentRef {
+                space.agents().map(move |agent| AgentRef {
                     pane_id: agent.pane_id.clone(),
                     workspace_id: space.id.clone(),
                     kind: agent.kind.clone(),

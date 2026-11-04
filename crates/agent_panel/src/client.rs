@@ -14,7 +14,9 @@ use std::time::Duration;
 use cmd_client::protocol::{AGENT_CONTROL_TOKEN_PREFIX, AgentControl};
 use serde_json::{Value, json};
 
-use terminal_view::{PaneContextMenuEntry, PaneScrollMetrics};
+use terminal_view::agent_chrome::{
+    PaneContextMenuEntry, PaneContextMenuOutcome, PaneScrollMetrics,
+};
 
 use crate::herdr_settings::{Integration, IntegrationState};
 use crate::snapshot::Snapshot;
@@ -567,7 +569,7 @@ pub(crate) fn pane_context_menu(
 pub(crate) fn invoke_pane_context_menu(
     pane_id: &str,
     action_id: &str,
-) -> Result<Option<String>, String> {
+) -> Result<PaneContextMenuOutcome, String> {
     let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
     let result = call(
         &control,
@@ -576,15 +578,14 @@ pub(crate) fn invoke_pane_context_menu(
     )
     .map_err(|err| err.to_string())?;
     if result.get("type").and_then(Value::as_str) == Some("pane_context_menu_rename") {
-        return Ok(Some(
-            result
+        return Ok(PaneContextMenuOutcome::Rename {
+            current_label: result
                 .get("current_label")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-        ));
+                .map(str::to_string),
+        });
     }
-    Ok(None)
+    Ok(PaneContextMenuOutcome::Done)
 }
 
 /// Renames one pane after the host's inline rename input is confirmed.

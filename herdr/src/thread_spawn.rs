@@ -14,6 +14,37 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
+    spawn_named_with_optional_stack_size(name, None, f)
+}
+
+/// Spawns a named thread with an explicit stack size.
+///
+/// The 2 MiB default is measured in bytes against code that reads SQLite
+/// through FAD's connector bridge: one `fsqlite` pager frame alone reserves
+/// 86 KiB in a debug build and the open path nests a dozen of them. Callers
+/// that drive that code pin the size here instead of tuning it at the crash
+/// site.
+pub(crate) fn spawn_named_with_stack_size<F, T>(
+    name: &str,
+    stack_size: usize,
+    f: F,
+) -> io::Result<JoinHandle<T>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    spawn_named_with_optional_stack_size(name, Some(stack_size), f)
+}
+
+fn spawn_named_with_optional_stack_size<F, T>(
+    name: &str,
+    stack_size: Option<usize>,
+    f: F,
+) -> io::Result<JoinHandle<T>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
     #[cfg(test)]
     if test_hook::take_injected_failure() {
         return Err(io::Error::new(
@@ -21,7 +52,11 @@ where
             "injected thread spawn failure",
         ));
     }
-    std::thread::Builder::new().name(name.to_owned()).spawn(f)
+    let mut builder = std::thread::Builder::new().name(name.to_owned());
+    if let Some(stack_size) = stack_size {
+        builder = builder.stack_size(stack_size);
+    }
+    builder.spawn(f)
 }
 
 /// Runs `work(payload)` on a new thread. If the thread cannot start, the

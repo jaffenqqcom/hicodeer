@@ -102,6 +102,10 @@ impl AppPolicy {
     };
 }
 
+/// One `agent.sessions` request waiting for the in-flight scan: the id its
+/// answer must carry, and the channel that delivers it.
+pub(crate) type PendingSessionScanRequest = (String, std::sync::mpsc::Sender<String>);
+
 pub struct App {
     pub state: AppState,
     pub(crate) pixel_mouse_available: bool,
@@ -128,6 +132,21 @@ pub struct App {
     pub(crate) git_status_cache: HashMap<std::path::PathBuf, crate::workspace::GitStatusCacheEntry>,
     pub(crate) pending_api_worktree_creates: HashMap<std::path::PathBuf, u64>,
     pub(crate) worktree_read_slots: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Requests waiting for the in-flight `agent.sessions` scan.
+    ///
+    /// `None` means no scan is running; `Some(requests)` holds every request
+    /// that arrived while one was. One scan answers them all, so two requests
+    /// never read the same session stores at the same time -- which would also
+    /// take the FAD cache slot out from under each other (see
+    /// `sessions::fad::collect`).
+    pub(crate) pending_session_scan_requests:
+        std::sync::Arc<std::sync::Mutex<Option<Vec<PendingSessionScanRequest>>>>,
+    /// Test-only release flag for the first session scan.
+    ///
+    /// A test stores `false` to hold the scan on its thread and observe the app
+    /// loop while it is in flight, then stores `true` to let it finish.
+    #[cfg(test)]
+    pub(crate) session_scan_test_gate: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) pending_api_worktree_removes: HashMap<String, u64>,
     pub(crate) pending_api_worktree_remove_paths: HashMap<std::path::PathBuf, u64>,
     pub(crate) pending_worktree_remove_runtime_exits: HashMap<crate::layout::PaneId, usize>,
@@ -641,6 +660,9 @@ impl App {
             git_status_cache: HashMap::new(),
             pending_api_worktree_creates: HashMap::new(),
             worktree_read_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(8)),
+            pending_session_scan_requests: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            session_scan_test_gate: None,
             pending_api_worktree_removes: HashMap::new(),
             pending_api_worktree_remove_paths: HashMap::new(),
             pending_worktree_remove_runtime_exits: HashMap::new(),

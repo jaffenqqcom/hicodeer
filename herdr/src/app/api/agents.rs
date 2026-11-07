@@ -12,6 +12,16 @@ use super::responses::{encode_error, encode_error_body, encode_success};
 
 const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 
+/// Stack for the thread that scans agent session stores.
+///
+/// The scan drives FAD's SQLite connectors through `fsqlite`, whose pager
+/// builds connection state on the calling thread's stack: one frame reserves
+/// 86 KiB in a debug build and the open path nests a dozen of them, which
+/// overflows `std::thread`'s 2 MiB default. Every connector shares this one
+/// thread, so the size is pinned once here rather than per connector, and it
+/// does not grow with the number of sessions on disk.
+const AGENT_SESSION_SCAN_STACK_SIZE: usize = 8 * 1024 * 1024;
+
 // Codex's Windows input reader does not surface bracketed paste. It detects the prompt as a
 // "paste burst" and, while that burst is buffered, rewrites a following Enter into a newline
 // instead of submitting. The burst only flushes after an idle timeout, so any size-based delay is
@@ -32,7 +42,116 @@ fn append_codex_paste_boundary(runtime: &crate::terminal::TerminalRuntime, text:
     }
 }
 
+/// Takes every request waiting for the in-flight session scan.
+fn take_pending_session_scan(
+    pending: &std::sync::Mutex<Option<Vec<crate::app::PendingSessionScanRequest>>>,
+) -> Vec<crate::app::PendingSessionScanRequest> {
+    match pending.lock() {
+        Ok(mut pending) => pending.take().unwrap_or_default(),
+        Err(poisoned) => poisoned.into_inner().take().unwrap_or_default(),
+    }
+}
+
 impl App {
+    /// Answers `agent.sessions` from a dedicated thread instead of the app loop.
+    ///
+    /// The scan walks every agent session store on disk, and the first request
+    /// after the daemon starts parses them: seconds on this device. Answering
+    /// it on the app loop parks every other request behind it, so the panel's
+    /// one-second status poll times out and the daemon looks unreachable for
+    /// as long as the scan lasts. The scan therefore runs on its own thread and
+    /// answers through `respond_to`.
+    pub(crate) fn handle_deferred_agent_sessions_request(
+        &mut self,
+        request: crate::api::schema::Request,
+        respond_to: std::sync::mpsc::Sender<String>,
+    ) -> bool {
+        let crate::api::schema::Method::AgentSessions(_) = request.method else {
+            return false;
+        };
+        // Snapshot the roots here: the scan reads the file system and must not
+        // reach back into app state from another thread.
+        let workspace_roots: Vec<(String, std::path::PathBuf)> = self
+            .state
+            .workspaces
+            .iter()
+            .map(|workspace| (workspace.id.clone(), workspace.identity_cwd.clone()))
+            .collect();
+        let id = request.id;
+
+        // One scan answers every request that arrives while it runs. A second
+        // one would read the same stores again, and `sessions::fad` takes its
+        // cache out of its slot for the duration of a scan, so the two would
+        // also invalidate each other and both pay a full parse.
+        let mut pending = match self.pending_session_scan_requests.lock() {
+            Ok(pending) => pending,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(waiting) = pending.as_mut() {
+            waiting.push((id, respond_to));
+            return true;
+        }
+        *pending = Some(vec![(id, respond_to)]);
+        drop(pending);
+
+        let waiters = std::sync::Arc::clone(&self.pending_session_scan_requests);
+        #[cfg(test)]
+        let test_gate = self.session_scan_test_gate.clone();
+        let spawned = crate::thread_spawn::spawn_named_with_stack_size(
+            "herdr-agent-sessions",
+            AGENT_SESSION_SCAN_STACK_SIZE,
+            move || {
+                #[cfg(test)]
+                {
+                    if let Some(released) = test_gate {
+                        // Bounded: a test that never releases the gate must not
+                        // park this thread for the rest of the process. The
+                        // test asserts the loop answered well before it ends.
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(2);
+                        while !released.load(std::sync::atomic::Ordering::Acquire)
+                            && std::time::Instant::now() < deadline
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                    }
+                }
+                // A panic here must not leave the slot filled forever: every
+                // later request would wait on a scan that already ended.
+                let scanned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::sessions::collect_sessions(&workspace_roots)
+                }));
+                for (id, respond_to) in take_pending_session_scan(&waiters) {
+                    let response = match &scanned {
+                        Ok(sessions) => encode_success(
+                            id,
+                            ResponseResult::AgentSessions {
+                                sessions: sessions.clone(),
+                            },
+                        ),
+                        Err(_) => encode_error(
+                            id,
+                            "agent_sessions_failed",
+                            "the session scan panicked".to_string(),
+                        ),
+                    };
+                    let _ = respond_to.send(response);
+                }
+            },
+        );
+        if let Err(err) = spawned {
+            tracing::warn!(err = %err, "failed to spawn agent session scan thread");
+            for (id, respond_to) in take_pending_session_scan(&self.pending_session_scan_requests) {
+                let _ = respond_to.send(encode_error(
+                    id,
+                    "agent_sessions_failed",
+                    format!("could not start the session scan: {err}"),
+                ));
+            }
+        }
+        true
+    }
+
     pub(super) fn handle_agent_list(&mut self, id: String) -> String {
         encode_success(
             id,
@@ -498,6 +617,75 @@ mod tests {
         start_deferred_agent_prompt(app, id, params)
             .recv_timeout(Duration::from_secs(1))
             .expect("agent prompt responds after submission")
+    }
+
+    /// Starts one `agent.sessions` request and returns the channel its answer
+    /// will arrive on.
+    fn start_deferred_agent_sessions(app: &mut App, id: &str) -> std::sync::mpsc::Receiver<String> {
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+        assert!(app.handle_deferred_agent_sessions_request(
+            crate::api::schema::Request {
+                id: id.into(),
+                method: crate::api::schema::Method::AgentSessions(Default::default()),
+            },
+            respond_to,
+        ));
+        response_rx
+    }
+
+    #[tokio::test]
+    async fn the_session_scan_does_not_block_the_app_loop() {
+        let mut app = app_with_agent();
+        let release = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        app.session_scan_test_gate = Some(release.clone());
+
+        let response_rx = start_deferred_agent_sessions(&mut app, "sessions-while-busy");
+        assert!(
+            app.pending_session_scan_requests
+                .lock()
+                .expect("pending session scan requests")
+                .is_some(),
+            "the scan must be in flight, with its request waiting"
+        );
+
+        // The status poll the panel runs once a second must be answered while
+        // the scan holds its thread, not after it finishes.
+        let started = std::time::Instant::now();
+        let response = app.handle_agent_list("list-while-scanning".into());
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "agent.list waited for the session scan: {elapsed:?}"
+        );
+        let listed: SuccessResponse = serde_json::from_str(&response).expect("agent.list response");
+        assert_eq!(listed.id, "list-while-scanning");
+
+        release.store(true, std::sync::atomic::Ordering::Release);
+        response_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the scan answers its waiting request");
+    }
+
+    #[tokio::test]
+    async fn a_scan_thread_that_cannot_start_answers_with_an_error() {
+        let mut app = app_with_agent();
+        crate::thread_spawn::test_hook::fail_next_spawns(1);
+
+        let response_rx = start_deferred_agent_sessions(&mut app, "sessions-unstartable");
+        let response = response_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("a failed spawn answers instead of dropping the request");
+        let error: crate::api::schema::ErrorResponse =
+            serde_json::from_str(&response).expect("error response");
+        assert_eq!(error.id, "sessions-unstartable");
+        assert_eq!(error.error.code, "agent_sessions_failed");
+        assert!(
+            app.pending_session_scan_requests
+                .lock()
+                .expect("pending session scan requests")
+                .is_none(),
+            "the slot must be released so the next request can start a scan"
+        );
     }
 
     #[cfg(windows)]

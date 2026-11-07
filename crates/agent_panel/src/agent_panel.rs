@@ -58,6 +58,14 @@ use crate::snapshot::{Agent, AgentStatus, Snapshot, Space, SpaceEntry, TerminalE
 /// agent status, so the tree is re-read at this interval: fast enough that a
 /// status change reads as live, slow enough to be two idle requests.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(1000);
+/// Refresh failures in a row before the panel treats the server as gone.
+///
+/// A single failed poll is not a disconnection: the server answers some
+/// requests from disk (the session scan), so one of them can outlast this
+/// client's read timeout while the server is perfectly alive. Acting on the
+/// first failure replaced the whole tree with the disconnected message and
+/// closed the Agent terminal for a moment, so only a run of failures counts.
+const REFRESH_FAILURES_BEFORE_DISCONNECT: usize = 3;
 /// Minimum gap between two attempts to add the Agent terminal. Deploying is
 /// asynchronous, so without this a refresh that lands mid-deploy would start a
 /// second terminal while the first is still being placed.
@@ -581,41 +589,51 @@ impl AgentPanel {
                 }
             }
             Err(error) => {
-                // Only the endpoint status differs per kind.
-                match &error {
-                    ClientError::NotReady => {
-                        // No endpoint at all: the daemon went away and the
-                        // bootstrap cleared what it had reported.
-                        #[cfg(target_env = "ohos")]
-                        {
-                            self.status_recorded = false;
-                        }
-                        self.unavailable = Some(Unavailable::WaitingForServer);
-                    }
+                // Not ready means the endpoint itself is gone; a failed answer
+                // means it is there but this one request did not come back.
+                // Only a run of the latter, or the former at once, is a
+                // disconnection: until then the last snapshot stays on screen
+                // and the Agent terminal stays open.
+                let disconnected = match &error {
+                    ClientError::NotReady => true,
                     ClientError::Failed(message) => {
                         // One line per outage: the refresh runs once a second, so
                         // logging every failure would bury the first, useful error.
                         if self.consecutive_failures == 0 {
                             log::warn!("agent panel: refresh failed: {message}");
                         }
-                        // Whatever changed while the endpoint was unreachable is
-                        // not news the user needs one toast per agent for.
-                        #[cfg(target_env = "ohos")]
-                        {
-                            self.status_recorded = false;
-                        }
-                        self.unavailable = Some(Unavailable::ServerUnavailable);
+                        self.consecutive_failures + 1 >= REFRESH_FAILURES_BEFORE_DISCONNECT
                     }
-                }
+                };
                 self.consecutive_failures += 1;
-                // Showing that message means the panel can read nothing from
-                // the server: the Agent terminal has nothing left to attach to,
-                // so it is closed in the same refresh. There is no separate
-                // disconnection rule to fall behind this one; a successful
-                // refresh flips `wanted` back on and the terminal is reopened.
-                self.wanted = false;
-                self.needs_sync = true;
-                self.clear_history();
+                // The next successful snapshot has no reliable predecessor to
+                // compare against, so it becomes the new baseline instead of
+                // reporting every change that happened during the outage.
+                #[cfg(target_env = "ohos")]
+                {
+                    self.status_recorded = false;
+                }
+                if disconnected {
+                    // Only the endpoint status differs per kind.
+                    match &error {
+                        ClientError::NotReady => {
+                            // No endpoint at all: the daemon went away and the
+                            // bootstrap cleared what it had reported.
+                            self.unavailable = Some(Unavailable::WaitingForServer);
+                        }
+                        ClientError::Failed(_) => {
+                            self.unavailable = Some(Unavailable::ServerUnavailable);
+                        }
+                    }
+                    // Showing that message means the panel can read nothing from
+                    // the server: the Agent terminal has nothing left to attach to,
+                    // so it is closed in the same refresh. There is no separate
+                    // disconnection rule to fall behind this one; a successful
+                    // refresh flips `wanted` back on and the terminal is reopened.
+                    self.wanted = false;
+                    self.needs_sync = true;
+                    self.clear_history();
+                }
             }
         }
         #[cfg(target_env = "ohos")]
@@ -633,7 +651,7 @@ impl AgentPanel {
     #[cfg(target_env = "ohos")]
     fn update_idle_sleep_prevention(&mut self, cx: &mut Context<Self>) {
         let enabled = AgentPanelSettings::get_global(cx).prevent_idle_sleep;
-        let server_reachable = self.unavailable.is_none();
+        let server_reachable = self.unavailable.is_none() && self.consecutive_failures == 0;
         let any_agent_working = self
             .spaces
             .iter()

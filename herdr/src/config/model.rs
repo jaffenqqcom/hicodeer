@@ -1134,10 +1134,23 @@ pub struct ExperimentalConfig {
     pub switch_ascii_input_source_in_prefix: bool,
 }
 
+/// Default prefix binding for the standalone build.
+#[cfg(not(target_env = "ohos"))]
+fn default_prefix_binding() -> BindingConfig {
+    BindingConfig::one("ctrl+b")
+}
+
+/// HiCodeer embeds this TUI as the editor's Agent panel, where Ctrl+B belongs
+/// to the agent running in the pane; the standalone default would swallow it.
+#[cfg(target_env = "ohos")]
+fn default_prefix_binding() -> BindingConfig {
+    BindingConfig::empty()
+}
+
 impl Default for KeysConfig {
     fn default() -> Self {
         Self {
-            prefix: BindingConfig::one("ctrl+b"),
+            prefix: default_prefix_binding(),
             help: BindingConfig::one("prefix+?"),
             settings: BindingConfig::one("prefix+s"),
             new_workspace: BindingConfig::one("prefix+shift+n"),

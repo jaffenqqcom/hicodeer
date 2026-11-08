@@ -38,7 +38,15 @@ impl LiveKeybindConfig {
     pub fn primary_prefix_label(&self) -> String {
         self.primary_prefix()
             .map(format_key_combo)
-            .unwrap_or_else(|| format_key_combo(DEFAULT_PREFIX))
+            .unwrap_or_else(|| {
+                // [OHOS PORT BEGIN] No prefix key is configured in the embedded
+                // Agent panel; do not advertise the standalone default.
+                #[cfg(target_env = "ohos")]
+                return String::new();
+                // [OHOS PORT END]
+                #[cfg(not(target_env = "ohos"))]
+                format_key_combo(DEFAULT_PREFIX)
+            })
     }
 }
 
@@ -1371,6 +1379,15 @@ fn parse_prefix_keys(config: &BindingConfig) -> (Vec<KeyCombo>, Option<String>, 
 
     for raw in config.values() {
         let raw = raw.trim();
+        // [OHOS PORT BEGIN] An empty entry means "no prefix key" in the
+        // embedded Agent panel, so it must not fall back to the default.
+        #[cfg(target_env = "ohos")]
+        {
+            if raw.is_empty() {
+                continue;
+            }
+        }
+        // [OHOS PORT END]
         match parse_key_combo(raw) {
             Some(combo) if !combos.contains(&combo) => combos.push(combo),
             Some(_) => {}
@@ -1381,10 +1398,18 @@ fn parse_prefix_keys(config: &BindingConfig) -> (Vec<KeyCombo>, Option<String>, 
     }
 
     if combos.is_empty() {
+        // [OHOS PORT BEGIN] The embedded Agent panel runs without a prefix key
+        // by default, so an unset `keys.prefix` stays empty instead of falling
+        // back to the standalone Ctrl+B.
+        #[cfg(target_env = "ohos")]
+        return (Vec::new(), None, diagnostics);
+        // [OHOS PORT END]
+        #[cfg(not(target_env = "ohos"))]
         let reject = Some(format!(
             "invalid keybinding: keys.prefix; using fallback {}",
             format_key_combo(DEFAULT_PREFIX)
         ));
+        #[cfg(not(target_env = "ohos"))]
         return (vec![DEFAULT_PREFIX], reject, diagnostics);
     }
 
@@ -1394,6 +1419,11 @@ fn parse_prefix_keys(config: &BindingConfig) -> (Vec<KeyCombo>, Option<String>, 
 /// Render all configured prefix keys for the help panel.
 pub fn format_prefix_combos(prefixes: &[KeyCombo]) -> String {
     if prefixes.is_empty() {
+        // [OHOS PORT BEGIN] No prefix key in the embedded Agent panel.
+        #[cfg(target_env = "ohos")]
+        return String::new();
+        // [OHOS PORT END]
+        #[cfg(not(target_env = "ohos"))]
         return format_key_combo(DEFAULT_PREFIX);
     }
     prefixes

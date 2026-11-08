@@ -1369,6 +1369,7 @@ impl TerminalState {
                 .then_some(crate::agent_resume::AgentSessionRef {
                     kind: current_kind,
                     value: current_value,
+                    transcript_path: None,
                 })
             },
         )

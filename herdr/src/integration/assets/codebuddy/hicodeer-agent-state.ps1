@@ -2,7 +2,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codebuddy
-# HERDR_INTEGRATION_VERSION=5
+# HERDR_INTEGRATION_VERSION=7
 
 param([string]$Action = "")
 
@@ -26,6 +26,15 @@ if (-not [string]::IsNullOrWhiteSpace($payload.agent_id)) { exit 0 }
 
 $sessionId = $payload.session_id
 if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
+
+# CodeBuddy 2.x fires PermissionRequest for every tool call and then approves it
+# itself unless the permission mode is "default". An auto-approved request is
+# not a wait, so reporting blocked there makes the pane flip between blocked and
+# working on every command.
+if ($Action -eq "blocked" -and $payload.hook_event_name -ceq "PermissionRequest") {
+    $permissionMode = "$($payload.permission_mode)".ToLowerInvariant()
+    if (-not [string]::IsNullOrWhiteSpace($permissionMode) -and $permissionMode -ne "default") { $Action = "working" }
+}
 
 if ($Action -eq "notification") {
     $nt = ("$($payload.notification_type)$($payload.notificationType)").ToLowerInvariant()

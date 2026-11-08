@@ -379,6 +379,48 @@ pub fn detect_agent_with_osc(
     )
 }
 
+/// The short session id Hermes prints on its status line (`Session: bbb2b94b`).
+///
+/// Hermes runs every turn inside its gateway process, so its plugin hooks can
+/// never name the pane they belong to and do not report a session. That status
+/// line is the only per-pane identity: it shows the first eight hex characters
+/// of the full `local-<hash>` session id.
+pub fn hermes_screen_session_id(screen: &str) -> Option<String> {
+    const MARKER: &str = "Session:";
+    const SHORT_ID_LEN: usize = 8;
+    // Only the welcome box near the bottom prints this line. A full-screen scan
+    // would accept `Session: 1a2b3c4d` pasted into the transcript and bind the
+    // pane to a session that has nothing to do with it.
+    const SCAN_NON_EMPTY_LINES: usize = 16;
+    let bottom_lines = screen
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(SCAN_NON_EMPTY_LINES);
+    for line in bottom_lines {
+        let trimmed = line.trim();
+        // The id sits inside the bordered welcome box. Requiring the frame
+        // keeps a `Session: 1a2b3c4d` pasted into the transcript from being
+        // mistaken for this pane's identity.
+        if !trimmed.starts_with('│') || !trimmed.ends_with('│') {
+            continue;
+        }
+        let Some((_, rest)) = trimmed.split_once(MARKER) else {
+            continue;
+        };
+        let candidate: String = rest
+            .trim_start()
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .take(SHORT_ID_LEN)
+            .collect();
+        if candidate.len() == SHORT_ID_LEN {
+            return Some(candidate.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
 pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),
@@ -988,6 +1030,44 @@ fn is_python_runtime(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hermes_session_id_comes_from_the_status_line() {
+        let screen = "│  deepseek-chat · Nous Research                  │\n│  Session: bbb2b94b                              │";
+        assert_eq!(
+            super::hermes_screen_session_id(screen).as_deref(),
+            Some("bbb2b94b")
+        );
+    }
+
+    #[test]
+    fn hermes_session_id_ignores_plain_transcript_text() {
+        let screen = "Session: deadbeef pasted into the transcript\n\
+                      ❯ Ask anything, or type / for commands…\n\
+                      ☤ deepseek-flash · 17.8K/1M · 2% · 23s";
+        assert_eq!(super::hermes_screen_session_id(screen), None);
+    }
+
+    #[test]
+    fn hermes_session_id_ignores_a_bordered_box_outside_the_bottom() {
+        let mut screen = String::from("│  Session: deadbeef                         │\n");
+        for _ in 0..20 {
+            screen.push_str("─ older output line ─\n");
+        }
+        screen.push_str("❯ Ask anything, or type / for commands…\n");
+        screen.push_str(" ☤ deepseek-flash · 17.8K/1M · 2% · 23s\n");
+        assert_eq!(super::hermes_screen_session_id(&screen), None);
+    }
+
+    #[test]
+    fn hermes_session_id_ignores_other_session_text() {
+        assert_eq!(super::hermes_screen_session_id("Session: too-short"), None);
+        assert_eq!(super::hermes_screen_session_id("no status line here"), None);
+        assert_eq!(
+            super::hermes_screen_session_id("│  Session: 0A1B2C3D  │"),
+            Some("0a1b2c3d".to_string())
+        );
+    }
+
     use super::*;
 
     fn foreground_process(

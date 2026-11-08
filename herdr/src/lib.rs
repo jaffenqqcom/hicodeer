@@ -29,6 +29,8 @@ mod config;
 mod copy_mode;
 mod detect;
 mod events;
+#[cfg(target_env = "ohos")]
+mod fetch_reply;
 use ghostty_vt as ghostty;
 mod handoff_runtime;
 mod input;

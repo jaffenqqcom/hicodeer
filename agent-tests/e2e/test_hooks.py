@@ -10,7 +10,8 @@
      `agent_status`，要求先出现 `working`、再回到 `idle`。
   4. 断言 `agent_session` 的 `source` 是 `hicodeer:<agent>`，即上报来自我们装的 hook。
 
-覆盖有 hook 的四个 agent：zcode / codewhale / atomcode / deveco。
+覆盖有 hook 的 agent：zcode / codewhale / atomcode / deveco / gemini。
+hermes 也在这个名单里，但它的状态来自识屏（turn 在 gateway 进程执行，hook 定位不到 pane）。
 openclaw 在 `agent --local` 下两套 hook 都不触发（2026-10-28 实测），不在此列。
 """
 
@@ -18,13 +19,15 @@ import argparse
 import os
 import time
 
+import agent_prereqs
 import agent_rpc
 from agent_rpc import run_guarded
 
 DEFAULT_PROMPT = "用 bash 执行 echo hi，然后只回复两个字：成功"
 
-# 按配置复杂度排，简单的前面先跑。
-HOOK_AGENTS = ["deveco", "atomcode", "codewhale", "zcode"]
+# 按配置复杂度排，简单的前面先跑。gemini 走 settings.json 的 hooks 对象，
+# 与 claude 同构，是「官方 hook 直接上报状态」的一类。
+HOOK_AGENTS = ["deveco", "atomcode", "codewhale", "zcode", "gemini", "hermes"]
 
 # 启动提示的轮询是 0.5 秒一轮；连续这么多轮没看到提示就认为启动提示已经处理完。
 QUIET_ROUNDS_BEFORE_DONE = 12
@@ -281,7 +284,14 @@ def check_agent(harness, rpc, args, agent):
     if not ensure_installed(harness, rpc, target, not args.no_install):
         return
 
-    created = rpc.create_workspace(cwd=args.cwd, focus=True, label="hook-test-%s" % agent)
+    env, reason = agent_prereqs.prepare(agent)
+    if reason:
+        harness.warn("%s 跳过：%s" % (agent, reason))
+        return
+
+    created = rpc.create_workspace(
+        cwd=args.cwd, focus=True, label="hook-test-%s" % agent, env=env
+    )
     workspace = created.get("workspace") or {}
     root_pane = created.get("root_pane") or {}
     pane_id = root_pane.get("pane_id")
@@ -363,8 +373,12 @@ def check_blocked(harness, rpc, args, agent):
                 "配置不存在、读不了、或已带 permission 键",
             )
             return
+        env, reason = agent_prereqs.prepare(agent)
+        if reason:
+            harness.warn("%s blocked 跳过：%s" % (agent, reason))
+            return
         created = rpc.create_workspace(
-            cwd=args.cwd, focus=True, label="hook-blocked-%s" % agent
+            cwd=args.cwd, focus=True, label="hook-blocked-%s" % agent, env=env
         )
         workspace = created.get("workspace") or {}
         root_pane = created.get("root_pane") or {}
@@ -467,8 +481,8 @@ def add_arguments(parser):
     parser.add_argument(
         "--wait-seconds",
         type=float,
-        default=180.0,
-        help="等待 agent 识别与空闲的上限，默认 180 秒",
+        default=60.0,
+        help="等待 agent 识别与空闲的上限，默认 60 秒",
     )
     parser.add_argument(
         "--start-timeout-ms",
@@ -479,8 +493,8 @@ def add_arguments(parser):
     parser.add_argument(
         "--startup-prompt-seconds",
         type=float,
-        default=30.0,
-        help="等待 agent 首次启动提示（如 deveco 的目录信任）的上限，默认 30 秒",
+        default=15.0,
+        help="等待 agent 首次启动提示（如 deveco 的目录信任）的上限，默认 15 秒",
     )
     parser.add_argument(
         "--no-blocked",

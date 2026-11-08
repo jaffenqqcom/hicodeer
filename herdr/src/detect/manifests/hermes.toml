@@ -1,7 +1,7 @@
 id = "hermes"
-version = "2026.07.24.1"
+version = "2026.11.08.1"
 min_engine_version = 2
-updated_at = "2026-07-24T19:12:54Z"
+updated_at = "2026-11-08T00:00:00Z"
 aliases = ["hermes-agent"]
 
 [[rules]]
@@ -100,3 +100,26 @@ priority = 100
 region = "osc_title"
 visible_idle = true
 regex = ['^✓[\u{fe0e}\u{fe0f}]?(?:\s|$)']
+
+# The 0.22 TUI owns the bottom of the screen: a turn shows a spinner banner
+# ("Working…", "brainstorming...") plus the redirect hint, and the prompt box
+# returns to a bare "❯ <placeholder>" line only after the turn settles. The
+# OSC title stays empty in this version, so the old title rules never fire.
+[[rules]]
+id = "turn_banner_working"
+state = "working"
+priority = 960
+region = "bottom_non_empty_lines(6)"
+visible_working = true
+any = [
+  { contains = ["type to redirect this turn"] },
+  { contains = ["Working…"] },
+]
+
+[[rules]]
+id = "prompt_box_idle"
+state = "idle"
+priority = 120
+region = "bottom_non_empty_lines(6)"
+visible_idle = true
+line_regex = ['^❯ ']

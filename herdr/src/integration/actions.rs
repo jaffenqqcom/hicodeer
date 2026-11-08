@@ -4,10 +4,10 @@ use super::registry::{integration_target_label, integration_target_supported};
 use super::targets::{
     install_antigravity_cli, install_claude, install_codebuddy, install_codex, install_copilot,
     install_cursor, install_devin, install_droid, install_grok, install_hermes, install_kilo,
-    install_kimi, install_letta, install_mastracode, install_omp, install_opencode, install_pi,
+    install_gemini, install_kimi, install_letta, install_mastracode, install_omp, install_opencode, install_pi,
     install_atomcode, install_codewhale, install_deveco, install_qodercli, install_qwen, install_zcode, uninstall_antigravity_cli, uninstall_claude,
     uninstall_codebuddy, uninstall_codex, uninstall_copilot, uninstall_cursor, uninstall_devin,
-    uninstall_droid, uninstall_grok, uninstall_hermes, uninstall_kilo, uninstall_kimi,
+    uninstall_droid, uninstall_gemini, uninstall_grok, uninstall_hermes, uninstall_kilo, uninstall_kimi,
     uninstall_letta, uninstall_mastracode, uninstall_omp, uninstall_opencode, uninstall_pi,
     uninstall_atomcode, uninstall_codewhale, uninstall_deveco, uninstall_qodercli, uninstall_qwen, uninstall_zcode,
 };
@@ -187,6 +187,19 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                 ),
                 format!("ensured kimi config at {}", installed.config_path.display()),
                 format!("requires kimi code {KIMI_MIN_VERSION} or newer"),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Gemini => {
+            let installed = install_gemini()?;
+            vec![
+                format!(
+                    "installed gemini integration hook to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "ensured gemini hooks at {}",
+                    installed.settings_path.display()
+                ),
             ]
         }
         crate::api::schema::IntegrationTarget::Droid => {
@@ -591,6 +604,33 @@ pub(crate) fn uninstall_target(
                 messages.push(format!(
                     "no hicodeer kimi hook entries found in {}",
                     result.config_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Gemini => {
+            let result = uninstall_gemini()?;
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed gemini hook at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no gemini hook found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.updated_settings {
+                messages.push(format!(
+                    "removed hicodeer gemini hook entries from {}",
+                    result.settings_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no hicodeer gemini hook entries found in {}",
+                    result.settings_path.display()
                 ));
             }
             messages

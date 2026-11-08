@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codebuddy
-# HERDR_INTEGRATION_VERSION=6
+# HERDR_INTEGRATION_VERSION=7
 
 set -eu
 
@@ -50,6 +50,18 @@ if hook_input_file:
         hook_input = {}
 
 
+hook_event_name = str(hook_input.get("hook_event_name") or "")
+
+# CodeBuddy 2.x fires PermissionRequest for every single tool call and then
+# approves it itself whenever the permission mode is not "default". An
+# auto-approved request is not a wait, so reporting blocked there makes the
+# pane flip blocked/working on every command, and each flip fires a
+# needs-attention notification. Only a real prompt parks the turn on the user.
+if action == "blocked" and hook_event_name == "PermissionRequest":
+    permission_mode = str(hook_input.get("permission_mode") or "").lower()
+    if permission_mode and permission_mode != "default":
+        action = "working"
+
 # A Notification carries a wait type. Permission prompts park the turn on the
 # user (blocked); the idle prompt is just "no input lately" -- that is idle,
 # not blocked, or the panel shows a waiting icon while the agent sits at its
@@ -62,7 +74,6 @@ if action == "notification":
         action = "idle"
     else:
         raise SystemExit(0)
-hook_event_name = str(hook_input.get("hook_event_name") or "")
 session_id = hook_input.get("session_id")
 agent_session_id = session_id if isinstance(session_id, str) and session_id else None
 transcript_path = hook_input.get("transcript_path")

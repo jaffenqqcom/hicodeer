@@ -232,7 +232,24 @@ fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> 
             )
         } != 0
         {
-            return Err(std::io::Error::last_os_error());
+            let error = std::io::Error::last_os_error();
+            // [OHOS PORT BEGIN] hmdfs assigns its own isolation/label xattrs and
+            // refuses to let an unprivileged service copy them onto a new file.
+            // The replacement file is still readable by the same users, so the
+            // missing copy is reported instead of failing the whole write.
+            #[cfg(target_env = "ohos")]
+            {
+                if matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::ENOTSUP)) {
+                    tracing::warn!(
+                        xattr = %name.to_string_lossy(),
+                        %error,
+                        "config xattr not copied"
+                    );
+                    continue;
+                }
+            }
+            // [OHOS PORT END]
+            return Err(error);
         }
     }
     Ok(())

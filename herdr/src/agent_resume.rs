@@ -10,7 +10,13 @@ const MAX_RESUME_ARGV_BYTES: usize = 8192;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionRef {
     pub kind: AgentSessionRefKind,
+    /// The id or path the resume command needs.
     pub value: String,
+    /// Absolute path to the agent's own transcript, as reported by the hook.
+    /// Carried alongside `value` so a consumer that wants the transcript does
+    /// not have to reconstruct it from an id; resume keeps using `value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -101,6 +107,7 @@ impl AgentSessionRef {
         valid_session_id(&value).then_some(Self {
             kind: AgentSessionRefKind::Id,
             value,
+            transcript_path: None,
         })
     }
 
@@ -109,6 +116,7 @@ impl AgentSessionRef {
         valid_session_path(&value).then_some(Self {
             kind: AgentSessionRefKind::Path,
             value,
+            transcript_path: None,
         })
     }
 }
@@ -117,19 +125,25 @@ pub fn session_ref_from_report(
     source: &str,
     agent: &str,
     agent_session_id: Option<String>,
-    _agent_session_path: Option<String>,
+    agent_session_path: Option<String>,
 ) -> Option<AgentSessionRef> {
     if !is_official_agent_source(source, agent) {
         return None;
     }
 
-    if agent == "pi" || agent == "omp" {
-        return _agent_session_path
+    let transcript_path = agent_session_path.filter(|path| valid_session_path(path));
+    let mut session_ref = if agent == "pi" || agent == "omp" {
+        transcript_path
+            .clone()
             .and_then(AgentSessionRef::path)
-            .or_else(|| agent_session_id.and_then(AgentSessionRef::id));
-    }
-
-    agent_session_id.and_then(AgentSessionRef::id)
+            .or_else(|| agent_session_id.and_then(AgentSessionRef::id))?
+    } else {
+        agent_session_id.and_then(AgentSessionRef::id)?
+    };
+    // pi/omp resume from the path itself; every other agent resumes from its
+    // id, but all of them can hand the transcript to consumers that need it.
+    session_ref.transcript_path = transcript_path;
+    Some(session_ref)
 }
 
 pub fn persisted_session_from_launch_args(
@@ -850,6 +864,27 @@ mod tests {
         .is_none());
     }
 
+    /// A codebuddy hook reports both an id (which resume needs) and the
+    /// transcript path (which the IM bridge reads). Dropping the path would
+    /// force consumers back to scraping the terminal.
+    #[test]
+    fn report_ref_keeps_the_transcript_path_next_to_an_id() {
+        let path = absolute_test_path("01a1b08f-8dfa-796e-8aeb-7d589bdfa764.jsonl");
+        let session_ref = session_ref_from_report(
+            "hicodeer:codebuddy",
+            "codebuddy",
+            Some("01a1b08f-8dfa-796e-8aeb-7d589bdfa764".into()),
+            Some(path.clone()),
+        )
+        .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(
+            session_ref.value,
+            "01a1b08f-8dfa-796e-8aeb-7d589bdfa764"
+        );
+        assert_eq!(session_ref.transcript_path.as_deref(), Some(path.as_str()));
+    }
+
     #[test]
     fn report_ref_prefers_pi_and_omp_paths_and_validates_values() {
         let pi_session = absolute_test_path("pi-session.jsonl");
@@ -865,6 +900,10 @@ mod tests {
         .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Path);
         assert_eq!(session_ref.value, pi_session);
+        assert_eq!(
+            session_ref.transcript_path.as_deref(),
+            Some(pi_session.as_str())
+        );
 
         assert!(session_ref_from_report("hicodeer:pi", "pi", Some("bad\nid".into()), None).is_none());
         assert!(

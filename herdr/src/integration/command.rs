@@ -24,6 +24,14 @@ pub(crate) fn hook_command(hook_path: &Path, action: Option<&str>) -> String {
 
     #[cfg(not(windows))]
     {
+        // HiCodeer: on HarmonyOS the agent's own hook runner re-resolves the
+        // command through its sandbox PATH, where a bare `bash` lands on a
+        // bundle path that does not exist (ENOENT), so every hook silently
+        // failed. The scripts carry a /bin/sh shebang and are installed
+        // executable, so invoking the absolute path skips that lookup.
+        #[cfg(target_env = "ohos")]
+        let mut command = shell_single_quote(&path);
+        #[cfg(not(target_env = "ohos"))]
         let mut command = format!("bash {}", shell_single_quote(&path));
         if let Some(action) = action {
             command.push(' ');

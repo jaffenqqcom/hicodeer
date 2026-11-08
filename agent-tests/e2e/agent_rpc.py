@@ -302,11 +302,16 @@ class AgentRpc(object):
         require_type(result, "agent_started", "agent.start")
         return result
 
-    def create_workspace(self, cwd=None, focus=True, reuse_root=False, label=None):
+    def create_workspace(
+        self, cwd=None, focus=True, reuse_root=False, label=None, env=None
+    ):
         """`workspace.create` — params per schema/workspaces.rs:8-28.
 
         `reuse_root=true` is the history-session path: an open space for that
         directory gets a new tab instead of a second space.
+        `env` is exported into the new pane: the pane inherits the shell's
+        startup files, not this script's environment, so credentials an agent
+        needs before its first message have to be passed explicitly.
         Returns {"type":"workspace_created","workspace":{...},"tab":{...},"root_pane":{...}}.
         """
         params = {"focus": bool(focus), "reuse_root": bool(reuse_root)}
@@ -314,6 +319,8 @@ class AgentRpc(object):
             params["cwd"] = cwd
         if label:
             params["label"] = label
+        if env:
+            params["env"] = dict(env)
         result = self.call("workspace.create", params)
         require_type(result, "workspace_created", "workspace.create")
         return result

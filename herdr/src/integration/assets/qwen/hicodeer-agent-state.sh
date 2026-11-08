@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=qwen
-# HERDR_INTEGRATION_VERSION=6
+# HERDR_INTEGRATION_VERSION=7
 
 set -eu
 
@@ -64,6 +64,8 @@ if action == "notification":
         raise SystemExit(0)
 session_id = hook_input.get("session_id")
 agent_session_id = session_id if isinstance(session_id, str) and session_id else None
+transcript_path = hook_input.get("transcript_path")
+agent_session_path = transcript_path if isinstance(transcript_path, str) and transcript_path else None
 request_id = f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):06d}"
 report_seq = time.time_ns()
 if action == "session":
@@ -81,6 +83,8 @@ if action == "session":
             "seq": report_seq,
         },
     }
+    if agent_session_path:
+        request["params"]["agent_session_path"] = agent_session_path
 else:
     request = {
         "id": request_id,
@@ -95,6 +99,8 @@ else:
     }
     if agent_session_id:
         request["params"]["agent_session_id"] = agent_session_id
+    if agent_session_path:
+        request["params"]["agent_session_path"] = agent_session_path
 
 try:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

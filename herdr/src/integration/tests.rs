@@ -1473,7 +1473,7 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 11);
+    assert_eq!(codex.expected_version, 13);
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1504,11 +1504,19 @@ fn install_codex_writes_hook_and_updates_hooks_and_config() {
         .as_str()
         .unwrap()
         .contains(" session"));
-    assert!(hooks["hooks"].get("UserPromptSubmit").is_none());
-    assert!(hooks["hooks"].get("PreToolUse").is_none());
-    assert!(hooks["hooks"].get("PermissionRequest").is_none());
-    assert!(hooks["hooks"].get("Stop").is_none());
-    assert!(hooks["hooks"].get("Interrupt").is_none());
+    for (event, action) in [
+        ("UserPromptSubmit", " working"),
+        ("PreToolUse", " working"),
+        ("PermissionRequest", " blocked"),
+        ("Stop", " idle"),
+        ("Interrupt", " idle"),
+    ] {
+        let command = hooks["hooks"][event][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(command.contains(action), "{event}: {command}");
+        assert_eq!(hooks["hooks"][event].as_array().unwrap().len(), 1);
+    }
     assert!(config.contains("model = \"gpt-5.4\""));
     assert!(config.contains("[features]"));
     assert!(config.contains("hooks = true"));
@@ -1558,12 +1566,20 @@ fn install_codex_is_idempotent_for_hook_entries_and_feature_flag() {
         serde_json::from_str(&fs::read_to_string(codex_dir.join("hooks.json")).unwrap()).unwrap();
     let config = fs::read_to_string(codex_dir.join("config.toml")).unwrap();
 
-    assert_eq!(hooks["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
-    assert!(hooks["hooks"].get("UserPromptSubmit").is_none());
-    assert!(hooks["hooks"].get("PreToolUse").is_none());
-    assert!(hooks["hooks"].get("PermissionRequest").is_none());
-    assert!(hooks["hooks"].get("Stop").is_none());
-    assert!(hooks["hooks"].get("Interrupt").is_none());
+    for event in [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "Stop",
+        "Interrupt",
+    ] {
+        assert_eq!(
+            hooks["hooks"][event].as_array().unwrap().len(),
+            1,
+            "{event} should hold exactly one herdr entry"
+        );
+    }
     assert_eq!(config.matches("hooks = true").count(), 1);
     assert!(!config.contains("codex_hooks"));
     assert!(config.contains("other = true"));
@@ -1629,12 +1645,32 @@ fn install_codex_removes_turn_status_hooks_from_previous_integration() {
     let hooks: Value =
         serde_json::from_str(&fs::read_to_string(codex_dir.join("hooks.json")).unwrap()).unwrap();
     assert_eq!(hooks["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+    // The previous integration's own entry is replaced, the user's entry stays.
+    let user_prompt: Vec<Value> = hooks["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["hooks"].as_array().cloned().unwrap_or_default())
+        .collect();
+    assert!(user_prompt.iter().any(|entry| entry["command"] == "echo keep"));
+    assert!(user_prompt.iter().any(|entry| entry["command"]
+        .as_str()
+        .unwrap_or_default()
+        .contains(" working")));
     assert_eq!(
-        hooks["hooks"]["UserPromptSubmit"][0]["hooks"],
-        json!([{"type": "command", "command": "echo keep", "timeout": 10}])
+        user_prompt
+            .iter()
+            .filter(|entry| entry["command"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(" working"))
+            .count(),
+        1,
+        "herdr's working entry must appear once"
     );
-    assert!(hooks["hooks"].get("Stop").is_none());
-    assert!(hooks["hooks"].get("Interrupt").is_none());
+    for event in ["Stop", "Interrupt"] {
+        assert_eq!(hooks["hooks"][event].as_array().unwrap().len(), 1, "{event}");
+    }
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -4105,6 +4141,79 @@ fn install_qodercli_errors_when_config_dir_missing() {
 }
 
 #[test]
+fn install_gemini_writes_state_hooks_and_preserves_settings() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let gemini_dir = base.join(".gemini");
+    fs::create_dir_all(&gemini_dir).unwrap();
+    fs::write(
+        gemini_dir.join("settings.json"),
+        r#"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#,
+    )
+    .unwrap();
+    std::env::set_var(GEMINI_CONFIG_DIR_ENV_VAR, &gemini_dir);
+
+    let installed = install_gemini().unwrap();
+
+    assert_eq!(
+        installed.hook_path,
+        gemini_dir.join("hooks").join(GEMINI_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(installed.settings_path, gemini_dir.join("settings.json"));
+    assert!(installed.hook_path.is_file());
+
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.settings_path).unwrap()).unwrap();
+    for (event, action) in [
+        ("SessionStart", "session"),
+        ("BeforeAgent", "working"),
+        ("AfterTool", "working"),
+        ("AfterAgent", "idle"),
+        ("Notification", "blocked"),
+        ("SessionEnd", "idle"),
+    ] {
+        let entries = settings["hooks"][event]
+            .as_array()
+            .unwrap_or_else(|| panic!("{event} missing"));
+        assert_eq!(entries.len(), 1, "{event}");
+        assert_eq!(entries[0]["hooks"][0]["timeout"], 10_000);
+        let command = entries[0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(command.contains(GEMINI_HOOK_INSTALL_NAME), "{command}");
+        assert!(command.ends_with(action), "{command}");
+    }
+    assert!(settings.get("security").is_some());
+
+    let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
+    assert!(hook_asset.contains("HERDR_INTEGRATION_ID=gemini"));
+    assert!(hook_asset.contains("hicodeer:gemini"));
+
+    install_gemini().unwrap();
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.settings_path).unwrap()).unwrap();
+    assert_eq!(settings["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+
+    let removed = uninstall_gemini().unwrap();
+    assert!(removed.removed_hook_file);
+    assert!(removed.updated_settings);
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&gemini_dir.join("settings.json")).unwrap())
+            .unwrap();
+    for event in [
+        "SessionStart",
+        "BeforeAgent",
+        "AfterTool",
+        "AfterAgent",
+        "Notification",
+        "SessionEnd",
+    ] {
+        assert!(settings["hooks"].get(event).is_none(), "{event}");
+    }
+
+    std::env::remove_var(GEMINI_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn install_qwen_writes_state_hook_and_preserves_settings() {
     let _lock = integration_env_lock();
     let base = unique_base();
@@ -4138,7 +4247,7 @@ fn install_qwen_writes_state_hook_and_preserves_settings() {
     assert!(settings.get("permissions").is_some());
     let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
     assert!(hook_asset.contains("HERDR_INTEGRATION_ID=qwen"));
-    assert!(hook_asset.contains("HERDR_INTEGRATION_VERSION=6"));
+    assert!(hook_asset.contains("HERDR_INTEGRATION_VERSION=7"));
     assert!(hook_asset.contains("hicodeer:qwen"));
 
     install_qwen().unwrap();

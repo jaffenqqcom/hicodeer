@@ -55,6 +55,7 @@ pub(crate) fn integration_target_label(
         crate::api::schema::IntegrationTarget::Deveco => "deveco",
         crate::api::schema::IntegrationTarget::Codewhale => "codewhale",
         crate::api::schema::IntegrationTarget::Zcode => "zcode",
+        crate::api::schema::IntegrationTarget::Gemini => "gemini",
     }
 }
 
@@ -90,6 +91,7 @@ pub(crate) fn integration_target_command_names(
         crate::api::schema::IntegrationTarget::Deveco => &["deveco"],
         crate::api::schema::IntegrationTarget::Codewhale => &["codewhale"],
         crate::api::schema::IntegrationTarget::Zcode => &["zcode"],
+        crate::api::schema::IntegrationTarget::Gemini => &["gemini"],
     }
 }
 
@@ -329,7 +331,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 22] {
+); 23] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -370,6 +372,11 @@ fn integration_specs() -> [(
             crate::api::schema::IntegrationTarget::Kimi,
             kimi_dir().map(|dir| dir.join("hooks").join(super::KIMI_HOOK_INSTALL_NAME)),
             super::KIMI_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Gemini,
+            gemini_dir().map(|dir| dir.join("hooks").join(super::GEMINI_HOOK_INSTALL_NAME)),
+            super::GEMINI_INTEGRATION_VERSION,
         ),
         (
             crate::api::schema::IntegrationTarget::Opencode,

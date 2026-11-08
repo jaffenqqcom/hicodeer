@@ -1,5 +1,5 @@
 id = "codebuddy"
-version = "2026.10.24.1"
+version = "2026.11.07.1"
 min_engine_version = 2
 updated_at = "2026-10-23T00:00:00Z"
 aliases = ["codebuddy-code", "codebuddy-cli"]
@@ -46,7 +46,7 @@ state = "working"
 priority = 900
 region = "bottom_non_empty_lines(8)"
 visible_working = true
-line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2726}-\x{273F}]\s+\S.*…\s+\(\d+[smh]\s*·']
+line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2726}-\x{273F}]\s+\S.*\(\d+[smh]\s*·']
 not = [
   { contains = ["do you want to proceed?"] },
   { contains = ["esc to cancel"] },
@@ -69,6 +69,19 @@ not = [
   { contains = ["esc to cancel"] },
   { contains = ["waiting for permission"] },
 ]
+
+# Live turn, tool named: the elapsed-and-tool clause is the one part of the
+# footer that survives every title length and every wrap, so it is matched on
+# its own anywhere in the footer. Without this a short title renders no
+# ellipsis, the rule above stops matching, and the pane falls back to idle
+# while the tool is still running.
+[[rules]]
+id = "running_tool_clause_working"
+state = "working"
+priority = 892
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+line_regex = ['\(\d+[smh]\s*·\s*running\s+\S']
 
 # Live turn: the footer renders "(12s • esc to interrupt)" while the agent runs.
 [[rules]]

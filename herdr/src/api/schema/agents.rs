@@ -229,6 +229,11 @@ pub struct AgentInfo {
     /// The current idle transition completed work, independently of who has viewed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_seq: Option<u64>,
+    /// The agent's final reply for that completed turn, recovered by the daemon
+    /// from the agent's own transcript. `agent.list` carries it so the panel
+    /// never has to read session files it has no permission to open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reply: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,4 +247,7 @@ pub struct AgentSessionInfo {
     pub agent: String,
     pub kind: crate::agent_resume::AgentSessionRefKind,
     pub value: String,
+    /// Absolute path to the agent's transcript, when the hook reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }

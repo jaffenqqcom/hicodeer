@@ -29,7 +29,7 @@ use super::config_edit::{
 use super::config_file::{check_config_targets, write_config};
 use super::env::{
     antigravity_cli_dir, atomcode_hooks_path, claude_dir, codebuddy_dir, codewhale_config_path,
-    codex_dir, copilot_dir, deveco_dir,
+    codex_dir, copilot_dir, deveco_dir, gemini_dir,
     cursor_dir, devin_dir, droid_dir, grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir,
     letta_dir, mastracode_dir, omp_extension_dir, opencode_dir, opencode_state_dir,
     pi_extension_dir, qodercli_dir, qwen_dir, zcode_settings_path,
@@ -556,6 +556,41 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
         10,
         None,
     )?;
+    ensure_command_hook(
+        hooks,
+        "UserPromptSubmit",
+        hook_command(&hook_path, Some("working")),
+        10,
+        None,
+    )?;
+    ensure_command_hook(
+        hooks,
+        "PreToolUse",
+        hook_command(&hook_path, Some("working")),
+        10,
+        None,
+    )?;
+    ensure_command_hook(
+        hooks,
+        "PermissionRequest",
+        hook_command(&hook_path, Some("blocked")),
+        10,
+        None,
+    )?;
+    ensure_command_hook(
+        hooks,
+        "Stop",
+        hook_command(&hook_path, Some("idle")),
+        10,
+        None,
+    )?;
+    ensure_command_hook(
+        hooks,
+        "Interrupt",
+        hook_command(&hook_path, Some("idle")),
+        3,
+        None,
+    )?;
     remove_legacy_bash_hook_file(&hook_path)?;
 
     write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
@@ -575,6 +610,124 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
         hook_path,
         hooks_path,
         config_path,
+    })
+}
+
+/// Gemini CLI events herdr installs. The timeouts are milliseconds, which is
+/// what gemini expects (its default is 60000).
+const GEMINI_HOOK_TIMEOUT_MS: u64 = 10_000;
+const GEMINI_HOOK_EVENTS: [(&str, &str); 6] = [
+    ("SessionStart", "session"),
+    ("BeforeAgent", "working"),
+    ("AfterTool", "working"),
+    ("AfterAgent", "idle"),
+    ("Notification", "blocked"),
+    ("SessionEnd", "idle"),
+];
+
+pub(crate) struct GeminiInstallPaths {
+    pub(crate) hook_path: PathBuf,
+    pub(crate) settings_path: PathBuf,
+}
+
+pub(crate) fn install_gemini() -> io::Result<GeminiInstallPaths> {
+    let dir = gemini_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "gemini config directory not found at {}. install gemini cli first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(super::GEMINI_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, super::GEMINI_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let settings_path = dir.join("settings.json");
+    let mut settings = if settings_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?).map_err(|err| {
+            io::Error::other(format!(
+                "failed to parse {}: {err}",
+                settings_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut settings,
+        &settings_path,
+        "gemini settings",
+        "gemini settings hooks",
+    )?;
+    for (event, action) in GEMINI_HOOK_EVENTS {
+        ensure_command_hook(
+            hooks,
+            event,
+            hook_command(&hook_path, Some(action)),
+            GEMINI_HOOK_TIMEOUT_MS,
+            None,
+        )?;
+    }
+
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    Ok(GeminiInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
+pub(crate) struct GeminiUninstallResult {
+    pub(crate) hook_path: PathBuf,
+    pub(crate) settings_path: PathBuf,
+    pub(crate) removed_hook_file: bool,
+    pub(crate) updated_settings: bool,
+}
+
+pub(crate) fn uninstall_gemini() -> io::Result<GeminiUninstallResult> {
+    let dir = gemini_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    let hook_path = dir.join("hooks").join(super::GEMINI_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
+    let mut updated_settings = false;
+
+    if settings_path.is_file() {
+        let mut settings = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse {}: {err}",
+                    settings_path.display()
+                ))
+            })?;
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "gemini settings",
+            "gemini settings hooks",
+        )? {
+            for (event, action) in GEMINI_HOOK_EVENTS {
+                updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+        }
+        if updated_settings {
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(GeminiUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
     })
 }
 

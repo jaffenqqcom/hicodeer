@@ -508,6 +508,25 @@ impl App {
             return None;
         }
         let pane = self.pane_metadata(ws_idx, pane_id)?;
+        #[cfg(target_env = "ohos")]
+        let last_reply = {
+            let session = pane.agent_session.as_ref();
+            let session_path = session
+                .and_then(|session| session.path.as_deref())
+                .map(std::path::Path::new);
+            let session_id = session.map(|session| session.value.as_str());
+            crate::fetch_reply::reply_for_completion(
+                &pane.pane_id,
+                terminal.last_agent_completion_seq,
+                pane.agent.as_deref(),
+                session_path,
+                session_id,
+                pane.cwd.as_deref(),
+                None,
+            )
+        };
+        #[cfg(not(target_env = "ohos"))]
+        let last_reply: Option<String> = None;
         Some(crate::api::schema::AgentInfo {
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),
@@ -529,6 +548,7 @@ impl App {
             interactive_ready: terminal.managed_agent_interactive_ready(),
             state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
             completion_seq: terminal.last_agent_completion_seq,
+            last_reply,
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,
             revision: pane.revision,

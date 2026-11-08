@@ -140,7 +140,7 @@ const CODEBUDDY_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/codebuddy/hicodeer-agent-state.sh")
 };
-const CODEBUDDY_INTEGRATION_VERSION: u32 = 6;
+const CODEBUDDY_INTEGRATION_VERSION: u32 = 7;
 const CODEX_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -151,7 +151,7 @@ const CODEX_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/codex/hicodeer-agent-state.sh")
 };
-const CODEX_INTEGRATION_VERSION: u32 = 11;
+const CODEX_INTEGRATION_VERSION: u32 = 13;
 const KIMI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -163,6 +163,9 @@ const KIMI_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/kimi/hicodeer-agent-state.sh")
 };
 const KIMI_INTEGRATION_VERSION: u32 = 9;
+const GEMINI_HOOK_INSTALL_NAME: &str = "hicodeer-agent-state.sh";
+const GEMINI_HOOK_ASSET: &str = include_str!("assets/gemini/hicodeer-agent-state.sh");
+const GEMINI_INTEGRATION_VERSION: u32 = 3;
 const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> herdr kimi integration";
 const KIMI_CONFIG_BLOCK_END: &str = "# <<< herdr kimi integration";
 const KIMI_MIN_VERSION: &str = "0.14.0";
@@ -310,7 +313,7 @@ const HERMES_PLUGIN_MANIFEST_INSTALL_NAME: &str = "plugin.yaml";
 const HERMES_PLUGIN_INIT_INSTALL_NAME: &str = "__init__.py";
 const HERMES_PLUGIN_MANIFEST_ASSET: &str = include_str!("assets/hermes/plugin.yaml");
 const HERMES_PLUGIN_INIT_ASSET: &str = include_str!("assets/hermes/__init__.py");
-const HERMES_INTEGRATION_VERSION: u32 = 5;
+const HERMES_INTEGRATION_VERSION: u32 = 9;
 const QODERCLI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -333,7 +336,7 @@ const QWEN_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/qwen/hicodeer-agent-state.sh")
 };
-const QWEN_INTEGRATION_VERSION: u32 = 6;
+const QWEN_INTEGRATION_VERSION: u32 = 7;
 const QWEN_HOOK_EVENTS: [(&str, Option<&str>, &str); 7] = [
     ("SessionStart", None, "session"),
     ("UserPromptSubmit", None, "working"),

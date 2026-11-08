@@ -242,6 +242,40 @@ python3 test_hook_lifecycle.py --run --run-agents deveco,atomcode,codewhale
 
 `zcode` 还需要一点启动预热（`STARTUP_SETTLE_SECONDS`，8 秒）：首帧没画完时它会把送进去的文字丢掉，之后补发的回车落在空输入框里，表现为「agent 起来了但永远不 working」。
 
+### `test_last_reply.py` — 最后答复透传校验（daemon → agent.list）
+
+```bash
+python3 test_last_reply.py --list-only              # 只读：校验现有 pane 的契约，无副作用
+python3 test_last_reply.py                          # 默认起 codebuddy 真跑一轮
+python3 test_last_reply.py --agents claude,codex    # 指定名单
+python3 test_last_reply.py --second-round           # 再跑一轮，校验 seq 与文本一起换
+```
+
+验的是这条链路：会话存储 → `herdr/src/fetch_reply/` 的 per-agent adapter → `AgentInfo.last_reply` → `agent.list`。面板的 IM 通知优先用它，避免应用进程读不到的会话文件与终端快照。
+
+断言：
+
+1. 契约：`last_reply` 出现时 `completion_seq` 必须非 null（被中断的轮次两者都不出现，daemon 不猜）。
+2. 内容：`last_reply` 含期望文本（默认「成功」），且不含 `esc to interrupt` / `ctrl+c to` / `? for shortcuts` 这些终端装饰——出现即说明取错了来源。
+3. 稳定：同一 `completion_seq` 连续两次 `agent.list` 返回同一文本（daemon 的 memo 一次完成只解析一次）。
+4. `--second-round`：第二轮 `completion_seq` 变大，`last_reply` 换成第二轮答复。
+5. 表格 + 特殊符号（默认开启，`--no-special-chars` 关闭）：额外跑一轮「原样输出」提示，断言 markdown 表格三行、`→ ≤ ≥ ★ ☑ 「引号」① ½ ⚠` 全部原样保留、竖线 ≥ 6 个、不含 U+FFFD；`--show-reply` 会把该轮原文打出来。
+
+`--list-only` 对「已完成但没有 `last_reply`」只告警不失败：可能是该 agent 的 adapter 未覆盖或会话尚未写完，属环境差异而非功能回归。
+
+为什么轮询 `agent.list` 而不是拿到 idle 就断言：daemon 是在被拉取时解析会话存储的，Stop 之后 transcript 可能还没落盘。daemon 侧按时间窗重试（30 秒），面板侧在 completion 到达但 `last_reply` 缺失时也会重拉几次快照，脚本则按 `completion_seq` 最多等 `--reply-seconds`（默认 15 秒）。一轮完成的上限是 `--wait-seconds`（默认 60 秒），识别后到发提示之间的稳定期是 `--settle-seconds`（默认 5 秒）。
+
+覆盖现状（2026-11-08 实测，均含表格与特殊符号轮）：
+
+- 已通过：`claude`、`codebuddy`、`opencode`、`zcode`、`deveco`、`qwen`、`kimi`、`codewhale`、`atomcode`、`codex`、`hermes`。
+- `gemini` 走 `~/.gemini/settings.json` 的 `hooks`，事件与 claude 同构。答复从 `~/.gemini/tmp/<project>/chats/session-*.jsonl` 取最后一条 `type == "gemini"`（逐行记录，也兼容整份 JSON 文档），project 名由 `~/.gemini/projects.json` 从 cwd 反查；`--agents all` 会连同它一起跑。
+- `agent_prereqs.py` 管本地依赖：`gemini` 需要 `~/tmp/gem-proxy` 在 127.0.0.1:8000（Gemini 协议转 DeepSeek），`codex` 需要 `~/.cargo/bin/codex-relay` 在 127.0.0.1:4446。脚本按需启动、端口已在监听就复用、进程退出时只杀自己起的那些，所以连续跑两次不会互相踩。
+- `codex` 依赖本地桥：`~/.cargo/bin/codex-relay --port 4446 --upstream https://api.deepseek.com/v1 --api-key $DEEPSEEK_API_KEY`。codex 0.164 只接受 `wire_api = "responses"`，DeepSeek 只提供 chat completions，没有这个桥就起不了一轮。它的 hook 注册 6 个事件（`SessionStart` session、`UserPromptSubmit`/`PreToolUse` working、`PermissionRequest` blocked、`Stop`/`Interrupt` idle），并随事件上报 `transcript_path`；daemon 从 rollout 的 `task_complete.last_agent_message` 取答复。
+- `hermes` 的答复查询只认 `finish_reason in ('stop','length')` 的 assistant 行：工具循环的中间步骤同样是 assistant 行（`tool_calls`），不过滤就会把半成品当答复。
+`hermes` 走它自己的 `state.db`，但状态与会话都不来自插件：0.22 的 TUI 只是 gateway 的客户端，turn 在 gateway 进程执行，而 gateway 继承的是「谁启动它」的 `HERDR_PANE_ID`，按 hook 上报必然记到无关面板上。现在的链路是：识屏从底部状态行读 `Session: <8位>`（`herdr/src/detect/mod.rs` 的 `hermes_screen_session_id`），绑到该 pane，再按前缀查 `local-<hash>`；状态则由 `hermes.toml` 的 `turn_banner_working`（`type to redirect this turn` / `Working…`）与 `prompt_box_idle`（`^❯ `）判 working/idle。插件仍会安装，但 gateway 进程里 `_pane_id()` 直接返回空，不再误报。
+- `qwen` 使用 hook 的 `transcript_path`，缺失时按 `~/.qwen/projects/<cwd 分隔符换成 ->/chats/<session>.jsonl` 兜底；它的 reasoning part 带 `thought: true`，解析时跳过。
+- `pi`：链路本身正常，卡在模型侧一直 working，属环境问题。
+
 ### `test_skill.py` — SKILL.md 命令校验（只读，不连 daemon）
 
 ```bash

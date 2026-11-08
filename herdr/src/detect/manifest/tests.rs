@@ -907,3 +907,35 @@ contains = ["active"]
 "#;
     assert!(parse_manifest(manifest).is_err());
 }
+
+/// A short turn title renders no ellipsis, so the footer reads
+/// "`✺ 修复 (12s · running REPL · …)`" without a truncation mark. The elapsed
+/// clause is what proves a turn is live; the title shape is not.
+#[test]
+fn codebuddy_short_title_with_running_tool_is_working() {
+    let screen = concat!(
+        "● REPL · 读取配置\n",
+        "  └ · 4s · 1 command (ctrl+o to expand)\n",
+        "\n",
+        "✺ 修复 (12s · running REPL ·   24 tokens · ctrl+t to show todos)\n",
+        "───────────────────────────────────────────────\n",
+        ">\n",
+        "───────────────────────────────────────────────\n",
+    );
+    let detection = detect(Agent::CodeBuddy, screen);
+    assert_eq!(detection.state, AgentState::Working);
+    assert!(detection.visible_working);
+}
+
+/// The wrapped footer keeps only the elapsed clause on its own line.
+#[test]
+fn codebuddy_wrapped_footer_clause_is_working() {
+    let screen = concat!(
+        "● REPL · 读取配置\n",
+        "  └ · 4s · 1 command (ctrl+o to expand)\n",
+        " (693s · running Bash · ctrl+t to show todos)\n",
+        ">\n",
+    );
+    let detection = detect(Agent::CodeBuddy, screen);
+    assert_eq!(detection.state, AgentState::Working);
+}

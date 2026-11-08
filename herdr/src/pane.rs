@@ -308,6 +308,61 @@ async fn publish_agent_process_detected_event(
     }
 }
 
+/// Binds a Hermes pane to the session its status line names.
+///
+/// Hermes has no pane-scoped hook: every turn runs in its gateway process, so
+/// the per-pane identity only exists on screen. The status line shows the
+/// short id whose prefix matches the full `local-<hash>` session id.
+async fn publish_hermes_screen_session(
+    state_events: &mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent: Option<Agent>,
+    content: &str,
+    last_session: &mut Option<String>,
+) {
+    if agent != Some(Agent::Hermes) {
+        return;
+    }
+    let Some(short_id) = crate::detect::hermes_screen_session_id(content) else {
+        return;
+    };
+    if last_session.as_deref() == Some(short_id.as_str()) {
+        return;
+    }
+    let Some(session_ref) = crate::agent_resume::session_ref_from_report(
+        "hicodeer:hermes",
+        "hermes",
+        Some(short_id.clone()),
+        None,
+    ) else {
+        return;
+    };
+    // A timestamp keeps this report comparable with hook reports, which carry
+    // `time_ns`: an untimed report is rejected outright once any timed report
+    // for the same source has arrived (terminal/state.rs::hook_report_is_newer).
+    let seq = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0);
+    let report = AppEvent::AgentSessionReported {
+        pane_id,
+        source: "hicodeer:hermes".to_string(),
+        agent_label: "hermes".to_string(),
+        seq: Some(seq),
+        session_ref: Some(session_ref),
+        session_start_source: None,
+    };
+    if let Err(error) = state_events.send(report).await {
+        warn!(
+            pane = pane_id.raw(),
+            %error,
+            "failed to deliver Hermes screen session"
+        );
+        return;
+    }
+    *last_session = Some(short_id);
+}
+
 async fn publish_codex_prompt_observation(
     state_events: &mpsc::Sender<AppEvent>,
     pane_id: PaneId,
@@ -1030,6 +1085,7 @@ fn spawn_basic_detection_task(
         let mut agent_startup_grace_until = None;
         let mut pending_idle = PendingIdleConfirmation::default();
         let mut last_codex_prompt_ready = false;
+        let mut last_hermes_screen_session = None;
         let mut last_self_reported_shell_check = None;
         let mut agent_job = AgentJobTracker::default();
 
@@ -1243,6 +1299,14 @@ fn spawn_basic_detection_task(
             let content_changed = last_detection_text
                 .refresh(agent, &content_seq, || terminal.detection_text_for_cache());
             let content = &last_detection_text.text;
+            publish_hermes_screen_session(
+                &state_events,
+                pane_id,
+                agent,
+                content,
+                &mut last_hermes_screen_session,
+            )
+            .await;
             last_screen_scan_detection_content_seq = current_detection_content_seq;
             let osc_title = terminal.agent_osc_title();
             let osc_progress = terminal.agent_osc_progress();
@@ -3006,6 +3070,7 @@ impl PaneRuntime {
                 let mut agent_startup_grace_until = None;
                 let mut pending_idle = PendingIdleConfirmation::default();
                 let mut last_codex_prompt_ready = false;
+                let mut last_hermes_screen_session = None;
                 let mut last_self_reported_shell_check = None;
                 let mut agent_job = AgentJobTracker::default();
                 let mut last_agent_process: Option<(u32, Option<u64>)> = None;
@@ -3364,6 +3429,14 @@ impl PaneRuntime {
                             terminal.detection_text_for_cache()
                         });
                     let content = &last_detection_text.text;
+                    publish_hermes_screen_session(
+                        &state_events,
+                        pane_id,
+                        agent,
+                        content,
+                        &mut last_hermes_screen_session,
+                    )
+                    .await;
                     last_screen_scan_detection_content_seq = current_detection_content_seq;
                     let osc_title = terminal.agent_osc_title();
                     let osc_progress = terminal.agent_osc_progress();

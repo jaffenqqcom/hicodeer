@@ -111,7 +111,8 @@ if [ -z "${ALLOW_MISSING_LICENSES-}" ]; then WRAPPER=fail_on_stderr; else WRAPPE
 
 ROOT_REPORT="$(mktemp)"
 DAEMON_REPORT="$(mktemp)"
-trap 'rm -f "$ROOT_REPORT" "$DAEMON_REPORT"' EXIT
+UPSTREAM_REPORT="$(mktemp)"
+trap 'rm -f "$ROOT_REPORT" "$DAEMON_REPORT" "$UPSTREAM_REPORT"' EXIT
 
 echo "Generating licenses for the application workspace"
 set -x
@@ -136,7 +137,30 @@ set -x
 )
 set +x
 
-python3 script/licenses/merge-about.py "$ROOT_REPORT" "$DAEMON_REPORT" >>"$OUTPUT_FILE"
+# Two upstream sources never reach cargo-about's output: the editor tree is the
+# Zed source tree itself (workspace members are private and skipped), and herdr
+# is a path dependency renamed to `hicodeer-agent`, so its entry loses the
+# upstream name and URL. Both are emitted as regular report blocks so every
+# regeneration still names them.
+ZED_REPOSITORY="https://github.com/zed-industries/zed"
+HERDR_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' herdr/Cargo.toml | head -n 1)"
+HERDR_REPOSITORY="$(sed -n 's/^repository = "\(.*\)"$/\1/p' herdr/Cargo.toml | head -n 1)"
+ZED_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/zed/Cargo.toml | head -n 1)"
+if [ -z "$HERDR_VERSION" ] || [ -z "$HERDR_REPOSITORY" ] || [ -z "$ZED_VERSION" ]; then
+    echo "generate-licenses: ERROR: cannot read upstream version or repository from Cargo.toml" >&2
+    exit 1
+fi
+{
+    printf '#### Apache License 2.0\n\n##### Used by:\n\n'
+    printf '* [herdr %s]( %s )\n\n' "$HERDR_VERSION" "$HERDR_REPOSITORY"
+    printf '%s\n\n' '--------------------------------------------------------------------------------'
+    printf '#### GNU General Public License v3.0 or later\n\n##### Used by:\n\n'
+    printf '* [zed %s]( %s )\n\n' "$ZED_VERSION" "$ZED_REPOSITORY"
+    cat LICENSE-GPL
+    printf '\n%s\n\n' '--------------------------------------------------------------------------------'
+} >"$UPSTREAM_REPORT"
+
+python3 script/licenses/merge-about.py "$ROOT_REPORT" "$DAEMON_REPORT" "$UPSTREAM_REPORT" >>"$OUTPUT_FILE"
 
 sed -i.bak 's/&quot;/"/g' "$OUTPUT_FILE"
 sed -i.bak 's/&#x27;/'\''/g' "$OUTPUT_FILE" # The ` '\'' ` thing ends the string, appends a single quote, and re-opens the string

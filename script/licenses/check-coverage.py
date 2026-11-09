@@ -10,7 +10,9 @@ cargo reports cannot prove on their own:
   4. the daemon dependency graph was actually scanned — probed with crates only
      that graph can contribute,
   5. `hicodeerd` still subsumes `herdr`: if it ever stops doing so, the single
-     daemon `cargo about` run silently stops covering herdr and this fails.
+     daemon `cargo about` run silently stops covering herdr and this fails,
+  6. the upstream sources (zed, herdr) are declared — they are not cargo
+     dependencies cargo-about reports on its own.
 
 Usage: check-coverage.py assets/licenses.md
 """
@@ -106,6 +108,12 @@ def main(report_path):
             failures.append(
                 f"daemon cargo report is missing (probe crate {crate!r} not found); "
                 "did the hicodeerd `cargo about` run in generate-licenses succeed?"
+            )
+    for crate in ("zed", "herdr"):
+        if f"* [{crate} " not in report:
+            failures.append(
+                f"upstream source {crate!r} is not declared; did generate-licenses "
+                "contribute its upstream report?"
             )
 
     if os.path.isfile(HERDR_LOCK) and os.path.isfile(DAEMON_LOCK):

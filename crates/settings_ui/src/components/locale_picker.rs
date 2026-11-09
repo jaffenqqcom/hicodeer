@@ -1,7 +1,7 @@
 use gpui::{App, IntoElement as _, ReadGlobal as _, SharedString, Window};
 use ui::{
-    Button, ButtonSize, ButtonStyle, ContextMenu, DropdownMenu, DropdownStyle, Tooltip,
-    prelude::*, px,
+    Button, ButtonSize, ButtonStyle, ContextMenu, DropdownMenu, DropdownStyle, Tooltip, prelude::*,
+    px,
 };
 
 use crate::{
@@ -74,15 +74,13 @@ pub(crate) fn render_locale_picker(
                                 <dyn fs::Fs>::global(cx),
                                 move |settings, app| (write)(settings, Some(value), app),
                             );
-                        cx.spawn(async move |_| {
-                            match completion.await {
-                                Ok(Ok(())) => {}
-                                Ok(Err(error)) => {
-                                    log::error!("failed to save UI locale: {error:#}")
-                                }
-                                Err(error) => {
-                                    log::error!("UI locale update was canceled: {error}")
-                                }
+                        cx.spawn(async move |_| match completion.await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                log::error!("failed to save UI locale: {error:#}")
+                            }
+                            Err(error) => {
+                                log::error!("UI locale update was canceled: {error}")
                             }
                         })
                         .detach();

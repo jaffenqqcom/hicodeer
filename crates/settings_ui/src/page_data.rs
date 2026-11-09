@@ -1,9 +1,6 @@
 use gpui::{App, Context};
 use itertools::Itertools as _;
-use settings::{
-    LanguageSettingsContent, SemanticTokens,
-    SettingsContent,
-};
+use settings::{LanguageSettingsContent, SemanticTokens, SettingsContent};
 use std::sync::{Arc, OnceLock};
 use strum::{EnumMessage, IntoDiscriminant as _, VariantArray};
 use theme::SystemAppearance;
@@ -64,9 +61,10 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         panels_page(),
         terminal_page(),
     ];
-    // [OHOS PORT] The agent panel's settings have no upstream counterpart. They
-    // are appended to the Panels page as its last section (see `panels_page`),
-    // because they configure a panel rather than being a page of their own.
+    // [OHOS PORT] The agent panel's layout settings have no upstream
+    // counterpart. They are appended to the Panels page as its last section
+    // (see `panels_page`); the panel's notification and IM settings live on the
+    // Agent Container page instead.
     pages.extend([version_control_page(), network_page()]);
     // [OHOS PORT BEGIN] The developer page only carries the performance
     // profiler, which is off and hidden in this build; keeping the page would
@@ -79,7 +77,21 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
     #[cfg(target_env = "ohos")]
     pages.push(about_page());
     // [OHOS PORT END]
+    // [OHOS PORT BEGIN] The agent container page sits between Keymap and
+    // Editor: it holds the switches and IM channel settings that used to live
+    // on the Panels page and on a page of their own.
+    #[cfg(target_env = "ohos")]
+    pages.insert(3, agent_container_page());
+    // [OHOS PORT END]
     pages
+}
+
+#[cfg(target_env = "ohos")]
+fn agent_container_page() -> SettingsPage {
+    SettingsPage {
+        title: localization::localized_str!("Agent Container"),
+        items: crate::agent_container_settings::items().into_boxed_slice(),
+    }
 }
 
 // [OHOS PORT BEGIN] Not reachable on this platform, see `settings_data`.
@@ -91,7 +103,9 @@ fn developer_page(cx: &App) -> SettingsPage {
 
     // Feature flag overrides are a staff-only affordance, so only surface the section when the overrides are enabled.
     if cx.feature_flag_overrides_enabled() {
-        items.push(SettingsPageItem::SectionHeader(localization::localized_str!("Feature Flags")));
+        items.push(SettingsPageItem::SectionHeader(
+            localization::localized_str!("Feature Flags"),
+        ));
         items.push(SettingsPageItem::SubPageLink(SubPageLink {
             title: localization::localized_str!("Feature Flags").into(),
             r#type: Default::default(),
@@ -104,7 +118,9 @@ fn developer_page(cx: &App) -> SettingsPage {
         }));
     }
 
-    items.push(SettingsPageItem::SectionHeader(localization::localized_str!("Instrumentation")));
+    items.push(SettingsPageItem::SectionHeader(
+        localization::localized_str!("Instrumentation"),
+    ));
     items.push(SettingsPageItem::SettingItem(SettingItem {
         title: localization::localized_str!("Performance Profiler"),
         description: localization::localized_str!("Collect timing data for foreground and background executor tasks so they can be inspected via `zed: open performance profiler`. May lead to increased memory usage."),
@@ -145,7 +161,9 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("General Settings")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Accessible Mode"),
-                description: localization::localized_str!("Optimize HiCodeer's interface for assistive technology such as screen readers. When enabled, otherwise-collapsed controls stay expanded and keyboard-reachable."),
+                description: localization::localized_str!(
+                    "Optimize HiCodeer's interface for assistive technology such as screen readers. When enabled, otherwise-collapsed controls stay expanded and keyboard-reachable."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("accessible_mode"),
@@ -159,7 +177,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("When Closing With No Tabs"),
-                description: localization::localized_str!("What to do when using the 'close active item' action with no tabs."),
+                description: localization::localized_str!(
+                    "What to do when using the 'close active item' action with no tabs."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("when_closing_with_no_tabs"),
@@ -178,7 +198,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("On New Window"),
-                description: localization::localized_str!("What to show when opening a new window."),
+                description: localization::localized_str!(
+                    "What to show when opening a new window."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("on_new_window"),
@@ -192,7 +214,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("On Last Window Closed"),
-                description: localization::localized_str!("What to do when the last window is closed."),
+                description: localization::localized_str!(
+                    "What to do when the last window is closed."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("on_last_window_closed"),
@@ -208,7 +232,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use System Path Prompts"),
-                description: localization::localized_str!("Use native OS dialogs for 'Open' and 'Save As'."),
+                description: localization::localized_str!(
+                    "Use native OS dialogs for 'Open' and 'Save As'."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_path_prompts"),
@@ -224,7 +250,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use System Prompts"),
-                description: localization::localized_str!("Use native OS dialogs for confirmations."),
+                description: localization::localized_str!(
+                    "Use native OS dialogs for confirmations."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_prompts"),
@@ -238,7 +266,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Redact Private Values"),
-                description: localization::localized_str!("Hide the values of variables in private files."),
+                description: localization::localized_str!(
+                    "Hide the values of variables in private files."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("redact_private_values"),
@@ -252,7 +282,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Private Files"),
-                description: localization::localized_str!("Globs to match against file paths to determine if a file is private."),
+                description: localization::localized_str!(
+                    "Globs to match against file paths to determine if a file is private."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -274,7 +306,9 @@ fn general_page(cx: &App) -> SettingsPage {
             #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("CLI Default Open Behavior"),
-                description: localization::localized_str!("How `zed <path>` opens directories when no flag is specified."),
+                description: localization::localized_str!(
+                    "How `zed <path>` opens directories when no flag is specified."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cli_default_open_behavior"),
@@ -296,7 +330,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Reveal If Open"),
-                description: localization::localized_str!("when enabled, HiCodeer will prefer already-open buffers."),
+                description: localization::localized_str!(
+                    "when enabled, HiCodeer will prefer already-open buffers."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("reveal_if_open"),
@@ -310,7 +346,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Default Open Behavior"),
-                description: localization::localized_str!("How projects open from the UI by default."),
+                description: localization::localized_str!(
+                    "How projects open from the UI by default."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("default_open_behavior"),
@@ -334,7 +372,9 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Security")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Trust All Projects By Default"),
-                description: localization::localized_str!("When opening HiCodeer, avoid Restricted Mode by auto-trusting all projects, enabling use of all features without having to give permission to each new project."),
+                description: localization::localized_str!(
+                    "When opening HiCodeer, avoid Restricted Mode by auto-trusting all projects, enabling use of all features without having to give permission to each new project."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("session.trust_all_projects"),
@@ -362,7 +402,9 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Workspace Restoration")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Restore Unsaved Buffers"),
-                description: localization::localized_str!("Whether or not to restore unsaved buffers on restart."),
+                description: localization::localized_str!(
+                    "Whether or not to restore unsaved buffers on restart."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("session.restore_unsaved_buffers"),
@@ -384,7 +426,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Restore On Startup"),
-                description: localization::localized_str!("What to restore from the previous session when opening HiCodeer."),
+                description: localization::localized_str!(
+                    "What to restore from the previous session when opening HiCodeer."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("restore_on_startup"),
@@ -405,7 +449,9 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Preview Channel"),
-                description: localization::localized_str!("Which settings should be activated only in Preview build of HiCodeer."),
+                description: localization::localized_str!(
+                    "Which settings should be activated only in Preview build of HiCodeer."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -420,7 +466,9 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Settings Profiles"),
-                description: localization::localized_str!("Any number of settings profiles that are temporarily applied on top of your existing user settings."),
+                description: localization::localized_str!(
+                    "Any number of settings profiles that are temporarily applied on top of your existing user settings."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -443,7 +491,9 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Privacy")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Telemetry Diagnostics"),
-                description: localization::localized_str!("Send debug information like crash reports."),
+                description: localization::localized_str!(
+                    "Send debug information like crash reports."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.diagnostics"),
@@ -465,7 +515,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Telemetry Metrics"),
-                description: localization::localized_str!("Send anonymized usage data like what languages you're using HiCodeer with."),
+                description: localization::localized_str!(
+                    "Send anonymized usage data like what languages you're using HiCodeer with."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.metrics"),
@@ -484,7 +536,9 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Anthropic Data Retention"),
-                description: localization::localized_str!("Allow sending requests to Anthropic models that cannot be offered with Zero Data Retention."),
+                description: localization::localized_str!(
+                    "Allow sending requests to Anthropic models that cannot be offered with Zero Data Retention."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("telemetry.anthropic_retention"),
@@ -516,7 +570,9 @@ fn general_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Auto Update")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Update"),
-                description: localization::localized_str!("Whether or not to automatically check for updates."),
+                description: localization::localized_str!(
+                    "Whether or not to automatically check for updates."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("auto_update"),
@@ -1053,7 +1109,9 @@ fn appearance_page() -> SettingsPage {
                         settings::BufferLineHeightDiscriminants::Custom => vec![SettingItem {
                             files: USER,
                             title: localization::localized_str!("Custom Line Height"),
-                            description: localization::localized_str!("Custom line height value (must be at least 1.0)."),
+                            description: localization::localized_str!(
+                                "Custom line height value (must be at least 1.0)."
+                            ),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("buffer_line_height"),
@@ -1085,7 +1143,9 @@ fn appearance_page() -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Font Features"),
-                description: localization::localized_str!("The OpenType features to enable for rendering in text buffers."),
+                description: localization::localized_str!(
+                    "The OpenType features to enable for rendering in text buffers."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1104,7 +1164,9 @@ fn appearance_page() -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Font Fallbacks"),
-                description: localization::localized_str!("The font fallbacks to use for rendering in text buffers."),
+                description: localization::localized_str!(
+                    "The font fallbacks to use for rendering in text buffers."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1171,7 +1233,9 @@ fn appearance_page() -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Font Features"),
-                description: localization::localized_str!("The OpenType features to enable for rendering in UI elements."),
+                description: localization::localized_str!(
+                    "The OpenType features to enable for rendering in UI elements."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1188,7 +1252,9 @@ fn appearance_page() -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Font Fallbacks"),
-                description: localization::localized_str!("The font fallbacks to use for rendering in the UI."),
+                description: localization::localized_str!(
+                    "The font fallbacks to use for rendering in the UI."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1205,13 +1271,14 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
-
     fn markdown_preview_font_section() -> [SettingsPageItem; 5] {
         [
             SettingsPageItem::SectionHeader(localization::localized_str!("Markdown Preview Font")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Font Family"),
-                description: localization::localized_str!("Font family for the markdown preview. Falls back to the UI font family."),
+                description: localization::localized_str!(
+                    "Font family for the markdown preview. Falls back to the UI font family."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.font_family"),
@@ -1235,7 +1302,9 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Code Font Family"),
-                description: localization::localized_str!("Font family for code blocks in the markdown preview. Falls back to the editor font family."),
+                description: localization::localized_str!(
+                    "Font family for code blocks in the markdown preview. Falls back to the editor font family."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.code_font_family"),
@@ -1259,7 +1328,9 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Font Size"),
-                description: localization::localized_str!("Font size for the markdown preview. Falls back to the editor font size."),
+                description: localization::localized_str!(
+                    "Font size for the markdown preview. Falls back to the editor font size."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.font_size"),
@@ -1363,7 +1434,9 @@ fn appearance_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Cursor")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Multi Cursor Modifier"),
-                description: localization::localized_str!("Modifier key for adding multiple cursors."),
+                description: localization::localized_str!(
+                    "Modifier key for adding multiple cursors."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("multi_cursor_modifier"),
@@ -1377,7 +1450,9 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Cursor Blink"),
-                description: localization::localized_str!("Whether the cursor blinks in the editor."),
+                description: localization::localized_str!(
+                    "Whether the cursor blinks in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cursor_blink"),
@@ -1391,7 +1466,9 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Cursor Animation"),
-                description: localization::localized_str!("Whether the cursor smoothly animates when moving around the editor."),
+                description: localization::localized_str!(
+                    "Whether the cursor smoothly animates when moving around the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("cursor_animation.enabled"),
@@ -1444,7 +1521,9 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Reduce Motion"),
-                description: localization::localized_str!("Whether to reduce non-essential motion, such as loading spinners, by rendering them in a static state."),
+                description: localization::localized_str!(
+                    "Whether to reduce non-essential motion, such as loading spinners, by rendering them in a static state."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("reduce_motion"),
@@ -1464,7 +1543,9 @@ fn appearance_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Highlighting")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Unnecessary Code Fade"),
-                description: localization::localized_str!("How much to fade out unused code (0.0 - 0.9)."),
+                description: localization::localized_str!(
+                    "How much to fade out unused code (0.0 - 0.9)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("unnecessary_code_fade"),
@@ -1494,7 +1575,9 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Selection Highlight"),
-                description: localization::localized_str!("Highlight all occurrences of selected text."),
+                description: localization::localized_str!(
+                    "Highlight all occurrences of selected text."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("selection_highlight"),
@@ -1508,7 +1591,9 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Rounded Selection"),
-                description: localization::localized_str!("Whether the text selection should have rounded corners."),
+                description: localization::localized_str!(
+                    "Whether the text selection should have rounded corners."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("rounded_selection"),
@@ -1522,7 +1607,9 @@ fn appearance_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Minimum Contrast For Highlights"),
-                description: localization::localized_str!("The minimum APCA perceptual contrast to maintain when rendering text over highlight backgrounds."),
+                description: localization::localized_str!(
+                    "The minimum APCA perceptual contrast to maintain when rendering text over highlight backgrounds."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimum_contrast_for_highlights"),
@@ -1573,7 +1660,9 @@ fn appearance_page() -> SettingsPage {
             // todo(settings_ui): This needs a custom component
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Wrap Guides"),
-                description: localization::localized_str!("Character counts at which to show wrap guides."),
+                description: localization::localized_str!(
+                    "Character counts at which to show wrap guides."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -1622,7 +1711,10 @@ fn keymap_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Keybindings")),
             SettingsPageItem::ActionLink(ActionLink {
                 title: localization::localized_str!("Edit Keybindings").into(),
-                description: Some(localization::localized_str!("Customize keybindings in the keymap editor.").into()),
+                description: Some(
+                    localization::localized_str!("Customize keybindings in the keymap editor.")
+                        .into(),
+                ),
                 button_text: localization::localized_str!("Open Keymap").into(),
                 on_click: Arc::new(
                     |settings_window, _window, cx: &mut Context<crate::SettingsWindow>| {
@@ -1683,7 +1775,9 @@ fn keymap_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Base Keymap")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Base Keymap"),
-                description: localization::localized_str!("The name of a base set of key bindings to use."),
+                description: localization::localized_str!(
+                    "The name of a base set of key bindings to use."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("base_keymap"),
@@ -1808,7 +1902,9 @@ fn editor_page() -> SettingsPage {
                         settings::AutosaveSettingDiscriminants::AfterDelay => vec![SettingItem {
                             files: USER,
                             title: localization::localized_str!("Delay (milliseconds)"),
-                            description: localization::localized_str!("Save after inactivity period (in milliseconds)."),
+                            description: localization::localized_str!(
+                                "Save after inactivity period (in milliseconds)."
+                            ),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("autosave.after_delay.milliseconds"),
@@ -1850,7 +1946,9 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Which-key Menu")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Which-key Menu"),
-                description: localization::localized_str!("Display the which-key menu with matching bindings while a multi-stroke binding is pending. The pending keystrokes indicator remains visible, but its binding preview popover is disabled."),
+                description: localization::localized_str!(
+                    "Display the which-key menu with matching bindings while a multi-stroke binding is pending. The pending keystrokes indicator remains visible, but its binding preview popover is disabled."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("which_key.enabled"),
@@ -1869,7 +1967,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Menu Delay"),
-                description: localization::localized_str!("Delay in milliseconds before the which-key menu appears."),
+                description: localization::localized_str!(
+                    "Delay in milliseconds before the which-key menu appears."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("which_key.delay_ms"),
@@ -1894,7 +1994,9 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Multibuffer")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Double Click In Multibuffer"),
-                description: localization::localized_str!("What to do when multibuffer is double-clicked in some of its excerpts."),
+                description: localization::localized_str!(
+                    "What to do when multibuffer is double-clicked in some of its excerpts."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("double_click_in_multibuffer"),
@@ -1910,7 +2012,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Expand Excerpt Lines"),
-                description: localization::localized_str!("How many lines to expand the multibuffer excerpts by default."),
+                description: localization::localized_str!(
+                    "How many lines to expand the multibuffer excerpts by default."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("expand_excerpt_lines"),
@@ -1924,7 +2028,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Excerpt Context Lines"),
-                description: localization::localized_str!("How many lines of context to provide in multibuffer excerpts by default."),
+                description: localization::localized_str!(
+                    "How many lines of context to provide in multibuffer excerpts by default."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("excerpt_context_lines"),
@@ -1938,7 +2044,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Expand Outlines With Depth"),
-                description: localization::localized_str!("Default depth to expand outline items in the current file."),
+                description: localization::localized_str!(
+                    "Default depth to expand outline items in the current file."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.expand_outlines_with_depth"),
@@ -1976,7 +2084,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Minimum Split Diff Width"),
-                description: localization::localized_str!("The minimum width (in columns) at which the split diff view is used. When the editor is narrower, the diff view automatically switches to unified mode. Set to 0 to disable."),
+                description: localization::localized_str!(
+                    "The minimum width (in columns) at which the split diff view is used. When the editor is narrower, the diff view automatically switches to unified mode. Set to 0 to disable."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimum_split_diff_width"),
@@ -1998,7 +2108,9 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Scrolling")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Scroll Beyond Last Line"),
-                description: localization::localized_str!("Whether the editor will scroll beyond the last line."),
+                description: localization::localized_str!(
+                    "Whether the editor will scroll beyond the last line."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scroll_beyond_last_line"),
@@ -2014,7 +2126,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Vertical Scroll Margin"),
-                description: localization::localized_str!("The number of lines to keep above/below the cursor when auto-scrolling."),
+                description: localization::localized_str!(
+                    "The number of lines to keep above/below the cursor when auto-scrolling."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vertical_scroll_margin"),
@@ -2030,7 +2144,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Horizontal Scroll Margin"),
-                description: localization::localized_str!("The number of characters to keep on either side when scrolling with the mouse."),
+                description: localization::localized_str!(
+                    "The number of characters to keep on either side when scrolling with the mouse."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("horizontal_scroll_margin"),
@@ -2046,7 +2162,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Scroll Sensitivity"),
-                description: localization::localized_str!("Scroll sensitivity multiplier for both horizontal and vertical scrolling."),
+                description: localization::localized_str!(
+                    "Scroll sensitivity multiplier for both horizontal and vertical scrolling."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scroll_sensitivity"),
@@ -2060,7 +2178,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Mouse Wheel Zoom"),
-                description: localization::localized_str!("Whether to zoom the editor font size with the mouse wheel while holding the primary modifier key."),
+                description: localization::localized_str!(
+                    "Whether to zoom the editor font size with the mouse wheel while holding the primary modifier key."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("mouse_wheel_zoom"),
@@ -2074,7 +2194,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Fast Scroll Sensitivity"),
-                description: localization::localized_str!("Fast scroll sensitivity multiplier for both horizontal and vertical scrolling."),
+                description: localization::localized_str!(
+                    "Fast scroll sensitivity multiplier for both horizontal and vertical scrolling."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("fast_scroll_sensitivity"),
@@ -2090,7 +2212,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Autoscroll On Clicks"),
-                description: localization::localized_str!("Whether to scroll when clicking near the edge of the visible text area."),
+                description: localization::localized_str!(
+                    "Whether to scroll when clicking near the edge of the visible text area."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("autoscroll_on_clicks"),
@@ -2104,7 +2228,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Sticky Scroll"),
-                description: localization::localized_str!("Whether to stick scopes to the top of the editor"),
+                description: localization::localized_str!(
+                    "Whether to stick scopes to the top of the editor"
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("sticky_scroll.enabled"),
@@ -2134,7 +2260,9 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Signature Help")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Signature Help"),
-                description: localization::localized_str!("Automatically show a signature help pop-up."),
+                description: localization::localized_str!(
+                    "Automatically show a signature help pop-up."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("auto_signature_help"),
@@ -2148,7 +2276,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Signature Help After Edits"),
-                description: localization::localized_str!("Show the signature help pop-up after completions or bracket pairs are inserted."),
+                description: localization::localized_str!(
+                    "Show the signature help pop-up after completions or bracket pairs are inserted."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("show_signature_help_after_edits"),
@@ -2167,7 +2297,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Snippet Sort Order"),
-                description: localization::localized_str!("Determines how snippets are sorted relative to other completion items."),
+                description: localization::localized_str!(
+                    "Determines how snippets are sorted relative to other completion items."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("snippet_sort_order"),
@@ -2187,7 +2319,9 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Hover Popover")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enabled"),
-                description: localization::localized_str!("Show the informational hover box when moving the mouse over symbols in the editor."),
+                description: localization::localized_str!(
+                    "Show the informational hover box when moving the mouse over symbols in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_enabled"),
@@ -2202,7 +2336,9 @@ fn editor_page() -> SettingsPage {
             // todo(settings ui): add units to this number input
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Delay"),
-                description: localization::localized_str!("Time to wait in milliseconds before showing the informational hover box."),
+                description: localization::localized_str!(
+                    "Time to wait in milliseconds before showing the informational hover box."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_delay"),
@@ -2216,7 +2352,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Sticky"),
-                description: localization::localized_str!("Whether the hover popover sticks when the mouse moves toward it, allowing interaction with its contents."),
+                description: localization::localized_str!(
+                    "Whether the hover popover sticks when the mouse moves toward it, allowing interaction with its contents."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_sticky"),
@@ -2231,7 +2369,9 @@ fn editor_page() -> SettingsPage {
             // todo(settings ui): add units to this number input
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Hiding Delay"),
-                description: localization::localized_str!("Time to wait in milliseconds before hiding the hover popover after the mouse moves away."),
+                description: localization::localized_str!(
+                    "Time to wait in milliseconds before hiding the hover popover after the mouse moves away."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("hover_popover_hiding_delay"),
@@ -2250,7 +2390,9 @@ fn editor_page() -> SettingsPage {
 
     fn drag_and_drop_selection_section() -> [SettingsPageItem; 3] {
         [
-            SettingsPageItem::SectionHeader(localization::localized_str!("Drag And Drop Selection")),
+            SettingsPageItem::SectionHeader(localization::localized_str!(
+                "Drag And Drop Selection"
+            )),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enabled"),
                 description: localization::localized_str!("Enable drag and drop selection."),
@@ -2277,7 +2419,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Delay"),
-                description: localization::localized_str!("Delay in milliseconds before drag and drop selection starts."),
+                description: localization::localized_str!(
+                    "Delay in milliseconds before drag and drop selection starts."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("drag_and_drop_selection.delay"),
@@ -2331,7 +2475,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Relative Line Numbers"),
-                description: localization::localized_str!("Controls line number display in the editor's gutter. \"disabled\" shows absolute line numbers, \"enabled\" shows relative line numbers for each absolute line, and \"wrapped\" shows relative line numbers for every line, absolute or wrapped."),
+                description: localization::localized_str!(
+                    "Controls line number display in the editor's gutter. \"disabled\" shows absolute line numbers, \"enabled\" shows relative line numbers for each absolute line, and \"wrapped\" shows relative line numbers for every line, absolute or wrapped."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("relative_line_numbers"),
@@ -2417,7 +2563,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Folds"),
-                description: localization::localized_str!("Show code folding controls in the gutter."),
+                description: localization::localized_str!(
+                    "Show code folding controls in the gutter."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.folds"),
@@ -2437,7 +2585,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Min Line Number Digits"),
-                description: localization::localized_str!("Minimum number of characters to reserve space for in the gutter."),
+                description: localization::localized_str!(
+                    "Minimum number of characters to reserve space for in the gutter."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("gutter.min_line_number_digits"),
@@ -2462,7 +2612,9 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     title: localization::localized_str!("Git Gutter Width"),
-                    description: localization::localized_str!("Width of the git diff indicators in the gutter. Default scales with the buffer font size."),
+                    description: localization::localized_str!(
+                        "Width of the git diff indicators in the gutter. Default scales with the buffer font size."
+                    ),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("gutter.git_gutter_width$"),
@@ -2517,7 +2669,9 @@ fn editor_page() -> SettingsPage {
                         settings::GitGutterWidthDiscriminants::Custom => vec![SettingItem {
                             files: USER,
                             title: localization::localized_str!("Custom Width"),
-                            description: localization::localized_str!("Width in pixels of the git diff indicators."),
+                            description: localization::localized_str!(
+                                "Width in pixels of the git diff indicators."
+                            ),
                             field: Box::new(SettingField {
                                 organization_override: None,
                                 json_path: Some("gutter.git_gutter_width"),
@@ -2552,7 +2706,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Inline Code Actions"),
-                description: localization::localized_str!("Show code action button at start of buffer line."),
+                description: localization::localized_str!(
+                    "Show code action button at start of buffer line."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("inline_code_actions"),
@@ -2572,7 +2728,9 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Scrollbar")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show"),
-                description: localization::localized_str!("When to show the scrollbar in the editor."),
+                description: localization::localized_str!(
+                    "When to show the scrollbar in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar"),
@@ -2592,7 +2750,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Cursors"),
-                description: localization::localized_str!("Show cursor positions in the scrollbar."),
+                description: localization::localized_str!(
+                    "Show cursor positions in the scrollbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.cursors"),
@@ -2612,7 +2772,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Git Diff"),
-                description: localization::localized_str!("Show Git diff indicators in the scrollbar."),
+                description: localization::localized_str!(
+                    "Show Git diff indicators in the scrollbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.git_diff"),
@@ -2637,7 +2799,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Search Results"),
-                description: localization::localized_str!("Show buffer search result indicators in the scrollbar."),
+                description: localization::localized_str!(
+                    "Show buffer search result indicators in the scrollbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.search_results"),
@@ -2662,7 +2826,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Selected Text"),
-                description: localization::localized_str!("Show selected text occurrences in the scrollbar."),
+                description: localization::localized_str!(
+                    "Show selected text occurrences in the scrollbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.selected_text"),
@@ -2687,7 +2853,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Selected Symbol"),
-                description: localization::localized_str!("Show selected symbol occurrences in the scrollbar."),
+                description: localization::localized_str!(
+                    "Show selected symbol occurrences in the scrollbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.selected_symbol"),
@@ -2712,7 +2880,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Diagnostics"),
-                description: localization::localized_str!("Which diagnostic indicators to show in the scrollbar."),
+                description: localization::localized_str!(
+                    "Which diagnostic indicators to show in the scrollbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.diagnostics"),
@@ -2737,7 +2907,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Horizontal Scrollbar"),
-                description: localization::localized_str!("When false, forcefully disables the horizontal scrollbar."),
+                description: localization::localized_str!(
+                    "When false, forcefully disables the horizontal scrollbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.axes.horizontal"),
@@ -2766,7 +2938,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Vertical Scrollbar"),
-                description: localization::localized_str!("When false, forcefully disables the vertical scrollbar."),
+                description: localization::localized_str!(
+                    "When false, forcefully disables the vertical scrollbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("scrollbar.axes.vertical"),
@@ -2801,7 +2975,9 @@ fn editor_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Minimap")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show"),
-                description: localization::localized_str!("When to show the minimap in the editor."),
+                description: localization::localized_str!(
+                    "When to show the minimap in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.show"),
@@ -2817,7 +2993,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Display In"),
-                description: localization::localized_str!("Where to show the minimap in the editor."),
+                description: localization::localized_str!(
+                    "Where to show the minimap in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.display_in"),
@@ -2862,7 +3040,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Thumb Border"),
-                description: localization::localized_str!("Border style for the minimap's scrollbar thumb."),
+                description: localization::localized_str!(
+                    "Border style for the minimap's scrollbar thumb."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.thumb_border"),
@@ -2887,7 +3067,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Current Line Highlight"),
-                description: localization::localized_str!("How to highlight the current line in the minimap."),
+                description: localization::localized_str!(
+                    "How to highlight the current line in the minimap."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.current_line_highlight"),
@@ -2912,7 +3094,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Max Width Columns"),
-                description: localization::localized_str!("Maximum number of columns to display in the minimap."),
+                description: localization::localized_str!(
+                    "Maximum number of columns to display in the minimap."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("minimap.max_width_columns"),
@@ -2971,7 +3155,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Quick Actions"),
-                description: localization::localized_str!("Show quick action buttons (e.g., search, selection, editor controls, etc.)."),
+                description: localization::localized_str!(
+                    "Show quick action buttons (e.g., search, selection, editor controls, etc.)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.quick_actions"),
@@ -2996,7 +3182,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Selections Menu"),
-                description: localization::localized_str!("Show the selections menu in the editor toolbar."),
+                description: localization::localized_str!(
+                    "Show the selections menu in the editor toolbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.selections_menu"),
@@ -3021,7 +3209,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Code Actions"),
-                description: localization::localized_str!("Show code action buttons in the editor toolbar."),
+                description: localization::localized_str!(
+                    "Show code action buttons in the editor toolbar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("toolbar.code_actions"),
@@ -3066,7 +3256,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Toggle Relative Line Numbers"),
-                description: localization::localized_str!("Toggle relative line numbers in Vim mode."),
+                description: localization::localized_str!(
+                    "Toggle relative line numbers in Vim mode."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.toggle_relative_line_numbers"),
@@ -3089,7 +3281,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use System Clipboard"),
-                description: localization::localized_str!("Controls when to use system clipboard in Vim mode."),
+                description: localization::localized_str!(
+                    "Controls when to use system clipboard in Vim mode."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.use_system_clipboard"),
@@ -3108,7 +3302,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use Smartcase Find"),
-                description: localization::localized_str!("Enable smartcase searching in Vim mode."),
+                description: localization::localized_str!(
+                    "Enable smartcase searching in Vim mode."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.use_smartcase_find"),
@@ -3127,7 +3323,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Global Substitution Default"),
-                description: localization::localized_str!("When enabled, the :substitute command replaces all matches in a line by default. The 'g' flag then toggles this behavior."),
+                description: localization::localized_str!(
+                    "When enabled, the :substitute command replaces all matches in a line by default. The 'g' flag then toggles this behavior."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.gdefault"),
@@ -3141,7 +3339,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Highlight on Yank Duration"),
-                description: localization::localized_str!("Duration in milliseconds to highlight yanked text in Vim mode."),
+                description: localization::localized_str!(
+                    "Duration in milliseconds to highlight yanked text in Vim mode."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.highlight_on_yank_duration"),
@@ -3164,7 +3364,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Regex Search"),
-                description: localization::localized_str!("Use regex search by default in Vim search."),
+                description: localization::localized_str!(
+                    "Use regex search by default in Vim search."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.use_regex_search"),
@@ -3210,7 +3412,9 @@ fn editor_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Cursor Shape - Insert Mode"),
-                description: localization::localized_str!("Cursor shape for insert mode. Inherit uses the editor's cursor shape."),
+                description: localization::localized_str!(
+                    "Cursor shape for insert mode. Inherit uses the editor's cursor shape."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("vim.cursor_shape.insert"),
@@ -3347,7 +3551,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("File Types")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("File Type Associations"),
-                description: localization::localized_str!("A mapping from languages to files and file extensions that should be treated as that language."),
+                description: localization::localized_str!(
+                    "A mapping from languages to files and file extensions that should be treated as that language."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -3372,7 +3578,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Diagnostics")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Max Severity"),
-                description: localization::localized_str!("Which level to use to filter out diagnostics displayed in the editor."),
+                description: localization::localized_str!(
+                    "Which level to use to filter out diagnostics displayed in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics_max_severity"),
@@ -3388,7 +3596,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Include Warnings"),
-                description: localization::localized_str!("Whether to show warnings or not by default."),
+                description: localization::localized_str!(
+                    "Whether to show warnings or not by default."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.include_warnings"),
@@ -3417,7 +3627,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Inline Diagnostics")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enabled"),
-                description: localization::localized_str!("Whether to show diagnostics inline or not."),
+                description: localization::localized_str!(
+                    "Whether to show diagnostics inline or not."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.enabled"),
@@ -3444,7 +3656,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Update Debounce"),
-                description: localization::localized_str!("The delay in milliseconds to show inline diagnostics after the last diagnostic update."),
+                description: localization::localized_str!(
+                    "The delay in milliseconds to show inline diagnostics after the last diagnostic update."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.update_debounce_ms"),
@@ -3471,7 +3685,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Padding"),
-                description: localization::localized_str!("The amount of padding between the end of the source line and the start of the inline diagnostic."),
+                description: localization::localized_str!(
+                    "The amount of padding between the end of the source line and the start of the inline diagnostic."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.padding"),
@@ -3498,7 +3714,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Minimum Column"),
-                description: localization::localized_str!("The minimum column at which to display inline diagnostics."),
+                description: localization::localized_str!(
+                    "The minimum column at which to display inline diagnostics."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.inline.min_column"),
@@ -3531,7 +3749,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("LSP Pull Diagnostics")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enabled"),
-                description: localization::localized_str!("Whether to pull for language server-powered diagnostics or not."),
+                description: localization::localized_str!(
+                    "Whether to pull for language server-powered diagnostics or not."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.lsp_pull_diagnostics.enabled"),
@@ -3559,7 +3779,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             // todo(settings_ui): Needs unit
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Debounce"),
-                description: localization::localized_str!("Minimum time to wait before pulling diagnostics from the language server(s)."),
+                description: localization::localized_str!(
+                    "Minimum time to wait before pulling diagnostics from the language server(s)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.lsp_pull_diagnostics.debounce_ms"),
@@ -3592,7 +3814,9 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("LSP Highlights")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Debounce"),
-                description: localization::localized_str!("The debounce delay before querying highlights from the language."),
+                description: localization::localized_str!(
+                    "The debounce delay before querying highlights from the language."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("lsp_highlight_debounce"),
@@ -3612,33 +3836,30 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
     fn languages_list_section(cx: &App) -> Box<[SettingsPageItem]> {
         // todo(settings_ui): Refresh on extension (un)/installed
         // Note that `crates/json_schema_store` solves the same problem, there is probably a way to unify the two
-        std::iter::once(SettingsPageItem::SectionHeader(localization::localized_str!("Languages")))
-            .chain(all_language_names(cx).into_iter().map(|language_name| {
-                let link = format!("languages.{language_name}");
-                SettingsPageItem::SubPageLink(SubPageLink {
-                    title: language_name,
-                    r#type: crate::SubPageType::Language,
-                    description: None,
-                    search_aliases: &[],
-                    json_path: Some(link.leak()),
-                    in_json: true,
-                    files: USER | PROJECT,
-                    render: |this, scroll_handle, window, cx| {
-                        let items: Box<[SettingsPageItem]> = concat_sections!(
-                            language_settings_data(),
-                            non_editor_language_settings_data()
-                        );
-                        this.render_sub_page_items(
-                            items.iter().enumerate(),
-                            scroll_handle,
-                            window,
-                            cx,
-                        )
+        std::iter::once(SettingsPageItem::SectionHeader(
+            localization::localized_str!("Languages"),
+        ))
+        .chain(all_language_names(cx).into_iter().map(|language_name| {
+            let link = format!("languages.{language_name}");
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: language_name,
+                r#type: crate::SubPageType::Language,
+                description: None,
+                search_aliases: &[],
+                json_path: Some(link.leak()),
+                in_json: true,
+                files: USER | PROJECT,
+                render: |this, scroll_handle, window, cx| {
+                    let items: Box<[SettingsPageItem]> = concat_sections!(
+                        language_settings_data(),
+                        non_editor_language_settings_data()
+                    );
+                    this.render_sub_page_items(items.iter().enumerate(), scroll_handle, window, cx)
                         .into_any_element()
-                    },
-                })
-            }))
-            .collect()
+                },
+            })
+        }))
+        .collect()
     }
 
     SettingsPage {
@@ -3708,7 +3929,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use Smartcase Search"),
-                description: localization::localized_str!("Whether to automatically enable case-sensitive search based on the search query."),
+                description: localization::localized_str!(
+                    "Whether to automatically enable case-sensitive search based on the search query."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_smartcase_search"),
@@ -3722,7 +3945,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Include Ignored"),
-                description: localization::localized_str!("Include ignored files in search results by default."),
+                description: localization::localized_str!(
+                    "Include ignored files in search results by default."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.include_ignored"),
@@ -3763,7 +3988,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Search Wrap"),
-                description: localization::localized_str!("Whether the editor search results will loop."),
+                description: localization::localized_str!(
+                    "Whether the editor search results will loop."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search_wrap"),
@@ -3777,7 +4004,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Center on Match"),
-                description: localization::localized_str!("Whether to center the current match in the editor"),
+                description: localization::localized_str!(
+                    "Whether to center the current match in the editor"
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.search.center_on_match"),
@@ -3801,7 +4030,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Search on Type"),
-                description: localization::localized_str!("Start searching as you type in project search, without pressing Enter."),
+                description: localization::localized_str!(
+                    "Start searching as you type in project search, without pressing Enter."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.search.search_on_type"),
@@ -3825,7 +4056,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Seed Search Query From Cursor"),
-                description: localization::localized_str!("When to populate a new search's query based on the text under the cursor."),
+                description: localization::localized_str!(
+                    "When to populate a new search's query based on the text under the cursor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("seed_search_query_from_cursor"),
@@ -3850,7 +4083,9 @@ fn search_and_files_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Command Palette")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use Command History"),
-                description: localization::localized_str!("Whether to use command history ranking for sorting in the command palette."),
+                description: localization::localized_str!(
+                    "Whether to use command history ranking for sorting in the command palette."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("command_palette.use_command_history"),
@@ -3922,7 +4157,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Skip Focus For Active In Search"),
-                description: localization::localized_str!("Whether the file finder should skip focus for the active file in search results."),
+                description: localization::localized_str!(
+                    "Whether the file finder should skip focus for the active file in search results."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_finder.skip_focus_for_active_in_search"),
@@ -3976,7 +4213,9 @@ fn search_and_files_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("File Scan")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("File Scan Exclusions"),
-                description: localization::localized_str!("Files or globs of files that will be excluded by HiCodeer entirely. They will be skipped during file scans, file searches, and not be displayed in the project file tree. Takes precedence over \"File Scan Inclusions\""),
+                description: localization::localized_str!(
+                    "Files or globs of files that will be excluded by HiCodeer entirely. They will be skipped during file scans, file searches, and not be displayed in the project file tree. Takes precedence over \"File Scan Inclusions\""
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -3999,7 +4238,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("File Scan Inclusions"),
-                description: localization::localized_str!("Files or globs of files that will be included by HiCodeer, even when ignored by git. This is useful for files that are not tracked by git, but are still important to your project. Note that globs that are overly broad can slow down HiCodeer's file scanning. \"File Scan Exclusions\" takes precedence over these inclusions"),
+                description: localization::localized_str!(
+                    "Files or globs of files that will be included by HiCodeer, even when ignored by git. This is useful for files that are not tracked by git, but are still important to your project. Note that globs that are overly broad can slow down HiCodeer's file scanning. \"File Scan Exclusions\" takes precedence over these inclusions"
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -4022,7 +4263,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("File Scan Depth"),
-                description: localization::localized_str!("Maximum directory depth to eagerly index outside of git repositories; contents of directories at this depth or deeper are indexed on demand. Repositories rooted shallower than this depth are always indexed fully. In projects that are not rooted at a git repository, repositories directly inside a root folder activate their git features immediately; deeper ones activate on first use. 0 means no limit and activates all git repositories immediately"),
+                description: localization::localized_str!(
+                    "Maximum directory depth to eagerly index outside of git repositories; contents of directories at this depth or deeper are indexed on demand. Repositories rooted shallower than this depth are always indexed fully. In projects that are not rooted at a git repository, repositories directly inside a root folder activate their git features immediately; deeper ones activate on first use. 0 means no limit and activates all git repositories immediately"
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("file_scan_depth"),
@@ -4038,7 +4281,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Scan Symbolic Links"),
-                description: localization::localized_str!("When to scan content of linked directories"),
+                description: localization::localized_str!(
+                    "When to scan content of linked directories"
+                ),
                 field: Box::new(SettingField {
                     json_path: Some("scan_symlinks"),
                     organization_override: None,
@@ -4054,7 +4299,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Restore File State"),
-                description: localization::localized_str!("Restore previous file state when reopening."),
+                description: localization::localized_str!(
+                    "Restore previous file state when reopening."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("restore_on_file_reopen"),
@@ -4070,7 +4317,9 @@ fn search_and_files_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Close on File Delete"),
-                description: localization::localized_str!("Automatically close files that have been deleted."),
+                description: localization::localized_str!(
+                    "Automatically close files that have been deleted."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("close_on_file_delete"),
@@ -4104,7 +4353,9 @@ fn window_and_layout_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Status Bar")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Project Panel Button"),
-                description: localization::localized_str!("Show the project panel button in the status bar."),
+                description: localization::localized_str!(
+                    "Show the project panel button in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.button"),
@@ -4123,7 +4374,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Active Language Button"),
-                description: localization::localized_str!("Show the active language button in the status bar."),
+                description: localization::localized_str!(
+                    "Show the active language button in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.active_language_button"),
@@ -4146,7 +4399,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Active Encoding Button"),
-                description: localization::localized_str!("Control when to show the active encoding in the status bar."),
+                description: localization::localized_str!(
+                    "Control when to show the active encoding in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.active_encoding_button"),
@@ -4169,7 +4424,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Cursor Position Button"),
-                description: localization::localized_str!("Show the cursor position button in the status bar."),
+                description: localization::localized_str!(
+                    "Show the cursor position button in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.cursor_position_button"),
@@ -4192,7 +4449,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Line Endings Button"),
-                description: localization::localized_str!("Show the active line endings button in the status bar."),
+                description: localization::localized_str!(
+                    "Show the active line endings button in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.line_endings_button"),
@@ -4215,7 +4474,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Pending Keystrokes Indicator"),
-                description: localization::localized_str!("Show an indicator while a multi-stroke key binding is pending. If the input has a timeout, a countdown is shown and hovering pauses it. Its binding preview popover is disabled when the which-key menu is enabled."),
+                description: localization::localized_str!(
+                    "Show an indicator while a multi-stroke key binding is pending. If the input has a timeout, a countdown is shown and hovering pauses it. Its binding preview popover is disabled when the which-key menu is enabled."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.pending_keystrokes_indicator"),
@@ -4238,7 +4499,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Terminal Button"),
-                description: localization::localized_str!("Show the terminal button in the status bar."),
+                description: localization::localized_str!(
+                    "Show the terminal button in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.button"),
@@ -4252,7 +4515,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Diagnostics Button"),
-                description: localization::localized_str!("Show the project diagnostics button in the status bar."),
+                description: localization::localized_str!(
+                    "Show the project diagnostics button in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("diagnostics.button"),
@@ -4266,7 +4531,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Project Search Button"),
-                description: localization::localized_str!("Show the project search button in the status bar."),
+                description: localization::localized_str!(
+                    "Show the project search button in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("search.button"),
@@ -4286,7 +4553,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Active File Name"),
-                description: localization::localized_str!("Show the name of the active file in the status bar."),
+                description: localization::localized_str!(
+                    "Show the name of the active file in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("status_bar.show_active_file"),
@@ -4590,7 +4859,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Git Status In Tabs"),
-                description: localization::localized_str!("Show the Git file status on a tab item."),
+                description: localization::localized_str!(
+                    "Show the Git file status on a tab item."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.git_status"),
@@ -4635,7 +4906,9 @@ fn window_and_layout_page() -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Maximum Tabs"),
-                description: localization::localized_str!("Maximum open tabs in a pane. Will not close an unsaved tab."),
+                description: localization::localized_str!(
+                    "Maximum open tabs in a pane. Will not close an unsaved tab."
+                ),
                 // todo(settings_ui): The default for this value is null and it's use in code
                 // is complex, so I'm going to come back to this later
                 field: Box::new(
@@ -4653,7 +4926,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Navigation History Buttons"),
-                description: localization::localized_str!("Show the navigation history buttons in the tab bar."),
+                description: localization::localized_str!(
+                    "Show the navigation history buttons in the tab bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show_nav_history_buttons"),
@@ -4676,7 +4951,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Tab Bar Buttons"),
-                description: localization::localized_str!("Show the tab bar buttons (New, Split Pane, Zoom)."),
+                description: localization::localized_str!(
+                    "Show the tab bar buttons (New, Split Pane, Zoom)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show_tab_bar_buttons"),
@@ -4699,7 +4976,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Pinned Tabs Layout"),
-                description: localization::localized_str!("Show pinned tabs in a separate row above unpinned tabs."),
+                description: localization::localized_str!(
+                    "Show pinned tabs in a separate row above unpinned tabs."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tab_bar.show_pinned_tabs_in_separate_row"),
@@ -4728,7 +5007,9 @@ fn window_and_layout_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Tab Settings")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Activate On Close"),
-                description: localization::localized_str!("What to do after closing the current tab."),
+                description: localization::localized_str!(
+                    "What to do after closing the current tab."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.activate_on_close"),
@@ -4747,7 +5028,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Tab Show Diagnostics"),
-                description: localization::localized_str!("Which files containing diagnostic errors/warnings to mark in the tabs."),
+                description: localization::localized_str!(
+                    "Which files containing diagnostic errors/warnings to mark in the tabs."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.show_diagnostics"),
@@ -4766,7 +5049,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Close Button"),
-                description: localization::localized_str!("Controls the appearance behavior of the tab's close button."),
+                description: localization::localized_str!(
+                    "Controls the appearance behavior of the tab's close button."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("tabs.show_close_button"),
@@ -4810,7 +5095,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enable Preview From Project Panel"),
-                description: localization::localized_str!("Whether to open tabs in preview mode when opened from the project panel with a single click or the Open action."),
+                description: localization::localized_str!(
+                    "Whether to open tabs in preview mode when opened from the project panel with a single click or the Open action."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_project_panel"),
@@ -4833,7 +5120,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enable Preview From File Finder"),
-                description: localization::localized_str!("Whether to open tabs in preview mode when selected from the file finder."),
+                description: localization::localized_str!(
+                    "Whether to open tabs in preview mode when selected from the file finder."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_file_finder"),
@@ -4856,7 +5145,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enable Preview From Multibuffer"),
-                description: localization::localized_str!("Whether to open tabs in preview mode when opened from a multibuffer."),
+                description: localization::localized_str!(
+                    "Whether to open tabs in preview mode when opened from a multibuffer."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_from_multibuffer"),
@@ -4878,8 +5169,12 @@ fn window_and_layout_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
-                title: localization::localized_str!("Enable Preview Multibuffer From Code Navigation"),
-                description: localization::localized_str!("Whether to open tabs in preview mode when code navigation is used to open a multibuffer."),
+                title: localization::localized_str!(
+                    "Enable Preview Multibuffer From Code Navigation"
+                ),
+                description: localization::localized_str!(
+                    "Whether to open tabs in preview mode when code navigation is used to open a multibuffer."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_multibuffer_from_code_navigation"),
@@ -4902,7 +5197,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enable Preview File From Code Navigation"),
-                description: localization::localized_str!("Whether to open tabs in preview mode when code navigation is used to open a single file."),
+                description: localization::localized_str!(
+                    "Whether to open tabs in preview mode when code navigation is used to open a single file."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_preview_file_from_code_navigation"),
@@ -4925,7 +5222,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enable Keep Preview On Code Navigation"),
-                description: localization::localized_str!("Whether to keep tabs in preview mode when code navigation is used to navigate away from them. If `enable_preview_file_from_code_navigation` or `enable_preview_multibuffer_from_code_navigation` is also true, the new tab may replace the existing one."),
+                description: localization::localized_str!(
+                    "Whether to keep tabs in preview mode when code navigation is used to navigate away from them. If `enable_preview_file_from_code_navigation` or `enable_preview_multibuffer_from_code_navigation` is also true, the new tab may replace the existing one."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("preview_tabs.enable_keep_preview_on_code_navigation"),
@@ -5018,7 +5317,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Focus Follows Mouse"),
-                description: localization::localized_str!("Whether to change focus to a pane when the mouse hovers over it."),
+                description: localization::localized_str!(
+                    "Whether to change focus to a pane when the mouse hovers over it."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("focus_follows_mouse.enabled"),
@@ -5042,7 +5343,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Focus Follows Mouse Debounce ms"),
-                description: localization::localized_str!("Amount of time to wait before changing focus."),
+                description: localization::localized_str!(
+                    "Amount of time to wait before changing focus."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("focus_follows_mouse.debounce_ms"),
@@ -5072,7 +5375,9 @@ fn window_and_layout_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Window")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Title Format"),
-                description: localization::localized_str!("Window title template. Available variables are `${projectName}`, `${fileName}`, `${filePath}`, `${relativePath}`, `${fileStem}`, `${remoteName}`, `${remoteHost}`, `${appName}`, `${branch}`, and `${separator}`. `${separator}` is omitted when adjacent variables are empty, but literal text is preserved. The collaboration indicator, when present, is appended after the rendered template. If the template renders to nothing, the default template is used instead."),
+                description: localization::localized_str!(
+                    "Window title template. Available variables are `${projectName}`, `${fileName}`, `${filePath}`, `${relativePath}`, `${fileStem}`, `${remoteName}`, `${remoteHost}`, `${appName}`, `${branch}`, and `${separator}`. `${separator}` is omitted when adjacent variables are empty, but literal text is preserved. The collaboration indicator, when present, is appended after the rendered template. If the template renders to nothing, the default template is used instead."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_title_format"),
@@ -5092,7 +5397,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Title Separator"),
-                description: localization::localized_str!("String substituted for `${separator}` in the window title format. Include any surrounding whitespace in the value."),
+                description: localization::localized_str!(
+                    "String substituted for `${separator}` in the window title format. Include any surrounding whitespace in the value."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_title_separator"),
@@ -5115,7 +5422,9 @@ fn window_and_layout_page() -> SettingsPage {
             #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use System Window Tabs"),
-                description: localization::localized_str!("(macOS only) whether to allow Windows to tab together."),
+                description: localization::localized_str!(
+                    "(macOS only) whether to allow Windows to tab together."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("use_system_window_tabs"),
@@ -5132,7 +5441,9 @@ fn window_and_layout_page() -> SettingsPage {
             #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Fullscreen Mode"),
-                description: localization::localized_str!("(macOS only) which fullscreen mode the toggle fullscreen action enters."),
+                description: localization::localized_str!(
+                    "(macOS only) which fullscreen mode the toggle fullscreen action enters."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("fullscreen_mode"),
@@ -5147,7 +5458,9 @@ fn window_and_layout_page() -> SettingsPage {
             #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Window Decorations"),
-                description: localization::localized_str!("(Linux only) whether HiCodeer or your compositor should draw window decorations."),
+                description: localization::localized_str!(
+                    "(Linux only) whether HiCodeer or your compositor should draw window decorations."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("window_decorations"),
@@ -5168,7 +5481,9 @@ fn window_and_layout_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Pane Modifiers")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Inactive Opacity"),
-                description: localization::localized_str!("Opacity of inactive panels (0.0 - 1.0)."),
+                description: localization::localized_str!(
+                    "Opacity of inactive panels (0.0 - 1.0)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("active_pane_modifiers.inactive_opacity"),
@@ -5193,7 +5508,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Border Size"),
-                description: localization::localized_str!("Size of the border surrounding the active pane."),
+                description: localization::localized_str!(
+                    "Size of the border surrounding the active pane."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("active_pane_modifiers.border_size"),
@@ -5232,7 +5549,9 @@ fn window_and_layout_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Close Panel on Toggle"),
-                description: localization::localized_str!("Whether invoking a panel's ToggleFocus action while it's already focused closes the panel, instead of just moving focus back to the editor."),
+                description: localization::localized_str!(
+                    "Whether invoking a panel's ToggleFocus action while it's already focused closes the panel, instead of just moving focus back to the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("close_panel_on_toggle"),
@@ -5335,7 +5654,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Project Panel Default Width"),
-                description: localization::localized_str!("Default width of the project panel in pixels."),
+                description: localization::localized_str!(
+                    "Default width of the project panel in pixels."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.default_width"),
@@ -5359,7 +5680,9 @@ fn panels_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     title: localization::localized_str!("Project Panel Title Tooltips Delay"),
-                    description: localization::localized_str!("Delay in milliseconds before tooltips appear for project panel titles."),
+                    description: localization::localized_str!(
+                        "Delay in milliseconds before tooltips appear for project panel titles."
+                    ),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("project_panel.title_tooltip_delay$"),
@@ -5419,7 +5742,9 @@ fn panels_page() -> SettingsPage {
                             vec![SettingItem {
                                 files: USER,
                                 title: localization::localized_str!("Custom Delay"),
-                                description: localization::localized_str!("Delay in milliseconds of the project panel title tooltips."),
+                                description: localization::localized_str!(
+                                    "Delay in milliseconds of the project panel title tooltips."
+                                ),
                                 field: Box::new(SettingField {
                                     organization_override: None,
                                     json_path: Some("project_panel.title_tooltip_delay"),
@@ -5457,7 +5782,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Hide .gitignore"),
-                description: localization::localized_str!("Whether to hide the gitignore entries in the project panel."),
+                description: localization::localized_str!(
+                    "Whether to hide the gitignore entries in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_gitignore"),
@@ -5480,7 +5807,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Entry Spacing"),
-                description: localization::localized_str!("Spacing between worktree entries in the project panel."),
+                description: localization::localized_str!(
+                    "Spacing between worktree entries in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.entry_spacing"),
@@ -5522,7 +5851,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Folder Indicator"),
-                description: localization::localized_str!("What to show for directories in the project panel."),
+                description: localization::localized_str!(
+                    "What to show for directories in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.folder_indicator"),
@@ -5545,7 +5876,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Git Status"),
-                description: localization::localized_str!("Show the Git status in the project panel."),
+                description: localization::localized_str!(
+                    "Show the Git status in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.git_status"),
@@ -5564,7 +5897,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Indent Size"),
-                description: localization::localized_str!("Amount of indentation for nested items."),
+                description: localization::localized_str!(
+                    "Amount of indentation for nested items."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.indent_size"),
@@ -5587,7 +5922,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Reveal Entries"),
-                description: localization::localized_str!("Whether to reveal entries in the project panel automatically when a corresponding project entry becomes active."),
+                description: localization::localized_str!(
+                    "Whether to reveal entries in the project panel automatically when a corresponding project entry becomes active."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_reveal_entries"),
@@ -5610,7 +5947,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Starts Open"),
-                description: localization::localized_str!("Whether the project panel should open on startup."),
+                description: localization::localized_str!(
+                    "Whether the project panel should open on startup."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.starts_open"),
@@ -5633,7 +5972,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Fold Directories"),
-                description: localization::localized_str!("Whether to fold directories automatically and show compact folders when a directory has only one subdirectory inside."),
+                description: localization::localized_str!(
+                    "Whether to fold directories automatically and show compact folders when a directory has only one subdirectory inside."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_fold_dirs"),
@@ -5656,7 +5997,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Bold Folder Labels"),
-                description: localization::localized_str!("Whether to show folder names with bold text in the project panel."),
+                description: localization::localized_str!(
+                    "Whether to show folder names with bold text in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.bold_folder_labels"),
@@ -5679,7 +6022,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Scrollbar"),
-                description: localization::localized_str!("Show the scrollbar in the project panel."),
+                description: localization::localized_str!(
+                    "Show the scrollbar in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.scrollbar.show"),
@@ -5708,7 +6053,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Horizontal Scroll"),
-                description: localization::localized_str!("Whether to allow horizontal scrolling in the project panel. When disabled, the view is always locked to the leftmost position and long file names are clipped."),
+                description: localization::localized_str!(
+                    "Whether to allow horizontal scrolling in the project panel. When disabled, the view is always locked to the leftmost position and long file names are clipped."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.scrollbar.horizontal_scroll"),
@@ -5735,7 +6082,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Diagnostics"),
-                description: localization::localized_str!("Which files containing diagnostic errors/warnings to mark in the project panel."),
+                description: localization::localized_str!(
+                    "Which files containing diagnostic errors/warnings to mark in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.show_diagnostics"),
@@ -5758,7 +6107,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Diagnostic Badges"),
-                description: localization::localized_str!("Show error and warning count badges next to file names in the project panel."),
+                description: localization::localized_str!(
+                    "Show error and warning count badges next to file names in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.diagnostic_badges"),
@@ -5781,7 +6132,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Git Status Indicator"),
-                description: localization::localized_str!("Show a git status indicator next to file names in the project panel."),
+                description: localization::localized_str!(
+                    "Show a git status indicator next to file names in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.git_status_indicator"),
@@ -5804,7 +6157,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Sticky Scroll"),
-                description: localization::localized_str!("Whether to stick parent directories at top of the project panel."),
+                description: localization::localized_str!(
+                    "Whether to stick parent directories at top of the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.sticky_scroll"),
@@ -5828,7 +6183,9 @@ fn panels_page() -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Show Indent Guides"),
-                description: localization::localized_str!("Show indent guides in the project panel."),
+                description: localization::localized_str!(
+                    "Show indent guides in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.indent_guides.show"),
@@ -5854,7 +6211,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Drag and Drop"),
-                description: localization::localized_str!("Whether to enable drag-and-drop operations in the project panel."),
+                description: localization::localized_str!(
+                    "Whether to enable drag-and-drop operations in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.drag_and_drop"),
@@ -5877,7 +6236,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Hide Root"),
-                description: localization::localized_str!("Whether to hide the root entry when only one folder is open in the window."),
+                description: localization::localized_str!(
+                    "Whether to hide the root entry when only one folder is open in the window."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_root"),
@@ -5896,7 +6257,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Hide Hidden"),
-                description: localization::localized_str!("Whether to hide the hidden entries in the project panel."),
+                description: localization::localized_str!(
+                    "Whether to hide the hidden entries in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.hide_hidden"),
@@ -5919,7 +6282,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Sort Mode"),
-                description: localization::localized_str!("Sort order for entries in the project panel."),
+                description: localization::localized_str!(
+                    "Sort order for entries in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.sort_mode"),
@@ -5938,7 +6303,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Sort Order"),
-                description: localization::localized_str!("Whether to sort file and folder names case-sensitively in the project panel."),
+                description: localization::localized_str!(
+                    "Whether to sort file and folder names case-sensitively in the project panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     pick: |settings_content| {
@@ -5957,7 +6324,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Open Files On Create"),
-                description: localization::localized_str!("Whether to automatically open newly created files in the editor."),
+                description: localization::localized_str!(
+                    "Whether to automatically open newly created files in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_create"),
@@ -5984,7 +6353,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Open Files On Paste"),
-                description: localization::localized_str!("Whether to automatically open files after pasting or duplicating them."),
+                description: localization::localized_str!(
+                    "Whether to automatically open files after pasting or duplicating them."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_paste"),
@@ -6011,7 +6382,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Open Files On Drop"),
-                description: localization::localized_str!("Whether to automatically open files dropped from external sources."),
+                description: localization::localized_str!(
+                    "Whether to automatically open files dropped from external sources."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("project_panel.auto_open.on_drop"),
@@ -6038,7 +6411,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Hidden Files"),
-                description: localization::localized_str!("Globs to match files that will be considered \"hidden\" and can be hidden from the project panel."),
+                description: localization::localized_str!(
+                    "Globs to match files that will be considered \"hidden\" and can be hidden from the project panel."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -6077,7 +6452,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Starts Open"),
-                description: localization::localized_str!("Whether the terminal panel should open on startup."),
+                description: localization::localized_str!(
+                    "Whether the terminal panel should open on startup."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.starts_open"),
@@ -6096,7 +6473,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Terminal Panel Flexible Sizing"),
-                description: localization::localized_str!("Whether the terminal panel should use flexible (proportional) sizing when docked to the left or right."),
+                description: localization::localized_str!(
+                    "Whether the terminal panel should use flexible (proportional) sizing when docked to the left or right."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.flexible"),
@@ -6110,7 +6489,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Count Badge"),
-                description: localization::localized_str!("Show a badge on the terminal panel icon with the count of open terminals."),
+                description: localization::localized_str!(
+                    "Show a badge on the terminal panel icon with the count of open terminals."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.show_count_badge"),
@@ -6139,7 +6520,9 @@ fn panels_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Outline Panel")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Outline Panel Button"),
-                description: localization::localized_str!("Show the outline panel button in the status bar."),
+                description: localization::localized_str!(
+                    "Show the outline panel button in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.button"),
@@ -6172,7 +6555,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Outline Panel Default Width"),
-                description: localization::localized_str!("Default width of the outline panel in pixels."),
+                description: localization::localized_str!(
+                    "Default width of the outline panel in pixels."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.default_width"),
@@ -6214,7 +6599,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Folder Indicator"),
-                description: localization::localized_str!("What to show for directories in the outline panel."),
+                description: localization::localized_str!(
+                    "What to show for directories in the outline panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.folder_indicator"),
@@ -6237,7 +6624,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Git Status"),
-                description: localization::localized_str!("Show the Git status in the outline panel."),
+                description: localization::localized_str!(
+                    "Show the Git status in the outline panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.git_status"),
@@ -6256,7 +6645,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Indent Size"),
-                description: localization::localized_str!("Amount of indentation for nested items."),
+                description: localization::localized_str!(
+                    "Amount of indentation for nested items."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.indent_size"),
@@ -6279,7 +6670,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Reveal Entries"),
-                description: localization::localized_str!("Whether to reveal when a corresponding outline entry becomes active."),
+                description: localization::localized_str!(
+                    "Whether to reveal when a corresponding outline entry becomes active."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.auto_reveal_entries"),
@@ -6302,7 +6695,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Fold Directories"),
-                description: localization::localized_str!("Whether to fold directories automatically when a directory contains only one subdirectory."),
+                description: localization::localized_str!(
+                    "Whether to fold directories automatically when a directory contains only one subdirectory."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.auto_fold_dirs"),
@@ -6326,7 +6721,9 @@ fn panels_page() -> SettingsPage {
             SettingsPageItem::SettingItem(SettingItem {
                 files: USER,
                 title: localization::localized_str!("Show Indent Guides"),
-                description: localization::localized_str!("When to show indent guides in the outline panel."),
+                description: localization::localized_str!(
+                    "When to show indent guides in the outline panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.indent_guides.show"),
@@ -6352,7 +6749,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Hide Symbols in Multi-Buffers"),
-                description: localization::localized_str!("Whether to hide symbols, excerpts and search matches in the outline panel when a multi-buffer view is active."),
+                description: localization::localized_str!(
+                    "Whether to hide symbols, excerpts and search matches in the outline panel when a multi-buffer view is active."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("outline_panel.multi_buffer_hide_symbols"),
@@ -6381,7 +6780,9 @@ fn panels_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Git Panel")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Git Panel Button"),
-                description: localization::localized_str!("Show the Git panel button in the status bar."),
+                description: localization::localized_str!(
+                    "Show the Git panel button in the status bar."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.button"),
@@ -6409,7 +6810,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Starts Open"),
-                description: localization::localized_str!("Whether the git panel should open on startup."),
+                description: localization::localized_str!(
+                    "Whether the git panel should open on startup."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.starts_open"),
@@ -6428,7 +6831,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Git Panel Default Width"),
-                description: localization::localized_str!("Default width of the Git panel in pixels."),
+                description: localization::localized_str!(
+                    "Default width of the Git panel in pixels."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.default_width"),
@@ -6466,7 +6871,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Fallback Branch Name"),
-                description: localization::localized_str!("Default branch name will be when init.defaultbranch is not set in Git."),
+                description: localization::localized_str!(
+                    "Default branch name will be when init.defaultbranch is not set in Git."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.fallback_branch_name"),
@@ -6517,7 +6924,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Collapse Untracked Diff"),
-                description: localization::localized_str!("Whether to collapse untracked files in the diff panel."),
+                description: localization::localized_str!(
+                    "Whether to collapse untracked files in the diff panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.collapse_untracked_diff"),
@@ -6540,7 +6949,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Tree View"),
-                description: localization::localized_str!("Enable to show entries in tree view list, disable to show in flat view list."),
+                description: localization::localized_str!(
+                    "Enable to show entries in tree view list, disable to show in flat view list."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.tree_view"),
@@ -6556,7 +6967,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("File Icons"),
-                description: localization::localized_str!("Show file icons next to the Git status icon."),
+                description: localization::localized_str!(
+                    "Show file icons next to the Git status icon."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.file_icons"),
@@ -6575,7 +6988,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Folder Indicator"),
-                description: localization::localized_str!("What to show for directories in the git panel."),
+                description: localization::localized_str!(
+                    "What to show for directories in the git panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.folder_indicator"),
@@ -6598,7 +7013,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Diff Stats"),
-                description: localization::localized_str!("Whether to show the addition/deletion change count next to each file in the Git panel."),
+                description: localization::localized_str!(
+                    "Whether to show the addition/deletion change count next to each file in the Git panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.diff_stats"),
@@ -6617,7 +7034,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Primary Click Behavior"),
-                description: localization::localized_str!("Default action when clicking a changed file in the Git panel."),
+                description: localization::localized_str!(
+                    "Default action when clicking a changed file in the Git panel."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.entry_primary_click_action"),
@@ -6640,7 +7059,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Commit Editor"),
-                description: localization::localized_str!("Whether the commit message editor is shown in the Git panel by default."),
+                description: localization::localized_str!(
+                    "Whether the commit message editor is shown in the Git panel by default."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.commit_editor"),
@@ -6659,7 +7080,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Count Badge"),
-                description: localization::localized_str!("Whether to show a badge on the git panel icon with the count of uncommitted changes."),
+                description: localization::localized_str!(
+                    "Whether to show a badge on the git panel icon with the count of uncommitted changes."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.show_count_badge"),
@@ -6682,7 +7105,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Commit Title Max Length"),
-                description: localization::localized_str!("Maximum length of the commit message title before a warning is shown. Set to 0 to disable."),
+                description: localization::localized_str!(
+                    "Maximum length of the commit message title before a warning is shown. Set to 0 to disable."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.commit_title_max_length"),
@@ -6705,7 +7130,9 @@ fn panels_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Scroll Bar"),
-                description: localization::localized_str!("How and when the scrollbar should be displayed."),
+                description: localization::localized_str!(
+                    "How and when the scrollbar should be displayed."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git_panel.scrollbar.show"),
@@ -6735,9 +7162,6 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-
-
-
     let mut items = concat_sections![
         project_panel_section(),
         terminal_panel_section(),
@@ -6755,104 +7179,157 @@ fn panels_page() -> SettingsPage {
     }
 }
 
-
 fn terminal_page() -> SettingsPage {
     fn environment_section() -> [SettingsPageItem; 5] {
         [
-                SettingsPageItem::SectionHeader(localization::localized_str!("Environment")),
-                SettingsPageItem::DynamicItem(DynamicItem {
-                    discriminant: SettingItem {
-                        files: USER | PROJECT,
-                        title: localization::localized_str!("Shell"),
-                        description: localization::localized_str!("What shell to use when opening a terminal."),
-                        field: Box::new(SettingField {
-                            organization_override: None,
-                            json_path: Some("terminal.shell$"),
-                            pick: |settings_content| {
-                                Some(&dynamic_variants::<settings::Shell>()[
-                                    settings_content
-                                        .terminal
-                                        .as_ref()?
-                                        .project
-                                        .shell
-                                        .as_ref()?
-                                        .discriminant() as usize
-                                ])
-                            },
-                            write: |settings_content, value, _| {
-                                let Some(value) = value else {
-                                    if let Some(terminal) = settings_content.terminal.as_mut() {
-                                        terminal.project.shell = None;
-                                    }
-                                    return;
-                                };
-                                let settings_value = settings_content
+            SettingsPageItem::SectionHeader(localization::localized_str!("Environment")),
+            SettingsPageItem::DynamicItem(DynamicItem {
+                discriminant: SettingItem {
+                    files: USER | PROJECT,
+                    title: localization::localized_str!("Shell"),
+                    description: localization::localized_str!(
+                        "What shell to use when opening a terminal."
+                    ),
+                    field: Box::new(SettingField {
+                        organization_override: None,
+                        json_path: Some("terminal.shell$"),
+                        pick: |settings_content| {
+                            Some(
+                                &dynamic_variants::<settings::Shell>()[settings_content
                                     .terminal
-                                    .get_or_insert_default()
+                                    .as_ref()?
                                     .project
                                     .shell
-                                    .get_or_insert_with(|| settings::Shell::default());
-                                let default_shell = if cfg!(target_os = "windows") {
-                                    "powershell.exe"
-                                } else {
-                                    "sh"
-                                };
-                                *settings_value = match value {
-                                    settings::ShellDiscriminants::System => settings::Shell::System,
-                                    settings::ShellDiscriminants::Program => {
-                                        let program = match settings_value {
-                                            settings::Shell::Program(program) => program.clone(),
-                                            settings::Shell::WithArguments { program, .. } => program.clone(),
-                                            _ => String::from(default_shell),
-                                        };
-                                        settings::Shell::Program(program)
-                                    }
-                                    settings::ShellDiscriminants::WithArguments => {
-                                        let (program, args, title_override) = match settings_value {
-                                            settings::Shell::Program(program) => (program.clone(), vec![], None),
-                                            settings::Shell::WithArguments {
-                                                program,
-                                                args,
-                                                title_override,
-                                            } => (program.clone(), args.clone(), title_override.clone()),
-                                            _ => (String::from(default_shell), vec![], None),
-                                        };
+                                    .as_ref()?
+                                    .discriminant()
+                                    as usize],
+                            )
+                        },
+                        write: |settings_content, value, _| {
+                            let Some(value) = value else {
+                                if let Some(terminal) = settings_content.terminal.as_mut() {
+                                    terminal.project.shell = None;
+                                }
+                                return;
+                            };
+                            let settings_value = settings_content
+                                .terminal
+                                .get_or_insert_default()
+                                .project
+                                .shell
+                                .get_or_insert_with(|| settings::Shell::default());
+                            let default_shell = if cfg!(target_os = "windows") {
+                                "powershell.exe"
+                            } else {
+                                "sh"
+                            };
+                            *settings_value = match value {
+                                settings::ShellDiscriminants::System => settings::Shell::System,
+                                settings::ShellDiscriminants::Program => {
+                                    let program = match settings_value {
+                                        settings::Shell::Program(program) => program.clone(),
+                                        settings::Shell::WithArguments { program, .. } => {
+                                            program.clone()
+                                        }
+                                        _ => String::from(default_shell),
+                                    };
+                                    settings::Shell::Program(program)
+                                }
+                                settings::ShellDiscriminants::WithArguments => {
+                                    let (program, args, title_override) = match settings_value {
+                                        settings::Shell::Program(program) => {
+                                            (program.clone(), vec![], None)
+                                        }
                                         settings::Shell::WithArguments {
                                             program,
                                             args,
                                             title_override,
+                                        } => {
+                                            (program.clone(), args.clone(), title_override.clone())
                                         }
+                                        _ => (String::from(default_shell), vec![], None),
+                                    };
+                                    settings::Shell::WithArguments {
+                                        program,
+                                        args,
+                                        title_override,
                                     }
-                                };
-                            },
-                        }),
-                        metadata: None,
-                    },
-                    pick_discriminant: |settings_content| {
-                        Some(
-                            settings_content
-                                .terminal
-                                .as_ref()?
-                                .project
-                                .shell
-                                .as_ref()?
-                                .discriminant() as usize,
-                        )
-                    },
-                    fields: dynamic_variants::<settings::Shell>()
-                        .into_iter()
-                        .map(|variant| match variant {
-                            settings::ShellDiscriminants::System => vec![],
-                            settings::ShellDiscriminants::Program => vec![SettingItem {
+                                }
+                            };
+                        },
+                    }),
+                    metadata: None,
+                },
+                pick_discriminant: |settings_content| {
+                    Some(
+                        settings_content
+                            .terminal
+                            .as_ref()?
+                            .project
+                            .shell
+                            .as_ref()?
+                            .discriminant() as usize,
+                    )
+                },
+                fields: dynamic_variants::<settings::Shell>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::ShellDiscriminants::System => vec![],
+                        settings::ShellDiscriminants::Program => vec![SettingItem {
+                            files: USER | PROJECT,
+                            title: localization::localized_str!("Program"),
+                            description: localization::localized_str!("The shell program to use."),
+                            field: Box::new(SettingField {
+                                organization_override: None,
+                                json_path: Some("terminal.shell"),
+                                pick: |settings_content| match settings_content
+                                    .terminal
+                                    .as_ref()?
+                                    .project
+                                    .shell
+                                    .as_ref()
+                                {
+                                    Some(settings::Shell::Program(program)) => Some(program),
+                                    _ => None,
+                                },
+                                write: |settings_content, value, _| {
+                                    let Some(value) = value else {
+                                        return;
+                                    };
+                                    match settings_content
+                                        .terminal
+                                        .get_or_insert_default()
+                                        .project
+                                        .shell
+                                        .as_mut()
+                                    {
+                                        Some(settings::Shell::Program(program)) => *program = value,
+                                        _ => return,
+                                    }
+                                },
+                            }),
+                            metadata: None,
+                        }],
+                        settings::ShellDiscriminants::WithArguments => vec![
+                            SettingItem {
                                 files: USER | PROJECT,
                                 title: localization::localized_str!("Program"),
-                                description: localization::localized_str!("The shell program to use."),
+                                description: localization::localized_str!(
+                                    "The shell program to run."
+                                ),
                                 field: Box::new(SettingField {
                                     organization_override: None,
-                                    json_path: Some("terminal.shell"),
-                                    pick: |settings_content| match settings_content.terminal.as_ref()?.project.shell.as_ref()
+                                    json_path: Some("terminal.shell.program"),
+                                    pick: |settings_content| match settings_content
+                                        .terminal
+                                        .as_ref()?
+                                        .project
+                                        .shell
+                                        .as_ref()
                                     {
-                                        Some(settings::Shell::Program(program)) => Some(program),
+                                        Some(settings::Shell::WithArguments {
+                                            program, ..
+                                        }) => Some(program),
                                         _ => None,
                                     },
                                     write: |settings_content, value, _| {
@@ -6866,26 +7343,37 @@ fn terminal_page() -> SettingsPage {
                                             .shell
                                             .as_mut()
                                         {
-                                            Some(settings::Shell::Program(program)) => *program = value,
+                                            Some(settings::Shell::WithArguments {
+                                                program,
+                                                ..
+                                            }) => *program = value,
                                             _ => return,
                                         }
                                     },
                                 }),
                                 metadata: None,
-                            }],
-                            settings::ShellDiscriminants::WithArguments => vec![
-                                SettingItem {
-                                    files: USER | PROJECT,
-                                    title: localization::localized_str!("Program"),
-                                    description: localization::localized_str!("The shell program to run."),
-                                    field: Box::new(SettingField {
+                            },
+                            SettingItem {
+                                files: USER | PROJECT,
+                                title: localization::localized_str!("Arguments"),
+                                description: localization::localized_str!(
+                                    "The arguments to pass to the shell program."
+                                ),
+                                field: Box::new(
+                                    SettingField {
                                         organization_override: None,
-                                        json_path: Some("terminal.shell.program"),
-                                        pick: |settings_content| {
-                                            match settings_content.terminal.as_ref()?.project.shell.as_ref() {
-                                                Some(settings::Shell::WithArguments { program, .. }) => Some(program),
-                                                _ => None,
-                                            }
+                                        json_path: Some("terminal.shell.args"),
+                                        pick: |settings_content| match settings_content
+                                            .terminal
+                                            .as_ref()?
+                                            .project
+                                            .shell
+                                            .as_ref()
+                                        {
+                                            Some(settings::Shell::WithArguments {
+                                                args, ..
+                                            }) => Some(args),
+                                            _ => None,
                                         },
                                         write: |settings_content, value, _| {
                                             let Some(value) = value else {
@@ -6898,118 +7386,98 @@ fn terminal_page() -> SettingsPage {
                                                 .shell
                                                 .as_mut()
                                             {
-                                                Some(settings::Shell::WithArguments { program, .. }) => {
-                                                    *program = value
-                                                }
+                                                Some(settings::Shell::WithArguments {
+                                                    args,
+                                                    ..
+                                                }) => *args = value,
                                                 _ => return,
                                             }
                                         },
-                                    }),
-                                    metadata: None,
-                                },
-                                SettingItem {
-                                    files: USER | PROJECT,
-                                    title: localization::localized_str!("Arguments"),
-                                    description: localization::localized_str!("The arguments to pass to the shell program."),
-                                    field: Box::new(
-                                        SettingField {
-                                            organization_override: None,
-                                            json_path: Some("terminal.shell.args"),
-                                            pick: |settings_content| {
-                                                match settings_content.terminal.as_ref()?.project.shell.as_ref() {
-                                                    Some(settings::Shell::WithArguments { args, .. }) => Some(args),
-                                                    _ => None,
-                                                }
-                                            },
-                                            write: |settings_content, value, _| {
-                                                let Some(value) = value else {
-                                                    return;
-                                                };
-                                                match settings_content
-                                                    .terminal
-                                                    .get_or_insert_default()
-                                                    .project
-                                                    .shell
-                                                    .as_mut()
-                                                {
-                                                    Some(settings::Shell::WithArguments { args, .. }) => *args = value,
-                                                    _ => return,
-                                                }
-                                            },
-                                        }
-                                        .unimplemented(),
-                                    ),
-                                    metadata: None,
-                                },
-                                SettingItem {
-                                    files: USER | PROJECT,
-                                    title: localization::localized_str!("Title Override"),
-                                    description: localization::localized_str!("An optional string to override the title of the terminal tab."),
-                                    field: Box::new(SettingField {
-                                        organization_override: None,
-                                        json_path: Some("terminal.shell.title_override"),
-                                        pick: |settings_content| {
-                                            match settings_content.terminal.as_ref()?.project.shell.as_ref() {
-                                                Some(settings::Shell::WithArguments { title_override, .. }) => {
-                                                    title_override.as_ref().or(DEFAULT_EMPTY_STRING)
-                                                }
-                                                _ => None,
-                                            }
-                                        },
-                                        write: |settings_content, value, _| {
-                                            match settings_content
-                                                .terminal
-                                                .get_or_insert_default()
-                                                .project
-                                                .shell
-                                                .as_mut()
-                                            {
-                                                Some(settings::Shell::WithArguments { title_override, .. }) => {
-                                                    *title_override = value.filter(|s| !s.is_empty())
-                                                }
-                                                _ => return,
-                                            }
-                                        },
-                                    }),
-                                    metadata: None,
-                                },
-                            ],
-                        })
-                        .collect(),
-                }),
-                SettingsPageItem::DynamicItem(DynamicItem {
-                    discriminant: SettingItem {
-                        files: USER | PROJECT,
-                        title: localization::localized_str!("Working Directory"),
-                        description: localization::localized_str!("What working directory to use when launching the terminal."),
-                        field: Box::new(SettingField {
-                            organization_override: None,
-                            json_path: Some("terminal.working_directory$"),
-                            pick: |settings_content| {
-                                Some(&dynamic_variants::<settings::WorkingDirectory>()[
-                                    settings_content
+                                    }
+                                    .unimplemented(),
+                                ),
+                                metadata: None,
+                            },
+                            SettingItem {
+                                files: USER | PROJECT,
+                                title: localization::localized_str!("Title Override"),
+                                description: localization::localized_str!(
+                                    "An optional string to override the title of the terminal tab."
+                                ),
+                                field: Box::new(SettingField {
+                                    organization_override: None,
+                                    json_path: Some("terminal.shell.title_override"),
+                                    pick: |settings_content| match settings_content
                                         .terminal
                                         .as_ref()?
                                         .project
-                                        .working_directory
-                                        .as_ref()?
-                                        .discriminant() as usize
-                                ])
+                                        .shell
+                                        .as_ref()
+                                    {
+                                        Some(settings::Shell::WithArguments {
+                                            title_override,
+                                            ..
+                                        }) => title_override.as_ref().or(DEFAULT_EMPTY_STRING),
+                                        _ => None,
+                                    },
+                                    write: |settings_content, value, _| match settings_content
+                                        .terminal
+                                        .get_or_insert_default()
+                                        .project
+                                        .shell
+                                        .as_mut()
+                                    {
+                                        Some(settings::Shell::WithArguments {
+                                            title_override,
+                                            ..
+                                        }) => *title_override = value.filter(|s| !s.is_empty()),
+                                        _ => return,
+                                    },
+                                }),
+                                metadata: None,
                             },
-                            write: |settings_content, value, _| {
-                                let Some(value) = value else {
-                                    if let Some(terminal) = settings_content.terminal.as_mut() {
-                                        terminal.project.working_directory = None;
-                                    }
-                                    return;
-                                };
-                                let settings_value = settings_content
+                        ],
+                    })
+                    .collect(),
+            }),
+            SettingsPageItem::DynamicItem(DynamicItem {
+                discriminant: SettingItem {
+                    files: USER | PROJECT,
+                    title: localization::localized_str!("Working Directory"),
+                    description: localization::localized_str!(
+                        "What working directory to use when launching the terminal."
+                    ),
+                    field: Box::new(SettingField {
+                        organization_override: None,
+                        json_path: Some("terminal.working_directory$"),
+                        pick: |settings_content| {
+                            Some(
+                                &dynamic_variants::<settings::WorkingDirectory>()[settings_content
                                     .terminal
-                                    .get_or_insert_default()
+                                    .as_ref()?
                                     .project
                                     .working_directory
-                                    .get_or_insert_with(|| settings::WorkingDirectory::CurrentProjectDirectory);
-                                *settings_value = match value {
+                                    .as_ref()?
+                                    .discriminant()
+                                    as usize],
+                            )
+                        },
+                        write: |settings_content, value, _| {
+                            let Some(value) = value else {
+                                if let Some(terminal) = settings_content.terminal.as_mut() {
+                                    terminal.project.working_directory = None;
+                                }
+                                return;
+                            };
+                            let settings_value = settings_content
+                                .terminal
+                                .get_or_insert_default()
+                                .project
+                                .working_directory
+                                .get_or_insert_with(|| {
+                                    settings::WorkingDirectory::CurrentProjectDirectory
+                                });
+                            *settings_value = match value {
                                     settings::WorkingDirectoryDiscriminants::CurrentFileDirectory => {
                                         settings::WorkingDirectory::CurrentFileDirectory
                                     },
@@ -7030,99 +7498,126 @@ fn terminal_page() -> SettingsPage {
                                         settings::WorkingDirectory::Always { directory }
                                     }
                                 };
-                            },
-                        }),
-                        metadata: None,
-                    },
-                    pick_discriminant: |settings_content| {
-                        Some(
+                        },
+                    }),
+                    metadata: None,
+                },
+                pick_discriminant: |settings_content| {
+                    Some(
+                        settings_content
+                            .terminal
+                            .as_ref()?
+                            .project
+                            .working_directory
+                            .as_ref()?
+                            .discriminant() as usize,
+                    )
+                },
+                fields: dynamic_variants::<settings::WorkingDirectory>()
+                    .into_iter()
+                    .map(|variant| match variant {
+                        settings::WorkingDirectoryDiscriminants::CurrentFileDirectory => vec![],
+                        settings::WorkingDirectoryDiscriminants::CurrentProjectDirectory => vec![],
+                        settings::WorkingDirectoryDiscriminants::FirstProjectDirectory => vec![],
+                        settings::WorkingDirectoryDiscriminants::AlwaysHome => vec![],
+                        settings::WorkingDirectoryDiscriminants::Always => vec![SettingItem {
+                            files: USER | PROJECT,
+                            title: localization::localized_str!("Directory"),
+                            description: localization::localized_str!(
+                                "The directory path to use (will be shell expanded)."
+                            ),
+                            field: Box::new(SettingField {
+                                organization_override: None,
+                                json_path: Some("terminal.working_directory.always"),
+                                pick: |settings_content| match settings_content
+                                    .terminal
+                                    .as_ref()?
+                                    .project
+                                    .working_directory
+                                    .as_ref()
+                                {
+                                    Some(settings::WorkingDirectory::Always { directory }) => {
+                                        Some(directory)
+                                    }
+                                    _ => None,
+                                },
+                                write: |settings_content, value, _| {
+                                    let value = value.unwrap_or_default();
+                                    match settings_content
+                                        .terminal
+                                        .get_or_insert_default()
+                                        .project
+                                        .working_directory
+                                        .as_mut()
+                                    {
+                                        Some(settings::WorkingDirectory::Always { directory }) => {
+                                            *directory = value
+                                        }
+                                        _ => return,
+                                    }
+                                },
+                            }),
+                            metadata: None,
+                        }],
+                    })
+                    .collect(),
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Environment Variables"),
+                description: localization::localized_str!(
+                    "Key-value pairs to add to the terminal's environment."
+                ),
+                field: Box::new(
+                    SettingField {
+                        organization_override: None,
+                        json_path: Some("terminal.env"),
+                        pick: |settings_content| {
+                            settings_content.terminal.as_ref()?.project.env.as_ref()
+                        },
+                        write: |settings_content, value, _| {
+                            settings_content
+                                .terminal
+                                .get_or_insert_default()
+                                .project
+                                .env = value;
+                        },
+                    }
+                    .unimplemented(),
+                ),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Detect Virtual Environment"),
+                description: localization::localized_str!(
+                    "Activates the Python virtual environment, if one is found, in the terminal's working directory."
+                ),
+                field: Box::new(
+                    SettingField {
+                        organization_override: None,
+                        json_path: Some("terminal.detect_venv"),
+                        pick: |settings_content| {
                             settings_content
                                 .terminal
                                 .as_ref()?
                                 .project
-                                .working_directory
-                                .as_ref()?
-                                .discriminant() as usize,
-                        )
-                    },
-                    fields: dynamic_variants::<settings::WorkingDirectory>()
-                        .into_iter()
-                        .map(|variant| match variant {
-                            settings::WorkingDirectoryDiscriminants::CurrentFileDirectory => vec![],
-                            settings::WorkingDirectoryDiscriminants::CurrentProjectDirectory => vec![],
-                            settings::WorkingDirectoryDiscriminants::FirstProjectDirectory => vec![],
-                            settings::WorkingDirectoryDiscriminants::AlwaysHome => vec![],
-                            settings::WorkingDirectoryDiscriminants::Always => vec![SettingItem {
-                                files: USER | PROJECT,
-                                title: localization::localized_str!("Directory"),
-                                description: localization::localized_str!("The directory path to use (will be shell expanded)."),
-                                field: Box::new(SettingField {
-                                    organization_override: None,
-                                    json_path: Some("terminal.working_directory.always"),
-                                    pick: |settings_content| {
-                                        match settings_content.terminal.as_ref()?.project.working_directory.as_ref() {
-                                            Some(settings::WorkingDirectory::Always { directory }) => Some(directory),
-                                            _ => None,
-                                        }
-                                    },
-                                    write: |settings_content, value, _| {
-                                        let value = value.unwrap_or_default();
-                                        match settings_content
-                                            .terminal
-                                            .get_or_insert_default()
-                                            .project
-                                            .working_directory
-                                            .as_mut()
-                                        {
-                                            Some(settings::WorkingDirectory::Always { directory }) => *directory = value,
-                                            _ => return,
-                                        }
-                                    },
-                                }),
-                                metadata: None,
-                            }],
-                        })
-                        .collect(),
-                }),
-                SettingsPageItem::SettingItem(SettingItem {
-                    title: localization::localized_str!("Environment Variables"),
-                    description: localization::localized_str!("Key-value pairs to add to the terminal's environment."),
-                    field: Box::new(
-                        SettingField {
-                            organization_override: None,
-                            json_path: Some("terminal.env"),
-                            pick: |settings_content| settings_content.terminal.as_ref()?.project.env.as_ref(),
-                            write: |settings_content, value, _| {
-                                settings_content.terminal.get_or_insert_default().project.env = value;
-                            },
-                        }
-                        .unimplemented(),
-                    ),
-                    metadata: None,
-                    files: USER | PROJECT,
-                }),
-                SettingsPageItem::SettingItem(SettingItem {
-                    title: localization::localized_str!("Detect Virtual Environment"),
-                    description: localization::localized_str!("Activates the Python virtual environment, if one is found, in the terminal's working directory."),
-                    field: Box::new(
-                        SettingField {
-                            organization_override: None,
-                            json_path: Some("terminal.detect_venv"),
-                            pick: |settings_content| settings_content.terminal.as_ref()?.project.detect_venv.as_ref(),
-                            write: |settings_content, value, _| {
-                                settings_content
-                                    .terminal
-                                    .get_or_insert_default()
-                                    .project
-                                    .detect_venv = value;
-                            },
-                        }
-                        .unimplemented(),
-                    ),
-                    metadata: None,
-                    files: USER | PROJECT,
-                }),
-            ]
+                                .detect_venv
+                                .as_ref()
+                        },
+                        write: |settings_content, value, _| {
+                            settings_content
+                                .terminal
+                                .get_or_insert_default()
+                                .project
+                                .detect_venv = value;
+                        },
+                    }
+                    .unimplemented(),
+                ),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+        ]
     }
 
     fn font_section() -> [SettingsPageItem; 6] {
@@ -7130,7 +7625,9 @@ fn terminal_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Font")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Font Size"),
-                description: localization::localized_str!("Font size for terminal text. If not set, defaults to buffer font size."),
+                description: localization::localized_str!(
+                    "Font size for terminal text. If not set, defaults to buffer font size."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_size"),
@@ -7150,7 +7647,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Font Family"),
-                description: localization::localized_str!("Font family for terminal text. If not set, defaults to buffer font family."),
+                description: localization::localized_str!(
+                    "Font family for terminal text. If not set, defaults to buffer font family."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_family"),
@@ -7173,7 +7672,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Font Fallbacks"),
-                description: localization::localized_str!("Font fallbacks for terminal text. If not set, defaults to buffer font fallbacks."),
+                description: localization::localized_str!(
+                    "Font fallbacks for terminal text. If not set, defaults to buffer font fallbacks."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -7199,7 +7700,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Font Weight"),
-                description: localization::localized_str!("Font weight for terminal text in CSS weight units (100-900)."),
+                description: localization::localized_str!(
+                    "Font weight for terminal text in CSS weight units (100-900)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.font_weight"),
@@ -7272,7 +7775,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Cursor Shape"),
-                description: localization::localized_str!("Default cursor shape for the terminal (bar, block, underline, or hollow)."),
+                description: localization::localized_str!(
+                    "Default cursor shape for the terminal (bar, block, underline, or hollow)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.cursor_shape"),
@@ -7291,7 +7796,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Cursor Blinking"),
-                description: localization::localized_str!("Sets the cursor blinking behavior in the terminal."),
+                description: localization::localized_str!(
+                    "Sets the cursor blinking behavior in the terminal."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.blinking"),
@@ -7305,7 +7812,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Alternate Scroll"),
-                description: localization::localized_str!("Whether alternate scroll mode is active by default (converts mouse scroll to arrow keys in apps like Vim)."),
+                description: localization::localized_str!(
+                    "Whether alternate scroll mode is active by default (converts mouse scroll to arrow keys in apps like Vim)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.alternate_scroll"),
@@ -7328,7 +7837,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Minimum Contrast"),
-                description: localization::localized_str!("The minimum APCA perceptual contrast between foreground and background colors (0-106)."),
+                description: localization::localized_str!(
+                    "The minimum APCA perceptual contrast between foreground and background colors (0-106)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.minimum_contrast"),
@@ -7360,7 +7871,9 @@ fn terminal_page() -> SettingsPage {
             #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Option As Meta"),
-                description: localization::localized_str!("Whether the option key behaves as the meta key."),
+                description: localization::localized_str!(
+                    "Whether the option key behaves as the meta key."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.option_as_meta"),
@@ -7379,7 +7892,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Copy On Select"),
-                description: localization::localized_str!("Whether selecting text in the terminal automatically copies to the system clipboard."),
+                description: localization::localized_str!(
+                    "Whether selecting text in the terminal automatically copies to the system clipboard."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.copy_on_select"),
@@ -7398,7 +7913,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Keep Selection On Copy"),
-                description: localization::localized_str!("Whether to keep the text selection after copying it to the clipboard."),
+                description: localization::localized_str!(
+                    "Whether to keep the text selection after copying it to the clipboard."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.keep_selection_on_copy"),
@@ -7421,7 +7938,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Open Links In Mouse Mode"),
-                description: localization::localized_str!("Whether cmd-click (ctrl-click on Linux and Windows) opens hyperlinks even when the terminal application has enabled mouse reporting. When disabled, these clicks are forwarded to the application; links can still be opened with shift-cmd-click."),
+                description: localization::localized_str!(
+                    "Whether cmd-click (ctrl-click on Linux and Windows) opens hyperlinks even when the terminal application has enabled mouse reporting. When disabled, these clicks are forwarded to the application; links can still be opened with shift-cmd-click."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.open_links_in_mouse_mode"),
@@ -7444,7 +7963,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Audible Bell"),
-                description: localization::localized_str!("Whether to play a sound when the BEL character (`\\a`, `0x07`) is printed"),
+                description: localization::localized_str!(
+                    "Whether to play a sound when the BEL character (`\\a`, `0x07`) is printed"
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.bell"),
@@ -7464,7 +7985,9 @@ fn terminal_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Layout Settings")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Default Width"),
-                description: localization::localized_str!("Default width when the terminal is docked to the left or right (in pixels)."),
+                description: localization::localized_str!(
+                    "Default width when the terminal is docked to the left or right (in pixels)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.default_width"),
@@ -7483,7 +8006,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Default Height"),
-                description: localization::localized_str!("Default height when the terminal is docked to the bottom (in pixels)."),
+                description: localization::localized_str!(
+                    "Default height when the terminal is docked to the bottom (in pixels)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.default_height"),
@@ -7508,7 +8033,9 @@ fn terminal_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Advanced Settings")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Max Scroll History Lines"),
-                description: localization::localized_str!("Maximum number of lines to keep in scrollback history (max: 100,000; 0 disables scrolling)."),
+                description: localization::localized_str!(
+                    "Maximum number of lines to keep in scrollback history (max: 100,000; 0 disables scrolling)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.max_scroll_history_lines"),
@@ -7531,7 +8058,9 @@ fn terminal_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Scroll Multiplier"),
-                description: localization::localized_str!("The multiplier for scrolling in the terminal with the mouse wheel"),
+                description: localization::localized_str!(
+                    "The multiplier for scrolling in the terminal with the mouse wheel"
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.scroll_multiplier"),
@@ -7563,7 +8092,9 @@ fn terminal_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Toolbar")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Breadcrumbs"),
-                description: localization::localized_str!("Display the terminal title in breadcrumbs inside the terminal pane."),
+                description: localization::localized_str!(
+                    "Display the terminal title in breadcrumbs inside the terminal pane."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.toolbar.breadcrumbs"),
@@ -7596,7 +8127,9 @@ fn terminal_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Scrollbar")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Scrollbar"),
-                description: localization::localized_str!("When to show the scrollbar in the terminal."),
+                description: localization::localized_str!(
+                    "When to show the scrollbar in the terminal."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("terminal.scrollbar.show"),
@@ -7656,7 +8189,9 @@ fn version_control_page() -> SettingsPage {
                 discriminant: SettingItem {
                     files: USER,
                     title: localization::localized_str!("Disable Git Integration"),
-                    description: localization::localized_str!("Disable all Git integration features in HiCodeer."),
+                    description: localization::localized_str!(
+                        "Disable all Git integration features in HiCodeer."
+                    ),
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("git.disable_git"),
@@ -7696,7 +8231,9 @@ fn version_control_page() -> SettingsPage {
                         SettingItem {
                             files: USER,
                             title: localization::localized_str!("Enable Git Status"),
-                            description: localization::localized_str!("Show Git status information in the editor."),
+                            description: localization::localized_str!(
+                                "Show Git status information in the editor."
+                            ),
                             field: Box::new(SettingField::<bool> {
                                 organization_override: None,
                                 json_path: Some("git.enable_status"),
@@ -7723,7 +8260,9 @@ fn version_control_page() -> SettingsPage {
                         SettingItem {
                             files: USER,
                             title: localization::localized_str!("Enable Git Diff"),
-                            description: localization::localized_str!("Show Git diff information in the editor."),
+                            description: localization::localized_str!(
+                                "Show Git diff information in the editor."
+                            ),
                             field: Box::new(SettingField::<bool> {
                                 organization_override: None,
                                 json_path: Some("git.enable_diff"),
@@ -7758,7 +8297,9 @@ fn version_control_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Git Gutter")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Visibility"),
-                description: localization::localized_str!("Control whether Git status is shown in the editor's gutter."),
+                description: localization::localized_str!(
+                    "Control whether Git status is shown in the editor's gutter."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.git_gutter"),
@@ -7773,7 +8314,9 @@ fn version_control_page() -> SettingsPage {
             // todo(settings_ui): Figure out the right default for this value in default.json
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Debounce"),
-                description: localization::localized_str!("Debounce threshold in milliseconds after which changes are reflected in the Git gutter."),
+                description: localization::localized_str!(
+                    "Debounce threshold in milliseconds after which changes are reflected in the Git gutter."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.gutter_debounce"),
@@ -7796,7 +8339,9 @@ fn version_control_page() -> SettingsPage {
             SettingsPageItem::DynamicItem(DynamicItem {
                 discriminant: SettingItem {
                     title: localization::localized_str!("Enabled"),
-                    description: localization::localized_str!("Whether or not to show Git blame data for the currently focused line."),
+                    description: localization::localized_str!(
+                        "Whether or not to show Git blame data for the currently focused line."
+                    ),
                     field: Box::new(SettingField {
                         organization_override: None,
                         json_path: Some("git.inline_blame.enabled"),
@@ -7836,7 +8381,9 @@ fn version_control_page() -> SettingsPage {
                     vec![],
                     vec![SettingItem {
                         title: localization::localized_str!("Location"),
-                        description: localization::localized_str!("Where to render Git blame when it is enabled."),
+                        description: localization::localized_str!(
+                            "Where to render Git blame when it is enabled."
+                        ),
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("git.inline_blame.location"),
@@ -7865,7 +8412,9 @@ fn version_control_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Delay"),
-                description: localization::localized_str!("The delay after which the inline blame information is shown."),
+                description: localization::localized_str!(
+                    "The delay after which the inline blame information is shown."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.delay_ms"),
@@ -7892,7 +8441,9 @@ fn version_control_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Padding"),
-                description: localization::localized_str!("Padding between the end of the source line and the start of the inline blame in columns."),
+                description: localization::localized_str!(
+                    "Padding between the end of the source line and the start of the inline blame in columns."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.padding"),
@@ -7919,7 +8470,9 @@ fn version_control_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Minimum Column"),
-                description: localization::localized_str!("The minimum column number at which to show the inline blame information."),
+                description: localization::localized_str!(
+                    "The minimum column number at which to show the inline blame information."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.min_column"),
@@ -7946,7 +8499,9 @@ fn version_control_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Commit Summary"),
-                description: localization::localized_str!("Show commit summary as part of the inline blame."),
+                description: localization::localized_str!(
+                    "Show commit summary as part of the inline blame."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.inline_blame.show_commit_summary"),
@@ -7979,7 +8534,9 @@ fn version_control_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Git Blame View")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Avatar"),
-                description: localization::localized_str!("Show the avatar of the author of the commit."),
+                description: localization::localized_str!(
+                    "Show the avatar of the author of the commit."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.blame.show_avatar"),
@@ -8012,7 +8569,9 @@ fn version_control_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Branch Picker")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Author Name"),
-                description: localization::localized_str!("Show author name as part of the commit information in branch picker."),
+                description: localization::localized_str!(
+                    "Show author name as part of the commit information in branch picker."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.branch_picker.show_author_name"),
@@ -8045,7 +8604,9 @@ fn version_control_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("Git Hunks")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Hunk Style"),
-                description: localization::localized_str!("How Git hunks are displayed visually in the editor."),
+                description: localization::localized_str!(
+                    "How Git hunks are displayed visually in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.hunk_style"),
@@ -8059,7 +8620,9 @@ fn version_control_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Diff Base"),
-                description: localization::localized_str!("Whether git features show changes relative to HEAD (uncommitted changes) or to the default branch (all changes on the current branch)."),
+                description: localization::localized_str!(
+                    "Whether git features show changes relative to HEAD (uncommitted changes) or to the default branch (all changes on the current branch)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.diff_base"),
@@ -8073,7 +8636,9 @@ fn version_control_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Path Style"),
-                description: localization::localized_str!("Should the name or path be displayed first in the git view."),
+                description: localization::localized_str!(
+                    "Should the name or path be displayed first in the git view."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.path_style"),
@@ -8087,7 +8652,9 @@ fn version_control_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Stage/Restore Buttons"),
-                description: localization::localized_str!("Whether to show the stage and restore buttons on diff hunks."),
+                description: localization::localized_str!(
+                    "Whether to show the stage and restore buttons on diff hunks."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.show_stage_restore_buttons"),
@@ -8116,7 +8683,9 @@ fn version_control_page() -> SettingsPage {
             SettingsPageItem::SectionHeader(localization::localized_str!("File Diff")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Full File by Default"),
-                description: localization::localized_str!("Whether newly opened file diffs show the full file instead of changes only."),
+                description: localization::localized_str!(
+                    "Whether newly opened file diffs show the full file instead of changes only."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("git.file_diff.show_full_file"),
@@ -8158,8 +8727,6 @@ fn version_control_page() -> SettingsPage {
     }
 }
 
-
-
 fn network_page() -> SettingsPage {
     fn network_section() -> Vec<SettingsPageItem> {
         let mut items = vec![
@@ -8187,7 +8754,9 @@ fn network_page() -> SettingsPage {
         #[cfg(not(target_env = "ohos"))]
         items.push(SettingsPageItem::SettingItem(SettingItem {
             title: localization::localized_str!("Server URL"),
-            description: localization::localized_str!("The URL of the HiCodeer server to connect to."),
+            description: localization::localized_str!(
+                "The URL of the HiCodeer server to connect to."
+            ),
             field: Box::new(SettingField {
                 organization_override: None,
                 json_path: Some("server_url"),
@@ -8287,7 +8856,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Hard Tabs"),
-                description: localization::localized_str!("Whether to indent lines using tab characters, as opposed to multiple spaces."),
+                description: localization::localized_str!(
+                    "Whether to indent lines using tab characters, as opposed to multiple spaces."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).hard_tabs"),
@@ -8307,7 +8878,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Indent"),
-                description: localization::localized_str!("Controls automatic indentation behavior when typing."),
+                description: localization::localized_str!(
+                    "Controls automatic indentation behavior when typing."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).auto_indent"),
@@ -8327,7 +8900,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Auto Indent On Paste"),
-                description: localization::localized_str!("Whether indentation of pasted content should be adjusted based on the context."),
+                description: localization::localized_str!(
+                    "Whether indentation of pasted content should be adjusted based on the context."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).auto_indent_on_paste"),
@@ -8413,7 +8988,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Preferred Line Length"),
-                description: localization::localized_str!("The column at which to soft-wrap lines, for buffers where soft-wrap is enabled."),
+                description: localization::localized_str!(
+                    "The column at which to soft-wrap lines, for buffers where soft-wrap is enabled."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).preferred_line_length"),
@@ -8433,7 +9010,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Wrap Guides"),
-                description: localization::localized_str!("Character counts at which to show wrap guides in the editor."),
+                description: localization::localized_str!(
+                    "Character counts at which to show wrap guides in the editor."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -8460,7 +9039,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Allow Rewrap"),
-                description: localization::localized_str!("Controls where the `editor::rewrap` action is allowed for this language."),
+                description: localization::localized_str!(
+                    "Controls where the `editor::rewrap` action is allowed for this language."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).allow_rewrap"),
@@ -8509,7 +9090,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Line Width"),
-                description: localization::localized_str!("The width of the indent guides in pixels, between 1 and 10."),
+                description: localization::localized_str!(
+                    "The width of the indent guides in pixels, between 1 and 10."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.line_width"),
@@ -8532,7 +9115,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Active Line Width"),
-                description: localization::localized_str!("The width of the active indent guide in pixels, between 1 and 10."),
+                description: localization::localized_str!(
+                    "The width of the active indent guide in pixels, between 1 and 10."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.active_line_width"),
@@ -8558,7 +9143,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Coloring"),
-                description: localization::localized_str!("Determines how indent guides are colored."),
+                description: localization::localized_str!(
+                    "Determines how indent guides are colored."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.coloring"),
@@ -8581,7 +9168,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Background Coloring"),
-                description: localization::localized_str!("Determines how indent guide backgrounds are colored."),
+                description: localization::localized_str!(
+                    "Determines how indent guide backgrounds are colored."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).indent_guides.background_coloring"),
@@ -8612,7 +9201,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("Formatting")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Format On Save"),
-                description: localization::localized_str!("On: format the whole buffer.\nOff: do not format.\nModifications: format only lines with unstaged changes; skips formatting when a git diff or LSP range formatting is unavailable.\nModifications If Available: same, but falls back to formatting the whole buffer."),
+                description: localization::localized_str!(
+                    "On: format the whole buffer.\nOff: do not format.\nModifications: format only lines with unstaged changes; skips formatting when a git diff or LSP range formatting is unavailable.\nModifications If Available: same, but falls back to formatting the whole buffer."
+                ),
                 field: Box::new(
                     // TODO(settings_ui): this setting should just be a bool
                     SettingField {
@@ -8639,7 +9230,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Remove Trailing Whitespace On Save"),
-                description: localization::localized_str!("Whether or not to remove any trailing whitespace from lines of a buffer before saving it."),
+                description: localization::localized_str!(
+                    "Whether or not to remove any trailing whitespace from lines of a buffer before saving it."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).remove_trailing_whitespace_on_save"),
@@ -8659,7 +9252,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Ensure Final Newline On Save"),
-                description: localization::localized_str!("Whether or not to ensure there's a single newline at the end of a buffer when saving it."),
+                description: localization::localized_str!(
+                    "Whether or not to ensure there's a single newline at the end of a buffer when saving it."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).ensure_final_newline_on_save"),
@@ -8679,7 +9274,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Line Ending"),
-                description: localization::localized_str!("How line endings should be handled for new files and during format and save operations."),
+                description: localization::localized_str!(
+                    "How line endings should be handled for new files and during format and save operations."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).line_ending"),
@@ -8729,7 +9326,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use On Type Format"),
-                description: localization::localized_str!("Whether to use additional LSP queries to format (and amend) the code after every \"trigger\" symbol input, defined by LSP server capabilities"),
+                description: localization::localized_str!(
+                    "Whether to use additional LSP queries to format (and amend) the code after every \"trigger\" symbol input, defined by LSP server capabilities"
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_on_type_format"),
@@ -8749,7 +9348,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Code Actions On Format"),
-                description: localization::localized_str!("Additional code actions to run when formatting."),
+                description: localization::localized_str!(
+                    "Additional code actions to run when formatting."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -8782,7 +9383,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("Autoclose")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use Autoclose"),
-                description: localization::localized_str!("Whether to automatically type closing characters for you. For example, when you type '(', HiCodeer will automatically add a closing ')' at the correct position."),
+                description: localization::localized_str!(
+                    "Whether to automatically type closing characters for you. For example, when you type '(', HiCodeer will automatically add a closing ')' at the correct position."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_autoclose"),
@@ -8802,7 +9405,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Use Auto Surround"),
-                description: localization::localized_str!("Whether to automatically surround text with characters for you. For example, when you select text and type '(', HiCodeer will automatically surround text with ()."),
+                description: localization::localized_str!(
+                    "Whether to automatically surround text with characters for you. For example, when you select text and type '(', HiCodeer will automatically surround text with ()."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).use_auto_surround"),
@@ -8822,7 +9427,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Always Treat Brackets As Autoclosed"),
-                description: localization::localized_str!("Controls whether the closing characters are always skipped over and auto-removed no matter how they were inserted."),
+                description: localization::localized_str!(
+                    "Controls whether the closing characters are always skipped over and auto-removed no matter how they were inserted."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).always_treat_brackets_as_autoclosed"),
@@ -8842,7 +9449,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("JSX Tag Auto Close"),
-                description: localization::localized_str!("Whether to automatically close JSX tags."),
+                description: localization::localized_str!(
+                    "Whether to automatically close JSX tags."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).jsx_tag_auto_close"),
@@ -8869,7 +9478,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("Whitespace")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Whitespaces"),
-                description: localization::localized_str!("Whether to show tabs and spaces in the editor."),
+                description: localization::localized_str!(
+                    "Whether to show tabs and spaces in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_whitespaces"),
@@ -8889,7 +9500,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Space Whitespace Indicator"),
-                description: localization::localized_str!("Visible character used to render space characters when show_whitespaces is enabled (default: \"•\")"),
+                description: localization::localized_str!(
+                    "Visible character used to render space characters when show_whitespaces is enabled (default: \"•\")"
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -8916,7 +9529,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Tab Whitespace Indicator"),
-                description: localization::localized_str!("Visible character used to render tab characters when show_whitespaces is enabled (default: \"→\")"),
+                description: localization::localized_str!(
+                    "Visible character used to render tab characters when show_whitespaces is enabled (default: \"→\")"
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -8949,7 +9564,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("Completions")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Completions On Input"),
-                description: localization::localized_str!("Whether to pop the completions menu while typing in an editor without explicitly requesting it."),
+                description: localization::localized_str!(
+                    "Whether to pop the completions menu while typing in an editor without explicitly requesting it."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_completions_on_input"),
@@ -8969,7 +9586,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Completion Documentation"),
-                description: localization::localized_str!("Whether to display inline and alongside documentation for items in the completions menu."),
+                description: localization::localized_str!(
+                    "Whether to display inline and alongside documentation for items in the completions menu."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).show_completion_documentation"),
@@ -9009,7 +9628,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Words Min Length"),
-                description: localization::localized_str!("How many characters has to be in the completions query to automatically show the words-based completions."),
+                description: localization::localized_str!(
+                    "How many characters has to be in the completions query to automatically show the words-based completions."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.words_min_length"),
@@ -9032,7 +9653,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Completion Menu Scrollbar"),
-                description: localization::localized_str!("When to show the scrollbar in the completion menu."),
+                description: localization::localized_str!(
+                    "When to show the scrollbar in the completion menu."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_menu_scrollbar"),
@@ -9048,7 +9671,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Completion Detail Alignment"),
-                description: localization::localized_str!("Whether to align detail text in code completions context menus left or right."),
+                description: localization::localized_str!(
+                    "Whether to align detail text in code completions context menus left or right."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_detail_alignment"),
@@ -9064,7 +9689,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Completion Menu Item Kind"),
-                description: localization::localized_str!("How to display the LSP item kind (function, method, variable, etc.) of each entry in the completions menu."),
+                description: localization::localized_str!(
+                    "How to display the LSP item kind (function, method, variable, etc.) of each entry in the completions menu."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("editor.completion_menu_item_kind"),
@@ -9086,7 +9713,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("Inlay Hints")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enabled"),
-                description: localization::localized_str!("Global switch to toggle hints on and off."),
+                description: localization::localized_str!(
+                    "Global switch to toggle hints on and off."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.enabled"),
@@ -9106,7 +9735,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Value Hints"),
-                description: localization::localized_str!("Global switch to toggle inline values on and off when debugging."),
+                description: localization::localized_str!(
+                    "Global switch to toggle inline values on and off when debugging."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_value_hints"),
@@ -9149,7 +9780,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Show Parameter Hints"),
-                description: localization::localized_str!("Whether parameter hints should be shown."),
+                description: localization::localized_str!(
+                    "Whether parameter hints should be shown."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.show_parameter_hints"),
@@ -9215,7 +9848,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Edit Debounce Ms"),
-                description: localization::localized_str!("Whether or not to debounce inlay hints updates after buffer edits (set to 0 to disable debouncing)."),
+                description: localization::localized_str!(
+                    "Whether or not to debounce inlay hints updates after buffer edits (set to 0 to disable debouncing)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.edit_debounce_ms"),
@@ -9238,7 +9873,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Scroll Debounce Ms"),
-                description: localization::localized_str!("Whether or not to debounce inlay hints updates after buffer scrolls (set to 0 to disable debouncing)."),
+                description: localization::localized_str!(
+                    "Whether or not to debounce inlay hints updates after buffer scrolls (set to 0 to disable debouncing)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).inlay_hints.scroll_debounce_ms"),
@@ -9261,7 +9898,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Toggle On Modifiers Press"),
-                description: localization::localized_str!("Toggles inlay hints (hides or shows) when the user presses the modifiers specified."),
+                description: localization::localized_str!(
+                    "Toggles inlay hints (hides or shows) when the user presses the modifiers specified."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9303,7 +9942,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("Tasks")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enabled"),
-                description: localization::localized_str!("Whether tasks are enabled for this language."),
+                description: localization::localized_str!(
+                    "Whether tasks are enabled for this language."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tasks.enabled"),
@@ -9323,7 +9964,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Variables"),
-                description: localization::localized_str!("Extra task variables to set for a particular language."),
+                description: localization::localized_str!(
+                    "Extra task variables to set for a particular language."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9350,7 +9993,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Prefer LSP"),
-                description: localization::localized_str!("Use LSP tasks over HiCodeer language extension tasks."),
+                description: localization::localized_str!(
+                    "Use LSP tasks over HiCodeer language extension tasks."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).tasks.prefer_lsp"),
@@ -9376,7 +10021,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("Miscellaneous")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Language Detection"),
-                description: localization::localized_str!("Whether to enable automatic language detection in unsaved buffers."),
+                description: localization::localized_str!(
+                    "Whether to enable automatic language detection in unsaved buffers."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("language_detection"),
@@ -9390,7 +10037,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Word Diff Enabled"),
-                description: localization::localized_str!("Whether to enable word diff highlighting in the editor. When enabled, changed words within modified lines are highlighted to show exactly what changed."),
+                description: localization::localized_str!(
+                    "Whether to enable word diff highlighting in the editor. When enabled, changed words within modified lines are highlighted to show exactly what changed."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).word_diff_enabled"),
@@ -9457,7 +10106,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Extend Comment On Newline"),
-                description: localization::localized_str!("Whether to start a new line with a comment when a previous line is a comment as well."),
+                description: localization::localized_str!(
+                    "Whether to start a new line with a comment when a previous line is a comment as well."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).extend_comment_on_newline"),
@@ -9477,7 +10128,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Colorize Brackets"),
-                description: localization::localized_str!("Whether to colorize brackets in the editor."),
+                description: localization::localized_str!(
+                    "Whether to colorize brackets in the editor."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).colorize_brackets"),
@@ -9497,7 +10150,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Vim/Emacs Modeline Support"),
-                description: localization::localized_str!("Number of lines to search for modelines (set to 0 to disable)."),
+                description: localization::localized_str!(
+                    "Number of lines to search for modelines (set to 0 to disable)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("modeline_lines"),
@@ -9535,7 +10190,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Open Markdown Files in Preview"),
-                description: localization::localized_str!("Whether to automatically open Markdown files in the preview."),
+                description: localization::localized_str!(
+                    "Whether to automatically open Markdown files in the preview."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("markdown_preview.open_markdown_files_in_preview"),
@@ -9560,7 +10217,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 discriminant: SettingItem {
                     files: USER,
                     title: localization::localized_str!("Limit Markdown Preview Width"),
-                    description: localization::localized_str!("Whether to constrain the markdown preview content to a maximum width, centering it when the pane is wider, for optimal readability."),
+                    description: localization::localized_str!(
+                        "Whether to constrain the markdown preview content to a maximum width, centering it when the pane is wider, for optimal readability."
+                    ),
                     field: Box::new(SettingField::<bool> {
                         organization_override: None,
                         json_path: Some("markdown_preview.limit_content_width"),
@@ -9593,7 +10252,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                     vec![SettingItem {
                         files: USER,
                         title: localization::localized_str!("Max Width"),
-                        description: localization::localized_str!("Maximum content width in pixels. Content will be centered when the pane is wider than this value."),
+                        description: localization::localized_str!(
+                            "Maximum content width in pixels. Content will be centered when the pane is wider than this value."
+                        ),
                         field: Box::new(SettingField {
                             organization_override: None,
                             json_path: Some("markdown_preview.max_width"),
@@ -9617,7 +10278,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Drop Size Target"),
-                description: localization::localized_str!("Relative size of the drop target in the editor that will open dropped file as a split pane."),
+                description: localization::localized_str!(
+                    "Relative size of the drop target in the editor that will open dropped file as a split pane."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("drop_target_size"),
@@ -9636,7 +10299,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     let code_lens_item = [SettingsPageItem::SettingItem(SettingItem {
         title: localization::localized_str!("Code Lens"),
-        description: localization::localized_str!("Whether and how to display code lenses from language servers."),
+        description: localization::localized_str!(
+            "Whether and how to display code lenses from language servers."
+        ),
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("code_lens"),
@@ -9651,7 +10316,9 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 
     let lsp_document_colors_item = [SettingsPageItem::SettingItem(SettingItem {
         title: localization::localized_str!("LSP Document Colors"),
-        description: localization::localized_str!("How to render LSP color previews in the editor."),
+        description: localization::localized_str!(
+            "How to render LSP color previews in the editor."
+        ),
         field: Box::new(SettingField {
             organization_override: None,
             json_path: Some("lsp_document_colors"),
@@ -9705,7 +10372,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("LSP")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enable Language Server"),
-                description: localization::localized_str!("Whether to use language servers to provide code intelligence."),
+                description: localization::localized_str!(
+                    "Whether to use language servers to provide code intelligence."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).enable_language_server"),
@@ -9725,7 +10394,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Language Servers"),
-                description: localization::localized_str!("The list of language servers to use (or disable) for this language."),
+                description: localization::localized_str!(
+                    "The list of language servers to use (or disable) for this language."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -9752,7 +10423,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Linked Edits"),
-                description: localization::localized_str!("Whether to perform linked edits of associated ranges, if the LS supports it. For example, when editing opening <html> tag, the contents of the closing </html> tag will be edited as well."),
+                description: localization::localized_str!(
+                    "Whether to perform linked edits of associated ranges, if the LS supports it. For example, when editing opening <html> tag, the contents of the closing </html> tag will be edited as well."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).linked_edits"),
@@ -9772,7 +10445,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Go To Definition Fallback"),
-                description: localization::localized_str!("Whether to follow-up empty Go to definition responses from the language server."),
+                description: localization::localized_str!(
+                    "Whether to follow-up empty Go to definition responses from the language server."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("go_to_definition_fallback"),
@@ -9788,7 +10463,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Go To Definition Scroll Strategy"),
-                description: localization::localized_str!("How to scroll the target into view when navigating to a definition or reference."),
+                description: localization::localized_str!(
+                    "How to scroll the target into view when navigating to a definition or reference."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("go_to_definition_scroll_strategy"),
@@ -9807,7 +10484,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("LSP Results Location"),
-                description: localization::localized_str!("Where to show LSP results that can contain multiple locations (Go to Definition, Go to Implementation, Find All References)."),
+                description: localization::localized_str!(
+                    "Where to show LSP results that can contain multiple locations (Go to Definition, Go to Implementation, Find All References)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("lsp_results_location"),
@@ -9863,7 +10542,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("LSP Folding Ranges"),
-                description: localization::localized_str!("When enabled, use folding ranges from the language server instead of indent-based folding."),
+                description: localization::localized_str!(
+                    "When enabled, use folding ranges from the language server instead of indent-based folding."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).document_folding_ranges"),
@@ -9883,7 +10564,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("LSP Document Symbols"),
-                description: localization::localized_str!("When enabled, use the language server's document symbols for outlines and breadcrumbs instead of tree-sitter."),
+                description: localization::localized_str!(
+                    "When enabled, use the language server's document symbols for outlines and breadcrumbs instead of tree-sitter."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).document_symbols"),
@@ -9909,7 +10592,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("LSP Completions")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Enabled"),
-                description: localization::localized_str!("Whether to fetch LSP completions or not."),
+                description: localization::localized_str!(
+                    "Whether to fetch LSP completions or not."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.lsp"),
@@ -9929,7 +10614,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Fetch Timeout (milliseconds)"),
-                description: localization::localized_str!("When fetching LSP completions, determines how long to wait for a response of a particular server (set to 0 to wait indefinitely)."),
+                description: localization::localized_str!(
+                    "When fetching LSP completions, determines how long to wait for a response of a particular server (set to 0 to wait indefinitely)."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.lsp_fetch_timeout_ms"),
@@ -9952,7 +10639,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Insert Mode"),
-                description: localization::localized_str!("Controls how LSP completions are inserted."),
+                description: localization::localized_str!(
+                    "Controls how LSP completions are inserted."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).completions.lsp_insert_mode"),
@@ -9978,7 +10667,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             SettingsPageItem::SectionHeader(localization::localized_str!("Prettier")),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Allowed"),
-                description: localization::localized_str!("Enables or disables formatting with Prettier for a given language."),
+                description: localization::localized_str!(
+                    "Enables or disables formatting with Prettier for a given language."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).prettier.allowed"),
@@ -9998,7 +10689,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Parser"),
-                description: localization::localized_str!("Forces Prettier integration to use a specific parser name when formatting files with the language."),
+                description: localization::localized_str!(
+                    "Forces Prettier integration to use a specific parser name when formatting files with the language."
+                ),
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("languages.$(language).prettier.parser"),
@@ -10018,7 +10711,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Plugins"),
-                description: localization::localized_str!("Forces Prettier integration to use specific plugins when formatting files with the language."),
+                description: localization::localized_str!(
+                    "Forces Prettier integration to use specific plugins when formatting files with the language."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10045,7 +10740,9 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Options"),
-                description: localization::localized_str!("Default Prettier options, in the format as in package.json section for Prettier."),
+                description: localization::localized_str!(
+                    "Default Prettier options, in the format as in package.json section for Prettier."
+                ),
                 field: Box::new(
                     SettingField {
                         organization_override: None,
@@ -10073,13 +10770,8 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
         ]
     }
 
-    concat_sections!(
-        lsp_section(),
-        lsp_completions_section(),
-        prettier_section(),
-    )
+    concat_sections!(lsp_section(), lsp_completions_section(), prettier_section(),)
 }
-
 
 fn show_scrollbar_or_editor(
     settings_content: &SettingsContent,

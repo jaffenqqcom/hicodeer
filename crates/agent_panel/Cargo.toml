@@ -19,12 +19,13 @@ cmd-client = { path = "../gpui_ohos/depend/cmd-agent/cmd-client" }
 db.workspace = true
 editor.workspace = true
 fs.workspace = true
+futures.workspace = true
 gpui.workspace = true
 localization.workspace = true
 log.workspace = true
 menu.workspace = true
 paths.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 settings.workspace = true
 terminal_view = { path = "../terminal_view" }
@@ -32,7 +33,9 @@ theme.workspace = true
 ui.workspace = true
 workspace.workspace = true
 
-# The notification and sound paths only exist in the OHOS build.
+# The notification, sound and IM paths only exist in the OHOS build. The IM
+# channel is its own crate; the panel only implements the link it calls back.
 [target.'cfg(target_env = "ohos")'.dependencies]
 audio.workspace = true
+im_channel = { path = "../im_channel" }
 notifications.workspace = true

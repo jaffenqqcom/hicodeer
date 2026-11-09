@@ -759,7 +759,7 @@ pub struct AgentPanelSettingsContent {
     pub dock: Option<DockPosition>,
     /// Default width of the panel in pixels.
     ///
-    /// Default: 224
+    /// Default: 238
     pub default_width: Option<PixelSetting>,
     /// Whether the panel opens at start-up.
     ///

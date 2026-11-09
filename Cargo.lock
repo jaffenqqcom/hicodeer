@@ -207,7 +207,9 @@ dependencies = [
  "db",
  "editor",
  "fs",
+ "futures 0.3.34",
  "gpui",
+ "im_channel",
  "localization",
  "log",
  "menu",
@@ -7040,6 +7042,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "im_channel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-tungstenite",
+ "base64",
+ "flate2",
+ "futures 0.3.34",
+ "http_client",
+ "http_client_tls",
+ "localization",
+ "log",
+ "paths",
+ "prost",
+ "qrcode",
+ "reqwest_client",
+ "ring",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12927,6 +12952,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14825,6 +14859,7 @@ dependencies = [
  "heck 0.5.0",
  "http_client",
  "http_proxy",
+ "im_channel",
  "itertools 0.14.0",
  "keymap_editor",
  "language",
@@ -20478,7 +20513,7 @@ dependencies = [
 
 [[package]]
 name = "zed"
-version = "1.25.2"
+version = "1.26.0"
 dependencies = [
  "action_log",
  "activity_indicator",

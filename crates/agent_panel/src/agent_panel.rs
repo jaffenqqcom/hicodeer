@@ -10,6 +10,10 @@ pub mod agent_display;
 mod client;
 pub(crate) mod controller;
 pub mod herdr_settings;
+#[cfg(target_env = "ohos")]
+mod im_link;
+#[cfg(target_env = "ohos")]
+mod im_notify;
 mod session_service;
 mod snapshot;
 
@@ -21,15 +25,14 @@ use std::path::PathBuf;
 
 #[cfg(target_env = "ohos")]
 use audio::{Audio, Sound};
-#[cfg(target_env = "ohos")]
-use gpui::ActivityGuard;
 use editor::{Editor, actions::SelectAll};
 use fs::Fs;
+#[cfg(target_env = "ohos")]
+use gpui::ActivityGuard;
 use gpui::{
     Action, AnyElement, App, AsyncWindowContext, ClipboardItem, Context, ElementId, Entity,
     EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, Pixels, Render, ScrollHandle,
-    SharedString,
-    Subscription, Task, TaskExt, WeakEntity, Window, actions, div, prelude::*, px,
+    SharedString, Subscription, Task, TaskExt, WeakEntity, Window, actions, div, prelude::*, px,
     transparent_black,
 };
 use menu;
@@ -39,8 +42,8 @@ use settings::{IntoGpui, RegisterSetting, Settings, SettingsStore, update_settin
 use terminal_view::TerminalView;
 use theme::ActiveTheme as _;
 use ui::{
-    Color, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, ScrollAxes, Scrollbars, Tooltip,
-    WithScrollbar, prelude::*,
+    Color, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, ScrollAxes, Scrollbars,
+    Tooltip, WithScrollbar, prelude::*,
 };
 #[cfg(target_env = "ohos")]
 use workspace::MultiWorkspace;
@@ -179,51 +182,6 @@ enum Unavailable {
     ServerUnavailable,
 }
 
-/// A state transition worth telling the user about.
-///
-/// The server owns this rule (its `notification_toast_for_state_change`), but
-/// the events built from it only reach a terminal client. The panel repeats
-/// the rule instead of subscribing to those events.
-///
-/// `Done` is the server's "finished and not looked at" state, and it only
-/// appears for a pane the server believes the user is away from. Here the
-/// agent terminal is the only client, and it never reports losing focus, so
-/// the server keeps considering the pane watched: a finished turn arrives as
-/// plain `Idle` and `Done` is never sent. Treating `Idle` as the finish as
-/// well is what makes the panel's own notification reachable at all; whether
-/// the user is actually looking is decided separately, from the window.
-#[cfg(target_env = "ohos")]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AgentNotification {
-    /// The agent is waiting for the user.
-    NeedsAttention,
-    /// The agent stopped working on its own.
-    Finished,
-}
-
-#[cfg(target_env = "ohos")]
-impl AgentNotification {
-    fn from_transition(previous: AgentStatus, current: AgentStatus) -> Option<Self> {
-        match (previous, current) {
-            (previous, AgentStatus::Blocked) if previous != AgentStatus::Blocked => {
-                Some(Self::NeedsAttention)
-            }
-            (AgentStatus::Working, AgentStatus::Done | AgentStatus::Idle) => {
-                Some(Self::Finished)
-            }
-            (AgentStatus::Blocked, AgentStatus::Done) => Some(Self::Finished),
-            _ => None,
-        }
-    }
-
-    fn text(self) -> &'static str {
-        match self {
-            Self::NeedsAttention => localization::localized_str!("needs attention"),
-            Self::Finished => localization::localized_str!("finished"),
-        }
-    }
-}
-
 /// Where the panel docks, whether its status bar button shows, and how wide it
 /// opens. Written by the layout presets in the title bar as well as by dragging
 /// the panel to another dock.
@@ -269,6 +227,9 @@ pub fn init(cx: &mut App) {
     {
         cx.set_global(herdr_settings::AgentIntegrations::default());
         cx.set_global(herdr_settings::TerminalSettingsCache::default());
+        // Pick up a binding saved before this launch; the bridge owns its own
+        // thread and is idle when nothing is bound.
+        im_link::install();
         // The Agent terminal draws its right-click menu and scrollbar, but the
         // data and actions come from the agent server. Register the hooks the
         // terminal view calls so that crate does not need the agent client.
@@ -652,10 +613,11 @@ impl AgentPanel {
     fn update_idle_sleep_prevention(&mut self, cx: &mut Context<Self>) {
         let enabled = AgentPanelSettings::get_global(cx).prevent_idle_sleep;
         let server_reachable = self.unavailable.is_none() && self.consecutive_failures == 0;
-        let any_agent_working = self
-            .spaces
-            .iter()
-            .any(|space| space.agents().any(|agent| agent.status == AgentStatus::Working));
+        let any_agent_working = self.spaces.iter().any(|space| {
+            space
+                .agents()
+                .any(|agent| agent.status == AgentStatus::Working)
+        });
         if !enabled || !server_reachable || !any_agent_working {
             self.idle_sleep_prevention = IdleSleepPrevention::Inactive;
             return;
@@ -736,24 +698,24 @@ impl AgentPanel {
                 let Some(previous_status) = previous.get(&agent.pane_id).copied() else {
                     continue;
                 };
-                let Some(kind) = AgentNotification::from_transition(previous_status, agent.status)
-                else {
+                let Some(kind) = im_notify::AgentNotification::from_transition(
+                    previous_status,
+                    agent.status,
+                    agent.completion_seq,
+                ) else {
                     continue;
                 };
-                // The state alone cannot tell a finished turn from one the
-                // user stopped: both go Working -> Idle. The server marks real
-                // completions on `completion_seq` and leaves it unset when the
-                // turn was interrupted, so an unmarked finish is not an event.
-                if kind == AgentNotification::Finished && agent.completion_seq.is_none() {
-                    continue;
-                }
                 // The row mark needs no switch: it is the panel's own record of
                 // which agent changed.
                 self.attention_agents.insert(agent.pane_id.clone());
+                // The IM channel is a separate output: it has its own switch in
+                // the settings page, so it is fed before the toast decides
+                // whether the user is already looking at this agent.
+                im_notify::forward(spaces, space, agent, kind);
                 if sound_enabled {
                     match kind {
-                        AgentNotification::NeedsAttention => audio::play_system_bell(),
-                        AgentNotification::Finished => {
+                        im_notify::AgentNotification::NeedsAttention => audio::play_system_bell(),
+                        im_notify::AgentNotification::Finished => {
                             Audio::play_sound(Sound::AgentDone, cx);
                         }
                     }
@@ -1001,9 +963,9 @@ impl AgentPanel {
                 })
                 .ok()
                 .flatten();
-            if let Err(err) =
-                cx.background_spawn(async move { client::create_space(cwd.as_deref()) })
-                    .await
+            if let Err(err) = cx
+                .background_spawn(async move { client::create_space(cwd.as_deref()) })
+                .await
             {
                 log_client_error("create space", err);
             }
@@ -1039,9 +1001,9 @@ impl AgentPanel {
     fn focus_space(&mut self, workspace_id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.reveal_agent_terminal(window, cx);
         cx.spawn(async move |_this, cx| {
-            if let Err(err) =
-                cx.background_spawn(async move { client::focus_space(&workspace_id) })
-                    .await
+            if let Err(err) = cx
+                .background_spawn(async move { client::focus_space(&workspace_id) })
+                .await
             {
                 log_client_error("focus space", err);
             }
@@ -1064,9 +1026,9 @@ impl AgentPanel {
         });
         cx.notify();
         cx.spawn(async move |_this, cx| {
-            if let Err(err) =
-                cx.background_spawn(async move { client::focus_agent(&pane_id) })
-                    .await
+            if let Err(err) = cx
+                .background_spawn(async move { client::focus_agent(&pane_id) })
+                .await
             {
                 log_client_error("focus agent", err);
             }
@@ -1319,7 +1281,11 @@ impl AgentPanel {
             .iter()
             .find(|session| session.agent == key.agent && session.session_id == key.session_id)
             .and_then(|session| session.title.clone());
-        let Some(current) = self.session_service.title_override_of(&key).or(scanned_title) else {
+        let Some(current) = self
+            .session_service
+            .title_override_of(&key)
+            .or(scanned_title)
+        else {
             return;
         };
         let title = title_with_agent_prefix(&current, previous_name, name);
@@ -1590,11 +1556,7 @@ impl AgentPanel {
                 .flex_1()
                 .min_w_0()
                 .h_6()
-                .child(
-                    Label::new(display_name.clone())
-                        .single_line()
-                        .truncate(),
-                )
+                .child(Label::new(display_name.clone()).single_line().truncate())
                 .tooltip(Tooltip::text(display_name))
                 .into_any_element()
         };
@@ -1650,10 +1612,7 @@ impl AgentPanel {
                                     .icon_size(IconSize::Small)
                                     .icon_color(Color::Muted)
                                     .tooltip(move |_, cx| {
-                                        Tooltip::simple(
-                                            localization::localized_str!("Rename"),
-                                            cx,
-                                        )
+                                        Tooltip::simple(localization::localized_str!("Rename"), cx)
                                     })
                                     .on_click({
                                         let panel = rename_panel;
@@ -1676,10 +1635,7 @@ impl AgentPanel {
                                     .icon_size(IconSize::Small)
                                     .icon_color(Color::Muted)
                                     .tooltip(move |_, cx| {
-                                        Tooltip::simple(
-                                            localization::localized_str!("Close"),
-                                            cx,
-                                        )
+                                        Tooltip::simple(localization::localized_str!("Close"), cx)
                                     })
                                     .on_click({
                                         let panel = close_panel;
@@ -1695,7 +1651,9 @@ impl AgentPanel {
                     }),
             )
             .on_click(move |_, window, cx| {
-                let _ = panel.update(cx, |panel, cx| panel.focus_agent(pane_id.clone(), window, cx));
+                let _ = panel.update(cx, |panel, cx| {
+                    panel.focus_agent(pane_id.clone(), window, cx)
+                });
             })
             .into_any_element()
     }
@@ -1715,8 +1673,7 @@ impl AgentPanel {
         } else {
             None
         };
-        let label =
-            localization::format_message("Terminal-{}", &[("0", terminal.label.clone())]);
+        let label = localization::format_message("Terminal-{}", &[("0", terminal.label.clone())]);
 
         let title: AnyElement = if let Some(editor) = editor {
             let confirm_panel = panel.clone();
@@ -1739,14 +1696,12 @@ impl AgentPanel {
                         .size_full()
                         .child(editor)
                         .on_action(move |_: &menu::Confirm, window, cx| {
-                            let _ = confirm_panel.update(cx, |panel, cx| {
-                                panel.finish_renaming(true, window, cx)
-                            });
+                            let _ = confirm_panel
+                                .update(cx, |panel, cx| panel.finish_renaming(true, window, cx));
                         })
                         .on_action(move |_: &menu::Cancel, window, cx| {
-                            let _ = cancel_panel.update(cx, |panel, cx| {
-                                panel.finish_renaming(false, window, cx)
-                            });
+                            let _ = cancel_panel
+                                .update(cx, |panel, cx| panel.finish_renaming(false, window, cx));
                         }),
                 )
                 .into_any_element()
@@ -1813,7 +1768,9 @@ impl AgentPanel {
                                     move |_, window, cx| {
                                         let _ = panel.update(cx, |panel, cx| {
                                             panel.begin_rename(
-                                                RenameTarget::Tab { tab_id: tab_id.clone() },
+                                                RenameTarget::Tab {
+                                                    tab_id: tab_id.clone(),
+                                                },
                                                 window,
                                                 cx,
                                             );
@@ -1887,7 +1844,11 @@ impl AgentPanel {
         let reported: Vec<(String, String)> = snapshot
             .spaces
             .iter()
-            .flat_map(|space| space.agents().filter_map(|agent| agent.agent_session.clone()))
+            .flat_map(|space| {
+                space
+                    .agents()
+                    .filter_map(|agent| agent.agent_session.clone())
+            })
             .collect();
         let live_panes: Vec<&str> = snapshot
             .spaces
@@ -1932,7 +1893,9 @@ impl AgentPanel {
         }
         self.history_loading = true;
         cx.spawn(async move |this, cx| {
-            let scan = cx.background_spawn(async { client::fetch_sessions() }).await;
+            let scan = cx
+                .background_spawn(async { client::fetch_sessions() })
+                .await;
             let _ = this.update(cx, |this, cx| {
                 this.history_loading = false;
                 this.apply_history_scan(scan, cx);
@@ -1980,10 +1943,9 @@ impl AgentPanel {
     /// Rebuilds the view from the cached scan plus current state. Called after
     /// a scan and after every pin/archive/rename, so the row moves instantly.
     fn rebuild_history(&mut self) {
-        let view = self.session_service.history(
-            self.last_sessions.clone(),
-            &self.last_open_sessions,
-        );
+        let view = self
+            .session_service
+            .history(self.last_sessions.clone(), &self.last_open_sessions);
         self.history = Some(view);
     }
 
@@ -2021,9 +1983,7 @@ impl AgentPanel {
         };
         cx.spawn(async move |this, cx| {
             let opened = cx
-                .background_spawn(async move {
-                    controller::HerdrController.open_session(request)
-                })
+                .background_spawn(async move { controller::HerdrController.open_session(request) })
                 .await;
             match opened {
                 Ok(opened) => {
@@ -2043,9 +2003,7 @@ impl AgentPanel {
                             failed = true;
                             break;
                         }
-                        cx.background_executor()
-                            .timer(START_POLL_INTERVAL)
-                            .await;
+                        cx.background_executor().timer(START_POLL_INTERVAL).await;
                         let snapshot = cx.background_spawn(async { client::fetch() }).await;
                         let Ok(snapshot) = snapshot else {
                             // No endpoint: the refresh loop is already tearing
@@ -2148,12 +2106,7 @@ impl AgentPanel {
         cx.notify();
     }
 
-    fn archive_history_session(
-        &mut self,
-        key: SessionKey,
-        archived: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn archive_history_session(&mut self, key: SessionKey, archived: bool, cx: &mut Context<Self>) {
         if let Err(err) = self.session_service.archive(&key, archived) {
             log::error!("agent panel: cannot archive session: {err}");
             self.show_history_toast(
@@ -2173,7 +2126,12 @@ impl AgentPanel {
         cx.notify();
     }
 
-    fn begin_history_rename(&mut self, key: SessionKey, window: &mut Window, cx: &mut Context<Self>) {
+    fn begin_history_rename(
+        &mut self,
+        key: SessionKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(view) = self.history.as_ref() else {
             return;
         };
@@ -2211,12 +2169,7 @@ impl AgentPanel {
         cx.notify();
     }
 
-    fn finish_history_rename(
-        &mut self,
-        save: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn finish_history_rename(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editor) = self.history_rename_editor.take() else {
             return;
         };
@@ -2227,10 +2180,7 @@ impl AgentPanel {
         if save {
             let title = editor.read(cx).text(cx).trim().to_string();
             if !title.is_empty() {
-                if let Err(err) = self
-                    .session_service
-                    .rename(&key, Some(title.clone()))
-                {
+                if let Err(err) = self.session_service.rename(&key, Some(title.clone())) {
                     log::error!("agent panel: cannot rename session: {err}");
                 } else {
                     self.rebuild_history();
@@ -2249,9 +2199,8 @@ impl AgentPanel {
             let Some(workspace) = self.workspace.upgrade() else {
                 return;
             };
-            let toast = StatusToast::new(text.to_owned(), cx, |this, _cx| {
-                this.dismiss_button(true)
-            });
+            let toast =
+                StatusToast::new(text.to_owned(), cx, |this, _cx| this.dismiss_button(true));
             workspace.update(cx, |workspace, cx| {
                 workspace.toggle_status_toast(toast, cx);
             });
@@ -2502,8 +2451,10 @@ impl AgentPanel {
         } else {
             history_group_ids(&view)
         };
-        let all_collapsed =
-            !ids.is_empty() && ids.iter().all(|id| !self.expanded_history_groups.contains(id));
+        let all_collapsed = !ids.is_empty()
+            && ids
+                .iter()
+                .all(|id| !self.expanded_history_groups.contains(id));
         for id in ids {
             if all_collapsed {
                 self.expanded_history_groups.insert(id);
@@ -2602,10 +2553,7 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = entry.key.clone();
-        let opening = self
-            .opening
-            .as_ref()
-            .is_some_and(|opening| *opening == key);
+        let opening = self.opening.as_ref().is_some_and(|opening| *opening == key);
         let renaming = self
             .history_renaming
             .as_ref()
@@ -2685,178 +2633,173 @@ impl AgentPanel {
             (SharedString::from(""), Color::Muted)
         };
 
-        let row_id = SharedString::from(format!(
-            "history-row-{}:{}",
-            key.agent, key.session_id
-        ));
+        let row_id = SharedString::from(format!("history-row-{}:{}", key.agent, key.session_id));
         let mut row = row_container(ElementId::Name(row_id.clone()), AGENT_INDENT, false, cx)
-        .group(row_id.clone())
-        .when(archived, |row| row.opacity(0.6))
-        .child(
-            h_flex()
-                .relative()
-                .w_full()
-                .gap_1p5()
-                .child(status_slot(marker, marker_color))
-                .child(history_agent_icon(&key.agent))
-                .child(title)
-                // The time sits at the right edge, lined up with the section's
-                // "click to open" hint above the list.
-                .child(
-                    h_flex().ml_auto().flex_none().child(
-                        Label::new(time_label)
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    ),
-                )
-                // The actions float over the row's right edge and cover the end
-                // of the title while the pointer is on the row.
-                .child(
-                    h_flex()
-                        .absolute()
-                        .right_0()
-                        .top_0()
-                        .bottom_0()
-                        .items_center()
-                        .gap(ROW_ACTION_GAP)
-                        .px(ROW_ACTION_SIDE_PADDING)
-                        .bg(cx.theme().colors().ghost_element_hover)
-                        .visible_on_hover(row_id.clone())
-                        .when(!archived, |this| {
-                            this.child({
-                                let pinned_label = if entry.pinned {
-                                    localization::localized_str!("Unpin")
-                                } else {
-                                    localization::localized_str!("Pin")
-                                };
-                                IconButton::new(
-                                    ElementId::Name(SharedString::from(format!(
-                                        "history-pin-{}:{}",
-                                        key.agent, key.session_id
-                                    ))),
-                                    if entry.pinned {
-                                        IconName::Unpin
+            .group(row_id.clone())
+            .when(archived, |row| row.opacity(0.6))
+            .child(
+                h_flex()
+                    .relative()
+                    .w_full()
+                    .gap_1p5()
+                    .child(status_slot(marker, marker_color))
+                    .child(history_agent_icon(&key.agent))
+                    .child(title)
+                    // The time sits at the right edge, lined up with the section's
+                    // "click to open" hint above the list.
+                    .child(
+                        h_flex().ml_auto().flex_none().child(
+                            Label::new(time_label)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        ),
+                    )
+                    // The actions float over the row's right edge and cover the end
+                    // of the title while the pointer is on the row.
+                    .child(
+                        h_flex()
+                            .absolute()
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .items_center()
+                            .gap(ROW_ACTION_GAP)
+                            .px(ROW_ACTION_SIDE_PADDING)
+                            .bg(cx.theme().colors().ghost_element_hover)
+                            .visible_on_hover(row_id.clone())
+                            .when(!archived, |this| {
+                                this.child({
+                                    let pinned_label = if entry.pinned {
+                                        localization::localized_str!("Unpin")
                                     } else {
-                                        IconName::Pin
-                                    },
-                                )
-                                .icon_size(IconSize::Small)
-                                .icon_color(if entry.pinned {
-                                    Color::Accent
-                                } else {
-                                    Color::Muted
+                                        localization::localized_str!("Pin")
+                                    };
+                                    IconButton::new(
+                                        ElementId::Name(SharedString::from(format!(
+                                            "history-pin-{}:{}",
+                                            key.agent, key.session_id
+                                        ))),
+                                        if entry.pinned {
+                                            IconName::Unpin
+                                        } else {
+                                            IconName::Pin
+                                        },
+                                    )
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(if entry.pinned {
+                                        Color::Accent
+                                    } else {
+                                        Color::Muted
+                                    })
+                                    .tooltip(move |_, cx| Tooltip::simple(pinned_label, cx))
+                                    .on_click({
+                                        let panel = panel.clone();
+                                        let pinned = entry.pinned;
+                                        move |_, _, cx| {
+                                            let _ = panel.update(cx, |panel, cx| {
+                                                panel.toggle_history_pin(
+                                                    pin_key.clone(),
+                                                    !pinned,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    })
                                 })
-                                .tooltip(move |_, cx| {
-                                    Tooltip::simple(pinned_label, cx)
-                                })
-                                .on_click({
-                                    let panel = panel.clone();
-                                    let pinned = entry.pinned;
-                                    move |_, _, cx| {
-                                        let _ = panel.update(cx, |panel, cx| {
-                                            panel.toggle_history_pin(
-                                                pin_key.clone(),
-                                                !pinned,
-                                                cx,
-                                            );
-                                        });
-                                    }
+                                .child({
+                                    IconButton::new(
+                                        ElementId::Name(SharedString::from(format!(
+                                            "history-rename-{}:{}",
+                                            key.agent, key.session_id
+                                        ))),
+                                        IconName::Pencil,
+                                    )
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(move |_, cx| {
+                                        Tooltip::simple(localization::localized_str!("Rename"), cx)
+                                    })
+                                    .on_click({
+                                        let panel = panel.clone();
+                                        let windowless_key = rename_key.clone();
+                                        move |_, window, cx| {
+                                            let _ = panel.update(cx, |panel, cx| {
+                                                panel.begin_history_rename(
+                                                    windowless_key.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    })
                                 })
                             })
                             .child({
-                                IconButton::new(
-                                    ElementId::Name(SharedString::from(format!(
-                                        "history-rename-{}:{}",
-                                        key.agent, key.session_id
-                                    ))),
-                                    IconName::Pencil,
-                                )
-                                .icon_size(IconSize::Small)
-                                .icon_color(Color::Muted)
-                                .tooltip(move |_, cx| {
-                                    Tooltip::simple(localization::localized_str!("Rename"), cx)
-                                })
-                                .on_click({
-                                    let panel = panel.clone();
-                                    let windowless_key = rename_key.clone();
-                                    move |_, window, cx| {
-                                        let _ = panel.update(cx, |panel, cx| {
-                                            panel.begin_history_rename(
-                                                windowless_key.clone(),
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                    }
-                                })
-                            })
-                        })
-                        .child({
-                            let archive_label = if archived {
-                                localization::localized_str!("Unarchive")
-                            } else {
-                                localization::localized_str!("Archive")
-                            };
-                            IconButton::new(
-                                ElementId::Name(SharedString::from(format!(
-                                    "history-archive-{}:{}",
-                                    key.agent, key.session_id
-                                ))),
-                                if archived {
-                                    IconName::RotateCcw
+                                let archive_label = if archived {
+                                    localization::localized_str!("Unarchive")
                                 } else {
-                                    IconName::Archive
-                                },
-                            )
-                            .icon_size(IconSize::Small)
-                            .icon_color(Color::Muted)
-                            .tooltip(move |_, cx| Tooltip::simple(archive_label, cx))
-                            .on_click({
-                                let panel = panel.clone();
-                                let was_archived = archived;
-                                move |_, _, cx| {
-                                    let _ = panel.update(cx, |panel, cx| {
-                                        panel.archive_history_session(
-                                            archive_key.clone(),
-                                            !was_archived,
-                                            cx,
-                                        );
-                                    });
-                                }
-                            })
-                        })
-                        .when(entry.deletable, |row| {
-                            row.child({
+                                    localization::localized_str!("Archive")
+                                };
                                 IconButton::new(
                                     ElementId::Name(SharedString::from(format!(
-                                        "history-delete-{}:{}",
+                                        "history-archive-{}:{}",
                                         key.agent, key.session_id
                                     ))),
-                                    IconName::Trash,
+                                    if archived {
+                                        IconName::RotateCcw
+                                    } else {
+                                        IconName::Archive
+                                    },
                                 )
                                 .icon_size(IconSize::Small)
                                 .icon_color(Color::Muted)
-                                .tooltip(move |_, cx| {
-                                    Tooltip::simple(localization::localized_str!("Delete"), cx)
-                                })
+                                .tooltip(move |_, cx| Tooltip::simple(archive_label, cx))
                                 .on_click({
                                     let panel = panel.clone();
-                                    let delete_key = delete_key.clone();
-                                    let delete_path = delete_path.clone();
+                                    let was_archived = archived;
                                     move |_, _, cx| {
                                         let _ = panel.update(cx, |panel, cx| {
-                                            panel.delete_history_session(
-                                                delete_key.clone(),
-                                                delete_path.clone(),
+                                            panel.archive_history_session(
+                                                archive_key.clone(),
+                                                !was_archived,
                                                 cx,
                                             );
                                         });
                                     }
                                 })
                             })
-                        })
-                ),
-        );
+                            .when(entry.deletable, |row| {
+                                row.child({
+                                    IconButton::new(
+                                        ElementId::Name(SharedString::from(format!(
+                                            "history-delete-{}:{}",
+                                            key.agent, key.session_id
+                                        ))),
+                                        IconName::Trash,
+                                    )
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(move |_, cx| {
+                                        Tooltip::simple(localization::localized_str!("Delete"), cx)
+                                    })
+                                    .on_click({
+                                        let panel = panel.clone();
+                                        let delete_key = delete_key.clone();
+                                        let delete_path = delete_path.clone();
+                                        move |_, _, cx| {
+                                            let _ = panel.update(cx, |panel, cx| {
+                                                panel.delete_history_session(
+                                                    delete_key.clone(),
+                                                    delete_path.clone(),
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    })
+                                })
+                            }),
+                    ),
+            );
 
         if !renaming {
             let open_key = click_key.clone();
@@ -2872,9 +2815,9 @@ impl AgentPanel {
     /// Closes one space and its terminal.
     fn close_space(&self, workspace_id: String, cx: &mut Context<Self>) {
         cx.spawn(async move |_this, cx| {
-            if let Err(err) =
-                cx.background_spawn(async move { client::close_space(&workspace_id) })
-                    .await
+            if let Err(err) = cx
+                .background_spawn(async move { client::close_space(&workspace_id) })
+                .await
             {
                 log_client_error("close space", err);
             }
@@ -2887,9 +2830,9 @@ impl AgentPanel {
     /// of the space is left alone.
     fn close_agent(&self, pane_id: String, cx: &mut Context<Self>) {
         cx.spawn(async move |_this, cx| {
-            if let Err(err) =
-                cx.background_spawn(async move { client::close_agent_pane(&pane_id) })
-                    .await
+            if let Err(err) = cx
+                .background_spawn(async move { client::close_agent_pane(&pane_id) })
+                .await
             {
                 log_client_error("close agent", err);
             }
@@ -3210,10 +3153,8 @@ fn agent_rename_failure_message(error: &ClientError) -> String {
         return localization::localized_str!("Failed to rename agent").to_owned();
     };
     if message.contains("invalid_agent_name") {
-        localization::localized_str!(
-            "A name can only contain letters, digits, spaces, '-' and '_'"
-        )
-        .to_owned()
+        localization::localized_str!("A name can only contain letters, digits, spaces, '-' and '_'")
+            .to_owned()
     } else if message.contains("agent_launch_pending") {
         localization::localized_str!("The agent is still starting; try again in a moment")
             .to_owned()
@@ -3248,14 +3189,11 @@ fn status_marker(status: AgentStatus) -> (SharedString, Color) {
 /// in the status bar, because a space is this panel's unit, not an agent. An
 /// agent's working state belongs on the agent row.
 fn space_icon_slot() -> impl IntoElement {
-    h_flex()
-        .min_w(STATUS_SLOT_SIZE)
-        .justify_center()
-        .child(
-            Icon::new(IconName::Sparkle)
-                .size(IconSize::Small)
-                .color(Color::Muted),
-        )
+    h_flex().min_w(STATUS_SLOT_SIZE).justify_center().child(
+        Icon::new(IconName::Sparkle)
+            .size(IconSize::Small)
+            .color(Color::Muted),
+    )
 }
 
 /// The icon a terminal row shows where an agent row shows its agent icon: the
@@ -3295,12 +3233,10 @@ impl Render for AgentPanel {
             // active by the time the panel first renders, so sampling once
             // before subscribing is what makes the first frames truthful.
             self.window_active = window.is_window_active();
-            self.window_activation = Some(cx.observe_window_activation(
-                window,
-                |this, window, _cx| {
+            self.window_activation =
+                Some(cx.observe_window_activation(window, |this, window, _cx| {
                     this.window_active = window.is_window_active();
-                },
-            ));
+                }));
         }
         self.schedule_agent_terminal_sync(window, cx);
         let history = self.render_history(cx);
@@ -3336,9 +3272,7 @@ impl Render for AgentPanel {
                 for entry in &space.entries {
                     block = block.child(match entry {
                         SpaceEntry::Agent(agent) => self.render_agent_row(agent, cx),
-                        SpaceEntry::Terminal(terminal) => {
-                            self.render_terminal_row(terminal, cx)
-                        }
+                        SpaceEntry::Terminal(terminal) => self.render_terminal_row(terminal, cx),
                     });
                 }
                 rows.push(block.into_any_element());
@@ -3386,7 +3320,11 @@ fn history_group_ids(view: &HistoryView) -> Vec<String> {
     if !view.pinned.is_empty() {
         ids.push("pinned".to_owned());
     }
-    ids.extend(view.groups.iter().map(|(key, _, _)| format!("folder:{key}")));
+    ids.extend(
+        view.groups
+            .iter()
+            .map(|(key, _, _)| format!("folder:{key}")),
+    );
     ids
 }
 

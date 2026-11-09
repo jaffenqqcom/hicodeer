@@ -85,6 +85,7 @@ members = [
     "crates/http_client_tls",
     "crates/http_proxy",
     "crates/icons",
+    "crates/im_channel",
     "crates/image_viewer",
     "crates/input_latency_ui",
     "crates/inspector_ui",

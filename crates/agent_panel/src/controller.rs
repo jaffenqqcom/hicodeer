@@ -179,10 +179,7 @@ impl AgentController for HerdrController {
     }
 
     fn create_workspace(&self, root: &Path, label: Option<&str>) -> Result<WorkspaceRef> {
-        let (id, label) = client::create_space_with_label(
-            root.to_str(),
-            label,
-        )?;
+        let (id, label) = client::create_space_with_label(root.to_str(), label)?;
         Ok(WorkspaceRef { id, label })
     }
 
@@ -212,10 +209,13 @@ impl AgentController for HerdrController {
                     workspace_id: space.id.clone(),
                     kind: agent.kind.clone(),
                     status: agent.status,
-                    session: agent.agent_session.as_ref().map(|(agent, value)| SessionRef {
-                        agent: agent.clone(),
-                        id: value.clone(),
-                    }),
+                    session: agent
+                        .agent_session
+                        .as_ref()
+                        .map(|(agent, value)| SessionRef {
+                            agent: agent.clone(),
+                            id: value.clone(),
+                        }),
                     focused: agent.focused,
                 })
             })

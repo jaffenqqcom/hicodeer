@@ -57,7 +57,9 @@ impl std::fmt::Display for ClientError {
 pub(crate) fn fetch() -> Result<Snapshot, ClientError> {
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
     let workspaces = call(&control, "workspace.list", json!({}))?;
-    let agents = call(&control, "agent.list", json!({}))?;
+    // A status poll does not ask for the reply: the daemon would parse every
+    // agent's transcript on every refresh. It is fetched when a message is sent.
+    let agents = call(&control, "agent.list", json!({ "include_reply": false }))?;
     // Tabs are an OHOS-only view: desktop herdr still draws its own tab strip,
     // so duplicating it as `Terminal-*` rows would be wrong. On OHOS a failed
     // `tab.list` must not fail the whole snapshot either, so it degrades to no
@@ -73,6 +75,34 @@ pub(crate) fn fetch() -> Result<Snapshot, ClientError> {
     #[cfg(not(target_env = "ohos"))]
     let tabs = json!({ "tabs": [] });
     Snapshot::from_api(&workspaces, &agents, &tabs)
+}
+
+/// One reply as the daemon reports it.
+pub(crate) struct AgentReply {
+    pub text: Option<String>,
+    /// Which wait the text belongs to; zero when the pane is not waiting.
+    /// A new value means a different question.
+    pub blocked_seq: u64,
+}
+
+/// Asks the daemon for an agent's last assistant text.
+///
+/// Read on demand, when a message is about to be sent. The daemon parses the
+/// agent's transcript on every call, so the answer is whatever the agent has
+/// written by then, including the text before a question it is waiting on.
+pub(crate) fn fetch_reply(pane_id: &str) -> Result<AgentReply, ClientError> {
+    let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
+    let result = call(&control, "agent.reply", json!({ "target": pane_id }))?;
+    Ok(AgentReply {
+        text: result
+            .get("reply")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        blocked_seq: result
+            .get("blocked_seq")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    })
 }
 
 /// Focuses one space, which switches the TUI to it.
@@ -92,6 +122,20 @@ pub(crate) fn focus_space(workspace_id: &str) -> Result<(), ClientError> {
 pub(crate) fn focus_agent(pane_id: &str) -> Result<(), ClientError> {
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
     call(&control, "agent.focus", json!({ "target": pane_id }))?;
+    Ok(())
+}
+
+/// Sends a prompt to an agent, addressed by its public pane id.
+///
+/// The server rejects this while the agent is blocked, because a blocked agent
+/// needs an interactive answer rather than a new turn.
+pub(crate) fn prompt_agent(pane_id: &str, text: &str) -> Result<(), ClientError> {
+    let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
+    call(
+        &control,
+        "agent.prompt",
+        json!({ "target": pane_id, "text": text }),
+    )?;
     Ok(())
 }
 
@@ -228,12 +272,7 @@ fn parse_workspace_created(result: &Value) -> Result<(String, String), ClientErr
 /// Reads the daemon-scanned history sessions (every store the daemon covers).
 pub(crate) fn fetch_sessions() -> Result<Vec<crate::controller::RawSession>, ClientError> {
     let control = cmd_client::agent_control().ok_or(ClientError::NotReady)?;
-    let result = call_with_timeout(
-        &control,
-        "agent.sessions",
-        json!({}),
-        SESSIONS_READ_TIMEOUT,
-    )?;
+    let result = call_with_timeout(&control, "agent.sessions", json!({}), SESSIONS_READ_TIMEOUT)?;
     let entries = result
         .get("sessions")
         .and_then(Value::as_array)
@@ -424,7 +463,6 @@ pub(crate) fn delete_session(agent: &str, source_path: &str) -> Result<(), Clien
     Ok(())
 }
 
-
 /// Asks the server to re-read its configuration. The server answers by asking
 /// every connected client to reload its own settings, which is the same path
 /// the client's own settings page takes.
@@ -507,13 +545,17 @@ fn parse_integrations(result: &Value) -> Result<Vec<Integration>, ClientError> {
             .get("available")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let state = match entry.get("state").and_then(Value::as_str).unwrap_or_default() {
+        let state = match entry
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+        {
             "current" => IntegrationState::Current,
             "outdated" => IntegrationState::Outdated,
             _ => IntegrationState::NotInstalled,
         };
-        let needs_install =
-            state == IntegrationState::Outdated || (available && state == IntegrationState::NotInstalled);
+        let needs_install = state == IntegrationState::Outdated
+            || (available && state == IntegrationState::NotInstalled);
         integrations.push(Integration {
             target: target.to_string(),
             label: label.to_string(),
@@ -531,7 +573,8 @@ pub(crate) fn pane_context_menu(
     row: u16,
     col: u16,
 ) -> Result<(String, Vec<PaneContextMenuEntry>), String> {
-    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    let control =
+        cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
     let result = call(
         &control,
         "pane.context_menu",
@@ -570,7 +613,8 @@ pub(crate) fn invoke_pane_context_menu(
     pane_id: &str,
     action_id: &str,
 ) -> Result<PaneContextMenuOutcome, String> {
-    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    let control =
+        cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
     let result = call(
         &control,
         "pane.context_menu.invoke",
@@ -590,7 +634,8 @@ pub(crate) fn invoke_pane_context_menu(
 
 /// Renames one pane after the host's inline rename input is confirmed.
 pub(crate) fn rename_pane(pane_id: &str, label: &str) -> Result<(), String> {
-    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    let control =
+        cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
     call(
         &control,
         "pane.rename",
@@ -605,7 +650,8 @@ pub(crate) fn rename_pane(pane_id: &str, label: &str) -> Result<(), String> {
 /// scroll field for a pane whose runtime has not reported metrics yet. The
 /// pane id comes back too, so dragging the thumb can write the offset back.
 pub(crate) fn focused_pane_scroll() -> Result<PaneScrollMetrics, String> {
-    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    let control =
+        cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
     let result = call(&control, "pane.list", json!({})).map_err(|err| err.to_string())?;
     let panes = result
         .get("panes")
@@ -655,7 +701,8 @@ pub(crate) fn focused_pane_scroll() -> Result<PaneScrollMetrics, String> {
 
 /// Writes a new scroll position after the host's scrollbar thumb is dragged.
 pub(crate) fn set_pane_scroll(pane_id: &str, offset: u64) -> Result<(), String> {
-    let control = cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
+    let control =
+        cmd_client::agent_control().ok_or_else(|| "agent endpoint not ready".to_string())?;
     call(
         &control,
         "pane.scroll",

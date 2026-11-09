@@ -1,0 +1,37 @@
+[package]
+name = "im_channel"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+name = "im_channel"
+path = "src/lib.rs"
+
+# The IM channel is self-contained: it never depends on the panel. The host
+# installs an agent link at start-up, so this crate only knows the neutral
+# snapshot and command shapes it defines itself.
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+localization.workspace = true
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+async-tungstenite = { workspace = true, features = ["tokio", "tokio-rustls-manual-roots"] }
+base64.workspace = true
+flate2 = "1.1.8"
+http_client.workspace = true
+http_client_tls.workspace = true
+paths.workspace = true
+prost.workspace = true
+qrcode = "0.14"
+reqwest_client.workspace = true
+ring = "0.17"
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }

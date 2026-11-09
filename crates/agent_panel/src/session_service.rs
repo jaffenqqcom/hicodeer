@@ -81,7 +81,11 @@ impl HistoryView {
     pub(crate) fn find(&self, key: &SessionKey) -> Option<&SessionEntry> {
         self.pinned
             .iter()
-            .chain(self.groups.iter().flat_map(|(_, _, sessions)| sessions.iter()))
+            .chain(
+                self.groups
+                    .iter()
+                    .flat_map(|(_, _, sessions)| sessions.iter()),
+            )
             .chain(
                 self.archived
                     .iter()
@@ -111,8 +115,11 @@ impl SessionService {
         self.save()
     }
 
-    pub(crate) fn archive(&mut self, key: &SessionKey, archived: bool)
-    -> Result<(), ControllerError> {
+    pub(crate) fn archive(
+        &mut self,
+        key: &SessionKey,
+        archived: bool,
+    ) -> Result<(), ControllerError> {
         self.entry_mut(key).archived = archived;
         self.save()
     }
@@ -235,10 +242,7 @@ impl SessionService {
     }
 
     fn entry_mut(&mut self, key: &SessionKey) -> &mut SessionStateEntry {
-        self.state
-            .sessions
-            .entry(key.to_json_key())
-            .or_default()
+        self.state.sessions.entry(key.to_json_key()).or_default()
     }
 
     fn save(&self) -> Result<(), ControllerError> {
@@ -375,7 +379,10 @@ mod tests {
         let path = std::env::temp_dir().join(format!("herdr-hist-{}.json", std::process::id()));
         let mut service = SessionService::load(path.clone());
         let view = service.history(
-            vec![raw("codebuddy", "a1", "first", 100), raw("codebuddy", "a2", "second", 200)],
+            vec![
+                raw("codebuddy", "a1", "first", 100),
+                raw("codebuddy", "a2", "second", 200),
+            ],
             &pairs(&[("codebuddy", "a1")]),
         );
         // a1 is open → hidden; a2 lands in the w1 group.
@@ -384,12 +391,11 @@ mod tests {
         assert_eq!(view.groups[0].2.len(), 1);
         assert_eq!(view.groups[0].2[0].title, "second");
 
-        service.pin(&SessionKey::new("codebuddy", "a2"), true).unwrap();
+        service
+            .pin(&SessionKey::new("codebuddy", "a2"), true)
+            .unwrap();
         let reopened = SessionService::load(path.clone());
-        let view = reopened.history(
-            vec![raw("codebuddy", "a2", "second", 200)],
-            &[],
-        );
+        let view = reopened.history(vec![raw("codebuddy", "a2", "second", 200)], &[]);
         assert_eq!(view.pinned.len(), 1, "pin state must survive a reload");
 
         let _ = std::fs::remove_file(path);
@@ -420,11 +426,12 @@ mod tests {
         let key = SessionKey::new("claude", "c1");
         service.rename(&key, Some("my name".to_owned())).unwrap();
         service.archive(&key, true).unwrap();
-        let view = service.history(
-            vec![raw("claude", "c1", "original", 100)],
-            &[],
+        let view = service.history(vec![raw("claude", "c1", "original", 100)], &[]);
+        assert_eq!(
+            view.groups.len(),
+            0,
+            "archived rows leave their folder group"
         );
-        assert_eq!(view.groups.len(), 0, "archived rows leave their folder group");
         assert_eq!(view.archived.len(), 1);
         assert_eq!(view.archived[0].2[0].title, "my name");
 

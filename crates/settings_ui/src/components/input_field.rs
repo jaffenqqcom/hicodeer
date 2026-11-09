@@ -301,7 +301,9 @@ impl RenderOnce for SettingsInputField {
                                     .icon_size(IconSize::Small)
                                     .icon_color(Color::Success)
                                     .aria_label(localization::localized_str!("Confirm"))
-                                    .tooltip(Tooltip::text(localization::localized_str!("Enter to Confirm")))
+                                    .tooltip(Tooltip::text(localization::localized_str!(
+                                        "Enter to Confirm"
+                                    )))
                                     .on_click(move |_, window, cx| {
                                         let Some(confirm) = confirm_for_button.as_ref() else {
                                             return;

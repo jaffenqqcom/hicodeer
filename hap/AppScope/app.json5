@@ -3,7 +3,7 @@
     "bundleName": "com.hicodeer.edit",
     "vendor": "example",
     "versionCode": 1000000,
-    "versionName": "1.25.2",
+    "versionName": "1.26.0",
     "icon": "$media:layered_image",
     "label": "$string:app_name"
   }

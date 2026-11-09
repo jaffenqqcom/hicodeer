@@ -206,15 +206,9 @@ pub fn config_path(control: &AgentControl) -> Option<PathBuf> {
 /// its own copy.
 fn current_config_path() -> Option<PathBuf> {
     if let Some(root) = std::env::var_os(SANDBOX_FILES_DIR_ENV) {
-        return Some(
-            PathBuf::from(root)
-                .join(AGENT_STATE_DIR)
-                .join(CONFIG_FILE),
-        );
+        return Some(PathBuf::from(root).join(AGENT_STATE_DIR).join(CONFIG_FILE));
     }
-    cmd_client::agent_control()
-        .as_ref()
-        .and_then(config_path)
+    cmd_client::agent_control().as_ref().and_then(config_path)
 }
 
 /// Reads the terminal settings, falling back to the client's defaults for
@@ -362,8 +356,8 @@ fn write_atomically(path: &Path, content: &str) -> std::io::Result<()> {
 }
 
 fn update(section: &str, key: &str, value: &str) -> Result<(), String> {
-    let path = current_config_path()
-        .ok_or_else(|| "cannot locate the agent settings file".to_string())?;
+    let path =
+        current_config_path().ok_or_else(|| "cannot locate the agent settings file".to_string())?;
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
         // A missing file is the normal first-save case; anything else would be
@@ -597,7 +591,8 @@ mod tests {
 
     #[test]
     fn parse_reads_both_settings_and_defaults_the_rest() {
-        let settings = parse_settings("[ui.sound]\nenabled = false\n\n[ui.toast]\ndelivery = \"terminal\"\n");
+        let settings =
+            parse_settings("[ui.sound]\nenabled = false\n\n[ui.toast]\ndelivery = \"terminal\"\n");
         assert!(!settings.sound_enabled);
         assert_eq!(settings.toast, ToastDelivery::Terminal);
 

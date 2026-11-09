@@ -1,3 +1,5 @@
+#[cfg(target_env = "ohos")]
+mod agent_container_settings;
 mod components;
 mod page_data;
 pub mod pages;
@@ -41,8 +43,8 @@ use ui::{
 
 use util::{ResultExt as _, paths::PathStyle, rel_path::RelPath};
 use workspace::{
-    AppState, Item as SettingsItem, MultiWorkspace, OpenOptions, OpenVisible, SaveIntent, Workspace,
-    client_side_decorations,
+    AppState, Item as SettingsItem, MultiWorkspace, OpenOptions, OpenVisible, SaveIntent,
+    Workspace, client_side_decorations,
 };
 use zed_actions::{
     OpenProjectSettings, OpenSettings, OpenSettingsAt, OpenSettingsAtTarget, OpenSettingsPage,
@@ -50,12 +52,9 @@ use zed_actions::{
 
 use crate::components::{
     EnumVariantDropdown, NumberField, NumberFieldMode, NumberFieldType, SettingsInputField,
-    SettingsSectionHeader, font_picker, icon_theme_picker,
-    text_field_a11y_state, theme_picker,
+    SettingsSectionHeader, font_picker, icon_theme_picker, text_field_a11y_state, theme_picker,
 };
-use crate::pages::{
-    render_input_audio_device_dropdown, render_output_audio_device_dropdown,
-};
+use crate::pages::{render_input_audio_device_dropdown, render_output_audio_device_dropdown};
 
 const NAVBAR_CONTAINER_TAB_INDEX: isize = 0;
 const NAVBAR_GROUP_TAB_INDEX: isize = 1;
@@ -800,7 +799,6 @@ fn open_settings_editor_at_target(
     });
 }
 
-
 fn open_settings_editor_with(
     workspace_handle: Option<WindowHandle<MultiWorkspace>>,
     cx: &mut App,
@@ -1229,14 +1227,12 @@ impl SettingsPageItem {
                                 localization::localized_str!("Configure"),
                             )
                             .aria_label({
-        let __zed_i18n_arg_0 = format!("{}", sub_page_link.title);
-        localization::format_message(
-            "Configure {}",
-            &[
-                ("0", __zed_i18n_arg_0)
-            ],
-        )
-    })
+                                let __zed_i18n_arg_0 = format!("{}", sub_page_link.title);
+                                localization::format_message(
+                                    "Configure {}",
+                                    &[("0", __zed_i18n_arg_0)],
+                                )
+                            })
                             .tab_index(0_isize)
                             .end_icon(
                                 Icon::new(IconName::ChevronRight)
@@ -1439,7 +1435,9 @@ fn render_settings_item_layout(
                                     .icon_color(Color::Muted)
                                     .icon_size(IconSize::Small)
                                     .aria_label(localization::localized_str!("Reset to Default"))
-                                    .tooltip(Tooltip::text(localization::localized_str!("Reset to Default")))
+                                    .tooltip(Tooltip::text(localization::localized_str!(
+                                        "Reset to Default"
+                                    )))
                                     .on_click(move |_, window, cx| {
                                         reset_to_default(window, cx);
                                     }),
@@ -1448,16 +1446,14 @@ fn render_settings_item_layout(
                         .when_some(modified_in, |this, modified_in| {
                             this.child(
                                 Label::new({
-        let __zed_i18n_arg_0 = format!("{}", modified_in);
-        localization::format_message(
-            "\u{2014}  Modified in {modified_in}",
-            &[
-                ("modified_in", __zed_i18n_arg_0)
-            ],
-        )
-    })
-                                    .color(Color::Muted)
-                                    .size(LabelSize::Small),
+                                    let __zed_i18n_arg_0 = format!("{}", modified_in);
+                                    localization::format_message(
+                                        "\u{2014}  Modified in {modified_in}",
+                                        &[("modified_in", __zed_i18n_arg_0)],
+                                    )
+                                })
+                                .color(Color::Muted)
+                                .size(LabelSize::Small),
                             )
                         }),
                 )
@@ -1521,7 +1517,9 @@ fn render_settings_item(
                         Tooltip::with_meta(
                             localization::localized_str!("Overridden by Organization"),
                             None,
-                            localization::localized_str!("Contact your organization admins to adjust this setting."),
+                            localization::localized_str!(
+                                "Contact your organization admins to adjust this setting."
+                            ),
                             cx,
                         )
                     }),
@@ -1710,9 +1708,8 @@ struct ActionLink {
     // `&mut App` does not carry it. `Context<SettingsWindow>` is spelled out
     // because `Self` inside this definition would mean `ActionLink`. To
     // restore the upstream signature, delete this block.
-    on_click: Arc<
-        dyn Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + Send + Sync,
-    >,
+    on_click:
+        Arc<dyn Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + Send + Sync>,
     // [OHOS PORT END]
     files: FileMask,
 }
@@ -1809,7 +1806,11 @@ impl SettingsWindow {
         let current_file = SettingsUiFile::User;
         let search_bar = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
-            editor.set_placeholder_text(localization::localized_str!("Search settings…"), window, cx);
+            editor.set_placeholder_text(
+                localization::localized_str!("Search settings…"),
+                window,
+                cx,
+            );
             editor
         });
         cx.subscribe(&search_bar, |this, _, event: &EditorEvent, cx| {
@@ -2947,7 +2948,9 @@ impl SettingsWindow {
                                         }),
                                     )
                                     .style(DropdownStyle::Subtle)
-                                    .trigger_tooltip(Tooltip::text(localization::localized_str!("View Other Projects")))
+                                    .trigger_tooltip(Tooltip::text(localization::localized_str!(
+                                        "View Other Projects"
+                                    )))
                                     .trigger_icon(IconName::ChevronDown)
                                     .attach(gpui::Anchor::BottomLeft)
                                     .offset(gpui::Point {
@@ -2960,17 +2963,20 @@ impl SettingsWindow {
                     }),
             )
             .child(
-                Button::new(edit_in_json_id, localization::localized_str!("Edit in settings.json"))
-                    .tab_index(0_isize)
-                    .style(ButtonStyle::OutlinedGhost)
-                    .tooltip(Tooltip::for_action_title_in(
-                        localization::localized_str!("Edit in settings.json"),
-                        &OpenCurrentFile,
-                        &self.focus_handle,
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_current_settings_file(window, cx);
-                    })),
+                Button::new(
+                    edit_in_json_id,
+                    localization::localized_str!("Edit in settings.json"),
+                )
+                .tab_index(0_isize)
+                .style(ButtonStyle::OutlinedGhost)
+                .tooltip(Tooltip::for_action_title_in(
+                    localization::localized_str!("Edit in settings.json"),
+                    &OpenCurrentFile,
+                    &self.focus_handle,
+                ))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_current_settings_file(window, cx);
+                })),
             )
     }
 
@@ -3583,16 +3589,14 @@ impl SettingsWindow {
             .child(Label::new(localization::localized_str!("No Results")))
             .child(
                 Label::new({
-        let __zed_i18n_arg_0 = format!("{}", search_query);
-        localization::format_message(
-            "No settings match \"{}\"",
-            &[
-                ("0", __zed_i18n_arg_0)
-            ],
-        )
-    })
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+                    let __zed_i18n_arg_0 = format!("{}", search_query);
+                    localization::format_message(
+                        "No settings match \"{}\"",
+                        &[("0", __zed_i18n_arg_0)],
+                    )
+                })
+                .size(LabelSize::Small)
+                .color(Color::Muted),
             )
     }
 
@@ -3803,17 +3807,22 @@ impl SettingsWindow {
                         .flex_shrink_0()
                         .when(current_sub_page.link.in_json, |this| {
                             this.child(
-                                Button::new("open-in-settings-file", localization::localized_str!("Edit in settings.json"))
-                                    .tab_index(0_isize)
-                                    .style(ButtonStyle::OutlinedGhost)
-                                    .tooltip(Tooltip::for_action_title_in(
-                                        localization::localized_str!("Edit in settings.json"),
-                                        &OpenCurrentFile,
-                                        &self.focus_handle,
-                                    ))
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                Button::new(
+                                    "open-in-settings-file",
+                                    localization::localized_str!("Edit in settings.json"),
+                                )
+                                .tab_index(0_isize)
+                                .style(ButtonStyle::OutlinedGhost)
+                                .tooltip(Tooltip::for_action_title_in(
+                                    localization::localized_str!("Edit in settings.json"),
+                                    &OpenCurrentFile,
+                                    &self.focus_handle,
+                                ))
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
                                         this.open_current_settings_file(window, cx);
-                                    })),
+                                    },
+                                )),
                             )
                         }),
                 )
@@ -3856,12 +3865,17 @@ impl SettingsWindow {
                     )
                     .action_slot(
                         div().pr_1().pb_1().child(
-                            Button::new("fix-in-json", localization::localized_str!("Fix in settings.json"))
-                                .tab_index(0_isize)
-                                .style(ButtonStyle::Tinted(ui::TintColor::Warning))
-                                .on_click(cx.listener(|this, _, window, cx| {
+                            Button::new(
+                                "fix-in-json",
+                                localization::localized_str!("Fix in settings.json"),
+                            )
+                            .tab_index(0_isize)
+                            .style(ButtonStyle::Tinted(ui::TintColor::Warning))
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
                                     this.open_current_settings_file(window, cx);
-                                })),
+                                },
+                            )),
                         ),
                     )
             }
@@ -4092,9 +4106,13 @@ impl SettingsWindow {
             );
             return;
         };
-        open_in_workspace_keeping_settings_tab(original_window, cx, move |workspace, window, cx| {
-            open_readonly_document(workspace, text, title, language, window, cx);
-        });
+        open_in_workspace_keeping_settings_tab(
+            original_window,
+            cx,
+            move |workspace, window, cx| {
+                open_readonly_document(workspace, text, title, language, window, cx);
+            },
+        );
     }
     // ===== [OHOS PORT END] =====
 
@@ -4331,10 +4349,8 @@ impl SettingsWindow {
         self.push_sub_page(sub_page_link, section_header.into(), window, cx);
     }
 
-
     /// If the creator is already the active sub-page, the open mode is applied
     /// to the existing form instead
-
 
     /// Navigate to a sub-page by its json_path.
     /// Returns true if the sub-page was found and pushed, false otherwise.
@@ -4412,7 +4428,6 @@ impl SettingsWindow {
         self.content_focus_handle.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
-
 
     fn focus_file_at_index(&mut self, index: usize, window: &mut Window, cx: &mut App) {
         if let Some((_, handle)) = self.files.get(index) {
@@ -6551,12 +6566,15 @@ pub(crate) fn open_in_workspace_then_close_settings_tab<T, F>(
 {
     cx.defer(move |cx| {
         if let Err(err) = original_window.update(cx, |multi_workspace, window, cx| {
-            multi_workspace.workspace().clone().update(cx, |workspace, cx| {
-                workspace
-                    .with_local_or_wsl_workspace(window, cx, open)
-                    .detach_and_log_err(cx);
-                close_settings_tab_in_workspace(workspace, settings_item_id, window, cx);
-            });
+            multi_workspace
+                .workspace()
+                .clone()
+                .update(cx, |workspace, cx| {
+                    workspace
+                        .with_local_or_wsl_workspace(window, cx, open)
+                        .detach_and_log_err(cx);
+                    close_settings_tab_in_workspace(workspace, settings_item_id, window, cx);
+                });
         }) {
             log::error!("[ohos] failed to update the workspace: {err:?}");
         }
@@ -6635,8 +6653,9 @@ pub(crate) fn open_readonly_document(
         workspace
             .update_in(cx, move |workspace, window, cx| {
                 let project = workspace.project().clone();
-                let buffer = project
-                    .update(cx, move |project, cx| project.create_buffer(language, false, cx));
+                let buffer = project.update(cx, move |project, cx| {
+                    project.create_buffer(language, false, cx)
+                });
                 cx.spawn_in(window, async move |workspace, cx| {
                     let buffer = buffer.await?;
                     buffer.update(cx, |buffer, cx| {
@@ -6707,495 +6726,116 @@ fn close_settings_tab_in_workspace(
 }
 // ===== [OHOS PORT END] =====
 
-// ===== [OHOS PORT BEGIN] Agent terminal settings page =====
-// The agent terminal keeps its own settings file, and its own settings screen
-// is hard to reach in this build because the menu that opens it lives on a
-// sidebar this build hides. This page edits the settings that still matter and
-// writes the same file the terminal reads. Its titles, descriptions and choice
-// labels are the terminal's own wording, so both screens describe a setting the
-// same way.
+// ===== [OHOS PORT BEGIN] Agent panel layout settings =====
+// The agent panel configures like every other panel: one row for the dock and
+// one for the width. The panel's own switches live on the Agent Container page,
+// because they configure what runs inside the container rather than where the
+// panel sits.
 #[cfg(target_env = "ohos")]
 mod ohos_agent_settings {
-    use agent_panel::herdr_settings::{self, ToastDelivery};
-    use ui::{
-        Color, Divider, DividerColor, Icon, IconSize, Label, LabelSize, Switch, ToggleState,
-    };
-
     use super::*;
 
-    // Wording copied from the terminal client's settings screen, with the
-    // capitalisation the editor's other settings pages use. Each string goes
-    // through the localization channel, which falls back to the English source
-    // when the catalog has no entry for it.
-    fn sound_title() -> &'static str {
-        localization::localized_str!("Sound Alerts")
-    }
-    fn sound_description() -> &'static str {
-        localization::localized_str!("Play sounds when agents change state in background")
-    }
-    fn toast_title() -> &'static str {
-        localization::localized_str!("Notification Popups")
-    }
-    fn toast_description() -> &'static str {
-        localization::localized_str!("Show agent notifications outside the terminal")
-    }
-    fn prevent_idle_sleep_title() -> &'static str {
-        localization::localized_str!("Prevent Sleep")
-    }
-    fn prevent_idle_sleep_description() -> &'static str {
-        localization::localized_str!("While the app is in the foreground and an agent is running a task, the system stays awake")
-    }
-    fn auto_install_title() -> &'static str {
-        localization::localized_str!("Agent Status Notifications")
-    }
-    fn auto_install_description() -> &'static str {
-        localization::localized_str!("Automatically install task status notification scripts into agents")
-    }
-    fn show_history_title() -> &'static str {
-        localization::localized_str!("Show History")
-    }
-    fn show_history_description() -> &'static str {
-        localization::localized_str!("List past sessions from the agents below. Turning this off only hides them")
-    }
-    /// Height of one grid cell, matching the medium button height the base
-    /// keymap selector uses.
-    const AGENT_CELL_HEIGHT_PX: f32 = 28.;
-    /// One character of inset between a cell's border and its content.
-    const AGENT_CELL_INSET_PX: f32 = 8.;
-    /// Number of columns in an agent grid. Cells share the row width equally,
-    /// so the table's top and left borders end exactly where the cells end
-    /// instead of running past the last column.
-    const AGENT_COLUMNS: u16 = 4;
-    /// Mark shown for an installed integration.
-    const INSTALLED_MARK: &str = "✓";
-
-    /// The controls this module contributes: one section header plus a custom
-    /// block. They live in the Panels page as its last section rather than on a
-    /// page of their own, because they configure a panel. The block is custom
-    /// rather than settings rows because part of it (sound, notifications)
-    /// lives in the terminal's file, not in settings.json.
-    pub(crate) fn items() -> [SettingsPageItem; 2] {
+    pub(crate) fn items() -> [SettingsPageItem; 3] {
         [
             SettingsPageItem::SectionHeader(localization::localized_str!("Agent Panel")),
+            // The panel refuses any dock other than left or right, so the row
+            // offers only those two instead of the generic three-way setting.
             SettingsPageItem::Custom(CustomItem {
-                render: render_page,
-                keywords: &[
-                    "sound",
-                    "notification",
-                    "toast",
-                    "integration",
-                    "agent",
-                    "history",
-                    "sleep",
-                    "awake",
-                ],
+                render: render_dock_row,
+                keywords: &["dock", "left", "right", "agent", "panel"],
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Agent Panel Default Width"),
+                description: localization::localized_str!(
+                    "Default width of the agent panel in pixels."
+                ),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("agent_panel.default_width"),
+                    pick: |settings_content| {
+                        settings_content
+                            .agent_panel
+                            .as_ref()?
+                            .default_width
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .agent_panel
+                            .get_or_insert_default()
+                            .default_width = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
             }),
         ]
     }
 
-    fn render_page(
-        _settings_window: &SettingsWindow,
-        _window: &mut Window,
+    /// The dock row. The panel refuses any dock other than the two sides, so
+    /// the menu lists those two instead of every `DockPosition`.
+    fn render_dock_row(
+        settings_window: &SettingsWindow,
+        window: &mut Window,
         cx: &mut Context<SettingsWindow>,
     ) -> AnyElement {
-        let settings = herdr_settings::snapshot(cx);
+        static LABELS: [&str; 2] = ["Left", "Right"];
+        const DOCKS: [settings::DockPosition; 2] = [
+            settings::DockPosition::Left,
+            settings::DockPosition::Right,
+        ];
 
-        // The panel is what usually performs the first check; opening this page
-        // on its own would otherwise sit on "Not checked yet" until the switch
-        // is toggled.
-        if !settings.integrations_checked && !cx.global::<agent_panel::herdr_settings::AgentIntegrations>().checking {
-            herdr_settings::refresh_integrations(cx, settings.auto_install_integrations);
-        }
+        let selected = match agent_panel::AgentPanelSettings::get_global(cx).dock {
+            workspace::dock::DockPosition::Right => 1,
+            _ => 0,
+        };
 
-        let sound = Switch::new(
-            "agent-terminal-sound",
-            if settings.sound_enabled {
-                ToggleState::Selected
-            } else {
-                ToggleState::Unselected
-            },
-        )
-        .tab_index(0_isize)
-        .aria_label(sound_title())
-        .aria_description(sound_description())
-        .on_click({
-            move |state, _window, cx| {
-                let enabled = *state == ToggleState::Selected;
-                if let Err(error) = herdr_settings::set_sound_enabled(enabled, cx) {
-                    log::warn!("agent settings: {error}");
+        let dropdown = EnumVariantDropdown::new_indexed(
+            "agent-panel-dock",
+            selected,
+            &LABELS,
+            move |index, window, cx| {
+                let dock = DOCKS[index];
+                if let Err(error) = update_settings_file(
+                    SettingsUiFile::User,
+                    None,
+                    window,
+                    cx,
+                    move |settings, _| {
+                        settings.agent_panel.get_or_insert_default().dock = Some(dock);
+                    },
+                ) {
+                    log::warn!("agent panel settings: cannot save the dock: {error}");
                 }
-                cx.refresh_windows();
-            }
-        })
-        .into_any_element();
-
-        // One switch rather than the delivery modes: this build presents agent
-        // notifications itself, so "on" always means the system route and the
-        // terminal never draws a second copy of the same event.
-        let toast = Switch::new(
-            "agent-terminal-toast",
-            if settings.toast == ToastDelivery::Off {
-                ToggleState::Unselected
-            } else {
-                ToggleState::Selected
             },
         )
-        .tab_index(0_isize)
-        .aria_label(toast_title())
-        .aria_description(toast_description())
-        .on_click({
-            move |state, _window, cx| {
-                let enabled = *state == ToggleState::Selected;
-                let delivery = if enabled {
-                    ToastDelivery::System
-                } else {
-                    ToastDelivery::Off
-                };
-                if let Err(error) = herdr_settings::set_toast_delivery(delivery, cx) {
-                    log::warn!("agent settings: {error}");
-                }
-                cx.refresh_windows();
-            }
-        })
-        .into_any_element();
+        .aria_label(localization::localized_str!("Agent Panel Dock"))
+        .aria_description(localization::localized_str!("Where to dock the agent panel."))
+        .tab_index(0);
 
-        let prevent_idle_sleep = Switch::new(
-            "agent-terminal-prevent-idle-sleep",
-            if settings.prevent_idle_sleep {
-                ToggleState::Selected
-            } else {
-                ToggleState::Unselected
-            },
-        )
-        .tab_index(0_isize)
-        .aria_label(prevent_idle_sleep_title())
-        .aria_description(prevent_idle_sleep_description())
-        .on_click(move |state, window, cx| {
-            let enabled = *state == ToggleState::Selected;
-            if let Err(error) = update_settings_file(
-                SettingsUiFile::User,
-                None,
-                window,
-                cx,
-                move |settings, _| {
-                    settings
-                        .agent_panel
-                        .get_or_insert_with(Default::default)
-                        .prevent_idle_sleep = Some(enabled);
-                },
-            ) {
-                log::warn!("agent settings: cannot save prevent idle sleep: {error}");
-            }
-        })
-        .into_any_element();
-
-        let auto_install = Switch::new(
-            "agent-terminal-auto-install",
-            if settings.auto_install_integrations {
-                ToggleState::Selected
-            } else {
-                ToggleState::Unselected
-            },
-        )
-        .tab_index(0_isize)
-        .aria_label(auto_install_title())
-        .aria_description(auto_install_description())
-        .on_click(move |state, window, cx| {
-            let enabled = *state == ToggleState::Selected;
-            if let Err(error) = update_settings_file(
-                SettingsUiFile::User,
-                None,
-                window,
-                cx,
-                move |settings, _| {
-                    settings
-                        .agent_panel
-                        .get_or_insert_with(Default::default)
-                        .auto_install_integrations = Some(enabled);
-                },
-            ) {
-                log::warn!("agent settings: cannot save auto install: {error}");
-            }
-            // The switch is also the moment to look for targets, which is what
-            // the separate "check now" button used to be for.
-            herdr_settings::refresh_integrations(cx, enabled);
-            cx.refresh_windows();
-        })
-        .into_any_element();
-
-        let agents = agent_grid(&settings.integrations, cx.theme().colors().border, cx.theme().colors().element_hover);
-
-        let show_history = Switch::new(
-            "agent-terminal-show-history",
-            if settings.show_history {
-                ToggleState::Selected
-            } else {
-                ToggleState::Unselected
-            },
-        )
-        .tab_index(0_isize)
-        .aria_label(show_history_title())
-        .aria_description(show_history_description())
-        .on_click(move |state, window, cx| {
-            let enabled = *state == ToggleState::Selected;
-            if let Err(error) = update_settings_file(
-                SettingsUiFile::User,
-                None,
-                window,
-                cx,
-                move |settings, _| {
-                    settings
-                        .agent_panel
-                        .get_or_insert_with(Default::default)
-                        .show_history = Some(enabled);
-                },
-            ) {
-                log::warn!("agent settings: cannot save show history: {error}");
-            }
-        })
-        .into_any_element();
-
-        let scannable = scannable_grid(cx.theme().colors().border);
-
-        let mut content = v_flex()
-            .id("agent-terminal-settings")
-            .w_full()
-            .child(block(setting_row(sound_title(), sound_description(), sound)))
-            .child(divider())
-            .child(block(setting_row(toast_title(), toast_description(), toast)))
-            .child(divider())
-            .child(block(setting_row(
-                prevent_idle_sleep_title(),
-                prevent_idle_sleep_description(),
-                prevent_idle_sleep,
-            )))
-            .child(divider())
-            .child(block(setting_row(
-                auto_install_title(),
-                auto_install_description(),
-                auto_install,
-            )))
-            .child(divider());
-
-        if settings.integrations.is_empty() {
-            content = content.child(block(
-                Label::new(if settings.integrations_checked {
-                    localization::localized_str!("No integration targets are available.")
-                } else {
-                    localization::localized_str!("Not checked yet.")
-                })
-                .size(LabelSize::Small)
-                .color(Color::Muted)
-                .into_any_element(),
-            ));
-        } else {
-            content = content.child(block(agents.into_any_element()));
-        }
-
-        content = content
-            .child(divider())
-            .child(block(setting_row(
-                show_history_title(),
-                show_history_description(),
-                show_history,
-            )))
-            .child(divider())
-            .child(block(scannable));
-
-        content.into_any_element()
-    }
-
-    /// The agents whose history this build reads, drawn with the same cells the
-    /// integration list uses. Read-only: it says what "Show History" covers,
-    /// so it follows the switch instead of duplicating it.
-    fn scannable_grid(border: gpui::Hsla) -> AnyElement {
-        let mut grid = div()
-            .w_full()
-            .grid()
-            .grid_cols(AGENT_COLUMNS)
-            .border_t_1()
-            .border_l_1()
-            .border_color(border);
-        for (cell_index, agent) in agent_panel::agent_display::SCANNABLE_AGENTS
-            .iter()
-            .enumerate()
-        {
-            grid = grid.child(scannable_cell(agent, cell_index, border));
-        }
-        grid.into_any_element()
-    }
-
-    /// One read-only cell. Same shape as an integration cell minus the installed
-    /// check, because there is no per-agent state to report here.
-    fn scannable_cell(agent: &str, cell_index: usize, border: gpui::Hsla) -> AnyElement {
-        h_flex()
-            .id(("scannable-agent", cell_index))
-            .w_full()
-            .items_center()
-            .justify_start()
-            .gap_1p5()
-            .h(rems_from_px(AGENT_CELL_HEIGHT_PX))
-            .px(rems_from_px(AGENT_CELL_INSET_PX))
-            .min_w_0()
-            .overflow_hidden()
-            .border_b_1()
-            .border_r_1()
-            .border_color(border)
-            .child(
-                Icon::new(agent_panel::agent_display::agent_icon(agent))
-                    .size(IconSize::XSmall)
-                    .color(Color::Muted),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(
-                        Label::new(agent_panel::agent_display::integration_name(agent))
-                            .size(LabelSize::Small)
-                            .truncate(),
-                    ),
-            )
-            .into_any_element()
-    }
-
-    /// The agent grid: one square-cornered cell per target, sharing its borders
-    /// with its neighbours so the block reads as a table. Cells wrap instead of
-    /// stretching, so a narrow pane shows fewer columns rather than drawing the
-    /// table past its right edge.
-    ///
-    /// Cells are ordered by display name, the same order the history grid uses,
-    /// so one agent sits in the same place in both lists. The daemon answers in
-    /// its own order, which is why the sort happens here rather than upstream.
-    fn agent_grid(
-        integrations: &[herdr_settings::Integration],
-        border: gpui::Hsla,
-        hover: gpui::Hsla,
-    ) -> AnyElement {
-        let mut ordered_integrations: Vec<&herdr_settings::Integration> =
-            integrations.iter().collect();
-        // Case-insensitive, and stable so targets sharing a display name keep
-        // the order the daemon reported.
-        ordered_integrations.sort_by_cached_key(|integration| {
-            agent_panel::agent_display::integration_name(&integration.label).to_lowercase()
-        });
-        let mut grid = div()
-            .w_full()
-            .grid()
-            .grid_cols(AGENT_COLUMNS)
-            .border_t_1()
-            .border_l_1()
-            .border_color(border);
-        for (cell_index, integration) in ordered_integrations.into_iter().enumerate() {
-            grid = grid.child(agent_cell(integration, cell_index, border, hover));
-        }
-        grid.into_any_element()
-    }
-
-    /// One target's cell. An installed integration shows a check after its
-    /// name; nothing else about the cell changes, because a filled or tinted
-    /// cell would read as a selection.
-    fn agent_cell(
-        integration: &herdr_settings::Integration,
-        cell_index: usize,
-        border: gpui::Hsla,
-        hover: gpui::Hsla,
-    ) -> AnyElement {
-        let installed = integration.installed();
-        let name = agent_panel::agent_display::integration_name(&integration.label);
-        let needs_install = integration.needs_install;
-        let target = integration.target.clone();
-        h_flex()
-            .id(("agent-cell", cell_index))
-            .w_full()
-            .items_center()
-            .justify_start()
-            .gap_1p5()
-            .h(rems_from_px(AGENT_CELL_HEIGHT_PX))
-            .px(rems_from_px(AGENT_CELL_INSET_PX))
-            .min_w_0()
-            .overflow_hidden()
-            .border_b_1()
-            .border_r_1()
-            .border_color(border)
-            .when(needs_install, |this| {
-                this.cursor_pointer().hover(move |style| style.bg(hover))
-            })
-            .on_click(move |_, _, cx| {
-                if needs_install {
-                    herdr_settings::install_integration(target.clone(), cx);
-                    cx.refresh_windows();
-                }
-            })
-            .child(
-                Icon::new(agent_panel::agent_display::agent_icon(&integration.target))
-                    .size(IconSize::XSmall)
-                    .color(Color::Muted),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(Label::new(name).size(LabelSize::Small).truncate()),
-            )
-            .when(installed, |this| {
-                this.child(
-                    Label::new(INSTALLED_MARK)
-                        .size(LabelSize::Small)
-                        .color(Color::Success),
-                )
-            })
-            .into_any_element()
-    }
-
-    /// One settings row: title and description on the left, control on the
-    /// right, matching the rows the rest of the settings pages draw.
-    fn setting_row(
-        title: &'static str,
-        description: &'static str,
-        control: AnyElement,
-    ) -> AnyElement {
-        h_flex()
-            .w_full()
-            .min_w_0()
-            .justify_between()
-            .gap_4()
-            .child(
-                v_flex()
-                    .w_full()
-                    .max_w_2_3()
-                    .min_w_0()
-                    .child(Label::new(title))
-                    .child(
-                        Label::new(description)
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    ),
-            )
-            .child(control)
-            .into_any_element()
-    }
-
-    fn block(child: AnyElement) -> AnyElement {
+        // Match a regular setting row: same side padding, same vertical
+        // rhythm and the same divider under it.
         v_flex()
-            .w_full()
+            .group("setting-item")
             .px_8()
-            .pt_4()
-            .pb_4()
-            .child(child)
+            .child(
+                render_settings_item_layout(
+                    settings_window,
+                    localization::localized_str!("Agent Panel Dock"),
+                    localization::localized_str!("Where to dock the agent panel."),
+                    dropdown.into_any_element(),
+                    None,
+                    None,
+                    Some("agent_panel.dock"),
+                    false,
+                    cx,
+                )
+                .pt_4()
+                .pb_4(),
+            )
+            .child(Divider::horizontal())
             .into_any_element()
     }
-
-    fn divider() -> AnyElement {
-        h_flex()
-            .w_full()
-            .px_8()
-            .child(Divider::horizontal().color(DividerColor::BorderFaded))
-            .into_any_element()
-    }
-
 }
 // ===== [OHOS PORT END] =====
 
@@ -7223,12 +6863,7 @@ mod ohos_about_page {
             SettingsPageItem::Custom(CustomItem {
                 render: render_page,
                 keywords: &[
-                    "about",
-                    "version",
-                    "license",
-                    "feedback",
-                    "contact",
-                    "privacy",
+                    "about", "version", "license", "feedback", "contact", "privacy",
                 ],
             }),
         ]
@@ -7244,22 +6879,20 @@ mod ohos_about_page {
 
         let version_value = Label::new(version_text).into_any_element();
 
-        let license_button = Button::new(
-            "about-open-license",
-            localization::localized_str!("Open"),
-        )
-        .style(ButtonStyle::OutlinedGhost)
-        .size(ButtonSize::Medium)
-        .tab_index(0_isize)
-        .on_click(cx.listener(|this, _, _window, cx| {
-            this.open_bundled_document(
-                util::asset_str::<assets::Assets>("licenses.md"),
-                localization::localized_str!("License"),
-                "Markdown",
-                cx,
-            );
-        }))
-        .into_any_element();
+        let license_button =
+            Button::new("about-open-license", localization::localized_str!("Open"))
+                .style(ButtonStyle::OutlinedGhost)
+                .size(ButtonSize::Medium)
+                .tab_index(0_isize)
+                .on_click(cx.listener(|this, _, _window, cx| {
+                    this.open_bundled_document(
+                        util::asset_str::<assets::Assets>("licenses.md"),
+                        localization::localized_str!("License"),
+                        "Markdown",
+                        cx,
+                    );
+                }))
+                .into_any_element();
 
         let feedback_button = Button::new(
             "about-open-feedback",
@@ -7287,22 +6920,20 @@ mod ohos_about_page {
             })
             .into_any_element();
 
-        let privacy_button = Button::new(
-            "about-open-privacy",
-            localization::localized_str!("Open"),
-        )
-        .style(ButtonStyle::OutlinedGhost)
-        .size(ButtonSize::Medium)
-        .tab_index(0_isize)
-        .on_click(cx.listener(|this, _, _window, cx| {
-            this.open_bundled_document(
-                util::asset_str::<assets::Assets>("privacy.md"),
-                localization::localized_str!("Data & Privacy"),
-                "Markdown",
-                cx,
-            );
-        }))
-        .into_any_element();
+        let privacy_button =
+            Button::new("about-open-privacy", localization::localized_str!("Open"))
+                .style(ButtonStyle::OutlinedGhost)
+                .size(ButtonSize::Medium)
+                .tab_index(0_isize)
+                .on_click(cx.listener(|this, _, _window, cx| {
+                    this.open_bundled_document(
+                        util::asset_str::<assets::Assets>("privacy.md"),
+                        localization::localized_str!("Data & Privacy"),
+                        "Markdown",
+                        cx,
+                    );
+                }))
+                .into_any_element();
 
         v_flex()
             .id("about-page")
@@ -7315,7 +6946,9 @@ mod ohos_about_page {
             .child(divider())
             .child(block(setting_row(
                 localization::localized_str!("License"),
-                localization::localized_str!("View the licenses for HiCodeer and its dependencies."),
+                localization::localized_str!(
+                    "View the licenses for HiCodeer and its dependencies."
+                ),
                 license_button,
             )))
             .child(divider())

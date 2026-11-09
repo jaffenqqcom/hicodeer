@@ -112,9 +112,10 @@ fn split_columns(text: &str) -> (&str, Option<&str>) {
     (text.trim(), None)
 }
 
-/// A reply is the last block of plain text.
+/// A reply is the last block of plain text. The choice, when the pane draws
+/// one, is read by extract_choice before this is reached.
 pub(super) fn extract(lines: &[String]) -> Option<String> {
-    extract_choice(lines).or_else(|| super::last_plain_block(lines))
+    super::last_plain_block(lines)
 }
 
 #[cfg(test)]
@@ -133,5 +134,57 @@ mod tests {
         assert!(reply.contains("想去哪里就去哪里"));
         assert!(reply.contains("  按下暂停键"));
         assert!(!reply.contains("Other"));
+    }
+
+    #[test]
+    fn a_real_screen_keeps_the_title_and_question() {
+        // Captured from a live pane: forty rows as the daemon reads them.
+        let screen = r#"╭─ ◆ ZCODE  v3.16.3-41 ────────────────────────────────────────────────────╮
+│ ~/workspace/hicodeer · main                                              │
+│ Ask a task about this workspace                                          │
+╰─ /help commands · /status details ───────────────────────────────────────╯
+
+ ✨ Update available! 3.16.3-41 → 3.17.2-45
+ Run npm install -g zcode-app-cli@latest to update.
+ Release notes: https://github.com/kingsword09/zcode-cli/releases/latest
+
+ › 这是一道用于测试工具连通性的选择题，题目本身不具备任何实际业务含义和逻辑关系，唯一目的就是验证
+ askuserquestion 工具是否能够正常弹出选项列表，并且能够把你在下面三个选项中所做的选择结果完整地回传给我，请问
+ 你愿意选择以下哪一个选项呢？请用选择题问我，三个选项分别叫 链路正常、需要重试、仅测试，每个配一句说明。不要
+ 自己选。
+
+ ◇ Thought · Ctrl+O to expand
+
+ ◆ Question 1 question · waiting for permission
+  Awaiting 1 answer
+
+ Activity · 1 active tool
+  ○ AskUserQuestion
+
+连通性测试 · 1/1
+这是一道工具连通性测试题：以下三个选项中，你希望选择哪一个？
+
+链路正常
+表示当前选项列表能够正常弹出，选择结果可以完整回传。
+Filter: type to search
+
+→ 链路正常                        表示当前选项列表能够正常弹出，选择结果可以完整回传。
+  需要重试                        表示本次交互链路存在问题，需要重新发起一次选择。
+  仅测试                          表示这只是一次纯功能测试，不对应任何实际业务含义。
+  Other...                        Enter a different answer
+
+Type to filter · Up/Down choose · Ctrl+O details · ←/→ or PgUp/PgDn scroll · Enter confirm · Esc cancel
+"#;
+        let lines = useful_lines(screen);
+        let reply = extract_choice(&lines).expect("a choice");
+        assert!(reply.starts_with("连通性测试 · 1/1"), "{reply}");
+        assert!(reply.contains("这是一道工具连通性测试题"), "{reply}");
+        assert!(!reply.contains("1. "));
+        assert!(reply.contains("链路正常"));
+        assert!(reply.contains("  表示当前选项列表能够正常弹出"), "{reply}");
+        assert!(reply.contains("需要重试"), "{reply}");
+        assert!(!reply.contains("Other"), "{reply}");
+        assert!(!reply.contains("Filter"), "{reply}");
+        assert!(!reply.contains("AskUserQuestion"), "{reply}");
     }
 }

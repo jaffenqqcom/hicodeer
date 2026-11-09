@@ -17,14 +17,21 @@ mod kimi;
 mod minimax;
 mod opencode;
 mod pi;
+mod qwen;
 mod zcode;
 
 /// The reply drawn on this screen, when one can be found.
 pub(crate) fn extract(agent: &str, text: &str) -> Option<String> {
     let lines = useful_lines(text);
     // A drawn choice is what the reader has to answer, so it wins over the
-    // plain reply above it.
-    if let Some(choice) = choice_block(&lines) {
+    // plain reply above it. Agents that draw their own choice layout read it
+    // first: their question can be split in ways the generic reader would cut.
+    let own_choice = match agent {
+        "qwen" => qwen::extract_choice(&lines),
+        "zcode" => zcode::extract_choice(&lines),
+        _ => None,
+    };
+    if let Some(choice) = own_choice.or_else(|| choice_block(&lines)) {
         return Some(choice);
     }
     let reply = match agent {
@@ -39,89 +46,52 @@ pub(crate) fn extract(agent: &str, text: &str) -> Option<String> {
         "minimax" => minimax::extract(&lines),
         "opencode" => opencode::extract(&lines),
         "pi" => pi::extract(&lines),
+        "qwen" => qwen::extract(&lines),
         "zcode" => zcode::extract(&lines),
         _ => None,
     };
     reply.filter(|reply| !reply.trim().is_empty())
 }
 
-/// A choice drawn on the screen: its question and numbered options.
+/// Strips the frame a row may be drawn inside: some agents put a bar in front
+/// of every row of the panel.
+pub(super) fn strip_frame(line: &str) -> &str {
+    line.trim()
+        .trim_start_matches(|character: char| matches!(character, '│' | '┃' | '▎'))
+        .trim()
+}
+
+/// Parses a numbered option row: "1. label", "1) label", and "[1] label" are
+/// all in use.
+pub(super) fn numbered(line: &str) -> Option<(u32, String)> {
+    let rest = strip_frame(line);
+    let rest = rest.strip_prefix('❯').unwrap_or(rest).trim_start();
+    let rest = rest.strip_prefix('→').unwrap_or(rest).trim_start();
+    let (number, label) = if let Some(bracketed) = rest.strip_prefix('[') {
+        let (number, label) = bracketed.split_once(']')?;
+        (number, label)
+    } else if let Some((number, label)) = rest.split_once(". ") {
+        (number, label)
+    } else if let Some((number, label)) = rest.split_once(')') {
+        (number, label)
+    } else {
+        let (number, label) = rest.split_once('.')?;
+        (number, label)
+    };
+    let number: u32 = number.trim().parse().ok()?;
+    let label = label.trim();
+    if label.is_empty() {
+        return None;
+    }
+    Some((number, label.to_string()))
+}
+
+/// The numbered options from the first option on, each with its indented
+/// description.
 ///
-/// The layout is the same across agents: one numbered line per option, the
-/// question above the first one, and a footer that invites a choice.
-fn choice_block(lines: &[String]) -> Option<String> {
-    // The option can sit inside a frame: some agents draw a bar in front of
-    // every row of the panel, so the bar is stripped before the number.
-    fn strip_frame(line: &str) -> &str {
-        line.trim()
-            .trim_start_matches(|character: char| matches!(character, '│' | '┃' | '▎'))
-            .trim()
-    }
-
-    fn numbered(line: &str) -> Option<(u32, String)> {
-        let rest = strip_frame(line);
-        let rest = rest.strip_prefix('❯').unwrap_or(rest).trim_start();
-        let rest = rest.strip_prefix('→').unwrap_or(rest).trim_start();
-        // "1. label", "1) label", and "[1] label" are all in use.
-        let (number, label) = if let Some(bracketed) = rest.strip_prefix('[') {
-            let (number, label) = bracketed.split_once(']')?;
-            (number, label)
-        } else if let Some((number, label)) = rest.split_once(". ") {
-            (number, label)
-        } else if let Some((number, label)) = rest.split_once(')') {
-            (number, label)
-        } else {
-            let (number, label) = rest.split_once('.')?;
-            (number, label)
-        };
-        let number: u32 = number.trim().parse().ok()?;
-        let label = label.trim();
-        if label.is_empty() {
-            return None;
-        }
-        Some((number, label.to_string()))
-    }
-
-    let first = lines.iter().position(|line| {
-        numbered(line).is_some_and(|(number, _)| number == 1)
-    })?;
-    // Some agents mark the question with a leading "?", which is more precise
-    // than reading upwards: the row above can be a panel title.
-    let marked_question = lines[..first]
-        .iter()
-        .rev()
-        .find_map(|line| {
-            let text = strip_frame(line);
-            text.strip_prefix('?').map(|rest| rest.trim().to_string())
-        })
-        .filter(|question| !question.is_empty());
-    // The question can wrap over several rows. Read upwards until the frame or
-    // a blank row ends it, then put the rows back in reading order.
-    let mut question_lines: Vec<String> = Vec::new();
-    for line in lines[..first].iter().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || is_decoration(line) || is_chrome(line) {
-            if question_lines.is_empty() {
-                continue;
-            }
-            break;
-        }
-        if trimmed.starts_with('←') || trimmed.contains("Submit") {
-            if question_lines.is_empty() {
-                continue;
-            }
-            break;
-        }
-        let text = strip_frame(trimmed);
-        if text.is_empty() {
-            continue;
-        }
-        question_lines.push(text.to_string());
-    }
-    question_lines.reverse();
-    let question = marked_question.or_else(|| {
-        (!question_lines.is_empty()).then(|| question_lines.join("\n"))
-    });
+/// The placeholder rows ("Type something", "Other", "Chat about this") and the
+/// footer end the list.
+pub(super) fn collect_numbered_options(lines: &[String], first: usize) -> Vec<String> {
     let mut options: Vec<String> = Vec::new();
     for line in lines.iter().skip(first) {
         let trimmed = line.trim();
@@ -158,6 +128,54 @@ fn choice_block(lines: &[String]) -> Option<String> {
         }
         break;
     }
+    options
+}
+
+/// A choice drawn on the screen: its question and numbered options.
+///
+/// The layout is the same across agents: one numbered line per option, the
+/// question above the first one, and a footer that invites a choice.
+fn choice_block(lines: &[String]) -> Option<String> {
+    // The newest choice wins: an answered question stays on screen above the
+    // one being asked now, and its numbering would otherwise be read first.
+    let first = lines
+        .iter()
+        .rposition(|line| numbered(line).is_some_and(|(number, _)| number == 1))?;
+    // The question can wrap over several rows. Read upwards until the frame or
+    // a blank row ends it, then put the rows back in reading order.
+    let mut question_lines: Vec<String> = Vec::new();
+    for line in lines[..first].iter().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || is_decoration(line) || is_chrome(line) {
+            if question_lines.is_empty() {
+                continue;
+            }
+            break;
+        }
+        if trimmed.starts_with('←') || trimmed.contains("Submit") {
+            if question_lines.is_empty() {
+                continue;
+            }
+            break;
+        }
+        let text = strip_frame(trimmed);
+        if text.is_empty() {
+            continue;
+        }
+        question_lines.push(text.to_string());
+    }
+    question_lines.reverse();
+    // Some agents mark the question row with a leading "?". It is stripped
+    // here rather than searched for first: a panel header above a blank row
+    // also starts with "?" and would otherwise win.
+    let question = (!question_lines.is_empty()).then(|| {
+        let mut joined = question_lines.join("\n");
+        if let Some(rest) = joined.strip_prefix('?') {
+            joined = rest.trim_start().to_string();
+        }
+        joined
+    });
+    let options = collect_numbered_options(lines, first);
     if options.is_empty() {
         return None;
     }
@@ -470,6 +488,112 @@ mod tests {
         assert!(reply.contains("3. 先整理配色与字号"));
         assert!(!reply.contains("↑↓"));
         assert!(!reply.contains("Other"));
+    }
+
+
+    #[test]
+    fn a_real_qwen_choice_keeps_its_wrapped_question() {
+        // Captured from a live pane: the question wraps over three rows and the
+        // panel header above it must never become the question.
+        let screen = r#"
+
+  Tips: Try /insight to generate personalized insights from your chat history.
+  ● Read context files: AGENTS.md, ~/.qwen/output-language.md
+
+  > 用askuserquestion工具给我出一个选择题，题目长度要50个字以上。不需要逻辑，只是测试连通性
+
+  ∴ Thought briefly (click or ctrl+o to expand)
+
+  ◆ 我现在调用选择题工具生成一道没有逻辑含义、题面超过 50 字的测试题。
+  △ Update check skipped (registry error) — run /update to retry.
+  ? AskUserQuestion Ask user 1 question ←
+
+   连通测试
+
+   这是一道纯粹用于测试工具连通性的选择题，题目内容本身没有任何实际含义也不涉及任何逻辑推理，你只需要随便选
+   一个选项即可，选项之间没有对错之分，也不会影响任何后续操作或结果，请问你更愿意选择下面哪一个看起来顺眼的
+   选项呢？
+
+   ❯ 1. 选项甲：蓝色
+        第一个选项，仅用于验证选项列表能正常渲染。
+     2. 选项乙：绿色
+        第二个选项，仅用于验证多选一交互是否正常。
+     3. 选项丙：橙色
+        第三个选项，仅用于验证选项描述文本能正常显示。
+     4. 选项丁：紫色
+        第四个选项，仅用于验证四个选项的布局是否完整。
+     5. Type something...
+
+
+   ↑/↓: Navigate | Enter: Select | Esc: Cancel
+
+
+  ⠏ Waiting for user confirmation...
+"#;
+        let lines = useful_lines(screen);
+        let reply = qwen::extract_choice(&lines).expect("a choice");
+        assert!(reply.starts_with("连通测试"), "{reply}");
+        assert!(reply.contains("这是一道纯粹用于测试工具连通性的选择题"), "{reply}");
+        assert!(reply.contains("选项呢？"), "{reply}");
+        assert!(reply.contains("1. 选项甲：蓝色"), "{reply}");
+        assert!(reply.contains("  第一个选项，仅用于验证选项列表能正常渲染。"), "{reply}");
+        assert!(reply.contains("4. 选项丁：紫色"), "{reply}");
+        assert!(!reply.contains("Type something"), "{reply}");
+        assert!(!reply.contains("AskUserQuestion"), "{reply}");
+    }
+
+
+    #[test]
+    fn qwen_takes_the_newest_of_two_questions() {
+        // An answered question stays on screen above the one being asked now.
+        let screen = " ? AskUserQuestion Ask user 1 question ←\n\n旧标题\n旧问题？\n\n❯ 1. 甲\n     甲的说明\n  2. 乙\n     乙的说明\n  3. Type something...\n\n ? AskUserQuestion Ask user 1 question ←\n\n新标题\n新问题？\n\n❯ 1. 丙\n     丙的说明\n  2. 丁\n     丁的说明\n  3. Type something...\n";
+        let lines = useful_lines(screen);
+        let reply = qwen::extract_choice(&lines).expect("a choice");
+        assert!(reply.starts_with("新标题"), "{reply}");
+        assert!(reply.contains("新问题？"), "{reply}");
+        assert!(reply.contains("1. 丙"), "{reply}");
+        assert!(!reply.contains("旧标题"), "{reply}");
+    }
+
+    #[test]
+    fn a_newer_choice_wins_over_the_answered_one() {
+        let screen = "旧题？\n\n1. 甲\n   甲的说明\n2. 乙\n   乙的说明\n\n新题？\n\n1. 丙\n   丙的说明\n2. 丁\n   丁的说明\n\nEnter to select\n";
+        let lines = useful_lines(screen);
+        let reply = choice_block(&lines).expect("a choice");
+        assert!(reply.starts_with("新题？"), "{reply}");
+        assert!(reply.contains("1. 丙"), "{reply}");
+        assert!(!reply.contains("1. 甲"), "{reply}");
+    }
+
+    #[test]
+    fn qwen_plain_reply_is_the_last_block() {
+        let screen = " > 只回复两个字：成功\n\n ◆ 成功\n\n ? for shortcuts\n";
+        let lines = useful_lines(screen);
+        assert_eq!(qwen::extract(&lines).as_deref(), Some("成功"));
+    }
+
+    #[test]
+    fn qwen_plain_reply_stops_at_a_tool_result() {
+        // Captured from a live pane: the reply sits above a tool result and a
+        // status line that would otherwise become the body.
+        let screen = r#"
+  ● Read context files: AGENTS.md, ~/.qwen/output-language.md
+
+  > 只回复两个字：成功
+
+  ◆ 成功
+   ⎿ Stop says:
+      Warning: Traceback (most recent call last):
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>   Type your message or @path/to/file
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ➜ hicodeer · git:(main) · deepseek-flash high · 1.0m Context 2.1% used
+  Auto mode (shift + tab to cycle) · 1 dream
+
+"#;
+        let lines = useful_lines(screen);
+        assert_eq!(qwen::extract(&lines).as_deref(), Some("成功"));
     }
 
     #[test]

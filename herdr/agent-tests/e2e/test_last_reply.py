@@ -107,8 +107,8 @@ DEFAULT_AGENTS = [
 # Credentials an agent needs before its first message. A pane inherits the
 # shell's startup files, not this process's environment, so these are injected
 # through workspace.create(env=...). Values are never printed.
-# Local services (gemini bridge, codex relay) and per-agent environment live in
-# agent_prereqs so both e2e scripts share one recipe and one cleanup path.
+# The Gemini bridge and per-agent environment live in agent_prereqs, so both
+# e2e scripts share one recipe.
 
 # TUI 首帧未就绪时会把第一个回车吞掉，所以输入后先等窗口摆好。
 TUI_READY_DELAY_SECONDS = 1.0

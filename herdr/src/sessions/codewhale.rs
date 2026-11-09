@@ -306,11 +306,11 @@ mod tests {
 
     use super::*;
 
-    /// Fixtures sit beside the workspace rather than inside the crate, so the
-    /// end-to-end scripts under `agent-tests/` read the same samples.
+    /// Fixtures live under `agent-tests/` at the workspace root, outside this crate,
+    /// and the end-to-end scripts read the same samples.
     fn sessions_directory() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../agent-tests/fixtures/codewhale/sessions")
+            .join("agent-tests/fixtures/codewhale/sessions")
     }
 
     #[test]

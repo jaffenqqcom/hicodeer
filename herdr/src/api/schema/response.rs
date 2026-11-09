@@ -131,6 +131,12 @@ pub enum ResponseResult {
     AgentPrompted {
         agent: AgentInfo,
     },
+    AgentReply {
+        reply: Option<String>,
+        /// Which wait this reply describes; zero when the pane is not waiting.
+        #[serde(default, skip_serializing_if = "super::agents::is_zero_u64")]
+        blocked_seq: u64,
+    },
     AgentList {
         agents: Vec<AgentInfo>,
     },

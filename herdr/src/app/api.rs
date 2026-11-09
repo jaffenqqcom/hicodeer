@@ -1112,7 +1112,8 @@ impl App {
             Method::TabRename(params) => return self.handle_tab_rename(request.id, params),
             Method::TabMove(params) => return self.handle_tab_move(request.id, params),
             Method::TabClose(target) => return self.handle_tab_close(request.id, target),
-            Method::AgentList(_) => return self.handle_agent_list(request.id),
+            Method::AgentList(params) => return self.handle_agent_list(request.id, params),
+            Method::AgentReply(params) => return self.handle_agent_reply(request.id, params),
             Method::AgentSessions(_) => return self.handle_agent_sessions(request.id),
             Method::AgentSessionDelete(params) => {
                 return self.handle_agent_session_delete(request.id, params)

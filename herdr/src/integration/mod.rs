@@ -83,7 +83,7 @@ const CLAUDE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/claude/hicodeer-agent-state.sh")
 };
-const CLAUDE_INTEGRATION_VERSION: u32 = 15;
+const CLAUDE_INTEGRATION_VERSION: u32 = 21;
 const ZCODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -98,7 +98,7 @@ const ZCODE_HOOK_ASSET: &str = if cfg!(windows) {
 // constant said 1, so every installed copy already reports 15. The expected
 // version has to stay above that: `installed >= expected` is what marks a hook
 // current, and a value of 1 would leave the old hook in place forever.
-const ZCODE_INTEGRATION_VERSION: u32 = 16;
+const ZCODE_INTEGRATION_VERSION: u32 = 20;
 const CODEWHALE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -109,7 +109,7 @@ const CODEWHALE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/codewhale/hicodeer-agent-state.sh")
 };
-const CODEWHALE_INTEGRATION_VERSION: u32 = 16;
+const CODEWHALE_INTEGRATION_VERSION: u32 = 20;
 const ATOMCODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -120,7 +120,7 @@ const ATOMCODE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/atomcode/hicodeer-agent-state.sh")
 };
-const ATOMCODE_INTEGRATION_VERSION: u32 = 16;
+const ATOMCODE_INTEGRATION_VERSION: u32 = 20;
 const DEVECO_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
 const DEVECO_PLUGIN_ASSET: &str = include_str!("assets/deveco/hicodeer-agent-state.js");
 /// DevEco Code runs its TUI as a separate plugin host: `tui.json` plugins only
@@ -140,7 +140,7 @@ const CODEBUDDY_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/codebuddy/hicodeer-agent-state.sh")
 };
-const CODEBUDDY_INTEGRATION_VERSION: u32 = 7;
+const CODEBUDDY_INTEGRATION_VERSION: u32 = 13;
 const CODEX_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -151,7 +151,7 @@ const CODEX_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/codex/hicodeer-agent-state.sh")
 };
-const CODEX_INTEGRATION_VERSION: u32 = 13;
+const CODEX_INTEGRATION_VERSION: u32 = 17;
 const KIMI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {
@@ -162,10 +162,10 @@ const KIMI_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/kimi/hicodeer-agent-state.sh")
 };
-const KIMI_INTEGRATION_VERSION: u32 = 9;
+const KIMI_INTEGRATION_VERSION: u32 = 13;
 const GEMINI_HOOK_INSTALL_NAME: &str = "hicodeer-agent-state.sh";
 const GEMINI_HOOK_ASSET: &str = include_str!("assets/gemini/hicodeer-agent-state.sh");
-const GEMINI_INTEGRATION_VERSION: u32 = 3;
+const GEMINI_INTEGRATION_VERSION: u32 = 7;
 const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> herdr kimi integration";
 const KIMI_CONFIG_BLOCK_END: &str = "# <<< herdr kimi integration";
 const KIMI_MIN_VERSION: &str = "0.14.0";
@@ -207,7 +207,7 @@ const COPILOT_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/copilot/hicodeer-agent-state.sh")
 };
-const COPILOT_INTEGRATION_VERSION: u32 = 6;
+const COPILOT_INTEGRATION_VERSION: u32 = 10;
 const COPILOT_HOOK_EVENTS: [&str; 7] = [
     "sessionStart",
     "userPromptSubmitted",
@@ -238,7 +238,7 @@ const DEVIN_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/devin/hicodeer-agent-state.sh")
 };
-const DEVIN_INTEGRATION_VERSION: u32 = 4;
+const DEVIN_INTEGRATION_VERSION: u32 = 6;
 const DEVIN_HOOK_EVENTS: [(&str, &str); 6] = [
     ("SessionStart", "session"),
     ("UserPromptSubmit", "session"),
@@ -265,7 +265,7 @@ const DROID_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/droid/hicodeer-agent-state.sh")
 };
-const DROID_INTEGRATION_VERSION: u32 = 8;
+const DROID_INTEGRATION_VERSION: u32 = 12;
 const DROID_HOOK_EVENTS: [(&str, Option<&str>, &str); 8] = [
     ("SessionStart", None, "session"),
     ("UserPromptSubmit", None, "working"),
@@ -336,7 +336,7 @@ const QWEN_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/qwen/hicodeer-agent-state.sh")
 };
-const QWEN_INTEGRATION_VERSION: u32 = 7;
+const QWEN_INTEGRATION_VERSION: u32 = 11;
 const QWEN_HOOK_EVENTS: [(&str, Option<&str>, &str); 7] = [
     ("SessionStart", None, "session"),
     ("UserPromptSubmit", None, "working"),
@@ -424,7 +424,7 @@ const MASTRACODE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/mastracode/hicodeer-agent-state.sh")
 };
-const MASTRACODE_INTEGRATION_VERSION: u32 = 5;
+const MASTRACODE_INTEGRATION_VERSION: u32 = 9;
 const MASTRACODE_HOOK_TIMEOUT_MS: u64 = 10_000;
 const MASTRACODE_REMOVED_HOOK_EVENTS: [(&str, &str); 2] =
     [("SessionStart", "idle"), ("SessionEnd", "release")];
@@ -453,7 +453,7 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/grok/hicodeer-agent-state.sh")
 };
-const GROK_INTEGRATION_VERSION: u32 = 5;
+const GROK_INTEGRATION_VERSION: u32 = 9;
 
 /// The version an embedded asset declares for itself.
 ///

@@ -30,7 +30,7 @@ socket 路径由 `agent_socket_path()` 决定（`crates/gpui_ohos/depend/cmd-age
 `test_resume.py` 只说“恢复没成”，原因在 pane 里。拿到失败时返回的 `pane_id` 后先读屏（`pane.read` 的参数是 `pane_id` + 必填 `source`，取值 `visible` / `recent` / `recent_unwrapped` / `detection`，见 `schema/panes.rs:347-359`），两种高频原因都不是 resume 逻辑的问题：
 
 ```bash
-cd agent-tests/e2e   # 下面这条要在脚本目录里跑，才能 import agent_rpc
+cd herdr/agent-tests/e2e   # 下面这条要在脚本目录里跑，才能 import agent_rpc
 python3 -c "import agent_rpc,sys,json;r=agent_rpc.AgentRpc();print(json.dumps(r.call('pane.read',{'pane_id':sys.argv[1],'source':'recent','lines':60}),ensure_ascii=False))" w7:p3
 ```
 

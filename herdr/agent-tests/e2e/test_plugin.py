@@ -98,7 +98,7 @@ def write_manifest(directory, version, marker_path):
         "id": PLUGIN_ID,
         "name": "Plugin Lifecycle Test",
         "version": "0.0.1",
-        "description": "Temporary plugin created by agent-tests/e2e/test_plugin.py",
+        "description": "Temporary plugin created by herdr/agent-tests/e2e/test_plugin.py",
         "min_herdr_version": version,
         "actions": [
             {

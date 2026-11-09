@@ -4,7 +4,7 @@ Some agents cannot complete a turn on this machine without a local bridge:
 
   gemini  -> gem-proxy on 127.0.0.1:8000 (Gemini API shape -> DeepSeek)
   codex   -> codex-relay on 127.0.0.1:4446 (Responses -> chat completions)
-  qwen    -> model provider credentials from the caller's environment
+  qwen    -> provider and key from ~/.qwen/settings.json; caller env is optional
 
 The services are started on demand, reused when something already listens on
 their port, and stopped again when the test process exits. That keeps a second
@@ -152,13 +152,13 @@ FIXED_ENV = {
     },
 }
 
+# Optional overrides only: qwen reads its provider and key from
+# ~/.qwen/settings.json, so it starts without the caller exporting anything.
 PASSTHROUGH_ENV = {
     "qwen": ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"),
 }
 
-REQUIRED_ENV = {
-    "qwen": ("OPENAI_API_KEY",),
-}
+REQUIRED_ENV = {}
 
 
 def environment_for(agent):

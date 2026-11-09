@@ -319,8 +319,8 @@ fn modified_ms(metadata: &std::fs::Metadata) -> i64 {
 mod tests {
     use super::*;
 
-    /// Fixtures sit beside the workspace rather than inside the crate, so the
-    /// end-to-end scripts under `agent-tests/` read the same samples. These
+    /// Fixtures live under `agent-tests/` at the workspace root, outside this crate,
+    /// and the end-to-end scripts read the same samples. These
     /// hold what the `sqlite3` CLI prints, so no database is needed here.
     ///
     /// The archived / visibility / session-kind / parent filters live in the
@@ -331,7 +331,7 @@ mod tests {
     /// to history rows.
     fn fixture(relative: &str) -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../agent-tests/fixtures/minimax")
+            .join("agent-tests/fixtures/minimax")
             .join(relative);
         std::fs::read_to_string(path).expect("fixture should be readable")
     }

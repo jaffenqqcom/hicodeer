@@ -20,6 +20,11 @@ pub struct HookAuthority {
     pub agent_label: String,
     pub state: AgentState,
     pub message: Option<String>,
+    /// Which wait this report belongs to. A new value means a different
+    /// question, so a reader can tell a fresh wait from a repeated report of
+    /// the one it already handled.
+    #[serde(default)]
+    pub blocked_seq: u64,
     #[serde(skip, default = "Instant::now")]
     pub reported_at: Instant,
     pub session_ref: Option<crate::agent_resume::AgentSessionRef>,
@@ -798,11 +803,31 @@ impl TerminalState {
             }
         }
         self.persisted_agent_session = None;
+        // A wait with a different message is a new question; an identical
+        // repeat keeps the sequence so it is not announced twice.
+        let previous_blocked_seq = self
+            .hook_authority
+            .as_ref()
+            .map(|authority| authority.blocked_seq)
+            .unwrap_or(0);
+        let blocked_seq = if state == AgentState::Blocked {
+            match self.hook_authority.as_ref() {
+                Some(previous)
+                    if previous.state == AgentState::Blocked && previous.message == message =>
+                {
+                    previous.blocked_seq
+                }
+                _ => previous_blocked_seq + 1,
+            }
+        } else {
+            previous_blocked_seq
+        };
         self.hook_authority = Some(HookAuthority {
             source,
             agent_label,
             state,
             message,
+            blocked_seq,
             reported_at: now,
             session_ref,
         });
@@ -1057,6 +1082,7 @@ impl TerminalState {
                     agent_label: agent_label.to_string(),
                     state,
                     message: message.map(str::to_string),
+                    blocked_seq: 0,
                     reported_at,
                     session_ref: Some(session_ref),
                 },

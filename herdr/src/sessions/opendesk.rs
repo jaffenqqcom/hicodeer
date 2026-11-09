@@ -307,11 +307,11 @@ fn modified_ms(metadata: &std::fs::Metadata) -> i64 {
 mod tests {
     use super::*;
 
-    /// Fixtures sit beside the workspace rather than inside the crate, so the
-    /// end-to-end scripts under `agent-tests/` read the same samples.
+    /// Fixtures live under `agent-tests/` at the workspace root, outside this crate,
+    /// and the end-to-end scripts read the same samples.
     fn tasks_directory() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../agent-tests/fixtures/opendesk/tasks")
+            .join("agent-tests/fixtures/opendesk/tasks")
     }
 
     fn task(task_id: &str, task_name: Option<&str>, parent_id: Option<&str>) -> TaskEntry {
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn read_index_survives_truncated_file() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../agent-tests/fixtures/opendesk/broken")
+            .join("agent-tests/fixtures/opendesk/broken")
             .join(TASK_INDEX_FILE);
         assert!(
             read_index(&path).is_empty(),

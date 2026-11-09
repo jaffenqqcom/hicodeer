@@ -700,7 +700,7 @@ SWEPT_AGENTS_SKIPPED = {
 AGENT_ENVIRONMENT = {
     "codex": ("DEEPSEEK_API_KEY",),
     "deepseek": ("DEEPSEEK_API_KEY",),
-    "qwen": ("OPENAI_API_KEY",),
+    # qwen keeps its provider and key in ~/.qwen/settings.json.
     "opendesk": ("OPENDESK_PROVIDER_API_KEY",),
 }
 

@@ -16,7 +16,7 @@
 从仓库根目录跑（本机唯一可用入口）：
 
 ```sh
-./agent-tests/run-unit-tests.sh 'sessions::'
+./herdr/agent-tests/run-unit-tests.sh 'sessions::'
 ```
 
 脚本先 `cargo test -p hicodeer-agent --lib --no-run` 构建，再把测试二进制复制到
@@ -32,7 +32,7 @@
   本目录的测试在 `sessions::<agent>::tests::…`，所以 `'sessions::'` 正好只跑
   `src/sessions/` 下的用例；不加过滤则跑整个 lib。
 - `--` 之后的参数原样透传给测试二进制，例如
-  `./agent-tests/run-unit-tests.sh 'sessions::' -- --nocapture`。
+  `./herdr/agent-tests/run-unit-tests.sh 'sessions::' -- --nocapture`。
 
 ### 裸 `cargo test` 在本机会失败，且不是测试的问题
 
@@ -48,7 +48,7 @@
 
 - 每个 agent 一个子目录，`fixtures/<agent>/` 下按真实存储布局摆放，例如
   `fixtures/deepseek/sessions/--repo-demo--/session-alpha/session.v4.jsonl`。
-- 测试用 `env!("CARGO_MANIFEST_DIR")` 拼 `../agent-tests/fixtures` 定位，
+- 测试用 `env!("CARGO_MANIFEST_DIR")` 拼 `agent-tests/fixtures` 定位，
   **不读也不改 `HOME`**：测试并行跑，改环境变量会互相干扰。
   真正依赖 `HOME` 的入口（`sessions_root()`、`database_path()`）不在单测覆盖范围内，
   由 e2e 用真实目录覆盖。

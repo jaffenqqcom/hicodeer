@@ -21,6 +21,9 @@ const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 /// thread, so the size is pinned once here rather than per connector, and it
 /// does not grow with the number of sessions on disk.
 const AGENT_SESSION_SCAN_STACK_SIZE: usize = 8 * 1024 * 1024;
+/// How many screen lines a reply falls back to when neither the hook nor the
+/// transcript has text yet, which is what a waiting question looks like.
+const REPLY_SCREEN_LINES: u32 = 40;
 
 // Codex's Windows input reader does not surface bracketed paste. It detects the prompt as a
 // "paste burst" and, while that burst is buffered, rewrites a following Enter into a newline
@@ -152,11 +155,80 @@ impl App {
         true
     }
 
-    pub(super) fn handle_agent_list(&mut self, id: String) -> String {
+    pub(super) fn handle_agent_list(
+        &mut self,
+        id: String,
+        params: crate::api::schema::AgentListParams,
+    ) -> String {
         encode_success(
             id,
             ResponseResult::AgentList {
-                agents: self.collect_agent_infos(),
+                agents: self.collect_agent_infos(params.include_reply),
+            },
+        )
+    }
+
+    /// Returns the agent's last assistant text on demand.
+    ///
+    /// Nothing is cached: agents write their transcript asynchronously, and a
+    /// cached copy would answer with the previous turn.
+    pub(super) fn handle_agent_reply(&mut self, id: String, target: AgentTarget) -> String {
+        let resolved = match self.resolve_agent_target(&target.target) {
+            Ok(resolved) => resolved,
+            Err(err) => return encode_error_body(id, self.agent_target_error_body(err)),
+        };
+        let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id, true) else {
+            return agent_not_found(id, &target.target);
+        };
+        let mut reply = agent.last_reply;
+        // A waiting pane's transcript only holds the previous turn, and the
+        // hook may describe a permission gate rather than the question behind
+        // it. The screen is where the question is actually drawn, so a blocked
+        // pane reads it first and keeps the hook text only when it is empty.
+        let blocked = agent.agent_status == crate::api::schema::AgentStatus::Blocked;
+        let hook_text = self
+            .state
+            .workspaces
+            .get(resolved.ws_idx)
+            .and_then(|ws| ws.pane_state(resolved.pane_id))
+            .and_then(|pane_state| self.state.terminals.get(&pane_state.attached_terminal_id))
+            .and_then(|terminal| terminal.hook_authority.as_ref())
+            .and_then(|authority| authority.message.as_deref())
+            .filter(|text| !text.trim().is_empty())
+            .map(str::to_string);
+        if blocked {
+            reply = None;
+        }
+        let needs_screen = if blocked {
+            true
+        } else {
+            reply.as_deref().is_none_or(|text| text.trim().is_empty())
+        };
+        if needs_screen {
+            if let Some((pane, _workspace_id)) =
+                self.lookup_runtime(resolved.ws_idx, resolved.pane_id)
+            {
+                let snapshot = crate::app::api_helpers::read_terminal_snapshot(
+                    pane,
+                    crate::api::schema::ReadSource::RecentUnwrapped,
+                    crate::api::schema::ReadFormat::Text,
+                    Some(REPLY_SCREEN_LINES),
+                );
+                if !snapshot.text.trim().is_empty() {
+                    let agent_name = agent.agent.as_deref().unwrap_or_default();
+                    let extracted = crate::fetch_reply::screen::extract(agent_name, &snapshot.text);
+                    reply = Some(extracted.unwrap_or(snapshot.text));
+                }
+            }
+        }
+        if blocked && reply.is_none() {
+            reply = hook_text;
+        }
+        encode_success(
+            id,
+            ResponseResult::AgentReply {
+                reply,
+                blocked_seq: agent.blocked_seq,
             },
         )
     }
@@ -313,7 +385,7 @@ impl App {
                 ),
             ));
         }
-        let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
+        let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id, true) else {
             return Err(agent_not_found(id, &params.target));
         };
         Ok(ValidatedAgentPrompt {
@@ -651,7 +723,10 @@ mod tests {
         // The status poll the panel runs once a second must be answered while
         // the scan holds its thread, not after it finishes.
         let started = std::time::Instant::now();
-        let response = app.handle_agent_list("list-while-scanning".into());
+        let response = app.handle_agent_list(
+            "list-while-scanning".into(),
+            crate::api::schema::AgentListParams::default(),
+        );
         let elapsed = started.elapsed();
         assert!(
             elapsed < Duration::from_millis(200),

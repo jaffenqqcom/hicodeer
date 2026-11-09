@@ -71,7 +71,7 @@ impl App {
             tabs,
             panes,
             layouts,
-            agents: self.collect_agent_infos(),
+            agents: self.collect_agent_infos(true),
         }
     }
 }

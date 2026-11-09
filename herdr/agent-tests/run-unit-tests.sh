@@ -8,17 +8,16 @@
 # trips it. Stripping first keeps the signed copy at ~130 MB instead of ~1.1 GB.
 #
 # Usage:
-#   agent-tests/run-unit-tests.sh                  # every unit test in the lib
-#   agent-tests/run-unit-tests.sh 'sessions::'     # one module path filter
-#   agent-tests/run-unit-tests.sh -- --nocapture   # extra test-binary arguments
+#   herdr/agent-tests/run-unit-tests.sh                # every unit test in the lib
+#   herdr/agent-tests/run-unit-tests.sh 'sessions::'   # one module path filter
+#   herdr/agent-tests/run-unit-tests.sh -- --nocapture # extra test-binary arguments
 #
 # The filter is passed to the test binary, not to cargo, so the binary is built
 # once and the same artifact can be re-run with different filters.
 
 set -euo pipefail
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HERDR_ROOT="$PROJECT_ROOT/herdr"
+HERDR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CRATE="hicodeer-agent"
 WORK_DIR="${TMPDIR:-/tmp}/herdr-unit-tests"
 

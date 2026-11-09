@@ -35,6 +35,29 @@ DEFAULT_EXPECT = "成功"
 SECOND_PROMPT = "只回复两个字：收到"
 SECOND_EXPECT = "收到"
 
+# Ask for a real choice so the agent parks the turn on the user, which is the
+# state the IM notification has to describe.
+CHOICE_PROMPT = (
+    "用选择题问我：下面哪种方案更好。必须调用 AskUserQuestion 工具，"
+    "两个选项的 label 分别写成 Alpha 和 Beta，不要自己选，等我选完再继续。"
+)
+# A permission prompt can stand between the agent and its question. Approving it
+# is part of reaching the wait, so the test does it instead of stopping there.
+WAITING_APPROVALS = 1
+# A choice prompt can be swallowed before the TUI is ready; retry a couple of
+# times while the pane stays idle, and leave a gap so the first submit lands.
+CHOICE_CONFIRM_SECONDS = 2.5
+CHOICE_SUBMIT_ATTEMPTS = 2
+# The choice is drawn a moment after the pane turns blocked; poll the reply
+# for this long before calling it missing.
+CHOICE_REPLY_WINDOW_SECONDS = 5.0
+# The labels the question must carry. Checking them is the point: a bare
+# "needs your permission" line is not the question the reader has to answer.
+CHOICE_LABELS = ("Alpha", "Beta")
+# A choice is a model round plus a tool call, so it gets more room than a
+# plain reply.
+WAITING_TIMEOUT_SECONDS = 10.0
+
 # 表格与符号必须原样穿过 daemon 的解析与 JSON 传输。提示词明确要求不改写，
 # 断言挑的是稳定标记：markdown 表格的三行 + 各类符号。
 SPECIAL_PROMPT = (
@@ -127,7 +150,7 @@ def wait_until(rpc, pane_id, predicate, timeout, interval=0.5):
     return last
 
 
-def wait_for_reply(rpc, pane_id, timeout, previous_seq=None, interval=1.0):
+def wait_for_reply(rpc, pane_id, timeout, previous_seq=None, interval=0.5):
     """轮询 agent.list 直到该 pane 带出非空 last_reply。
 
     daemon 只在被拉取时解析会话存储，首次读可能早于 transcript 落盘，所以
@@ -224,13 +247,26 @@ def check_contract(harness, entry, label):
     pane_id = entry.get("pane_id") or "?"
     seq = entry.get("completion_seq")
     reply = entry.get("last_reply")
+    status = entry.get("agent_status")
     if reply is not None:
-        harness.expect(
-            seq is not None,
-            "%s %s: 有 last_reply 就有 completion_seq" % (label, pane_id),
-            "completion_seq 非 null",
-            repr(seq),
-        )
+        # A working agent has not finished the turn: its tool call is not a
+        # reply, and quoting it in a notification would be wrong.
+        if status == "working":
+            harness.fail(
+                "%s %s: working 态不应有 last_reply" % (label, pane_id),
+                "null/空",
+                repr(reply),
+            )
+        # A waiting agent has no completion marker: the turn is not finished,
+        # and its text is the question it is asking. Only a settled turn is
+        # required to carry the marker that identifies it.
+        if status in ("idle", "done") and seq is None:
+            # The text can come straight from the stop hook, which does not
+            # carry a completion marker. That is a valid source, not a fault.
+            harness.warn(
+                "%s %s: 完成态的 last_reply 没有 completion_seq（hook 直供文本）"
+                % (label, pane_id)
+            )
         harness.expect(
             isinstance(reply, str) and reply.strip() != "",
             "%s %s: last_reply 非空" % (label, pane_id),
@@ -316,13 +352,118 @@ def check_special(harness, rpc, pane_id, previous_seq, args):
         harness.info(reply)
 
 
+def check_waiting(harness, rpc, pane_id, args, deadline=None):
+    """等待选择时，agent.reply 仍能给出它问的问题与选项。
+
+    这一态没有任何 assistant 消息写进会话文件：agent 还没回答，只是在等。
+    所以取到的内容只能来自 hook 上报（AskUserQuestion 的 tool_input）。
+
+    deadline 是本次 agent 的总预算截止时刻；没有剩余时间就直接判失败，
+    不再用一个默认超时把整轮拖长。
+    """
+    def left(default):
+        if deadline is None:
+            return default
+        return max(0.0, min(default, deadline - time.time()))
+
+    harness.info("")
+    harness.info("== 等待选择（notify）")
+    if deadline is not None and deadline - time.time() < 5.0:
+        harness.fail(
+            "等待选择（notify）",
+            "剩余预算 ≥ 5 秒",
+            "%.1f 秒" % (deadline - time.time()),
+        )
+        return
+    # A choice never returns the pane to idle, so waiting for a finished round
+    # here would burn the whole round budget before the choice is even read.
+    # Send, then wait for blocked directly.
+    rpc.call("pane.send_text", {"pane_id": pane_id, "text": CHOICE_PROMPT})
+    time.sleep(TUI_READY_DELAY_SECONDS)
+    rpc.call("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]})
+    # The first return can be swallowed while the TUI is still laying out, so
+    # the prompt is submitted again while the pane is still idle. Each retry
+    # waits before pressing again; pressing while working would interrupt.
+    blocked_deadline = time.time() + left(WAITING_TIMEOUT_SECONDS)
+    submits = 0
+    next_submit = time.time() + CHOICE_CONFIRM_SECONDS
+    pane = {}
+    while time.time() < blocked_deadline:
+        pane = pane_state(rpc, pane_id)
+        status = pane.get("agent_status")
+        if status == "blocked":
+            break
+        if (
+            submits < CHOICE_SUBMIT_ATTEMPTS
+            and time.time() >= next_submit
+            and status in ("idle", "done")
+        ):
+            rpc.call("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]})
+            submits += 1
+            next_submit = time.time() + CHOICE_CONFIRM_SECONDS
+        time.sleep(0.5)
+    if not harness.equal(
+        "等待选择时状态变 blocked", "blocked", pane.get("agent_status")
+    ):
+        return
+    # The pane turns blocked before the choice is drawn, so the reply is polled
+    # for a short while: on several agents the text appears a moment later.
+    reply = None
+    approvals = 0
+    reply_deadline = time.time() + left(CHOICE_REPLY_WINDOW_SECONDS)
+    while time.time() < reply_deadline:
+        try:
+            result = rpc.call("agent.reply", {"target": pane_id})
+        except agent_rpc.EnvironmentNotMet as error:
+            # An unavailable reply interface is exactly what this check exists
+            # to catch; it is a failure, never a skip.
+            harness.fail("等待选择时 agent.reply 可用", "接口可用", str(error))
+            return
+        reply = result.get("reply")
+        if isinstance(reply, str) and all(label in reply for label in CHOICE_LABELS):
+            break
+        if approvals < WAITING_APPROVALS and "permission" in (reply or "").lower():
+            # A permission prompt stands before the choice; approve it.
+            rpc.call("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]})
+            approvals += 1
+        time.sleep(0.5)
+    harness.expect(
+        isinstance(reply, str) and reply.strip() != "",
+        "等待选择时 agent.reply 非空",
+        "非空字符串",
+        repr(reply),
+    )
+    for label in CHOICE_LABELS:
+        harness.expect(
+            isinstance(reply, str) and label in reply,
+            "等待选择的正文含选项 %r" % label,
+            "包含",
+            repr(reply),
+        )
+    if isinstance(reply, str):
+        lowered = reply.lower()
+        for noise in TERMINAL_NOISE:
+            harness.expect(
+                noise not in lowered,
+                "等待选择的正文不含终端装饰 %r" % noise,
+                "不含",
+                "包含",
+            )
+        if args.show_reply:
+            harness.info("等待选择的正文：")
+            harness.info(reply)
+    # Leave the wait so closing the workspace does not strand a blocked agent.
+    rpc.call("pane.send_keys", {"pane_id": pane_id, "keys": ["escape"]})
+
+
 def check_agent(harness, rpc, args, agent):
     harness.info("")
     harness.info("== %s" % agent)
 
     env, reason = agent_prereqs.prepare(agent)
     if reason:
-        harness.warn("%s 跳过：%s" % (agent, reason))
+        # Not runnable is a failure of this check, not a skip.
+        harness.fail("%s 环境准备" % agent, "可运行", reason)
         return
 
     created = rpc.create_workspace(
@@ -420,6 +561,9 @@ def check_agent(harness, rpc, args, agent):
 
         if args.special_chars:
             check_special(harness, rpc, pane_id, entry.get("completion_seq"), args)
+
+        if args.waiting:
+            check_waiting(harness, rpc, pane_id, args)
     finally:
         if not args.keep:
             rpc.close_workspace(workspace.get("workspace_id") or "", close_group=True)
@@ -515,6 +659,11 @@ def add_arguments(parser):
         type=float,
         default=DEFAULT_SETTLE_SECONDS,
         help="识别出 agent 后、发提示前的稳定期，默认 %(default)s 秒",
+    )
+    parser.add_argument(
+        "--waiting",
+        action="store_true",
+        help="额外校验等待选择（notify）时 agent.reply 是否给出问题与选项",
     )
     parser.add_argument(
         "--keep", action="store_true", help="结束后不关闭本轮新建的 workspace"

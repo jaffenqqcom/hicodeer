@@ -133,7 +133,10 @@ impl App {
         }
     }
 
-    pub(super) fn collect_agent_infos(&self) -> Vec<crate::api::schema::AgentInfo> {
+    pub(super) fn collect_agent_infos(
+        &self,
+        include_reply: bool,
+    ) -> Vec<crate::api::schema::AgentInfo> {
         self.state
             .workspaces
             .iter()
@@ -143,7 +146,7 @@ impl App {
                     tab.layout
                         .pane_ids()
                         .into_iter()
-                        .filter_map(move |pane_id| self.agent_info(ws_idx, pane_id))
+                        .filter_map(move |pane_id| self.agent_info(ws_idx, pane_id, include_reply))
                 })
             })
             .collect()
@@ -179,7 +182,7 @@ impl App {
         target: &str,
     ) -> Result<crate::api::schema::AgentInfo, TerminalTargetError> {
         let resolved = self.resolve_agent_target(target)?;
-        self.agent_info(resolved.ws_idx, resolved.pane_id)
+        self.agent_info(resolved.ws_idx, resolved.pane_id, true)
             .ok_or_else(|| TerminalTargetError::NotFound {
                 target: target.to_string(),
             })
@@ -194,7 +197,7 @@ impl App {
             .focus_pane_in_workspace(resolved.ws_idx, resolved.pane_id);
         self.state.mark_active_tab_seen();
         self.state.mode = crate::app::Mode::Terminal;
-        self.agent_info(resolved.ws_idx, resolved.pane_id)
+        self.agent_info(resolved.ws_idx, resolved.pane_id, true)
             .ok_or_else(|| TerminalTargetError::NotFound {
                 target: target.to_string(),
             })
@@ -242,7 +245,7 @@ impl App {
         self.state.mark_session_dirty();
         self.schedule_session_save();
         self.emit_pane_updated(resolved.ws_idx, resolved.pane_id);
-        self.agent_info(resolved.ws_idx, resolved.pane_id)
+        self.agent_info(resolved.ws_idx, resolved.pane_id, true)
             .ok_or_else(|| {
                 AgentRenameError::Target(TerminalTargetError::NotFound {
                     target: target.to_string(),
@@ -374,7 +377,7 @@ impl App {
         self.schedule_session_save();
 
         let agent = self
-            .agent_info(ws_idx, pane_id)
+            .agent_info(ws_idx, pane_id, true)
             .ok_or(AgentStartError::TargetUnavailable(params.pane_id))?;
         Ok((agent, argv))
     }
@@ -500,6 +503,7 @@ impl App {
         &self,
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
+        include_reply: bool,
     ) -> Option<crate::api::schema::AgentInfo> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane_state = ws.pane_state(pane_id)?;
@@ -508,22 +512,39 @@ impl App {
             return None;
         }
         let pane = self.pane_metadata(ws_idx, pane_id)?;
+        // Reading the reply means parsing the agent's own transcript. A status
+        // poll runs every few seconds, so it asks for the state without it and
+        // the reply is fetched on demand instead.
+        //
+        // No completion marker is required: an agent waiting for the user has
+        // not finished the turn, and the text before its question is exactly
+        // what the reader needs to answer.
+        // A waiting pane is answered from the screen; its transcript only holds
+        // the previous turn, so parsing it here would be discarded work.
         #[cfg(target_env = "ohos")]
-        let last_reply = {
+        let last_reply = if include_reply
+            && pane.agent_status != crate::api::schema::AgentStatus::Blocked
+        {
             let session = pane.agent_session.as_ref();
             let session_path = session
                 .and_then(|session| session.path.as_deref())
                 .map(std::path::Path::new);
             let session_id = session.map(|session| session.value.as_str());
-            crate::fetch_reply::reply_for_completion(
-                &pane.pane_id,
-                terminal.last_agent_completion_seq,
-                pane.agent.as_deref(),
+            // The stop hook carried the text already; it is authoritative and
+            // does not need the transcript to be flushed.
+            let hook_reply = terminal
+                .hook_authority
+                .as_ref()
+                .and_then(|authority| authority.message.as_deref());
+            crate::fetch_reply::fetch_reply(
+                pane.agent.as_deref().unwrap_or(""),
                 session_path,
                 session_id,
                 pane.cwd.as_deref(),
-                None,
+                hook_reply,
             )
+        } else {
+            None
         };
         #[cfg(not(target_env = "ohos"))]
         let last_reply: Option<String> = None;
@@ -536,6 +557,11 @@ impl App {
             terminal_title_stripped: pane.terminal_title_stripped,
             display_agent: pane.display_agent,
             agent_status: pane.agent_status,
+            blocked_seq: terminal
+                .hook_authority
+                .as_ref()
+                .map(|authority| authority.blocked_seq)
+                .unwrap_or(0),
             screen_detection_skipped: terminal.full_lifecycle_hook_authority_active(),
             state_labels: pane.state_labels,
             tokens: pane.tokens,
@@ -575,7 +601,7 @@ impl App {
         name: &str,
         except_terminal_id: &str,
     ) -> Vec<crate::api::schema::AgentInfo> {
-        self.collect_agent_infos()
+        self.collect_agent_infos(true)
             .into_iter()
             .filter(|agent| {
                 agent.name.as_deref() == Some(name) && agent.terminal_id != except_terminal_id

@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codex
-# HERDR_INTEGRATION_VERSION=13
+# HERDR_INTEGRATION_VERSION=17
 
 set -eu
 
@@ -60,6 +60,51 @@ if inherited_session_id and inherited_session_id != agent_session_id:
 
 request_id = f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):06d}"
 report_seq = time.time_ns()
+
+def describe_prompt(hook_input, blocked=False):
+    """The text the user needs in order to answer this hook."""
+    if blocked:
+        # A wait has to describe what the user must answer now. The last
+        # assistant line belongs to the turn that just ended and would quote
+        # the previous answer instead.
+        hook_input = dict(hook_input)
+        hook_input.pop("last_assistant_message", None)
+    tool_input = hook_input.get("tool_input")
+    if isinstance(tool_input, dict):
+        questions = tool_input.get("questions")
+        if isinstance(questions, list):
+            parts = []
+            for question in questions:
+                if not isinstance(question, dict):
+                    continue
+                text = question.get("question") or question.get("header")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+                options = question.get("options")
+                if isinstance(options, list):
+                    for option in options:
+                        if not isinstance(option, dict):
+                            continue
+                        label = option.get("label")
+                        if isinstance(label, str) and label.strip():
+                            parts.append("- " + label.strip())
+            if parts:
+                return "\n".join(parts)
+        for key in ("command", "description", "prompt", "url"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    # The question and its options live in tool_input, which is the text the
+    # reader has to answer. The last assistant line is only a fallback for a
+    # report that carries no tool input, such as a finished turn.
+    last_reply = hook_input.get("last_assistant_message")
+    if isinstance(last_reply, str) and last_reply.strip():
+        return last_reply.strip()
+    message = hook_input.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    return None
+
 requests = []
 
 if action == "session":
@@ -78,16 +123,21 @@ if action == "session":
         params["session_start_source"] = session_start_source
     requests.append(("pane.report_agent_session", params))
 else:
-    requests.append((
-        "pane.report_agent",
-        {
-            "pane_id": pane_id,
-            "source": source,
-            "agent": "codex",
-            "seq": report_seq,
-            "state": action,
-        },
-    ))
+    params = {
+        "pane_id": pane_id,
+        "source": source,
+        "agent": "codex",
+        "seq": report_seq,
+        "state": action,
+    }
+    # Only the two states that need attention carry text: a finished turn
+    # has its final reply, a wait has the question and its options. A working
+    # report is a tool call, and its command is not a reply.
+    if action in ("idle", "blocked"):
+        prompt = describe_prompt(hook_input)
+        if prompt:
+            params["message"] = prompt
+    requests.append(("pane.report_agent", params))
     # Stop carries the transcript too; refreshing the path here keeps the
     # session record current even when SessionStart ran before the rollout
     # file existed.

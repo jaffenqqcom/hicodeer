@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=copilot
-# HERDR_INTEGRATION_VERSION=6
+# HERDR_INTEGRATION_VERSION=10
 
 set -eu
 
@@ -84,6 +84,51 @@ session_id = hook_input.get("session_id")
 if not isinstance(session_id, str) or not session_id:
     session_id = hook_input.get("sessionId")
 
+
+def describe_prompt(hook_input, blocked=False):
+    """The text the user needs in order to answer this hook."""
+    if blocked:
+        # A wait has to describe what the user must answer now. The last
+        # assistant line belongs to the turn that just ended and would quote
+        # the previous answer instead.
+        hook_input = dict(hook_input)
+        hook_input.pop("last_assistant_message", None)
+    tool_input = hook_input.get("tool_input")
+    if isinstance(tool_input, dict):
+        questions = tool_input.get("questions")
+        if isinstance(questions, list):
+            parts = []
+            for question in questions:
+                if not isinstance(question, dict):
+                    continue
+                text = question.get("question") or question.get("header")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+                options = question.get("options")
+                if isinstance(options, list):
+                    for option in options:
+                        if not isinstance(option, dict):
+                            continue
+                        label = option.get("label")
+                        if isinstance(label, str) and label.strip():
+                            parts.append("- " + label.strip())
+            if parts:
+                return "\n".join(parts)
+        for key in ("command", "description", "prompt", "url"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    # The question and its options live in tool_input, which is the text the
+    # reader has to answer. The last assistant line is only a fallback for a
+    # report that carries no tool input, such as a finished turn.
+    last_reply = hook_input.get("last_assistant_message")
+    if isinstance(last_reply, str) and last_reply.strip():
+        return last_reply.strip()
+    message = hook_input.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    return None
+
 if action == "session":
     if not isinstance(session_id, str) or not session_id:
         raise SystemExit(0)
@@ -110,6 +155,11 @@ else:
             "seq": time.time_ns(),
         },
     }
+    # Only the two states that need the user's eyes carry text.
+    if action in ("idle", "blocked"):
+        prompt = describe_prompt(hook_input)
+        if prompt:
+            request["params"]["message"] = prompt
     if isinstance(session_id, str) and session_id:
         request["params"]["agent_session_id"] = session_id
 

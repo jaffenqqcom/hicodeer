@@ -8,13 +8,12 @@
 //! A reply supplied by a Stop hook wins over the file: transcript files may be
 //! written asynchronously and can lag behind the hook event.
 
-use std::collections::HashMap;
+pub(crate) mod screen;
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -64,86 +63,14 @@ pub(crate) fn extractor(agent: &str) -> Option<Extractor> {
     Some(chosen)
 }
 
-/// Cached replies for completed turns, keyed by public pane id. The stored
-/// completion sequence identifies which turn produced the reply: a new
-/// completion re-parses once, and a reply for a turn that never completed is
-/// never kept. This is bookkeeping keyed on a monotonic server sequence, not a
-/// guess about file contents.
-static REPLY_CACHE: OnceLock<Mutex<HashMap<String, CachedReply>>> = OnceLock::new();
-
-/// How long a failed parse keeps being retried. Agents write their transcript
-/// asynchronously, so the first read after the stop hook can land before the
-/// last record; the window is measured in time rather than in calls because
-/// `agent.list` is polled at a rate the agents do not control.
-const REPLY_RETRY_WINDOW: Duration = Duration::from_secs(30);
-
-/// One pane's reply bookkeeping for a single completion sequence.
-struct CachedReply {
-    seq: u64,
-    reply: Option<String>,
-    first_attempt: Instant,
-}
-
-/// Returns the reply for a pane's current completed turn, parsing at most once
-/// per completion sequence. `agent.list` is polled every few seconds, so
-/// parsing on every poll would re-read large transcripts and re-spawn `sqlite3`
-/// in the daemon's main loop. `completion_seq` is `None` for turns that did not
-/// complete (an Esc interrupt), so no reply is produced for those.
-pub(crate) fn reply_for_completion(
-    pane_id: &str,
-    completion_seq: Option<u64>,
-    agent: Option<&str>,
-    source_path: Option<&Path>,
-    session_id: Option<&str>,
-    cwd: Option<&str>,
-    hook_reply: Option<&str>,
-) -> Option<String> {
-    let Some(seq) = completion_seq else {
-        if let Ok(mut cache) = REPLY_CACHE.get_or_init(Default::default).lock() {
-            cache.remove(pane_id);
-        }
-        return None;
-    };
-    let cache = REPLY_CACHE.get_or_init(Default::default);
-    if let Ok(entries) = cache.lock() {
-        if let Some(cached) = entries.get(pane_id) {
-            let settled = cached.reply.is_some()
-                || cached.first_attempt.elapsed() >= REPLY_RETRY_WINDOW;
-            if cached.seq == seq && settled {
-                tracing::debug!("fetch_reply: cache hit for {pane_id} at seq {seq}");
-                return cached.reply.clone();
-            }
-        }
-    }
-    let reply = fetch_reply(agent.unwrap_or(""), source_path, session_id, cwd, hook_reply);
-    if let Ok(mut entries) = cache.lock() {
-        let first_attempt = match entries.get(pane_id) {
-            Some(cached) if cached.seq == seq => cached.first_attempt,
-            _ => Instant::now(),
-        };
-        if reply.is_none() {
-            tracing::warn!(
-                "fetch_reply: no reply for {pane_id} at seq {seq}, retrying within {:?}",
-                REPLY_RETRY_WINDOW
-            );
-        }
-        entries.insert(
-            pane_id.to_owned(),
-            CachedReply {
-                seq,
-                reply: reply.clone(),
-                first_attempt,
-            },
-        );
-    }
-    reply
-}
-
 /// Recovers the last assistant reply for `agent`.
 ///
 /// `hook_reply` is the final-text field from the Stop hook payload; when
 /// present it is authoritative. Otherwise the agent's own session store at
 /// `source_path` is parsed by that agent's adapter.
+///
+/// Every call reads the store: agents write their transcript asynchronously, so
+/// a cached copy can lag behind the turn the caller is asking about.
 pub(crate) fn fetch_reply(
     agent: &str,
     source_path: Option<&Path>,
@@ -740,47 +667,6 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{label}: {}", error.0));
             assert_eq!(reply, expected, "{label}");
         }
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-#[test]
-    fn a_settled_reply_stays_for_the_same_sequence() {
-        let pane = "test-pane-settled-reply";
-        let first =
-            reply_for_completion(pane, Some(21), Some("claude"), None, None, None, Some("answer"));
-        let second =
-            reply_for_completion(pane, Some(21), Some("claude"), None, None, None, Some("changed"));
-        assert_eq!(first.as_deref(), Some("answer"));
-        assert_eq!(second.as_deref(), Some("answer"));
-    }
-
-    #[test]
-    fn a_missing_transcript_is_retried_within_the_window() {
-        let dir = std::env::temp_dir().join(format!(
-            "fetch-reply-retry-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("session.jsonl");
-
-        let pane = "test-pane-retry-window";
-        let first =
-            reply_for_completion(pane, Some(31), Some("claude"), Some(&path), None, None, None);
-        assert!(first.is_none());
-
-        std::fs::write(
-            &path,
-            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"late\"}]}}\n",
-        )
-        .unwrap();
-        let second =
-            reply_for_completion(pane, Some(31), Some("claude"), Some(&path), None, None, None);
-        assert_eq!(second.as_deref(), Some("late"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

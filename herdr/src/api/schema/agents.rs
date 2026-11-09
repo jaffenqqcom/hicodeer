@@ -191,6 +191,33 @@ pub struct AgentPromptParams {
     pub wait: Option<AgentPromptWaitOptions>,
 }
 
+/// Parameters for listing agents.
+///
+/// A status poll runs every few seconds, so it turns `include_reply` off: the
+/// reply comes from parsing the agent's transcript, while a poll only needs the
+/// state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentListParams {
+    #[serde(default = "include_reply_by_default")]
+    pub include_reply: bool,
+}
+
+fn include_reply_by_default() -> bool {
+    true
+}
+
+pub(crate) fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+impl Default for AgentListParams {
+    fn default() -> Self {
+        Self {
+            include_reply: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentInfo {
     pub terminal_id: String,
@@ -207,6 +234,10 @@ pub struct AgentInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_agent: Option<String>,
     pub agent_status: AgentStatus,
+    /// Which wait this pane is in. A new value means a different question, so
+    /// a reader can ignore a repeat of the one it already announced.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub blocked_seq: u64,
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub screen_detection_skipped: bool,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

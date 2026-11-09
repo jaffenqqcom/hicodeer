@@ -26,7 +26,7 @@ import sys
 import agent_rpc
 from agent_rpc import EXIT_ENV, EXIT_FAIL, EXIT_PASS, Harness, run_guarded
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 DEFAULT_SKILL_PATH = os.path.join(REPO_ROOT, "herdr", "skills", "herdr", "SKILL.md")
 DEFAULT_BINARY = "hicodeerd"
 

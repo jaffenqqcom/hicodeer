@@ -470,12 +470,12 @@ fn parse_rows(text: &str, db: &Path) -> Result<Vec<SessionRow>, String> {
 mod tests {
     use super::*;
 
-    /// Fixtures sit beside the workspace rather than inside the crate, so the
-    /// end-to-end scripts under `agent-tests/` read the same samples. These
+    /// Fixtures live under `agent-tests/` at the workspace root, outside this crate,
+    /// and the end-to-end scripts read the same samples. These
     /// hold what the `sqlite3` CLI prints, so no database is needed here.
     fn fixture(relative: &str) -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../agent-tests/fixtures/deveco")
+            .join("agent-tests/fixtures/deveco")
             .join(relative);
         std::fs::read_to_string(path).expect("fixture should be readable")
     }

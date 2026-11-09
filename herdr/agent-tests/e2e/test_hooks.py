@@ -30,12 +30,12 @@ DEFAULT_PROMPT = "用 bash 执行 echo hi，然后只回复两个字：成功"
 HOOK_AGENTS = ["deveco", "atomcode", "codewhale", "zcode", "gemini", "hermes"]
 
 # 启动提示的轮询是 0.5 秒一轮；连续这么多轮没看到提示就认为启动提示已经处理完。
-QUIET_ROUNDS_BEFORE_DONE = 12
+QUIET_ROUNDS_BEFORE_DONE = 8
 
 # 提示送进输入框后等 TUI 摆好窗口，再按回车：TUI 首帧未就绪时会把第一个回车吞掉。
 TUI_READY_DELAY_SECONDS = 1.0
 # 按下回车后，状态在这个窗口内没离开起始值就认为没提交，再按一次。
-PROMPT_CONFIRM_SECONDS = 12.0
+PROMPT_CONFIRM_SECONDS = 5.0
 PROMPT_SUBMIT_ATTEMPTS = 3
 # 重发回车前再扫一遍启动提示的窗口（秒）。
 STARTUP_PROMPT_RESCAN_SECONDS = 8.0
@@ -117,7 +117,7 @@ def integration_entry(rpc, target):
     return None
 
 
-def ensure_installed(harness, rpc, target, allow_install):
+def ensure_installed(harness, rpc, target, allow_install, install_timeout=120.0):
     """断言目标可用，并在需要时走一次真实的自动安装。"""
     entry = integration_entry(rpc, target)
     if entry is None:
@@ -142,7 +142,7 @@ def ensure_installed(harness, rpc, target, allow_install):
         )
         return False
     harness.info("      installing %s (state=%s)" % (target, entry.get("state")))
-    rpc.call("integration.install", {"target": target}, timeout=120.0)
+    rpc.call("integration.install", {"target": target}, timeout=install_timeout)
     entry = integration_entry(rpc, target)
     actual = entry.get("state") if entry else None
     harness.equal("%s 安装后状态" % target, "current", actual)

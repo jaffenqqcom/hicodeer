@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=11
+// HERDR_INTEGRATION_VERSION=13
 // @ts-nocheck
 
 import net from "node:net";
@@ -250,8 +250,11 @@ export default function (pi) {
     publishState();
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
-    if (!rootSession || ctx?.isIdle?.() !== true) {
+  // Pi has no "agent_settled"; the loop end is "agent_end". The context still
+  // reports itself busy inside this callback, so the event is the signal: a
+  // turn that resumes later emits agent_start again.
+  pi.on("agent_end", (_event, _ctx) => {
+    if (!rootSession) {
       return;
     }
 

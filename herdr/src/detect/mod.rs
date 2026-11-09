@@ -115,7 +115,7 @@ impl Agent {
         Self::OpenDesk,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 24] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 25] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -140,6 +140,7 @@ impl Agent {
         Self::Muse,
         Self::CodeBuddy,
         Self::MiniMax,
+        Self::AtomCode,
     ];
 }
 

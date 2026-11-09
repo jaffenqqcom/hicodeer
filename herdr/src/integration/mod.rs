@@ -66,7 +66,7 @@ const PI_EXTENSION_INSTALL_NAME: &str = "hicodeer-agent-state.ts";
 /// extensions directory so an upgrade does not leave a second reporter behind.
 pub(crate) const LEGACY_PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
 const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/hicodeer-agent-state.ts");
-const PI_INTEGRATION_VERSION: u32 = 11;
+const PI_INTEGRATION_VERSION: u32 = 13;
 const OMP_EXTENSION_INSTALL_NAME: &str = "hicodeer-omp-agent-state.ts";
 /// The OMP extension file name used before the rename. Install removes it, so an
 /// upgrade cannot run the previous copy beside the current one.

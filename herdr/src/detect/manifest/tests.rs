@@ -939,3 +939,53 @@ fn codebuddy_wrapped_footer_clause_is_working() {
     let detection = detect(Agent::CodeBuddy, screen);
     assert_eq!(detection.state, AgentState::Working);
 }
+
+#[test]
+fn bundled_atomcode_manifest_covers_choices_and_running_status() {
+    let manifest = parse_manifest(include_str!("../manifests/atomcode.toml"))
+        .expect("atomcode manifest parses");
+    assert_eq!(manifest.rules.len(), 2);
+    assert!(manifest
+        .rules
+        .iter()
+        .any(|rule| rule.state == Some(ManifestState::Blocked)));
+    assert!(manifest
+        .rules
+        .iter()
+        .any(|rule| rule.state == Some(ManifestState::Working)));
+}
+
+#[test]
+fn bundled_atomcode_manifest_reads_a_live_choice_and_ignores_an_answered_one() {
+    let question = "│ 下面哪种方案更好？\n\n❯ 1. Alpha\n     方案 Alpha\n  2. Beta\n     方案 Beta\n  3. Type something.\n  ─────────────────────────────────\n  4. Chat about this\n\n  ↑↓ select · ⏎ confirm · esc Deny\ndeepseek-flash │ ~/workspace/hicodeer │ 26.9K/128K tok (21%) │ cache 33%";
+    let choice_explain = explain(Agent::AtomCode, question);
+    assert_eq!(choice_explain.state, AgentState::Blocked);
+    assert_eq!(
+        choice_explain
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("drawn_choice")
+    );
+
+    // The answered frame stays in the buffer; the done row below it proves the
+    // question is history and must not keep the pane blocked.
+    let answered = "❯ 1. Alpha\n  2. Beta\n  3. Type something.\n  ─────────────\n  4. Chat about this\n\n● 你选择了 Alpha。\n\n✻ Done 21:25 · 8.5s · 2 rounds\n\n──────────────────────────\n❯\n──────────────────────────\ndeepseek-flash │ ~/workspace/hicodeer │ 27.1K/128K tok (21%)";
+    let answered_explain = explain(Agent::AtomCode, answered);
+    assert_ne!(
+        answered_explain.state,
+        AgentState::Blocked,
+        "an answered frame is history, not a wait"
+    );
+}
+
+#[test]
+fn bundled_atomcode_manifest_matches_the_running_status_row() {
+    let screen = "❯ 请用 bash 连续执行 6 次 sleep 2\n\n● 连续执行 6 次 sleep 2\n  ⎿ $ sleep 2; sleep 2 · running\n\n\n⠹ running 1 tools （2s elapsed · ↑ 26.8K · ↓ 144 · 48 tok/s · cached 98.72%）\n\n────────────────────────────────\n❯\n────────────────────────────────\ndeepseek-flash │ ~/workspace/hicodeer │ 26.8K/128K tok (21%)";
+    let explain = explain(Agent::AtomCode, screen);
+    assert_eq!(explain.state, AgentState::Working);
+    assert_eq!(
+        explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("status_running")
+    );
+}

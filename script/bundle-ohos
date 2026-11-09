@@ -521,6 +521,15 @@ cd "$PROJECT_ROOT"
 
 # --hap-only 跳过 launch-zed 编译与 so 拷贝，直接复用现有 libcore.so
 if [ "$MODE" != "hap" ]; then
+  # Binaries embed assets/licenses.md at compile time (util/debug-embed for
+  # debug builds, rust-embed for release), and the file is generated instead of
+  # tracked, so regenerate it before compiling. Only release builds need it:
+  # they are the artifacts that ship.
+  if [ "$IS_RELEASE" = true ]; then
+    echo "[hicodeer-ohos-build] Generating assets/licenses.md ..."
+    script/generate-licenses
+  fi
+
   NPROC=$(nproc 2>/dev/null || echo 4)
   OHOS_TARGET_DIR="$SHARED_TARGET_DIR"
   echo "[hicodeer-ohos-build] Cargo build ($PROFILE_DIR, $NPROC CPUs) ..."
@@ -1143,8 +1152,15 @@ $NO_SHIM "$NODE_CMD" "$HVIGORW_JS" \
   if [ -d "$HNP_SRC_DIR" ] && ls "$HNP_SRC_DIR"/*.hnp >/dev/null 2>&1; then
     # unsigned HAP 是条目比对的基准，必须由本次 assembleHap 重新产出。
     UNSIGNED_HAP="$HAP_DIR/entry/build/default/outputs/default/entry-default-unsigned.hap"
-    if [ ! -f "$UNSIGNED_HAP" ]; then
-      echo "[hicodeer-ohos-build] ERROR: $UNSIGNED_HAP 不存在；拒绝重打（它是条目比对的基准）" >&2
+    # 条目比对的基准。hvigor 的 SignHap 会在签名成功后删掉 unsigned 包（本次
+    # 实测 22:52 那轮就删了），所以它不能是唯一来源：退到 signed 包，比对时跳过
+    # 它多出来的 META-INF 签名块。两者条目集合在签名前后是同一份。
+    BASELINE_HAP="$UNSIGNED_HAP"
+    if [ ! -f "$BASELINE_HAP" ]; then
+      BASELINE_HAP="$HAP_DIR/entry/build/default/outputs/default/entry-default-signed.hap"
+    fi
+    if [ ! -f "$BASELINE_HAP" ]; then
+      echo "[hicodeer-ohos-build] ERROR: 找不到条目比对基准（unsigned / signed 都不存在）" >&2
       exit 1
     fi
     if [ ! -x "$OHOS_PACKING_TOOL" ]; then
@@ -1166,7 +1182,7 @@ $NO_SHIM "$NODE_CMD" "$HVIGORW_JS" \
       --ets-path "$HAP_INTERMEDIATES/loader_out/default/ets" \
       --pkg-context-path "$HAP_INTERMEDIATES/loader/default/pkgContextInfo.json" \
       --hnp-path "$HAP_DIR/entry/hnp"
-    python3 - "$PACKED_HAP" "$UNSIGNED_HAP" "$HNP_SRC_DIR" arm64-v8a <<'PY'
+    python3 - "$PACKED_HAP" "$BASELINE_HAP" "$HNP_SRC_DIR" arm64-v8a <<'PY'
 import os, sys, zipfile
 packed, unsigned, hnp_dir, abi = sys.argv[1:5]
 # 官方打包器把 hnp 放到 HAP 根的 hnp/<abi>/ 下，条目名用 ABI 目录下的相对路径
@@ -1181,7 +1197,8 @@ for root, _dirs, files in os.walk(hnp_dir):
 if not payloads:
     sys.exit("no .hnp payload found under " + hnp_dir)
 with zipfile.ZipFile(unsigned) as baseline_zip:
-    baseline = set(baseline_zip.namelist())
+    # signed 基准多出 META-INF/ 签名块；重打包的包未签名，不会带这些条目。
+    baseline = {name for name in baseline_zip.namelist() if not name.startswith("META-INF/")}
 with zipfile.ZipFile(packed) as packed_zip:
     actual = set(packed_zip.namelist())
     missing = (baseline | set(payloads)) - actual

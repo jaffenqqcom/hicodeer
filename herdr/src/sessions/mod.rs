@@ -8,6 +8,7 @@
 //! AtomCode, MiniMax Code, OpenDesk); both kinds implement the same interface
 //! and are registered side by side in `fad.rs`.
 
+mod agent_cli;
 mod atomcode;
 mod claude_store;
 mod codebuddy;

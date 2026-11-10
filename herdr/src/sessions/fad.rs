@@ -34,6 +34,7 @@ use franken_agent_detection::{
 };
 
 use super::CollectedSession;
+use super::agent_cli;
 use super::atomcode;
 use super::claude_store;
 use super::codebuddy;
@@ -148,14 +149,13 @@ enum Guard {
 ///   conversation in a durable store reports the *same* `source_path` (the
 ///   store's `main.jsonl`), so a generic unlink would take the whole store with
 ///   it. Deleting one of its rows needs the store's own rewrite.
-/// - `opencode` and `openclaw` keep their sessions in databases, but each ships
-///   a delete command of its own (`opencode session delete`,
-///   `openclaw sessions delete`). Wiring those up means running the agent's CLI
-///   instead of unlinking a path, which this table cannot express, so they stay
-///   out until that path exists.
-/// - `hermes` has no delete command at all, and its database refuses to drop a
-///   session that has gateway history (a `BEFORE DELETE` trigger), so there is
-///   nothing to wire up.
+/// - `opencode` and `hermes` keep their sessions in databases and ship a delete
+///   command of their own; running it is the only correct removal (child
+///   sessions, delegate chains, media and full-text bookkeeping all belong to
+///   the store). Those two are registered through `agent_cli` instead of this
+///   list, which only describes one-file-per-session stores.
+/// - `openclaw` is the same database shape but stays out for now: nothing here
+///   runs its `openclaw sessions delete` yet.
 const DELETABLE_FAD_SLUGS: &[&str] = &["claude", "codex", "gemini", "kimi", "pi_agent", "qwen"];
 
 /// File extensions a transcript can have. Most stores write `.jsonl`; older
@@ -196,12 +196,20 @@ fn connector_registry() -> Vec<(&'static str, RegisteredStore)> {
     let mut stores: Vec<(&'static str, RegisteredStore)> = fad_stores()
         .into_iter()
         .map(|(slug, connector)| {
+            // A store whose delete is its own command checks the path itself,
+            // so it is registered as store-owned instead of taking the shared
+            // root check meant for plain transcript files.
+            let cli_delete = agent_cli::delete_for(slug);
             (
                 slug,
                 RegisteredStore {
                     connector: with_store_adjustments(slug, connector),
-                    delete: fad_delete_for(slug),
-                    guard: Guard::DetectedRoots,
+                    delete: cli_delete.or_else(|| fad_delete_for(slug)),
+                    guard: if cli_delete.is_some() {
+                        Guard::StoreOwned
+                    } else {
+                        Guard::DetectedRoots
+                    },
                 },
             )
         })

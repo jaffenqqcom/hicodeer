@@ -1,7 +1,7 @@
 // installed by HiCodeer
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // HERDR_INTEGRATION_ID=openclaw
-// HERDR_INTEGRATION_VERSION=1
+// HERDR_INTEGRATION_VERSION=2
 
 import net from "node:net";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";

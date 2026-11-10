@@ -1,7 +1,7 @@
 #!/bin/sh
 # managed by herdr; reinstalling the integration replaces this file.
 # HERDR_INTEGRATION_ID=kimi
-# HERDR_INTEGRATION_VERSION=13
+# HERDR_INTEGRATION_VERSION=15
 
 action="${1:-}"
 case "$action" in
@@ -23,11 +23,11 @@ import time
 
 action = sys.argv[1]
 try:
-    payload = json.load(sys.stdin)
+    hook_input = json.load(sys.stdin)
 except Exception:
-    payload = {}
+    hook_input = {}
 
-session_id = payload.get("session_id")
+session_id = hook_input.get("session_id")
 if not isinstance(session_id, str) or not session_id:
     session_id = None
 
@@ -94,7 +94,7 @@ else:
     # has its final reply, a wait has the question and its options. A working
     # report is a tool call, and its command is not a reply.
     if action in ("idle", "blocked"):
-        prompt = describe_prompt(hook_input)
+        prompt = describe_prompt(hook_input, blocked=(action == "blocked"))
         if prompt:
             params["message"] = prompt
 if session_id is not None:

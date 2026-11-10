@@ -38,6 +38,11 @@ mod jsx_tag_auto_close;
 mod linked_editing_ranges;
 mod lsp_ext;
 mod mouse_context_menu;
+// [OHOS PORT BEGIN] Talk to Agent selection collection: the editor reads its
+// own selection, so a git diff's left side reports its own content and lines.
+#[cfg(target_env = "ohos")]
+mod ohos_talk_to_agent;
+// [OHOS PORT END]
 pub mod movement;
 mod persistence;
 mod runnables;
@@ -1015,6 +1020,11 @@ pub struct Editor {
     breadcrumbs_visibility: BreadcrumbsVisibility,
     show_gutter: bool,
     show_scrollbars: ScrollbarAxes,
+    // [OHOS PORT BEGIN] Force scrollbars to stay visible while content overflows.
+    // The global setting's Auto mode only reveals them while scrolling.
+    #[cfg(target_env = "ohos")]
+    force_scrollbar_visibility: bool,
+    // [OHOS PORT END]
     minimap_visibility: MinimapVisibility,
     offset_content: bool,
     disable_expand_excerpt_buttons: bool,
@@ -2401,6 +2411,10 @@ impl Editor {
                 horizontal: full_mode,
                 vertical: full_mode,
             },
+            // [OHOS PORT BEGIN]
+            #[cfg(target_env = "ohos")]
+            force_scrollbar_visibility: false,
+            // [OHOS PORT END]
             minimap_visibility: MinimapVisibility::for_mode(&mode, cx),
             offset_content: !matches!(mode, EditorMode::SingleLine),
             breadcrumbs_visibility: BreadcrumbsVisibility::from_settings(cx),

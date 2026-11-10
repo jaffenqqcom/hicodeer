@@ -1,32 +1,39 @@
 // HiCodeer addition (not part of upstream Zed): the quick input modal shown
 // over a terminal. Portable GPUI code, not HarmonyOS-specific.
-use editor::Editor;
+use editor::{Editor, EditorElement, EditorStyle};
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable, KeyDownEvent,
-    KeystrokeEvent, MouseButton, MouseDownEvent, ScrollHandle, Subscription, WeakEntity, Window, div,
-    prelude::*, px,
+    AbsoluteLength, AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable,
+    KeyDownEvent,
+    KeystrokeEvent, MouseButton, MouseDownEvent, Pixels, ScrollHandle, Subscription, WeakEntity,
+    TextStyle, Window, div, prelude::*, px, rems,
 };
+use settings::Settings;
+use theme::ActiveTheme;
+use theme_settings::ThemeSettings;
 use ui::prelude::*;
 use ui::{
-    ButtonCommon, ButtonLike, ButtonStyle, Checkbox, Color, Icon, IconName, IconSize, ScrollAxes,
+    ButtonCommon, ButtonLike, ButtonStyle, Checkbox, Icon, IconName, IconSize, ScrollAxes,
     Scrollbars, ToggleState, Tooltip, WithScrollbar,
 };
 
 use crate::{TerminalView, quick_input};
 
-/// The modal takes two fifths of the window, but never gets so narrow that a
-/// phrase becomes unreadable.
-const MODAL_WIDTH_RATIO: f32 = 0.4;
-const MODAL_MIN_WIDTH: f32 = 280.0;
+/// Same footprint as the Talk to Agent dialog, which follows the git commit
+/// modal: 50 characters wide plus its container padding.
+const PREFERRED_CHAR_WIDTH: f32 = 50.0;
+const MODAL_PADDING: f32 = 5.0;
+const FALLBACK_MODAL_WIDTH: f32 = 460.0;
+/// The git commit modal's content height and the extra lines it reserves.
+const MODAL_CONTENT_HEIGHT: f32 = 309.0;
+const MODAL_EXTRA_LINES: f32 = 1.5;
+const MODAL_INNER_PADDING: f32 = 8.0;
+const MODAL_GAP: f32 = 8.0;
+const MODAL_FOOTER_HEIGHT: f32 = 24.0;
+const UI_LINE_HEIGHT_SCALE: f32 = 1.4;
 /// Long lists scroll instead of growing past this share of the window.
 const MODAL_MAX_HEIGHT_RATIO: f32 = 0.6;
-/// Fixed heights used to size the modal; the list itself takes the remainder.
+/// Height of one list row; the list itself takes the remaining modal height.
 const ROW_HEIGHT: f32 = 38.0;
-const HEADER_HEIGHT: f32 = 40.0;
-const INPUT_HEIGHT: f32 = 46.0;
-const OPTIONS_HEIGHT: f32 = 40.0;
-const EMPTY_LIST_HEIGHT: f32 = 56.0;
-const MAX_VISIBLE_ROWS: usize = 8;
 /// Gap between the paste and the Enter that follows it, long enough for the pty
 /// to deliver the paste as its own read.
 const DELAYED_ENTER_MS: u64 = 50;
@@ -48,6 +55,12 @@ pub struct QuickInputState {
     /// is the only place the modal can reliably claim Esc. Held only while the
     /// modal is open.
     escape_interceptor: Option<Subscription>,
+    /// Closes the modal when the window loses activation, so it does not stay
+    /// over a window the user switched away from.
+    activation_subscription: Option<Subscription>,
+    /// Closes the modal when focus leaves its input, which is what happens when
+    /// the user switches to another pane or window inside the app.
+    focus_out_subscription: Option<Subscription>,
     focus_handle: Option<FocusHandle>,
 }
 
@@ -61,6 +74,8 @@ impl Default for QuickInputState {
             row_editor: None,
             scroll: ScrollHandle::new(),
             escape_interceptor: None,
+            activation_subscription: None,
+            focus_out_subscription: None,
             focus_handle: None,
         }
     }
@@ -102,7 +117,45 @@ impl TerminalView {
         quick_input::store().lock().unwrap().reload();
 
         self.install_escape_interceptor(cx);
-        self.ensure_quick_input_editor(window, cx, String::new());
+        if self.quick_input.activation_subscription.is_none() {
+            self.quick_input.activation_subscription = Some(cx.observe_window_activation(
+                window,
+                |this, window, cx| {
+                    if this.quick_input.open && !window.is_window_active() {
+                        this.close_quick_input(window, cx);
+                    }
+                },
+            ));
+        }
+        let editor = self.ensure_quick_input_editor(window, cx, String::new());
+        let editor_handle = editor.read(cx).focus_handle(cx);
+        self.quick_input.focus_out_subscription = Some(cx.on_focus_out(
+            &editor_handle,
+            window,
+            |this, _, window, cx| {
+                if !this.quick_input.open {
+                    return;
+                }
+                // Focus also leaves the top box when a phrase starts editing in
+                // place; only close when neither editor holds it.
+                cx.defer_in(window, |this, window, cx| {
+                    if !this.quick_input.open {
+                        return;
+                    }
+                    let holds_focus = |editor: &Option<Entity<Editor>>| {
+                        editor
+                            .as_ref()
+                            .map(|editor| editor.read(cx).focus_handle(cx).is_focused(window))
+                            .unwrap_or(false)
+                    };
+                    if !holds_focus(&this.quick_input.input)
+                        && !holds_focus(&this.quick_input.row_editor)
+                    {
+                        this.close_quick_input(window, cx);
+                    }
+                });
+            },
+        ));
         cx.notify();
     }
 
@@ -137,6 +190,8 @@ impl TerminalView {
     pub(crate) fn close_quick_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quick_input.open = false;
         self.quick_input.escape_interceptor = None;
+        self.quick_input.activation_subscription = None;
+        self.quick_input.focus_out_subscription = None;
         self.quick_input.editing = None;
         self.quick_input.input = None;
         self.quick_input.row_editor = None;
@@ -426,6 +481,17 @@ impl TerminalView {
             return Vec::new();
         }
 
+        // Activation changes do not always reach the observer on this platform,
+        // so also treat a frame drawn while the window is inactive as a reason
+        // to close.
+        if !window.is_window_active() {
+            cx.defer_in(window, |this, window, cx| {
+                if this.quick_input.open {
+                    this.close_quick_input(window, cx);
+                }
+            });
+        }
+
         // Nothing in the keymap can help if focus drifted away, so pull it back
         // to whichever text box should own the keyboard.
         if let Some(editor) = self.text_box(cx) {
@@ -439,8 +505,10 @@ impl TerminalView {
         let panel_background = cx.theme().colors().element_background;
         let muted_text = cx.theme().colors().text_muted;
         let viewport = window.viewport_size();
-        let width = (f32::from(viewport.width) * MODAL_WIDTH_RATIO).max(MODAL_MIN_WIDTH);
+        let (width, height) = quick_input_modal_sizes(window, cx);
         let max_height = f32::from(viewport.height) * MODAL_MAX_HEIGHT_RATIO;
+        // Same footprint as the Talk to Agent dialog, so all three match.
+        let modal_height = height.min(px(max_height));
 
         // Remembered only so closing the modal can hand focus back to the
         // terminal; the modal itself no longer tracks a focus handle.
@@ -452,14 +520,6 @@ impl TerminalView {
             let store = quick_input::store().lock().unwrap();
             (store.items().to_vec(), store.direct_execute())
         };
-        let visible_rows = items.len().clamp(1, MAX_VISIBLE_ROWS);
-        let list_height = if items.is_empty() {
-            EMPTY_LIST_HEIGHT
-        } else {
-            ROW_HEIGHT * visible_rows as f32
-        };
-        let modal_height = (HEADER_HEIGHT + INPUT_HEIGHT + OPTIONS_HEIGHT + list_height)
-            .min(max_height);
         let selected = self.quick_input.selected;
         let editing = self.quick_input.editing;
         let row_editor = self.quick_input.row_editor.clone();
@@ -473,6 +533,7 @@ impl TerminalView {
             .flex()
             .flex_col()
             .overflow_y_scroll()
+            .bg(cx.theme().colors().editor_background)
             .track_scroll(&self.quick_input.scroll)
             .px_1()
             .pr(px(10.0));
@@ -520,11 +581,13 @@ impl TerminalView {
                 cx,
             );
 
+        // The input box uses the same UI font as the Talk to Agent dialog.
+        let input_style = quick_input_editor_style(window, cx);
         let top_editor: AnyElement = self
             .quick_input
             .input
             .clone()
-            .map(|editor| editor.into_any_element())
+            .map(|editor| EditorElement::new(&editor, input_style).into_any_element())
             .unwrap_or_else(|| div().into_any_element());
 
         vec![
@@ -532,8 +595,10 @@ impl TerminalView {
                 .absolute()
                 .inset_0()
                 .flex()
+                .flex_col()
                 .items_center()
-                .justify_center()
+                // Matches the modal layer's vertical offset and centering.
+                .pt(rems(5.0))
                 .bg(panel_background.opacity(0.55))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -550,14 +615,17 @@ impl TerminalView {
                         // Clicks inside the panel must not bubble to the
                         // backdrop, or every click would dismiss the modal.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .w(px(width))
-                        .h(px(modal_height))
+                        .w(width)
+                        .h(modal_height)
                         .flex()
                         .flex_col()
-                        .rounded_lg()
+                        .p(px(MODAL_PADDING))
+                        .rounded(px(12.0))
                         .border_1()
                         .border_color(border_color)
-                        .bg(panel_background)
+                        // Same outer surface and padding ring as the Talk to Agent
+                        // dialog; the rows below paint the inner editor surface.
+                        .bg(cx.theme().colors().elevated_surface_background)
                         .shadow_lg()
                         .key_context("QuickInput")
                         .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -569,42 +637,22 @@ impl TerminalView {
                         }))
                         .child(
                             div()
+                                .flex_1()
+                                .min_h(px(0.0))
                                 .flex()
-                                .items_center()
-                                .justify_between()
-                                .px_3()
-                                .py_2()
-                                .border_b_1()
-                                .border_color(border_color)
-                                .child(div().text_sm().child(localization::localized_str!("Quick Input")))
+                                .flex_col()
+                                .rounded(px(9.0))
+                                .border_1()
+                                .border_color(cx.theme().colors().border_variant)
+                                .bg(cx.theme().colors().editor_background)
+                                .overflow_hidden()
                                 .child(
-                                    ButtonLike::new("quick-input-close")
-                                        .style(ButtonStyle::Transparent)
-                                        .width(px(24.0))
-                                        .height(px(24.0).into())
-                                        .tooltip(|_window, cx| {
-                                            cx.new(|_cx| {
-                                                Tooltip::new(localization::localized_str!("Close (Esc)"))
-                                            })
-                                            .into()
-                                        })
-                                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                            cx.stop_propagation();
-                                            this.close_quick_input(window, cx);
-                                        }))
-                                        .child(
-                                            Icon::new(IconName::Close)
-                                                .size(IconSize::XSmall)
-                                                .color(Color::Muted),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .px_3()
+                                    div()
+                                        .px_2()
                                 .py_2()
+                                .bg(cx.theme().colors().editor_background)
                                 .border_b_1()
-                                .border_color(border_color)
+                                .border_color(cx.theme().colors().border_variant)
                                 .child(div().h(px(28.0)).child(top_editor)),
                         )
                         .child(list)
@@ -614,8 +662,9 @@ impl TerminalView {
                                 .items_center()
                                 .px_3()
                                 .py_2()
+                                .bg(cx.theme().colors().editor_background)
                                 .border_t_1()
-                                .border_color(border_color)
+                                .border_color(cx.theme().colors().border_variant)
                                 .child(
                                     Checkbox::new(
                                         "quick-input-direct-execute",
@@ -639,6 +688,7 @@ impl TerminalView {
                                         },
                                     )),
                                 ),
+                            ),
                         ),
                 )
                 .into_any_element(),
@@ -761,4 +811,52 @@ fn quick_input_delete_button(index: usize, view: WeakEntity<TerminalView>) -> An
         })
         .child(Icon::new(IconName::Trash).size(IconSize::XSmall))
         .into_any_element()
+}
+/// Same sizing rule as the git commit modal: 50 characters of the buffer font
+/// plus the container padding, so this modal and the Talk to Agent dialog end
+/// up the same size regardless of which font is focused.
+fn quick_input_modal_sizes(window: &Window, cx: &App) -> (Pixels, Pixels) {
+    let settings = ThemeSettings::get_global(cx);
+    let font = settings.ui_font.clone();
+    let font_size = settings.ui_font_size(cx);
+    let font_id = window.text_system().resolve_font(&font);
+    let width = match window.text_system().em_width(font_id, font_size) {
+        Ok(em_width) => em_width * PREFERRED_CHAR_WIDTH + px(MODAL_PADDING * 2.0),
+        Err(_) => px(FALLBACK_MODAL_WIDTH),
+    };
+
+    let line_height = font_size * UI_LINE_HEIGHT_SCALE;
+    let height = px(MODAL_PADDING * 2.0
+        + MODAL_INNER_PADDING * 2.0
+        + MODAL_CONTENT_HEIGHT
+        + MODAL_GAP
+        + MODAL_FOOTER_HEIGHT)
+        + line_height * MODAL_EXTRA_LINES;
+    (width, height)
+}
+
+/// Matches the Talk to Agent input: UI font at the small UI text size, which is
+/// what the Send button label uses.
+fn quick_input_editor_style(_window: &Window, cx: &App) -> EditorStyle {
+    let settings = ThemeSettings::get_global(cx);
+    // Same font and size as editor buffers.
+    let font = settings.buffer_font.clone();
+    let font_size = settings.buffer_font_size(cx);
+
+    EditorStyle {
+        background: cx.theme().colors().editor_background,
+        local_player: cx.theme().players().local(),
+        text: TextStyle {
+            color: cx.theme().colors().text,
+            font_family: font.family.clone(),
+            font_fallbacks: font.fallbacks.clone(),
+            font_features: font.features.clone(),
+            font_size: AbsoluteLength::from(font_size),
+            font_weight: font.weight,
+            line_height: (font_size * settings.buffer_line_height.value()).into(),
+            ..Default::default()
+        },
+        syntax: cx.theme().syntax().clone(),
+        ..Default::default()
+    }
 }

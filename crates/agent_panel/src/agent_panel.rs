@@ -16,6 +16,8 @@ mod im_link;
 mod im_notify;
 mod session_service;
 mod snapshot;
+#[cfg(target_env = "ohos")]
+mod talk_to_agent_modal;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -263,6 +265,31 @@ fn register(workspace: &mut Workspace, _cx: &mut Context<Workspace>) {
             panel.update(cx, |panel, cx| panel.create_space(cx));
         }
     });
+    // [OHOS PORT BEGIN] Talk to Agent dialog, opened from the editor selection.
+    #[cfg(target_env = "ohos")]
+    workspace.register_action(
+        |workspace,
+         action: &zed_actions::agent::SendSelectionToAgent,
+         window,
+         cx| {
+            let Some(panel) = workspace.panel::<AgentPanel>(cx) else {
+                log::warn!("talk to agent: the Agent panel is not available");
+                return;
+            };
+            let context = talk_to_agent_modal::TalkToAgentContext {
+                file_path: action.file_path.clone(),
+                start_line: action.start_line,
+                end_line: action.end_line,
+                selected_text: action.selected_text.clone(),
+                language_name: action.language_name.clone(),
+                is_before_change: action.is_before_change,
+            };
+            workspace.toggle_modal(window, cx, |window, cx| {
+                talk_to_agent_modal::TalkToAgentModal::new(panel.clone(), context, window, cx)
+            });
+        },
+    );
+    // [OHOS PORT END]
 }
 
 /// Whether the workspace currently holds the Agent terminal.

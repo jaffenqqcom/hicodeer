@@ -244,6 +244,16 @@ pub fn deploy_context_menu(
             });
 
         ui::ContextMenu::build(window, cx, |menu, _window, _cx| {
+            // [OHOS PORT BEGIN] Talk to Agent is the first entry. It stays
+            // visible without a selection: the dialog then uses the caret line.
+            #[cfg(target_env = "ohos")]
+            let menu = menu
+                .action(
+                    localization::localized_str!("Talk to Agent"),
+                    Box::new(zed_actions::agent::TalkToAgent),
+                )
+                .separator();
+            // [OHOS PORT END]
             let builder = menu
                 .on_blur_subscription(Subscription::new(|| {}))
                 .when(run_to_cursor, |builder| {

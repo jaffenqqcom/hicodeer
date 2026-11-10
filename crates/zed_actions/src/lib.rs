@@ -616,6 +616,42 @@ pub mod agent {
         pub agent: String,
     }
 
+    /// Opens the Talk to Agent dialog for the current editor selection.
+    ///
+    /// OHOS-only: the dialog sends the selection to an agent in the Agent panel.
+    #[cfg(target_env = "ohos")]
+    #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+    #[action(namespace = agent)]
+    pub struct TalkToAgent;
+
+    /// Carries the editor selection to the Talk to Agent dialog.
+    ///
+    /// OHOS-only: dispatched by the editor after reading its own selection, so
+    /// the data always belongs to the side the user right-clicked.
+    #[cfg(target_env = "ohos")]
+    #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+    #[action(namespace = agent)]
+    #[serde(deny_unknown_fields)]
+    pub struct SendSelectionToAgent {
+        pub file_path: String,
+        pub start_line: u32,
+        pub end_line: u32,
+        pub selected_text: String,
+        /// Language name for the fenced code block; empty when unknown.
+        pub language_name: String,
+        /// True when the selection came from the pre-change side of a diff.
+        pub is_before_change: bool,
+    }
+
+    /// Sends the message typed in the Talk to Agent dialog to the chosen agent.
+    ///
+    /// OHOS-only: this is the dialog's counterpart to `git::Commit` in the git
+    /// commit modal, so `ctrl-enter` behaves the same in both places.
+    #[cfg(target_env = "ohos")]
+    #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+    #[action(namespace = agent)]
+    pub struct SendTalkToAgentMessage;
+
     /// Opens a new agent thread with the provided branch diff for review.
     #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
     #[action(namespace = agent)]

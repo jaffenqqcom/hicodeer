@@ -121,6 +121,15 @@ impl Editor {
         cx.notify();
     }
 
+    // [OHOS PORT BEGIN] Keep scrollbars visible whenever content overflows,
+    // independent of the global Auto mode, which hides them while idle.
+    #[cfg(target_env = "ohos")]
+    pub fn set_force_scrollbar_visibility(&mut self, force: bool, cx: &mut Context<Self>) {
+        self.force_scrollbar_visibility = force;
+        cx.notify();
+    }
+    // [OHOS PORT END]
+
     pub fn set_minimap_visibility(
         &mut self,
         minimap_visibility: MinimapVisibility,

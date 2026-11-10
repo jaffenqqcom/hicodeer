@@ -9025,6 +9025,32 @@ pub fn panel_editor_container(_window: &mut Window, cx: &mut App) -> Div {
 }
 
 pub(crate) fn git_commit_editor_style(font_size: gpui::Pixels, cx: &App) -> EditorStyle {
+    // [OHOS PORT BEGIN] Use the buffer font at the buffer size so the commit
+    // message matches editor text; other platforms keep the zoomable size.
+    #[cfg(target_env = "ohos")]
+    {
+        let settings = ThemeSettings::get_global(cx);
+        let buffer_font = settings.buffer_font.clone();
+        let buffer_size = settings.buffer_font_size(cx);
+        return EditorStyle {
+            background: cx.theme().colors().editor_background,
+            local_player: cx.theme().players().local(),
+            text: TextStyle {
+                color: cx.theme().colors().text,
+                font_family: buffer_font.family.clone(),
+                font_fallbacks: buffer_font.fallbacks.clone(),
+                font_features: buffer_font.features.clone(),
+                font_size: AbsoluteLength::from(buffer_size),
+                font_weight: buffer_font.weight,
+                line_height: (buffer_size * settings.buffer_line_height.value()).into(),
+                ..Default::default()
+            },
+            syntax: cx.theme().syntax().clone(),
+            ..Default::default()
+        };
+    }
+    // [OHOS PORT END]
+
     let settings = ThemeSettings::get_global(cx);
 
     EditorStyle {

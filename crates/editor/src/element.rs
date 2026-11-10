@@ -408,6 +408,10 @@ impl EditorElement {
         register_action(editor, window, Editor::select_page_down);
         register_action(editor, window, Editor::select_page_up);
         register_action(editor, window, Editor::cancel);
+        // [OHOS PORT BEGIN] Talk to Agent reads this editor's own selection.
+        #[cfg(target_env = "ohos")]
+        register_action(editor, window, Editor::talk_to_agent);
+        // [OHOS PORT END]
         register_action(editor, window, Editor::blame_hover);
         register_action(editor, window, Editor::next_snippet_tabstop);
         register_action(editor, window, Editor::previous_snippet_tabstop);
@@ -1540,6 +1544,13 @@ impl EditorElement {
             ShowScrollbar::Always => true,
             ShowScrollbar::Never => return None,
         };
+
+        // [OHOS PORT BEGIN] Dialogs can ask for scrollbars that stay visible
+        // whenever content overflows, instead of only while scrolling.
+        #[cfg(target_env = "ohos")]
+        let show_scrollbars =
+            self.editor.read(cx).force_scrollbar_visibility || show_scrollbars;
+        // [OHOS PORT END]
 
         // The horizontal scrollbar is usually slightly offset to align nicely with
         // indent guides. However, this offset is not needed if indent guides are

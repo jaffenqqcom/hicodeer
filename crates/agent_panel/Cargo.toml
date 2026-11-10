@@ -21,6 +21,7 @@ editor.workspace = true
 fs.workspace = true
 futures.workspace = true
 gpui.workspace = true
+language.workspace = true
 localization.workspace = true
 log.workspace = true
 menu.workspace = true
@@ -30,6 +31,7 @@ serde_json.workspace = true
 settings.workspace = true
 terminal_view = { path = "../terminal_view" }
 theme.workspace = true
+theme_settings.workspace = true
 ui.workspace = true
 workspace.workspace = true
 zed_actions.workspace = true

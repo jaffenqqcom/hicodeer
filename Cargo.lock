@@ -210,6 +210,7 @@ dependencies = [
  "futures 0.3.34",
  "gpui",
  "im_channel",
+ "language",
  "localization",
  "log",
  "menu",
@@ -220,6 +221,7 @@ dependencies = [
  "settings",
  "terminal_view",
  "theme",
+ "theme_settings",
  "ui",
  "workspace",
  "zed_actions",
@@ -20514,7 +20516,7 @@ dependencies = [
 
 [[package]]
 name = "zed"
-version = "1.26.0"
+version = "1.26.2"
 dependencies = [
  "action_log",
  "activity_indicator",

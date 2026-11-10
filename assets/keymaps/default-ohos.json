@@ -1231,4 +1231,21 @@
       "shift-tab": "git_graph::FocusPreviousTabStop",
     },
   },
+  // ===== [OHOS PORT] Talk to Agent dialog: same key shape as the git commit modal.
+  {
+    // The dialog's editors are full-mode editors, so no `mode` guard here.
+    "context": "TalkToAgentModal > Editor",
+    "bindings": {
+      "escape": "menu::Cancel",
+      "enter": "editor::Newline",
+      "ctrl-enter": "agent::SendTalkToAgentMessage",
+    },
+  },
+  {
+    // Do not re-open the dialog from inside itself.
+    "context": "Editor && !TalkToAgentModal",
+    "bindings": {
+      "ctrl-alt-z": "agent::TalkToAgent",
+    },
+  },
 ]

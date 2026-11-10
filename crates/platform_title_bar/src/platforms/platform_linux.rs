@@ -266,36 +266,6 @@ impl RenderOnce for WindowControl {
                             .as_ref()
                             .expect("Use WindowControl::new_close() for close control.")
                             .boxed_clone();
-                        // HiCodeer hides the system title bar, so this button is the only
-                        // window-close affordance; ask before tearing the whole app down.
-                        #[cfg(target_env = "ohos")]
-                        {
-                            let answer = window.prompt(
-                                gpui::PromptLevel::Info,
-                                localization::localized_str!(
-                                    "Are you sure you want to quit?"
-                                ),
-                                None,
-                                &[
-                                    localization::localized_str!("Quit"),
-                                    localization::localized_str!("Cancel"),
-                                ],
-                                cx,
-                            );
-                            let window_handle = window.window_handle();
-                            cx.spawn(async move |cx| {
-                                if answer.await.ok() != Some(0) {
-                                    return;
-                                }
-                                window_handle
-                                    .update(cx, |_, window, cx| {
-                                        window.dispatch_action(action, cx);
-                                    })
-                                    .ok();
-                            })
-                            .detach();
-                        }
-                        #[cfg(not(target_env = "ohos"))]
                         window.dispatch_action(action, cx);
                     }
                 }

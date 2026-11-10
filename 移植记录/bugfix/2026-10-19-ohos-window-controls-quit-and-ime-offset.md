@@ -100,9 +100,13 @@ fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
 
 最终链路：`remove_window → cx.quit → 延迟 shutdown（agent flush / LSP / 会话 / 窗口序列化）→ terminateSelf`。
 
-### 关闭确认：只加在自绘关闭按钮上
+### 关闭确认：不弹，关闭路径与上游完全一致
 
-在 `platform_linux.rs` 的 `WindowControlType::Close` 分支里，OHOS 下先 `window.prompt("Are you sure you want to quit?")`，确认后才 dispatch `CloseWindow`；取消则什么都不做。用 `#[cfg(target_env = "ohos")]` / `#[cfg(not(target_env = "ohos"))]` 两个互斥分支隔离，Linux 保持原行为。
+关闭按钮全平台都 dispatch `workspace::CloseWindow`：`platform_title_bar.rs` 里是 `Box::new(workspace::CloseWindow)`，`platform_linux.rs` 的 `WindowControlType::Close` 分支就是一句 `window.dispatch_action(action, cx)`。这两个文件在关闭路径上不再有任何 OHOS 专属代码。
+
+单窗口下退出依然成立：`MultiWorkspace::close_window` 只做 `prepare_window_to_close` + `remove_window()`，真正的退出由 gpui 的 `QuitMode::Default`（非 macOS 即 `LastWindowClosed`）在最后一个窗口消失时触发，再走前面修好的 `Platform::quit` / `on_quit` 到 `terminateSelf`。这是一条间接信号，改动窗口生命周期时要注意。
+
+曾经的做法是在自绘关闭按钮里加一个 OHOS 专属的 `window.prompt("Are you sure you want to quit?")`。它只覆盖鼠标点 X，`ctrl-q` 的全局 `zed::Quit` 不经过它，两条退出路径行为不同；该分支连同 `confirm_quit` 的 OHOS 默认值一起移除，现在退出就是退出，没有确认。
 
 ### 最大化：显式退出沉浸 + 用实时状态切换
 
@@ -159,7 +163,7 @@ return heightVp > 0 ? heightVp * display.getDefaultDisplaySync().densityPixels :
 - `crates/gpui_ohos/src/ohos/platform.rs` — 新增 `quit_callback` 字段与 Clone；`quit()` 延迟执行 shutdown 并 `terminate_ability()`；`on_quit()` 保存回调；`button_layout()` 返回右侧三键（最大化/恢复、最小化、关闭）。
 - `crates/gpui_ohos/src/ohos/window.rs` — `window_decorations()` 改为 Client；`window_controls()` 打开 minimize/maximize；`minimize()/zoom()` 接 ArkTS 动作；`is_maximized()` 读镜像；给 `OhosWindowHandle` 补 decorations/controls 转发。
 - `crates/gpui_ohos/depend/launch-zed/src/launch_app.rs` — 删除启动诊断日志。
-- `crates/platform_title_bar/src/platforms/platform_linux.rs` — 关闭按钮在 OHOS 下先弹确认框；新增 OHOS 图标常量对与选择逻辑。
+- `crates/platform_title_bar/src/platforms/platform_linux.rs` — 新增 OHOS 图标常量对与选择逻辑（关闭确认后来整段移除，见上一节）。
 - `crates/platform_title_bar/src/platform_title_bar.rs` — OHOS 下跳过客户端装饰边框与圆角。
 - `crates/workspace/src/workspace.rs` — OHOS 下 `set_client_inset(0)`，跳过阴影内边距、边框和 box-shadow。
 - `crates/workspace/src/status_bar.rs` — OHOS 下跳过状态栏底部圆角与补偿边距。

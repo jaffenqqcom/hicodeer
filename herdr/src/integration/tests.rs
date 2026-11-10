@@ -1451,6 +1451,52 @@ fn install_claude_errors_when_claude_dir_missing() {
 }
 
 #[test]
+fn codex_status_is_current_only_when_the_config_registers_the_hook() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let codex_dir = home.join(".codex");
+    fs::create_dir_all(&codex_dir).unwrap();
+    let hook_path = codex_dir.join(CODEX_HOOK_INSTALL_NAME);
+    fs::write(
+        &hook_path,
+        format!(
+            "#!/bin/sh\n# HERDR_INTEGRATION_ID=codex\n# HERDR_INTEGRATION_VERSION={CODEX_INTEGRATION_VERSION}\n"
+        ),
+    )
+    .unwrap();
+    let hooks_path = codex_dir.join("hooks.json");
+    std::env::set_var("HOME", &home);
+
+    // A current script with nothing wired to it does not run, so the install is
+    // reported as outdated and a reinstall is triggered.
+    fs::write(&hooks_path, "{}").unwrap();
+    let statuses = installed_integration_statuses();
+    let codex = statuses
+        .iter()
+        .find(|status| status.target == crate::api::schema::IntegrationTarget::Codex)
+        .unwrap();
+    assert_eq!(codex.state, IntegrationStatusKind::Outdated);
+
+    // Once the config names the script, the install is whole again.
+    let registered = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{ "hooks": [{ "type": "command", "command": format!("'{}' session", hook_path.display()) }] }]
+        }
+    });
+    fs::write(&hooks_path, serde_json::to_string(&registered).unwrap()).unwrap();
+    let statuses = installed_integration_statuses();
+    let codex = statuses
+        .iter()
+        .find(|status| status.target == crate::api::schema::IntegrationTarget::Codex)
+        .unwrap();
+    assert_eq!(codex.state, IntegrationStatusKind::Current);
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn codex_v2_integration_status_is_outdated() {
     let _lock = integration_env_lock();
     let base = unique_base();

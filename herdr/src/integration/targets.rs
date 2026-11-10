@@ -348,8 +348,6 @@ pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(CLAUDE_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, CLAUDE_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
 
     let settings_path = dir.join("settings.json");
     let existing_settings = if settings_path.is_file() {
@@ -358,11 +356,16 @@ pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
         "{}".to_string()
     };
     let updated_settings = install_claude_settings(&existing_settings, &settings_path, &hook_path)?;
-    remove_legacy_bash_hook_file(&hook_path)?;
 
     if updated_settings != existing_settings {
         write_config(&settings_path, updated_settings)?;
     }
+
+    // The script is written last: a config write that fails leaves no reporter
+    // behind, so a partial install cannot look like a working one.
+    remove_legacy_bash_hook_file(&hook_path)?;
+    fs::write(&hook_path, CLAUDE_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
 
     Ok(ClaudeInstallPaths {
         hook_path,
@@ -534,8 +537,6 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     }
 
     let hook_path = dir.join(CODEX_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, CODEX_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
 
     let hooks_path = dir.join("hooks.json");
     let mut hooks_file = if hooks_path.is_file() {
@@ -601,8 +602,6 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
         3,
         None,
     )?;
-    remove_legacy_bash_hook_file(&hook_path)?;
-
     write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
 
     let config_path = dir.join("config.toml");
@@ -615,6 +614,12 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     if new_config != existing_config {
         write_config(&config_path, new_config)?;
     }
+
+    // The script is written last: a config write that fails leaves no reporter
+    // behind, so a partial install cannot look like a working one.
+    remove_legacy_bash_hook_file(&hook_path)?;
+    fs::write(&hook_path, CODEX_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
 
     Ok(CodexInstallPaths {
         hook_path,
@@ -654,8 +659,6 @@ pub(crate) fn install_gemini() -> io::Result<GeminiInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(super::GEMINI_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, super::GEMINI_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
 
     let settings_path = dir.join("settings.json");
     let mut settings = if settings_path.is_file() {
@@ -686,7 +689,12 @@ pub(crate) fn install_gemini() -> io::Result<GeminiInstallPaths> {
     }
 
     write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    // The script is written last: a config write that fails leaves no reporter
+    // behind, so a partial install cannot look like a working one.
     remove_legacy_bash_hook_file(&hook_path)?;
+    fs::write(&hook_path, super::GEMINI_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
 
     Ok(GeminiInstallPaths {
         hook_path,
@@ -1532,8 +1540,6 @@ pub(crate) fn install_codebuddy() -> io::Result<ClaudeInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(CODEBUDDY_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, CODEBUDDY_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
 
     let settings_path = dir.join("settings.json");
     let existing_settings = if settings_path.is_file() {
@@ -1564,6 +1570,11 @@ pub(crate) fn install_codebuddy() -> io::Result<ClaudeInstallPaths> {
         )?;
     }
     write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    // The script is written last: a config write that fails leaves no reporter
+    // behind, so a partial install cannot look like a working one.
+    fs::write(&hook_path, CODEBUDDY_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
 
     Ok(ClaudeInstallPaths {
         hook_path,
@@ -2152,8 +2163,6 @@ pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(QWEN_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, QWEN_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
 
     let settings_path = dir.join("settings.json");
     let mut settings = if settings_path.is_file() {
@@ -2186,6 +2195,11 @@ pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
     }
 
     write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    // The script is written last: a config write that fails leaves no reporter
+    // behind, so a partial install cannot look like a working one.
+    fs::write(&hook_path, QWEN_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
 
     Ok(QwenInstallPaths {
         hook_path,

@@ -542,6 +542,61 @@ pub(crate) fn print_outdated_update_notice() -> bool {
 
 /// Whether the Herdr-owned Grok hook config exactly matches the installed
 /// integration. JSON formatting and object key order do not affect validity.
+/// Whether the agent's config still registers the hook script.
+///
+/// A current script on disk does nothing by itself: the config document is what
+/// wires it to the agent's lifecycle events. An install whose config entries
+/// were lost would otherwise keep reporting as current, and nothing would ever
+/// trigger a reinstall.
+fn hook_config_registers_script(
+    target: crate::api::schema::IntegrationTarget,
+    hook_path: &Path,
+) -> bool {
+    let Some(config_path) = hook_config_path(target, hook_path) else {
+        return true;
+    };
+    let Ok(content) = fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let script_path = hook_path.to_string_lossy();
+    json_value_mentions(&document, &script_path)
+}
+
+/// The document that wires an agent's hooks to its lifecycle events.
+fn hook_config_path(
+    target: crate::api::schema::IntegrationTarget,
+    hook_path: &Path,
+) -> Option<PathBuf> {
+    match target {
+        crate::api::schema::IntegrationTarget::Codex => {
+            Some(hook_path.parent()?.join("hooks.json"))
+        }
+        crate::api::schema::IntegrationTarget::Claude
+        | crate::api::schema::IntegrationTarget::CodeBuddy
+        | crate::api::schema::IntegrationTarget::Gemini
+        | crate::api::schema::IntegrationTarget::Qwen => {
+            Some(hook_path.parent()?.parent()?.join("settings.json"))
+        }
+        _ => None,
+    }
+}
+
+fn json_value_mentions(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains(needle),
+        serde_json::Value::Array(items) => {
+            items.iter().any(|item| json_value_mentions(item, needle))
+        }
+        serde_json::Value::Object(entries) => {
+            entries.values().any(|item| json_value_mentions(item, needle))
+        }
+        _ => false,
+    }
+}
+
 fn grok_hook_config_is_valid(hook_path: &Path) -> bool {
     let Some(hooks_dir) = hook_path.parent() else {
         return false;
@@ -634,6 +689,14 @@ pub(crate) fn integration_status_at(
     expected_version: u32,
 ) -> super::IntegrationStatus {
     let (mut state, installed_version) = integration_state_for_path(&path, expected_version);
+
+    // A current script with no config entry never runs: report it as outdated so
+    // the list shows it and a reinstall rewrites the half that was lost.
+    if state == super::IntegrationStatusKind::Current
+        && !hook_config_registers_script(target, &path)
+    {
+        state = super::IntegrationStatusKind::Outdated;
+    }
 
     // Grok only invokes the hook when the herdr-owned `hooks/herdr.json`
     // registers it, so a current hook script with a missing or broken config

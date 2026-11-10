@@ -717,14 +717,41 @@ fn open_settings_editor_to_page(
         settings_window.has_query = false;
         settings_window.filter_matches_to_file();
 
-        let Some(navbar_entry_index) = settings_window
+        let page_entry = settings_window
             .navbar_entries
             .iter()
-            .position(|entry| entry.is_root && entry.title.eq_ignore_ascii_case(&page))
-        else {
+            .position(|entry| entry.is_root && entry.title.eq_ignore_ascii_case(&page));
+        // ===== [OHOS PORT BEGIN] A section title opens its page and scrolls to
+        // that section. The embedded Agent panel links straight to the IM
+        // section of the Agent Container page, and sections are navbar entries
+        // there.
+        #[cfg(target_env = "ohos")]
+        let page_entry = page_entry.or_else(|| {
+            settings_window
+                .navbar_entries
+                .iter()
+                .position(|entry| !entry.is_root && entry.title.eq_ignore_ascii_case(&page))
+        });
+        // ===== [OHOS PORT END] =====
+        let Some(navbar_entry_index) = page_entry else {
             log::error!("settings page not found: {page}");
             return;
         };
+
+        // ===== [OHOS PORT BEGIN] Expand the page that owns the section so the
+        // entry is visible before scrolling to it.
+        #[cfg(target_env = "ohos")]
+        if !settings_window.navbar_entries[navbar_entry_index].is_root {
+            let page_index = settings_window.navbar_entries[navbar_entry_index].page_index;
+            if let Some(root_index) = settings_window
+                .navbar_entries
+                .iter()
+                .position(|entry| entry.is_root && entry.page_index == page_index)
+            {
+                settings_window.navbar_entries[root_index].expanded = true;
+            }
+        }
+        // ===== [OHOS PORT END] =====
 
         settings_window.open_and_scroll_to_navbar_entry(
             navbar_entry_index,
@@ -6483,8 +6510,15 @@ mod ohos_settings_tab {
         /// The item is created while the hosting workspace is mid-update, so the
         /// file fetch and the first UI build run at the end of the effect cycle
         /// instead of inside `SettingsWindow::new`.
-        pub(super) fn initialize_as_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-            cx.defer_in(window, |this, window, cx| {
+        pub(super) fn initialize_as_tab(
+            &mut self,
+            window: &mut Window,
+            cx: &mut Context<Self>,
+            callback: Option<
+                impl FnOnce(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
+            >,
+        ) {
+            cx.defer_in(window, move |this, window, cx| {
                 Self::observe_existing_workspaces(window, cx);
                 this.fetch_files(window, cx);
                 this.build_ui(window, cx);
@@ -6493,6 +6527,13 @@ mod ohos_settings_tab {
                 this.search_bar.update(cx, |editor, cx| {
                     editor.focus_handle(cx).focus(window, cx);
                 });
+
+                // A callback that targets a page reads the navbar this task
+                // just built, so it has to run here rather than before the
+                // first build.
+                if let Some(callback) = callback {
+                    callback(this, window, cx);
+                }
             });
         }
     }
@@ -6522,11 +6563,9 @@ mod ohos_settings_tab {
 
                     let settings_window =
                         cx.new(|cx| SettingsWindow::new(Some(workspace_handle), window, cx));
+                    let pending_callback = callback.take();
                     settings_window.update(cx, |settings_window, cx| {
-                        settings_window.initialize_as_tab(window, cx);
-                        if let Some(callback) = callback.take() {
-                            callback(settings_window, window, cx);
-                        }
+                        settings_window.initialize_as_tab(window, cx, pending_callback);
                     });
                     workspace.add_item_to_active_pane(
                         Box::new(settings_window),

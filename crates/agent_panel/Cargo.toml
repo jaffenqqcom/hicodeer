@@ -32,6 +32,7 @@ terminal_view = { path = "../terminal_view" }
 theme.workspace = true
 ui.workspace = true
 workspace.workspace = true
+zed_actions.workspace = true
 
 # The notification, sound and IM paths only exist in the OHOS build. The IM
 # channel is its own crate; the panel only implements the link it calls back.

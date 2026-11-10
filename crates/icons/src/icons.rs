@@ -221,6 +221,7 @@ pub enum IconName {
     Maximize,
     MaximizeAlt,
     Menu,
+    Message,
     Mic,
     MicMute,
     Minimize,

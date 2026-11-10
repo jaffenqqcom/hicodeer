@@ -222,6 +222,7 @@ dependencies = [
  "theme",
  "ui",
  "workspace",
+ "zed_actions",
 ]
 
 [[package]]

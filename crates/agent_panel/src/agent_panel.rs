@@ -2920,6 +2920,50 @@ impl AgentPanel {
             .into_any_element()
     }
 
+    /// Entry that opens the editor's settings at the IM channel section.
+    ///
+    /// The channel itself is configured on the Agent Container page, so this
+    /// row is only a shortcut and carries no state of its own.
+    fn render_im_channel_entry(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors();
+        // Same shell as the "New Space" row in render_actions: an outer row
+        // with one flexed cell that carries its own side padding, so the label
+        // keeps the identical size and height in both places.
+        h_flex()
+            .id("agent-panel-im-channel-row")
+            .w_full()
+            .py_1()
+            .child(
+                div()
+                    .id("agent-panel-im-channel")
+                    .flex_1()
+                    .min_w_0()
+                    .py_1()
+                    .pl(ROW_SIDE_PADDING)
+                    .pr(ROW_SIDE_PADDING)
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(transparent_black())
+                    .cursor_pointer()
+                    .hover(|style| style.bg(colors.ghost_element_hover))
+                    .active(|style| style.bg(colors.ghost_element_active))
+                    .child(action_content(
+                        IconName::Message,
+                        localization::localized_str!("IM Channel"),
+                    ))
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(
+                            Box::new(zed_actions::OpenSettingsPage {
+                                page: localization::localized_str!("IM Assistant").to_string(),
+                                target: None,
+                            }),
+                            cx,
+                        );
+                    })),
+            )
+            .into_any_element()
+    }
+
     /// Header of the panel: the space creator, pinned above the scrolling tree.
     /// Settings live in the editor's own settings page, so the panel has no
     /// entry of its own.
@@ -3300,6 +3344,7 @@ impl Render for AgentPanel {
                             .overflow_y_scroll()
                             .track_scroll(&self.scroll_handle)
                             .child(tree)
+                            .child(self.render_im_channel_entry(cx))
                             .child(history),
                     )
                     .custom_scrollbars(

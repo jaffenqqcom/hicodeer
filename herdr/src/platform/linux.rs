@@ -156,7 +156,24 @@ pub(crate) fn write_config_temporary(
         if (metadata.uid(), metadata.gid()) != (current.uid(), current.gid()) {
             // Keep ownership before restoring mode/ACLs; chown can clear mode bits.
             if unsafe { libc::fchown(output.as_raw_fd(), metadata.uid(), metadata.gid()) } != 0 {
-                return Err(std::io::Error::last_os_error());
+                let error = std::io::Error::last_os_error();
+                // [OHOS PORT BEGIN] hmdfs gives a new file to the user that owns the
+                // directory, and an unprivileged daemon cannot take another user's
+                // file over. Keep the inherited owner and group instead: the mode
+                // below is still taken from the original file, so the agent keeps
+                // its access and the replacement stays atomic.
+                #[cfg(target_env = "ohos")]
+                {
+                    if error.raw_os_error() != Some(libc::EPERM) {
+                        return Err(error);
+                    }
+                    tracing::warn!(%error, "config file ownership not preserved");
+                }
+                #[cfg(not(target_env = "ohos"))]
+                {
+                    return Err(error);
+                }
+                // [OHOS PORT END]
             }
         }
         // Replace inherited ACLs before enabling the original mode. Prepare all
@@ -211,7 +228,24 @@ fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> 
         {
             let name = CStr::from_bytes_with_nul(bytes).map_err(std::io::Error::other)?;
             if unsafe { libc::fremovexattr(destination, name.as_ptr()) } != 0 {
-                return Err(std::io::Error::last_os_error());
+                let error = std::io::Error::last_os_error();
+                // [OHOS PORT BEGIN] hmdfs stamps every new file with its own
+                // isolation label, and an unprivileged service cannot remove it.
+                // The label only isolates the file, so leaving it in place is
+                // safe and must not fail the whole config write.
+                #[cfg(target_env = "ohos")]
+                {
+                    if matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::ENOTSUP)) {
+                        tracing::warn!(
+                            xattr = %name.to_string_lossy(),
+                            %error,
+                            "config xattr not removed"
+                        );
+                        continue;
+                    }
+                }
+                // [OHOS PORT END]
+                return Err(error);
             }
         }
     }

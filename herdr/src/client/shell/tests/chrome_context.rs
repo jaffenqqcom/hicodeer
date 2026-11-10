@@ -527,3 +527,34 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_workspace_cl
             if params.workspace_id == "ws_1" && !params.close_group
     ));
 }
+
+/// The embedded build starts with its sidebar hidden and must not paint
+/// anything before the first pane surface: the startup placeholder used to
+/// flash the agent and space lists over a fresh terminal.
+#[cfg(target_env = "ohos")]
+#[test]
+fn startup_waits_for_real_content_instead_of_flashing_the_sidebar() {
+    let mut config = Config::default();
+    config.ui.sidebar_start_collapsed = true;
+    config.ui.sidebar_collapsed_mode = crate::config::SidebarCollapsedModeConfig::Hidden;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+
+    assert!(
+        state.compose(106, 30).is_none(),
+        "no frame before the first surface"
+    );
+
+    // A later unavailable frame (disconnect after the first surface) still
+    // shows its notice, but never the expanded sidebar of a hidden one.
+    state.has_composed_content_frame = true;
+    let frame = state.compose(106, 30).expect("unavailable frame");
+    let text: String = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect();
+
+    assert!(!text.contains(" spaces"), "no workspace list: {text}");
+    assert!(!text.contains(" agents"), "no agent list: {text}");
+    assert!(state.hits.workspaces.is_empty());
+}

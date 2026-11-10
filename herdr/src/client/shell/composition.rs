@@ -30,6 +30,16 @@ impl ClientShellState {
                 .bg(self.config.palette.panel_bg),
         );
         self.hits = ShellHitMap::default();
+        // [OHOS PORT BEGIN] The embedded Agent TUI starts with its sidebar
+        // collapsed into nothing, so its width is zero and the fallback rect
+        // below covers the whole frame. Drawing the expanded sidebar into it
+        // flashed the agent and space lists for the frame presented before the
+        // first pane surface arrived.
+        #[cfg(target_env = "ohos")]
+        let render_expanded_sidebar = layout.sidebar.width > 0;
+        #[cfg(not(target_env = "ohos"))]
+        let render_expanded_sidebar = true;
+        // [OHOS PORT END]
         let sidebar = if layout.sidebar.width > 0 {
             layout.sidebar
         } else {
@@ -87,7 +97,7 @@ impl ClientShellState {
                 &mut render_state,
                 &mut self.hits,
             );
-        } else {
+        } else if render_expanded_sidebar {
             super::endpoint_sidebar::render_expanded(
                 &mut buffer,
                 sidebar,
@@ -171,6 +181,17 @@ impl ClientShellState {
                     && self.navigation_target_valid(&pending.target)
             });
         if self.snapshot.is_none() || self.pane_surface.is_none() {
+            // [OHOS PORT BEGIN] The embedded Agent TUI opens in a fresh
+            // terminal and receives its snapshot before the matching pane
+            // surface. Composing the unavailable placeholder for that gap
+            // still painted a startup flash over the terminal, so stay silent
+            // until real content is ready. An explicit endpoint error is still
+            // shown, so a broken connection is not hidden.
+            #[cfg(target_env = "ohos")]
+            if !self.has_composed_content_frame && self.endpoint_error.is_none() {
+                return None;
+            }
+            // [OHOS PORT END]
             return Some(self.compose_unavailable(cols, rows).into());
         }
         let snapshot = self.snapshot.as_deref()?;
@@ -185,6 +206,13 @@ impl ClientShellState {
         if snapshot.revision != surface.projection_revision {
             return None;
         }
+        // [OHOS PORT BEGIN] From here on the frame carries real pane content,
+        // so the startup placeholder is no longer needed.
+        #[cfg(target_env = "ohos")]
+        {
+            self.has_composed_content_frame = true;
+        }
+        // [OHOS PORT END]
         let layout = self.layout(cols, rows);
         if self.last_tab_bar_width != Some(layout.tab_bar.width) {
             self.last_tab_bar_width = Some(layout.tab_bar.width);

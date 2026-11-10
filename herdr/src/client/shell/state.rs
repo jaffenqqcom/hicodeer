@@ -916,6 +916,10 @@ pub(crate) struct ClientShellState {
     pub(super) last_tab_bar_width: Option<u16>,
     pub(super) last_composed_size: Option<(u16, u16)>,
     pub(super) last_composed_at: Option<std::time::Instant>,
+    /// Whether a frame with real pane content has been composed yet. The
+    /// embedded build waits for it before drawing the unavailable placeholder.
+    #[cfg(target_env = "ohos")]
+    pub(super) has_composed_content_frame: bool,
     pub(super) selection_repaint_deadline: Option<std::time::Instant>,
     pub(super) hits: ShellHitMap,
     pub(super) endpoints: Vec<ClientShellEndpoint>,
@@ -1090,6 +1094,8 @@ impl ClientShellState {
             last_tab_bar_width: None,
             last_composed_size: None,
             last_composed_at: None,
+            #[cfg(target_env = "ohos")]
+            has_composed_content_frame: false,
             selection_repaint_deadline: None,
             hits: ShellHitMap::default(),
             endpoints: vec![local_endpoint()],

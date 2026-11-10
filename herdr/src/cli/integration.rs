@@ -46,7 +46,7 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
         println!("{target}: {state} ({})", status.path.display());
     }
 
-    if let Some(status) = crate::integration::experimental_letta_integration_status() {
+    for status in crate::integration::experimental_integration_statuses() {
         let state = describe_integration_state(
             status.state,
             status.installed_version,
@@ -92,7 +92,9 @@ fn integration_install(args: &[String]) -> std::io::Result<i32> {
 
     let installed = match target {
         IntegrationCommandTarget::Builtin(target) => crate::integration::install_target(target),
-        IntegrationCommandTarget::Letta => crate::integration::install_experimental_letta(),
+        IntegrationCommandTarget::Experimental(label) => {
+            crate::integration::install_experimental_target(label)
+        }
     };
     match installed {
         Ok(messages) => {
@@ -113,7 +115,9 @@ fn integration_uninstall(args: &[String]) -> std::io::Result<i32> {
 
     let removed = match target {
         IntegrationCommandTarget::Builtin(target) => crate::integration::uninstall_target(target),
-        IntegrationCommandTarget::Letta => crate::integration::uninstall_experimental_letta(),
+        IntegrationCommandTarget::Experimental(label) => {
+            crate::integration::uninstall_experimental_target(label)
+        }
     };
     match removed {
         Ok(messages) => {
@@ -133,12 +137,13 @@ fn print_integration_messages(messages: Vec<String>) {
     }
 }
 
-/// Integration target accepted by the CLI. Letta is deliberately kept out of
-/// the frozen client endpoint `IntegrationTarget` enum and is handled as an
-/// experimental CLI-only target until the agent registry replaces it.
+/// Integration target accepted by the CLI. Experimental targets are
+/// deliberately kept out of the frozen client endpoint `IntegrationTarget`
+/// enum and are handled as CLI-only targets until the agent registry replaces
+/// it.
 enum IntegrationCommandTarget {
     Builtin(IntegrationTarget),
-    Letta,
+    Experimental(&'static str),
 }
 
 fn parse_integration_target(
@@ -154,10 +159,13 @@ fn parse_integration_target(
     }
     let target = args[0].as_str();
 
-    // Letta is deliberately outside the frozen client endpoint enum, so the
-    // registry lookup below cannot return it.
-    if target == "letta" {
-        return Ok(Some(IntegrationCommandTarget::Letta));
+    // Experimental targets are deliberately outside the frozen client endpoint
+    // enum, so the registry lookup below cannot return them.
+    if let Some(label) = crate::integration::EXPERIMENTAL_INTEGRATION_TARGET_LABELS
+        .iter()
+        .find(|label| **label == target)
+    {
+        return Ok(Some(IntegrationCommandTarget::Experimental(label)));
     }
     if let Some(parsed) = crate::integration::integration_target_from_label(target) {
         return Ok(Some(IntegrationCommandTarget::Builtin(parsed)));
@@ -172,16 +180,24 @@ fn parse_integration_target(
 }
 
 /// Every installable target label, in registry order, followed by the
-/// CLI-only experimental one.
+/// CLI-only experimental ones.
 fn integration_target_usage_list() -> String {
     let mut labels = crate::integration::integration_target_labels();
-    labels.push("letta");
+    labels.extend(
+        crate::integration::EXPERIMENTAL_INTEGRATION_TARGET_LABELS
+            .iter()
+            .copied(),
+    );
     labels.join("|")
 }
 
 fn print_integration_help() {
     let mut labels = crate::integration::integration_target_labels();
-    labels.push("letta");
+    labels.extend(
+        crate::integration::EXPERIMENTAL_INTEGRATION_TARGET_LABELS
+            .iter()
+            .copied(),
+    );
     eprintln!("hicodeerd integration commands:");
     for label in &labels {
         eprintln!("  hicodeerd integration install {label}");

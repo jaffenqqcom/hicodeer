@@ -1,0 +1,10 @@
+{
+  "name": "hicodeer-agent-state",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reports OpenClaw lifecycle state to HiCodeer.",
+  "openclaw": {
+    "extensions": ["./index.js"]
+  }
+}

@@ -56,6 +56,9 @@ pub(crate) fn integration_target_label(
         crate::api::schema::IntegrationTarget::Codewhale => "codewhale",
         crate::api::schema::IntegrationTarget::Zcode => "zcode",
         crate::api::schema::IntegrationTarget::Gemini => "gemini",
+        crate::api::schema::IntegrationTarget::Minimax => "minimax",
+        crate::api::schema::IntegrationTarget::Openclaw => "openclaw",
+        crate::api::schema::IntegrationTarget::Opendesk => "opendesk",
     }
 }
 
@@ -92,6 +95,9 @@ pub(crate) fn integration_target_command_names(
         crate::api::schema::IntegrationTarget::Codewhale => &["codewhale"],
         crate::api::schema::IntegrationTarget::Zcode => &["zcode"],
         crate::api::schema::IntegrationTarget::Gemini => &["gemini"],
+        crate::api::schema::IntegrationTarget::Minimax => &["mcode"],
+        crate::api::schema::IntegrationTarget::Openclaw => &["openclaw"],
+        crate::api::schema::IntegrationTarget::Opendesk => &["opendesk"],
     }
 }
 
@@ -121,6 +127,9 @@ pub(crate) fn integration_target_supported(target: crate::api::schema::Integrati
                 | crate::api::schema::IntegrationTarget::Cursor
                 | crate::api::schema::IntegrationTarget::Mastracode
                 | crate::api::schema::IntegrationTarget::Grok
+                | crate::api::schema::IntegrationTarget::Minimax
+                | crate::api::schema::IntegrationTarget::Openclaw
+                | crate::api::schema::IntegrationTarget::Opendesk
         )
     }
 
@@ -331,7 +340,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 23] {
+); 26] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -464,6 +473,32 @@ fn integration_specs() -> [(
                     .join(super::ZCODE_HOOK_INSTALL_NAME)
             }),
             super::ZCODE_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Minimax,
+            minimax_dir().map(|dir| {
+                dir.join(super::MINIMAX_HOOKS_DIR_NAME)
+                    .join(super::MINIMAX_HOOK_INSTALL_NAME)
+            }),
+            super::MINIMAX_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Openclaw,
+            openclaw_dir().map(|dir| {
+                dir.join("extensions")
+                    .join(super::PLUGIN_PACKAGE_ID)
+                    .join(super::OPENCLAW_PLUGIN_ENTRY_INSTALL_NAME)
+            }),
+            super::OPENCLAW_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Opendesk,
+            opendesk_dir().map(|dir| {
+                dir.join("plugins")
+                    .join(super::PLUGIN_PACKAGE_ID)
+                    .join(super::OPENDESK_PLUGIN_ENTRY_INSTALL_NAME)
+            }),
+            super::OPENDESK_INTEGRATION_VERSION,
         ),
     ]
 }
@@ -632,25 +667,39 @@ pub(crate) fn integration_status_at(
     }
 }
 
-/// Letta is intentionally kept out of the frozen client endpoint
-/// `IntegrationTarget` enum so published generation-1 clients never receive an
-/// unknown variant. It is installable and reportable as an experimental
-/// CLI-only target until the agent registry replaces the enum-keyed registry.
-pub(crate) fn experimental_letta_integration_status() -> Option<super::ExperimentalIntegrationStatus>
-{
-    let path = letta_dir()
-        .ok()?
-        .join("hooks")
-        .join(super::LETTA_HOOK_INSTALL_NAME);
-    let (state, installed_version) =
-        integration_state_for_path(&path, super::LETTA_INTEGRATION_VERSION);
-    Some(super::ExperimentalIntegrationStatus {
-        label: "letta",
-        path,
-        state,
-        installed_version,
-        expected_version: super::LETTA_INTEGRATION_VERSION,
-    })
+/// Experimental targets are intentionally kept out of the frozen client
+/// endpoint `IntegrationTarget` enum so published generation-1 clients never
+/// receive an unknown variant. They are installable and reportable as CLI-only
+/// targets until the agent registry replaces the enum-keyed registry.
+///
+/// The tracked file is the one carrying the `HERDR_INTEGRATION_VERSION` marker:
+/// for plugin packages that is the entry module, since neither manifest format
+/// accepts comments.
+fn experimental_integration_specs() -> Vec<(&'static str, io::Result<PathBuf>, u32)> {
+    vec![(
+        "letta",
+        letta_dir().map(|dir| dir.join("hooks").join(super::LETTA_HOOK_INSTALL_NAME)),
+        super::LETTA_INTEGRATION_VERSION,
+    )]
+}
+
+pub(crate) fn experimental_integration_statuses()
+-> Vec<super::ExperimentalIntegrationStatus> {
+    experimental_integration_specs()
+        .into_iter()
+        .filter_map(|(label, path, expected_version)| {
+            let path = path.ok()?;
+            let (state, installed_version) =
+                integration_state_for_path(&path, expected_version);
+            Some(super::ExperimentalIntegrationStatus {
+                label,
+                path,
+                state,
+                installed_version,
+                expected_version,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn parse_integration_version(content: &str) -> Option<u32> {

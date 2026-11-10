@@ -27,6 +27,8 @@ pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
 pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
+/// Documented override for OpenDesk's config directory.
+pub(crate) const OPENDESK_CONFIG_DIR_ENV_VAR: &str = "OPENDESK_CONFIG_DIRECTORY";
 /// Points one ZCode process at its own CLI settings file, which carries the
 /// hooks, MCP servers and tool permissions.
 pub(crate) const ZCODE_CLI_SETTINGS_FILE_ENV_VAR: &str = "ZCODE_CLI_SETTINGS_FILE";
@@ -231,6 +233,28 @@ pub(crate) fn opencode_state_dir() -> io::Result<PathBuf> {
 
 pub(crate) fn kilo_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".config/kilo"))
+}
+
+/// mcode's data directory. Every plugin directory below `plugins/` is loaded on
+/// startup, so the reporter is installed there instead of in a settings file.
+pub(crate) fn minimax_dir() -> io::Result<PathBuf> {
+    Ok(home_dir()?.join(".minimax"))
+}
+
+/// OpenClaw's home directory. Plugins below `extensions/` are discovered on
+/// startup, with `plugins.load.paths` taking precedence over them.
+pub(crate) fn openclaw_dir() -> io::Result<PathBuf> {
+    Ok(home_dir()?.join(".openclaw"))
+}
+
+/// OpenDesk's config directory, honoring the documented
+/// `OPENDESK_CONFIG_DIRECTORY` override so a relocated install is still found.
+pub(crate) fn opendesk_dir() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os(OPENDESK_CONFIG_DIR_ENV_VAR).filter(|value| !value.is_empty()) {
+        return expand_tilde_path(PathBuf::from(value));
+    }
+
+    Ok(home_dir()?.join(".opendesk"))
 }
 
 pub(crate) fn hermes_dir() -> io::Result<PathBuf> {

@@ -53,10 +53,13 @@ pub enum IntegrationTarget {
     Codewhale,
     Zcode,
     Gemini,
+    Minimax,
+    Openclaw,
+    Opendesk,
 }
 
 impl IntegrationTarget {
-    pub(crate) const ALL: [Self; 23] = [
+    pub(crate) const ALL: [Self; 26] = [
         Self::Pi,
         Self::Omp,
         Self::Claude,
@@ -80,6 +83,9 @@ impl IntegrationTarget {
         Self::Codewhale,
         Self::Zcode,
         Self::Gemini,
+        Self::Minimax,
+        Self::Openclaw,
+        Self::Opendesk,
     ];
 }
 

@@ -1,0 +1,13 @@
+{
+  "id": "hicodeer-agent-state",
+  "name": "HiCodeer Agent State",
+  "description": "Reports OpenClaw lifecycle state to HiCodeer.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

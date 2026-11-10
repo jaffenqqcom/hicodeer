@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "hicodeer-agent-state",
+  "displayName": "HiCodeer Agent State",
+  "entry": "./index.mjs",
+  "apiVersion": 1,
+  "capabilities": ["hook"]
+}

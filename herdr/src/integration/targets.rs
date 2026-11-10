@@ -31,11 +31,12 @@ use super::env::{
     antigravity_cli_dir, atomcode_hooks_path, claude_dir, codebuddy_dir, codewhale_config_path,
     codex_dir, copilot_dir, deveco_dir, gemini_dir,
     cursor_dir, devin_dir, droid_dir, grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir,
-    letta_dir, mastracode_dir, omp_extension_dir, opencode_dir, opencode_state_dir,
-    pi_extension_dir, qodercli_dir, qwen_dir, zcode_settings_path,
+    letta_dir, mastracode_dir, minimax_dir, omp_extension_dir, openclaw_dir, opendesk_dir,
+    opencode_dir, opencode_state_dir, pi_extension_dir, qodercli_dir, qwen_dir, zcode_settings_path,
 };
 use super::file_ops::{
-    make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
+    make_executable, make_private_file, read_text_if_exists, remove_dir_all_if_exists,
+    remove_file_if_exists, remove_legacy_bash_hook_file,
 };
 use super::zcode_settings::{
     install as install_zcode_settings, uninstall as uninstall_zcode_settings,
@@ -55,6 +56,8 @@ use super::types::{
     KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, LettaInstallPaths,
     LettaUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
     OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
+    PluginPackageInstallPaths, PluginPackageUninstallResult,
+    HookDocumentInstallPaths, HookDocumentUninstallResult,
     QodercliInstallPaths, QodercliUninstallResult, QwenInstallPaths, QwenUninstallResult,
     ZcodeInstallPaths, ZcodeUninstallResult,
 };
@@ -87,7 +90,14 @@ use super::{
     OPENCODE_TUI_PLUGIN_SPEC, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET,
     QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
     QWEN_HOOK_ASSET, QWEN_HOOK_EVENTS, QWEN_HOOK_INSTALL_NAME, ZCODE_HOOK_ASSET,
-    ZCODE_HOOK_INSTALL_NAME,
+    ZCODE_HOOK_INSTALL_NAME, PLUGIN_PACKAGE_ID,
+    MINIMAX_HOOK_ASSET, MINIMAX_HOOK_EVENTS, MINIMAX_HOOK_HANDLER_NAME, MINIMAX_HOOK_INSTALL_NAME,
+    MINIMAX_HOOK_PS1_ASSET, MINIMAX_HOOK_PS1_INSTALL_NAME, MINIMAX_HOOK_TIMEOUT_SECONDS,
+    MINIMAX_HOOKS_DIR_NAME, MINIMAX_HOOKS_INSTALL_NAME, OPENCLAW_PLUGIN_ENTRY_ASSET, OPENCLAW_PLUGIN_ENTRY_INSTALL_NAME,
+    OPENCLAW_PLUGIN_MANIFEST_ASSET, OPENCLAW_PLUGIN_MANIFEST_INSTALL_NAME,
+    OPENCLAW_PLUGIN_PACKAGE_ASSET, OPENCLAW_PLUGIN_PACKAGE_INSTALL_NAME, OPENDESK_PLUGIN_ENTRY_ASSET,
+    OPENDESK_PLUGIN_ENTRY_INSTALL_NAME, OPENDESK_PLUGIN_MANIFEST_ASSET,
+    OPENDESK_PLUGIN_MANIFEST_INSTALL_NAME,
 };
 
 fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
@@ -1040,6 +1050,357 @@ pub(crate) fn install_kilo() -> io::Result<KiloInstallPaths> {
     Ok(KiloInstallPaths { plugin_path })
 }
 
+/// Writes one file of a plugin package, creating the package directory on the
+/// first install. The package directory is the whole install: these agents load
+/// every package below their plugin root, so a reinstall only overwrites files.
+fn write_plugin_package_file(path: &Path, contents: &str) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other(format!("{} has no parent directory", path.display())))?;
+    fs::create_dir_all(parent)?;
+    fs::write(path, contents)
+}
+
+/// mcode has no plugin CLI for reporters. It reads user-level Hooks from one
+/// document at the data dir root and runs none of them unless that document is
+/// enabled, so the reporter is a script beside it plus one handler per
+/// lifecycle event.
+pub(crate) fn install_minimax() -> io::Result<HookDocumentInstallPaths> {
+    let dir = minimax_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "mcode config directory not found at {}. install mcode first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join(MINIMAX_HOOKS_DIR_NAME);
+    let hook_path = hooks_dir.join(MINIMAX_HOOK_INSTALL_NAME);
+    write_plugin_package_file(&hook_path, MINIMAX_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+    let powershell_path = hooks_dir.join(MINIMAX_HOOK_PS1_INSTALL_NAME);
+    write_plugin_package_file(&powershell_path, MINIMAX_HOOK_PS1_ASSET)?;
+
+    let document_path = dir.join(MINIMAX_HOOKS_INSTALL_NAME);
+    let existing = read_text_if_exists(&document_path)?;
+    let document =
+        install_minimax_hook_handlers(&existing, &document_path, &hook_path, &powershell_path)?;
+    fs::write(&document_path, format!("{document:#}\n"))?;
+    make_private_file(&document_path)?;
+
+    Ok(HookDocumentInstallPaths {
+        hook_path,
+        document_path,
+    })
+}
+
+fn install_minimax_hook_handlers(
+    existing: &str,
+    document_path: &Path,
+    hook_path: &Path,
+    powershell_path: &Path,
+) -> io::Result<Value> {
+    let mut document = parse_hook_document(existing, document_path)?;
+    let object = document.as_object_mut().ok_or_else(|| {
+        io::Error::other(format!(
+            "{} must contain a JSON object",
+            document_path.display()
+        ))
+    })?;
+    // mcode runs nothing from the user hook document while this flag is absent.
+    object.insert("enabled".to_string(), Value::Bool(true));
+    let hooks = object
+        .entry("hooks".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let hooks = hooks.as_object_mut().ok_or_else(|| {
+        io::Error::other(format!(
+            "hooks in {} must be an object",
+            document_path.display()
+        ))
+    })?;
+
+    for (event, action) in MINIMAX_HOOK_EVENTS {
+        let command = hook_command(hook_path, Some(action));
+        let windows_command = windows_file_hook_command(powershell_path, action);
+        ensure_minimax_hook_handler(hooks, event, &command, &windows_command)?;
+    }
+
+    Ok(document)
+}
+
+fn parse_hook_document(existing: &str, document_path: &Path) -> io::Result<Value> {
+    if existing.trim().is_empty() {
+        return Ok(Value::Object(Map::new()));
+    }
+    serde_json::from_str(existing).map_err(|err| {
+        io::Error::other(format!(
+            "{} is not valid JSON: {err}",
+            document_path.display()
+        ))
+    })
+}
+
+fn ensure_minimax_hook_handler(
+    hooks: &mut Map<String, Value>,
+    event: &str,
+    command: &str,
+    windows_command: &str,
+) -> io::Result<()> {
+    let entries = hooks
+        .entry(event.to_string())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| io::Error::other(format!("hook entries for {event} must be an array")))?;
+
+    // A reinstall rewrites our handler where it already stands, so a user who
+    // moved it stays with one reporter instead of getting a second copy.
+    for entry in entries.iter_mut() {
+        let Some(handlers) = entry.get_mut("hooks").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for handler in handlers.iter_mut() {
+            if handler.get("name").and_then(Value::as_str) != Some(MINIMAX_HOOK_HANDLER_NAME) {
+                continue;
+            }
+            let handler = handler.as_object_mut().ok_or_else(|| {
+                io::Error::other(format!("a {event} hook handler must be an object"))
+            })?;
+            handler.insert("type".to_string(), Value::String("command".to_string()));
+            handler.insert("command".to_string(), Value::String(command.to_string()));
+            handler.insert(
+                "commandWindows".to_string(),
+                Value::String(windows_command.to_string()),
+            );
+            handler.insert("timeout".to_string(), json!(MINIMAX_HOOK_TIMEOUT_SECONDS));
+            return Ok(());
+        }
+    }
+
+    entries.push(json!({
+        "hooks": [{
+            "type": "command",
+            "name": MINIMAX_HOOK_HANDLER_NAME,
+            "command": command,
+            "commandWindows": windows_command,
+            "timeout": MINIMAX_HOOK_TIMEOUT_SECONDS,
+        }]
+    }));
+    Ok(())
+}
+
+/// The hook document carries a command per platform, so a Windows host runs the
+/// PowerShell twin without reinstalling.
+fn windows_file_hook_command(hook_path: &Path, action: &str) -> String {
+    format!(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" {}",
+        hook_path.display().to_string().replace('"', "\\\""),
+        action
+    )
+}
+
+/// OpenClaw discovers plugins below `extensions/`, but an untracked copy still
+/// needs an explicit enable, so install also selects the package path and sets
+/// the enable flag in `openclaw.json`.
+pub(crate) fn install_openclaw() -> io::Result<PluginPackageInstallPaths> {
+    let dir = openclaw_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "openclaw config directory not found at {}. install openclaw first",
+            dir.display()
+        )));
+    }
+
+    let plugin_dir = dir.join("extensions").join(PLUGIN_PACKAGE_ID);
+    write_plugin_package_file(
+        &plugin_dir.join(OPENCLAW_PLUGIN_PACKAGE_INSTALL_NAME),
+        OPENCLAW_PLUGIN_PACKAGE_ASSET,
+    )?;
+    write_plugin_package_file(
+        &plugin_dir.join(OPENCLAW_PLUGIN_MANIFEST_INSTALL_NAME),
+        OPENCLAW_PLUGIN_MANIFEST_ASSET,
+    )?;
+    let entry_path = plugin_dir.join(OPENCLAW_PLUGIN_ENTRY_INSTALL_NAME);
+    write_plugin_package_file(&entry_path, OPENCLAW_PLUGIN_ENTRY_ASSET)?;
+
+    let config_path = dir.join("openclaw.json");
+    with_openclaw_config(&config_path, |config| {
+        register_openclaw_plugin(config, &config_path, &plugin_dir)
+    })?;
+
+    Ok(PluginPackageInstallPaths {
+        plugin_dir,
+        entry_path,
+        config_path: Some(config_path),
+    })
+}
+
+/// OpenDesk loads every package below `plugins/` that ships an
+/// `opendesk.plugin.json` manifest, so the package directory is the install.
+pub(crate) fn install_opendesk() -> io::Result<PluginPackageInstallPaths> {
+    let dir = opendesk_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "opendesk config directory not found at {}. install opendesk first",
+            dir.display()
+        )));
+    }
+
+    let plugin_dir = dir.join("plugins").join(PLUGIN_PACKAGE_ID);
+    write_plugin_package_file(
+        &plugin_dir.join(OPENDESK_PLUGIN_MANIFEST_INSTALL_NAME),
+        OPENDESK_PLUGIN_MANIFEST_ASSET,
+    )?;
+    let entry_path = plugin_dir.join(OPENDESK_PLUGIN_ENTRY_INSTALL_NAME);
+    write_plugin_package_file(&entry_path, OPENDESK_PLUGIN_ENTRY_ASSET)?;
+
+    Ok(PluginPackageInstallPaths {
+        plugin_dir,
+        entry_path,
+        config_path: None,
+    })
+}
+
+fn read_openclaw_config(config_path: &Path) -> io::Result<Value> {
+    match fs::read_to_string(config_path) {
+        Ok(content) if content.trim().is_empty() => Ok(json!({})),
+        Ok(content) => serde_json::from_str(&content).map_err(|error| {
+            io::Error::other(format!(
+                "cannot parse openclaw config at {}: {error}",
+                config_path.display()
+            ))
+        }),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(json!({})),
+        Err(error) => Err(error),
+    }
+}
+
+/// Applies `edit` to `openclaw.json`, rewriting the file only when the edit
+/// reports a change. A missing file counts as an empty config, so uninstall
+/// cannot create one.
+fn with_openclaw_config<F>(config_path: &Path, edit: F) -> io::Result<bool>
+where
+    F: FnOnce(&mut Value) -> io::Result<bool>,
+{
+    let mut config = read_openclaw_config(config_path)?;
+    if !edit(&mut config)? {
+        return Ok(false);
+    }
+    write_config(config_path, serde_json::to_string_pretty(&config)?)?;
+    Ok(true)
+}
+
+fn openclaw_object<'a>(
+    value: &'a mut Value,
+    field: &str,
+    config_path: &Path,
+) -> io::Result<&'a mut Map<String, Value>> {
+    value.as_object_mut().ok_or_else(|| {
+        io::Error::other(format!(
+            "{field} in {} is not a JSON object",
+            config_path.display()
+        ))
+    })
+}
+
+/// Selects the package path and enables it. `plugins.load.paths` outscores an
+/// auto-discovered copy, so a stale package elsewhere cannot shadow this one.
+fn register_openclaw_plugin(
+    config: &mut Value,
+    config_path: &Path,
+    plugin_dir: &Path,
+) -> io::Result<bool> {
+    let plugin_path = plugin_dir.display().to_string();
+    let mut changed = remove_legacy_openclaw_root_keys(config, config_path, &plugin_path)?;
+
+    let plugins = openclaw_object(config, "openclaw config", config_path)?
+        .entry("plugins")
+        .or_insert_with(|| json!({}));
+    let plugins = openclaw_object(plugins, "plugins", config_path)?;
+    let load = plugins.entry("load").or_insert_with(|| json!({}));
+    let load = openclaw_object(load, "plugins.load", config_path)?;
+    let paths = load.entry("paths").or_insert_with(|| json!([]));
+    let paths = paths.as_array_mut().ok_or_else(|| {
+        io::Error::other(format!(
+            "plugins.load.paths in {} is not a JSON array",
+            config_path.display()
+        ))
+    })?;
+    if !paths
+        .iter()
+        .any(|entry| entry.as_str() == Some(plugin_path.as_str()))
+    {
+        paths.push(json!(plugin_path));
+        changed = true;
+    }
+
+    let entries = plugins.entry("entries").or_insert_with(|| json!({}));
+    let entries = openclaw_object(entries, "plugins.entries", config_path)?;
+    let entry = entries
+        .entry(PLUGIN_PACKAGE_ID)
+        .or_insert_with(|| json!({}));
+    let entry = openclaw_object(entry, "plugins.entries entry", config_path)?;
+    if entry.get("enabled").and_then(Value::as_bool) != Some(true) {
+        entry.insert("enabled".to_string(), json!(true));
+        changed = true;
+    }
+
+    Ok(changed)
+}
+
+/// Removes the root-level `load` / `entries` an older build wrote.
+///
+/// OpenClaw rejects unknown root keys, so a config left by that build makes the
+/// whole file unusable. Only a value that points at this plugin is removed, so
+/// anything the user put there themselves survives.
+fn remove_legacy_openclaw_root_keys(
+    config: &mut Value,
+    config_path: &Path,
+    plugin_path: &str,
+) -> io::Result<bool> {
+    let root = openclaw_object(config, "openclaw config", config_path)?;
+    let mut changed = false;
+    let legacy_load = root
+        .get("load")
+        .and_then(|value| value.get("paths"))
+        .and_then(Value::as_array)
+        .is_some_and(|paths| paths.iter().any(|entry| entry.as_str() == Some(plugin_path)));
+    if legacy_load {
+        root.remove("load");
+        changed = true;
+    }
+    let legacy_entries = root
+        .get("entries")
+        .and_then(Value::as_object)
+        .is_some_and(|entries| entries.contains_key(PLUGIN_PACKAGE_ID));
+    if legacy_entries {
+        root.remove("entries");
+        changed = true;
+    }
+    Ok(changed)
+}
+
+fn unregister_openclaw_plugin(config: &mut Value, plugin_dir: &Path) -> bool {
+    let plugin_path = plugin_dir.display().to_string();
+    let mut changed = false;
+    let Some(plugins) = config.get_mut("plugins").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    if let Some(paths) = plugins
+        .get_mut("load")
+        .and_then(Value::as_object_mut)
+        .and_then(|load| load.get_mut("paths"))
+        .and_then(Value::as_array_mut)
+    {
+        let before = paths.len();
+        paths.retain(|entry| entry.as_str() != Some(plugin_path.as_str()));
+        changed |= paths.len() != before;
+    }
+    if let Some(entries) = plugins.get_mut("entries").and_then(Value::as_object_mut) {
+        changed |= entries.remove(PLUGIN_PACKAGE_ID).is_some();
+    }
+    changed
+}
+
 pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
     let dir = hermes_dir()?;
     check_config_targets(&dir, &["config.yaml"])?;
@@ -1578,6 +1939,110 @@ pub(crate) fn uninstall_kilo() -> io::Result<KiloUninstallResult> {
     Ok(KiloUninstallResult {
         plugin_path,
         removed_plugin,
+    })
+}
+
+pub(crate) fn uninstall_minimax() -> io::Result<HookDocumentUninstallResult> {
+    let dir = minimax_dir()?;
+    let hooks_dir = dir.join(MINIMAX_HOOKS_DIR_NAME);
+    let hook_path = hooks_dir.join(MINIMAX_HOOK_INSTALL_NAME);
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+    let removed_powershell = remove_file_if_exists(&hooks_dir.join(MINIMAX_HOOK_PS1_INSTALL_NAME))?;
+
+    let document_path = dir.join(MINIMAX_HOOKS_INSTALL_NAME);
+    let existing = read_text_if_exists(&document_path)?;
+    let updated_document = if existing.trim().is_empty() {
+        false
+    } else {
+        let mut document = parse_hook_document(&existing, &document_path)?;
+        let changed = remove_minimax_hook_handlers(&mut document);
+        if changed {
+            fs::write(&document_path, format!("{document:#}\n"))?;
+        }
+        changed
+    };
+
+    let _ = removed_powershell;
+
+    Ok(HookDocumentUninstallResult {
+        hook_path,
+        removed_hook_file,
+        document_path,
+        updated_document,
+    })
+}
+
+/// Drops every handler this integration declared, then any group or event the
+/// removal left empty. Everything the user wrote stays as it was.
+fn remove_minimax_hook_handlers(document: &mut Value) -> bool {
+    let Some(hooks) = document.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    let mut emptied_events = Vec::new();
+
+    for (event, entries) in hooks.iter_mut() {
+        let Some(groups) = entries.as_array_mut() else {
+            continue;
+        };
+        let mut removed_handler = false;
+        for group in groups.iter_mut() {
+            let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            let before = handlers.len();
+            handlers.retain(|handler| {
+                handler.get("name").and_then(Value::as_str) != Some(MINIMAX_HOOK_HANDLER_NAME)
+            });
+            if handlers.len() != before {
+                removed_handler = true;
+            }
+        }
+        let before_groups = groups.len();
+        groups.retain(|group| match group.get("hooks").and_then(Value::as_array) {
+            Some(handlers) => !handlers.is_empty(),
+            None => true,
+        });
+        if removed_handler || groups.len() != before_groups {
+            changed = true;
+        }
+        if groups.is_empty() {
+            emptied_events.push(event.clone());
+        }
+    }
+
+    for event in emptied_events {
+        hooks.remove(&event);
+        changed = true;
+    }
+
+    changed
+}
+
+pub(crate) fn uninstall_openclaw() -> io::Result<PluginPackageUninstallResult> {
+    let dir = openclaw_dir()?;
+    let plugin_dir = dir.join("extensions").join(PLUGIN_PACKAGE_ID);
+    let removed_plugin_dir = remove_dir_all_if_exists(&plugin_dir)?;
+    let config_path = dir.join("openclaw.json");
+    let updated_config = with_openclaw_config(&config_path, |config| {
+        Ok(unregister_openclaw_plugin(config, &plugin_dir))
+    })?;
+
+    Ok(PluginPackageUninstallResult {
+        plugin_dir,
+        removed_plugin_dir,
+        config_path: Some(config_path),
+        updated_config,
+    })
+}
+
+pub(crate) fn uninstall_opendesk() -> io::Result<PluginPackageUninstallResult> {
+    let plugin_dir = opendesk_dir()?.join("plugins").join(PLUGIN_PACKAGE_ID);
+    Ok(PluginPackageUninstallResult {
+        removed_plugin_dir: remove_dir_all_if_exists(&plugin_dir)?,
+        plugin_dir,
+        config_path: None,
+        updated_config: false,
     })
 }
 

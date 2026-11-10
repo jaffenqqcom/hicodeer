@@ -57,3 +57,28 @@ pub(crate) fn make_executable(_path: &Path) -> io::Result<()> {
 
     Ok(())
 }
+
+/// Reads a configuration document, treating a missing file as empty so the
+/// caller can fold its own entries into whatever the agent already wrote.
+pub(crate) fn read_text_if_exists(path: &Path) -> io::Result<String> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(contents),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Agents that hold credentials or telemetry next to their hook document keep
+/// the file owner-only; a hook document written by us matches that mode.
+pub(crate) fn make_private_file(_path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = fs::metadata(_path)?.permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(_path, perms)?;
+    }
+
+    Ok(())
+}

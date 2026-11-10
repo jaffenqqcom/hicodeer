@@ -6188,3 +6188,175 @@ fn command_available_falls_back_to_the_user_npm_bin() {
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }
+
+#[test]
+fn plugin_package_targets_are_first_class_integration_targets() {
+    // letta stays CLI-only; the plugin packages belong to the frozen enum so a
+    // client lists them and can install them without the CLI.
+    assert_eq!(EXPERIMENTAL_INTEGRATION_TARGET_LABELS, &["letta"]);
+
+    for (label, target) in [
+        ("minimax", crate::api::schema::IntegrationTarget::Minimax),
+        ("openclaw", crate::api::schema::IntegrationTarget::Openclaw),
+        ("opendesk", crate::api::schema::IntegrationTarget::Opendesk),
+    ] {
+        assert_eq!(integration_target_from_label(label), Some(target));
+        assert_eq!(integration_target_label(target), label);
+        assert!(integration_target_supported(target));
+    }
+
+    assert_eq!(crate::api::schema::IntegrationTarget::ALL.len(), 26);
+}
+
+#[test]
+fn openclaw_install_registers_plugin_and_uninstall_removes_it() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let openclaw_dir = home.join(".openclaw");
+    fs::create_dir_all(&openclaw_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_openclaw().expect("install openclaw plugin");
+    assert!(installed.plugin_dir.join("package.json").is_file());
+    assert!(installed.plugin_dir.join("openclaw.plugin.json").is_file());
+    assert!(installed.entry_path.is_file());
+
+    let config_path = installed
+        .config_path
+        .clone()
+        .expect("openclaw install registers through openclaw.json");
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let plugin_path = installed.plugin_dir.display().to_string();
+    let paths = config["plugins"]["load"]["paths"]
+        .as_array()
+        .expect("plugins.load.paths should be an array");
+    assert!(
+        paths
+            .iter()
+            .any(|entry| entry.as_str() == Some(plugin_path.as_str())),
+        "install should select the package path"
+    );
+    assert_eq!(
+        config["plugins"]["entries"][PLUGIN_PACKAGE_ID]["enabled"],
+        json!(true)
+    );
+
+    // Reinstalling must not append a second copy of the same load path.
+    install_openclaw().expect("reinstall openclaw plugin");
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(
+        config["plugins"]["load"]["paths"]
+            .as_array()
+            .expect("plugins.load.paths should be an array")
+            .len(),
+        1
+    );
+
+    let removed = uninstall_openclaw().expect("uninstall openclaw plugin");
+    assert!(removed.removed_plugin_dir);
+    assert!(!installed.plugin_dir.exists());
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert!(
+        config["plugins"]["load"]["paths"]
+            .as_array()
+            .expect("plugins.load.paths should stay an array")
+            .is_empty()
+    );
+    assert!(config["plugins"]["entries"][PLUGIN_PACKAGE_ID].is_null());
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn minimax_install_writes_enabled_hook_document() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let minimax_dir = home.join(".minimax");
+    fs::create_dir_all(&minimax_dir).unwrap();
+    // A user Hook that is already in the document has to survive the install:
+    // mcode disables every Hook in a file it cannot parse.
+    fs::write(
+        minimax_dir.join("hooks.json"),
+        serde_json::to_string_pretty(&json!({
+            "hooks": {
+                "Stop": [{
+                    "hooks": [{ "type": "command", "name": "user hook", "command": "echo user" }]
+                }]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_minimax().expect("install mcode hooks");
+    assert!(installed.hook_path.is_file());
+
+    let raw = fs::read_to_string(&installed.document_path).expect("hooks.json should be written");
+    let document: Value = serde_json::from_str(&raw).expect("hooks.json should stay valid JSON");
+    // mcode runs nothing from the user document while this flag is absent.
+    assert_eq!(document["enabled"], json!(true));
+
+    let script = installed.hook_path.display().to_string();
+    for (event, _) in MINIMAX_HOOK_EVENTS {
+        let handler = &document["hooks"][event][0]["hooks"][0];
+        assert_eq!(handler["name"], json!(MINIMAX_HOOK_HANDLER_NAME));
+        #[cfg(not(windows))]
+        assert!(
+            handler["command"]
+                .as_str()
+                .is_some_and(|command| command.contains(&script)),
+            "{event} should invoke the installed script"
+        );
+        assert!(
+            handler["commandWindows"]
+                .as_str()
+                .is_some_and(|command| command.contains("powershell")),
+            "{event} should declare the PowerShell twin for Windows"
+        );
+    }
+    assert!(
+        raw.contains("user hook"),
+        "an existing user Hook must keep its place"
+    );
+
+    // A reinstall rewrites our handler instead of appending a second one.
+    install_minimax().expect("reinstall mcode hooks");
+    let document: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.document_path).unwrap()).unwrap();
+    let groups = document["hooks"]["Stop"].as_array().expect("Stop groups");
+    let handlers: Vec<&Value> = groups
+        .iter()
+        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+        .flatten()
+        .collect();
+    assert_eq!(
+        handlers
+            .iter()
+            .filter(|handler| handler["name"] == json!(MINIMAX_HOOK_HANDLER_NAME))
+            .count(),
+        1,
+        "reinstall must not duplicate the reporter"
+    );
+
+    let removed = uninstall_minimax().expect("uninstall mcode hooks");
+    assert!(removed.removed_hook_file);
+    assert!(removed.updated_document);
+    assert!(!installed.hook_path.exists());
+    let document: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.document_path).unwrap()).unwrap();
+    assert_eq!(
+        document["hooks"]["Stop"][0]["hooks"][0]["name"],
+        json!("user hook"),
+        "uninstall must leave the user's own Hook in place"
+    );
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}

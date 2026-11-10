@@ -4,11 +4,13 @@ use super::registry::{integration_target_label, integration_target_supported};
 use super::targets::{
     install_antigravity_cli, install_claude, install_codebuddy, install_codex, install_copilot,
     install_cursor, install_devin, install_droid, install_grok, install_hermes, install_kilo,
-    install_gemini, install_kimi, install_letta, install_mastracode, install_omp, install_opencode, install_pi,
+    install_gemini, install_kimi, install_letta, install_mastracode, install_minimax, install_omp,
+    install_opencode, install_openclaw, install_opendesk, install_pi,
     install_atomcode, install_codewhale, install_deveco, install_qodercli, install_qwen, install_zcode, uninstall_antigravity_cli, uninstall_claude,
     uninstall_codebuddy, uninstall_codex, uninstall_copilot, uninstall_cursor, uninstall_devin,
     uninstall_droid, uninstall_gemini, uninstall_grok, uninstall_hermes, uninstall_kilo, uninstall_kimi,
-    uninstall_letta, uninstall_mastracode, uninstall_omp, uninstall_opencode, uninstall_pi,
+    uninstall_letta, uninstall_mastracode, uninstall_minimax, uninstall_omp, uninstall_opencode,
+    uninstall_openclaw, uninstall_opendesk, uninstall_pi,
     uninstall_atomcode, uninstall_codewhale, uninstall_deveco, uninstall_qodercli, uninstall_qwen, uninstall_zcode,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
@@ -23,57 +25,109 @@ pub(crate) fn install_target(
     result
 }
 
-/// Experimental Letta install that bypasses the frozen client endpoint
-/// `IntegrationTarget` enum. Fold into the agent registry when it lands.
-pub(crate) fn install_experimental_letta() -> io::Result<Vec<String>> {
-    let result = install_letta().map(|installed| {
-        vec![
-            format!(
-                "installed letta integration hook to {}",
-                installed.hook_path.display()
-            ),
-            format!(
-                "ensured letta settings at {}",
-                installed.settings_path.display()
-            ),
-        ]
-    });
+/// Installs an experimental target by CLI label.
+///
+/// These targets stay out of the frozen client endpoint `IntegrationTarget`
+/// enum, so the CLI reaches them by label and the registry layer keeps the
+/// per-target details. Fold into the agent registry when it lands.
+pub(crate) fn install_experimental_target(label: &'static str) -> io::Result<Vec<String>> {
+    let result = install_experimental_target_inner(label);
     let outcome = if result.is_ok() { "ok" } else { "error" };
-    crate::logging::integration_action("install", "letta", outcome);
+    crate::logging::integration_action("install", label, outcome);
     result
 }
 
-/// Experimental Letta uninstall counterpart.
-pub(crate) fn uninstall_experimental_letta() -> io::Result<Vec<String>> {
-    let result = uninstall_letta().map(|result| {
-        let mut messages = Vec::new();
-        if result.removed_hook_file {
-            messages.push(format!(
-                "removed letta hook at {}",
-                result.hook_path.display()
-            ));
-        } else {
-            messages.push(format!(
-                "no letta hook found at {}",
-                result.hook_path.display()
-            ));
-        }
-        if result.updated_settings {
-            messages.push(format!(
-                "removed hicodeer letta hook entry from {}",
-                result.settings_path.display()
-            ));
-        } else {
-            messages.push(format!(
-                "no hicodeer letta hook entry found in {}",
-                result.settings_path.display()
-            ));
-        }
-        messages
-    });
+fn install_experimental_target_inner(label: &str) -> io::Result<Vec<String>> {
+    match label {
+        "letta" => install_letta().map(|installed| {
+            vec![
+                format!(
+                    "installed letta integration hook to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "ensured letta settings at {}",
+                    installed.settings_path.display()
+                ),
+            ]
+        }),
+        other => Err(unknown_experimental_target(other)),
+    }
+}
+
+/// Experimental uninstall counterpart.
+pub(crate) fn uninstall_experimental_target(label: &'static str) -> io::Result<Vec<String>> {
+    let result = uninstall_experimental_target_inner(label);
     let outcome = if result.is_ok() { "ok" } else { "error" };
-    crate::logging::integration_action("uninstall", "letta", outcome);
+    crate::logging::integration_action("uninstall", label, outcome);
     result
+}
+
+fn uninstall_experimental_target_inner(label: &str) -> io::Result<Vec<String>> {
+    match label {
+        "letta" => uninstall_letta().map(|result| {
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed letta hook at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no letta hook found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.updated_settings {
+                messages.push(format!(
+                    "removed hicodeer letta hook entry from {}",
+                    result.settings_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no hicodeer letta hook entry found in {}",
+                    result.settings_path.display()
+                ));
+            }
+            messages
+        }),
+        other => Err(unknown_experimental_target(other)),
+    }
+}
+
+fn plugin_uninstall_messages(
+    label: &str,
+    result: super::types::PluginPackageUninstallResult,
+) -> Vec<String> {
+    let mut messages = vec![if result.removed_plugin_dir {
+        format!(
+            "removed {label} integration plugin at {}",
+            result.plugin_dir.display()
+        )
+    } else {
+        format!(
+            "no {label} integration plugin found at {}",
+            result.plugin_dir.display()
+        )
+    }];
+    if let Some(config_path) = result.config_path {
+        if result.updated_config {
+            messages.push(format!(
+                "removed hicodeer plugin registration from {}",
+                config_path.display()
+            ));
+        } else {
+            messages.push(format!(
+                "no hicodeer plugin registration found in {}",
+                config_path.display()
+            ));
+        }
+    }
+    messages
+}
+
+fn unknown_experimental_target(label: &str) -> io::Error {
+    io::Error::other(format!("unknown experimental integration target: {label}"))
 }
 
 fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Result<Vec<String>> {
@@ -400,6 +454,40 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                     installed.settings_path.display()
                 ),
             ]
+        }
+        crate::api::schema::IntegrationTarget::Minimax => {
+            let installed = install_minimax()?;
+            vec![
+                format!(
+                    "installed mcode hook script to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "registered mcode hooks in {}",
+                    installed.document_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Openclaw => {
+            let installed = install_openclaw()?;
+            let mut messages = vec![format!(
+                "installed openclaw integration plugin to {}",
+                installed.plugin_dir.display()
+            )];
+            if let Some(config_path) = installed.config_path {
+                messages.push(format!(
+                    "registered openclaw plugin in {}",
+                    config_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Opendesk => {
+            let installed = install_opendesk()?;
+            vec![format!(
+                "installed opendesk integration plugin to {}",
+                installed.plugin_dir.display()
+            )]
         }
     };
 
@@ -1037,6 +1125,39 @@ pub(crate) fn uninstall_target(
                 ));
             }
             messages
+        }
+        crate::api::schema::IntegrationTarget::Minimax => {
+            let result = uninstall_minimax()?;
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed mcode hook script at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no mcode hook script found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.updated_document {
+                messages.push(format!(
+                    "removed hicodeer mcode hooks from {}",
+                    result.document_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no hicodeer mcode hooks found in {}",
+                    result.document_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Openclaw => {
+            plugin_uninstall_messages("openclaw", uninstall_openclaw()?)
+        }
+        crate::api::schema::IntegrationTarget::Opendesk => {
+            plugin_uninstall_messages("opendesk", uninstall_opendesk()?)
         }
     };
 

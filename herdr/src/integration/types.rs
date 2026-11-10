@@ -148,6 +148,39 @@ pub(crate) struct LettaUninstallResult {
     pub updated_settings: bool,
 }
 
+/// Where a plugin package install landed. `config_path` is set only for hosts
+/// that need an explicit registration next to the package directory.
+#[derive(Debug)]
+pub(crate) struct PluginPackageInstallPaths {
+    pub plugin_dir: PathBuf,
+    pub entry_path: PathBuf,
+    pub config_path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(crate) struct PluginPackageUninstallResult {
+    pub plugin_dir: PathBuf,
+    pub removed_plugin_dir: bool,
+    pub config_path: Option<PathBuf>,
+    pub updated_config: bool,
+}
+
+/// A reporter installed as a script plus an entry in the agent's own hook
+/// document, which is how the agents that read user-level hook JSON work.
+#[derive(Debug)]
+pub(crate) struct HookDocumentInstallPaths {
+    pub hook_path: PathBuf,
+    pub document_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct HookDocumentUninstallResult {
+    pub hook_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub document_path: PathBuf,
+    pub updated_document: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IntegrationStatus {
     pub target: crate::api::schema::IntegrationTarget,

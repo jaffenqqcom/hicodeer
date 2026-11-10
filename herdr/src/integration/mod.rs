@@ -15,7 +15,7 @@ mod version;
 mod zcode_settings;
 
 pub(crate) use actions::{
-    install_experimental_letta, install_target, uninstall_experimental_letta, uninstall_target,
+    install_experimental_target, install_target, uninstall_experimental_target, uninstall_target,
 };
 #[cfg(test)]
 pub(crate) use env::integration_env_lock;
@@ -23,7 +23,7 @@ pub(crate) use env::{
     apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
 };
 pub(crate) use registry::{
-    experimental_letta_integration_status, installed_integration_statuses,
+    experimental_integration_statuses, installed_integration_statuses,
     integration_recommendations, integration_target_from_label, integration_target_label,
     integration_target_labels, print_outdated_update_notice,
 };
@@ -59,6 +59,10 @@ pub(crate) fn legacy_hook_paths(hook_path: &Path) -> impl Iterator<Item = PathBu
 /// CLI labels for experimental integrations that are intentionally not part of
 /// the frozen client endpoint `IntegrationTarget` enum. Empty this list once the
 /// agent registry provides first-class target registration.
+///
+/// `minimax`, `openclaw` and `opendesk` report state from a plugin package they
+/// load in-process instead of a hook script registered in a settings file, so
+/// they are installable from the CLI only until the registry replaces the enum.
 pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta"];
 
 const PI_EXTENSION_INSTALL_NAME: &str = "hicodeer-agent-state.ts";
@@ -162,7 +166,7 @@ const KIMI_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/kimi/hicodeer-agent-state.sh")
 };
-const KIMI_INTEGRATION_VERSION: u32 = 13;
+const KIMI_INTEGRATION_VERSION: u32 = 15;
 const GEMINI_HOOK_INSTALL_NAME: &str = "hicodeer-agent-state.sh";
 const GEMINI_HOOK_ASSET: &str = include_str!("assets/gemini/hicodeer-agent-state.sh");
 const GEMINI_INTEGRATION_VERSION: u32 = 7;
@@ -308,6 +312,48 @@ const KILO_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
 pub(crate) const LEGACY_KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
 const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/hicodeer-agent-state.js");
 const KILO_INTEGRATION_VERSION: u32 = 5;
+/// Plugin packages for agents whose only lifecycle surface is an in-process
+/// plugin API. Install writes a package directory into the agent's own plugin
+/// root and nothing else, so a reinstall overwrites the package instead of
+/// leaving a second reporter behind.
+/// mcode loads user-level Hooks from one document at the data dir root and runs
+/// none of them unless the top level carries `"enabled": true`. The declared
+/// command therefore points at a script beside that file, and the script - not
+/// the JSON - carries the `HERDR_INTEGRATION_VERSION` marker the registry
+/// parses, because JSON cannot hold a comment.
+const MINIMAX_HOOKS_DIR_NAME: &str = "hooks";
+const MINIMAX_HOOKS_INSTALL_NAME: &str = "hooks.json";
+const MINIMAX_HOOK_INSTALL_NAME: &str = "hicodeer-agent-state.sh";
+const MINIMAX_HOOK_ASSET: &str = include_str!("assets/minimax/hicodeer-agent-state.sh");
+const MINIMAX_HOOK_PS1_INSTALL_NAME: &str = "hicodeer-agent-state.ps1";
+const MINIMAX_HOOK_PS1_ASSET: &str = include_str!("assets/minimax/hicodeer-agent-state.ps1");
+/// Event name paired with the action the reporter takes for it.
+pub(crate) const MINIMAX_HOOK_EVENTS: [(&str, &str); 4] = [
+    ("SessionStart", "session"),
+    ("UserPromptSubmit", "working"),
+    ("PermissionRequest", "blocked"),
+    ("Stop", "idle"),
+];
+/// Displayed in mcode's hook settings, and the marker uninstall matches on.
+pub(crate) const MINIMAX_HOOK_HANDLER_NAME: &str = "hicodeer-agent-state";
+/// mcode caps a handler at ten seconds; the reporter finishes in well under one.
+pub(crate) const MINIMAX_HOOK_TIMEOUT_SECONDS: u64 = 5;
+const MINIMAX_INTEGRATION_VERSION: u32 = 1;
+const OPENCLAW_PLUGIN_PACKAGE_INSTALL_NAME: &str = "package.json";
+const OPENCLAW_PLUGIN_PACKAGE_ASSET: &str = include_str!("assets/openclaw/package.json");
+const OPENCLAW_PLUGIN_MANIFEST_INSTALL_NAME: &str = "openclaw.plugin.json";
+const OPENCLAW_PLUGIN_MANIFEST_ASSET: &str = include_str!("assets/openclaw/openclaw.plugin.json");
+const OPENCLAW_PLUGIN_ENTRY_INSTALL_NAME: &str = "index.js";
+const OPENCLAW_PLUGIN_ENTRY_ASSET: &str = include_str!("assets/openclaw/hicodeer-agent-state.js");
+const OPENCLAW_INTEGRATION_VERSION: u32 = 2;
+const OPENDESK_PLUGIN_MANIFEST_INSTALL_NAME: &str = "opendesk.plugin.json";
+const OPENDESK_PLUGIN_MANIFEST_ASSET: &str = include_str!("assets/opendesk/opendesk.plugin.json");
+const OPENDESK_PLUGIN_ENTRY_INSTALL_NAME: &str = "index.js";
+const OPENDESK_PLUGIN_ENTRY_ASSET: &str = include_str!("assets/opendesk/hicodeer-agent-state.js");
+const OPENDESK_INTEGRATION_VERSION: u32 = 1;
+/// The plugin id every package registers under. It is also the directory name
+/// and the `hicodeer:` source suffix, so one string keeps all three in step.
+const PLUGIN_PACKAGE_ID: &str = "hicodeer-agent-state";
 const HERMES_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state";
 const HERMES_PLUGIN_MANIFEST_INSTALL_NAME: &str = "plugin.yaml";
 const HERMES_PLUGIN_INIT_INSTALL_NAME: &str = "__init__.py";

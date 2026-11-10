@@ -1,0 +1,25 @@
+id = "openclaw"
+version = "2026.11.10.1"
+min_engine_version = 3
+updated_at = "2026-11-10T00:00:00Z"
+aliases = ["open-claw"]
+
+# The TUI keeps one status row at the bottom: an idle host prints
+# " local ready | idle", a running turn prints a spinner, the turn's own verb
+# and the elapsed seconds in front of "| local ready".
+
+[[rules]]
+id = "turn_running"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(4)"
+visible_working = true
+line_regex = ['^\s*[⠀-⣿]\s+\S.*•\s+\d+s\s*\|\s*local ready']
+
+[[rules]]
+id = "status_idle"
+state = "idle"
+priority = 200
+region = "bottom_non_empty_lines(4)"
+visible_idle = true
+line_regex = ['^\s*local ready\s*\|\s*idle\s*$']

@@ -1,0 +1,23 @@
+id = "opendesk"
+version = "2026.11.10.1"
+min_engine_version = 3
+updated_at = "2026-11-10T00:00:00Z"
+
+# The status bar carries the turn timer: a clock while the host is idle, a
+# braille spinner in the same slot while a turn runs.
+
+[[rules]]
+id = "turn_timer_spinner"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(4)"
+visible_working = true
+line_regex = ['[⠀-⣿]\s+\d{2}:\d{2}\s*│\s*Tokens:']
+
+[[rules]]
+id = "timer_idle"
+state = "idle"
+priority = 200
+region = "bottom_non_empty_lines(4)"
+visible_idle = true
+line_regex = ['⏱\s+\d{2}:\d{2}\s*│\s*Tokens:']

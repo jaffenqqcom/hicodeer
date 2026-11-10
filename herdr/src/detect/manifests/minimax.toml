@@ -1,5 +1,5 @@
 id = "minimax"
-version = "2026.10.23.2"
+version = "2026.11.10.1"
 min_engine_version = 2
 updated_at = "2026-10-23T00:00:00Z"
 aliases = ["minimax-code", "mcode"]
@@ -24,7 +24,7 @@ state = "working"
 priority = 900
 region = "bottom_non_empty_lines(20)"
 visible_working = true
-regex = ['(?i)esc\s+to\s+interrupt']
+regex = ['(?i)(esc\s+to\s+interrupt|esc\s+stop)']
 not = [
   { regex = ['(?i)waiting\s+for\s+(?:permission|approval|your\s+answer)'] },
 ]

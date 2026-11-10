@@ -115,7 +115,7 @@ impl Agent {
         Self::OpenDesk,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 25] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 27] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -141,6 +141,8 @@ impl Agent {
         Self::CodeBuddy,
         Self::MiniMax,
         Self::AtomCode,
+        Self::OpenClaw,
+        Self::OpenDesk,
     ];
 }
 
@@ -431,6 +433,9 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
             | ("hicodeer:opencode", "opencode")
             | ("hicodeer:kilo", "kilo")
             | ("hicodeer:kimi", "kimi")
+            | ("hicodeer:minimax", "minimax")
+            | ("hicodeer:openclaw", "openclaw")
+            | ("hicodeer:opendesk", "opendesk")
     )
 }
 

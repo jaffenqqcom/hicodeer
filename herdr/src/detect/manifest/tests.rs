@@ -989,3 +989,52 @@ fn bundled_atomcode_manifest_matches_the_running_status_row() {
         Some("status_running")
     );
 }
+
+#[test]
+fn bundled_minimax_manifest_matches_the_current_stop_hint() {
+    let screen = "   › 请分三步说明 Rust 所有权规则\n\n    ⠸ Running 1s · Alt+Enter queue · Enter steer · Ctrl+O details · Esc stop\n    ──────────────────────────────────────\n  ›  Ask Mcode to do anything\n    ──────────────────────────────────────\n  ~/workspace/hicodeer │ ◇ 计算 │ Auto │ ✦ deepseek-flash · Thinking On │ Context 85% left";
+    let explain = explain(Agent::MiniMax, screen);
+    assert_eq!(explain.state, AgentState::Working);
+    assert_eq!(
+        explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("interrupt_hint_working")
+    );
+}
+
+#[test]
+fn bundled_openclaw_manifest_reads_the_status_row() {
+    let working = "请分三步说明 Rust 所有权规则，每步两句话。\n\n ⠹ dillydallying… • 0s | local ready\n agent main | session main | deepseek-flash | deliver:off | tokens 14k\n────────────────────────────────────";
+    let working_explain = explain(Agent::OpenClaw, working);
+    assert_eq!(working_explain.state, AgentState::Working);
+    assert_eq!(
+        working_explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("turn_running")
+    );
+
+    let idle = "请用一句话回答：一加一等于几？\n\n一加一等于二。\n\n local ready | idle\n agent main | session main | deepseek-flash | deliver:off | tokens 14k";
+    let idle_explain = explain(Agent::OpenClaw, idle);
+    assert_eq!(idle_explain.state, AgentState::Idle);
+    assert_eq!(
+        idle_explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("status_idle")
+    );
+}
+
+#[test]
+fn bundled_opendesk_manifest_reads_the_status_bar() {
+    let working = " 请分三步说明 Rust 所有权规则\n ────────────────────────────────\n  ⚡ Standard  │  Minimal display  │  ⠙ 00:01  │  Tokens: 13998/1048576 (1.3%)  │  deepseek ...\n ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n                🕐 02:06 Tue 11/10 • Ctrl+K switch mode";
+    let working_explain = explain(Agent::OpenDesk, working);
+    assert_eq!(working_explain.state, AgentState::Working);
+    assert_eq!(
+        working_explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("turn_timer_spinner")
+    );
+
+    let idle = " 一加一等于二。\n ────────────────────────────────\n  ⚡ Standard  │  Minimal display  │  ⏱ 00:01  │  Tokens: 13998/1048576 (1.3%)  │  deepseek ...\n ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n                🕐 02:06 Tue 11/10 • Ctrl+K switch mode";
+    let idle_explain = explain(Agent::OpenDesk, idle);
+    assert_eq!(idle_explain.state, AgentState::Idle);
+    assert_eq!(
+        idle_explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("timer_idle")
+    );
+}

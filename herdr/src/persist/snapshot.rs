@@ -105,6 +105,11 @@ pub struct PaneSnapshot {
     pub agent_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_agent_kind: Option<String>,
+    /// The agent the pane was showing, whether or not it was started as a
+    /// managed agent. Resume needs it for agents that never report a session
+    /// id, because their continue flag is chosen by agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -338,13 +343,22 @@ fn capture_tab(
             .or_else(|| terminal.map(|terminal| terminal.cwd.clone()))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
         let label = terminal.and_then(|terminal| terminal.manual_label.clone());
-        let (agent_name, managed_agent_kind) = terminal
+        let holds_agent =
+            terminal.is_some_and(|terminal| terminal.effective_agent_label().is_some());
+        let (agent_name, managed_agent_kind, detected_agent) = terminal
             .filter(|terminal| !terminal.managed_agent_launch_pending())
             .map(|terminal| {
                 (
                     terminal.agent_name.clone(),
                     terminal
                         .managed_agent_kind()
+                        .map(|agent| crate::detect::agent_label(agent).to_string()),
+                    // Only a pane that still holds the agent records it: restore
+                    // launches whatever this names, so a closed agent written
+                    // here would come back on the next start.
+                    holds_agent
+                        .then_some(terminal.detected_agent)
+                        .flatten()
                         .map(|agent| crate::detect::agent_label(agent).to_string()),
                 )
             })
@@ -365,8 +379,6 @@ fn capture_tab(
                 value,
             })
         });
-        let holds_agent =
-            terminal.is_some_and(|terminal| terminal.effective_agent_label().is_some());
         let agent_resume = terminal
             .filter(|_| holds_agent)
             .and_then(|terminal| terminal.reported_resume())
@@ -382,6 +394,7 @@ fn capture_tab(
                 label,
                 agent_name,
                 managed_agent_kind,
+                detected_agent,
                 agent_session,
                 agent_resume,
                 launch_argv,
@@ -701,6 +714,7 @@ mod tests {
                 label: None,
                 agent_name: None,
                 managed_agent_kind: None,
+                detected_agent: None,
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,
@@ -713,6 +727,7 @@ mod tests {
                 label: Some("website".into()),
                 agent_name: None,
                 managed_agent_kind: None,
+                detected_agent: None,
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,
@@ -1399,6 +1414,7 @@ mod tests {
                 label: None,
                 agent_name: None,
                 managed_agent_kind: None,
+                detected_agent: None,
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,
@@ -1413,6 +1429,7 @@ mod tests {
                 label: None,
                 agent_name: None,
                 managed_agent_kind: None,
+                detected_agent: None,
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,

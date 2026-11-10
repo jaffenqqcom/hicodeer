@@ -537,6 +537,7 @@ fn restore_tab(
         let saved_managed_agent = saved_pane
             .and_then(|pane| pane.managed_agent_kind.as_deref())
             .and_then(crate::detect::parse_canonical_agent_label);
+        let saved_agent_kind = saved_pane.and_then(saved_agent_kind);
         let saved_launch_argv = saved_pane.and_then(|p| p.launch_argv.clone());
         let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
         let saved_agent_resume = saved_pane.and_then(saved_reported_resume);
@@ -547,9 +548,10 @@ fn restore_tab(
                 enabled: runtime_context.resume_agents_on_restore,
                 resumed_sessions: resumed_agent_sessions,
             };
-            pane_restore_startup(
+            pane_restore_startup_for_agent(
                 saved_agent_session,
                 saved_agent_resume,
+                saved_agent_kind.as_deref(),
                 &cwd,
                 saved_history,
                 &mut agent_restore,
@@ -823,9 +825,28 @@ fn restore_tab(
     )
 }
 
+#[cfg(test)]
 fn pane_restore_startup<'a>(
     session: Option<&PaneAgentSessionSnapshot>,
     reported_resume: Option<&PaneAgentResumeSnapshot>,
+    cwd: &std::path::Path,
+    history: Option<&'a PaneHistorySnapshot>,
+    agent_restore: &mut AgentRestoreState<'_>,
+) -> PaneRestoreStartup<'a> {
+    pane_restore_startup_for_agent(
+        session,
+        reported_resume,
+        None,
+        cwd,
+        history,
+        agent_restore,
+    )
+}
+
+fn pane_restore_startup_for_agent<'a>(
+    session: Option<&PaneAgentSessionSnapshot>,
+    reported_resume: Option<&PaneAgentResumeSnapshot>,
+    agent_name: Option<&str>,
     cwd: &std::path::Path,
     history: Option<&'a PaneHistorySnapshot>,
     agent_restore: &mut AgentRestoreState<'_>,
@@ -838,8 +859,12 @@ fn pane_restore_startup<'a>(
         None
     } else if let Some(resume) = reported_resume {
         Some(reported_resume_from_snapshot(resume).plan(cwd))
+    } else if let Some(session) = session {
+        restore_plan_for_snapshot(session, true)
     } else {
-        session.and_then(|session| restore_plan_for_snapshot(session, true))
+        agent_name.and_then(|agent| {
+            resume_plan_without_session(agent, cwd, agent_restore.resumed_sessions)
+        })
     };
     let has_native_agent_restore = restore_plan.is_some();
     // Reserve before spawning so later panes in the same restore pass cannot
@@ -873,6 +898,35 @@ fn pane_restore_startup<'a>(
         duplicate_agent_session,
         reserved_agent_session,
     }
+}
+
+/// The agent a saved pane was holding.
+///
+/// A pane started outside the managed launcher never records a kind, so the
+/// agent it was showing is the other source of truth; resume needs it to pick
+/// that agent's continue flag.
+fn saved_agent_kind(pane: &super::snapshot::PaneSnapshot) -> Option<String> {
+    pane.managed_agent_kind
+        .clone()
+        .or_else(|| pane.detected_agent.clone())
+}
+
+/// Picks a resume plan for an agent that reported no session id.
+///
+/// MiniMax Code keeps its conversations in one database keyed by directory, so
+/// each pane takes the newest conversation for its directory that no earlier
+/// pane has claimed. When that database is unavailable, the agent's own continue
+/// flag is all that is left, and it can only serve one pane per directory.
+fn resume_plan_without_session(
+    agent: &str,
+    cwd: &std::path::Path,
+    resumed: &HashSet<String>,
+) -> Option<crate::agent_resume::AgentResumePlan> {
+    crate::agent_resume::minimax_directory_sessions(cwd)
+        .into_iter()
+        .filter_map(|session_id| crate::agent_resume::session_plan(agent, cwd, &session_id))
+        .find(|plan| !resumed.contains(&plan.dedupe_key))
+        .or_else(|| crate::agent_resume::continue_plan(agent, cwd))
 }
 
 fn saved_reported_resume(pane: &super::snapshot::PaneSnapshot) -> Option<&PaneAgentResumeSnapshot> {
@@ -1230,6 +1284,66 @@ mod tests {
     }
 
     #[test]
+    fn saved_agent_kind_prefers_the_managed_kind_and_falls_back_to_the_detected_one() {
+        let mut pane = super::super::snapshot::PaneSnapshot {
+            cwd: std::path::PathBuf::from("/storage/Users/currentUser/workspace/hicodeer"),
+            label: None,
+            agent_name: None,
+            managed_agent_kind: Some("opencode".into()),
+            detected_agent: Some("minimax".into()),
+            agent_session: None,
+            agent_resume: None,
+            launch_argv: None,
+        };
+        assert_eq!(saved_agent_kind(&pane).as_deref(), Some("opencode"));
+
+        pane.managed_agent_kind = None;
+        assert_eq!(saved_agent_kind(&pane).as_deref(), Some("minimax"));
+    }
+
+    #[test]
+    fn pane_restore_startup_continues_an_agent_that_reported_no_session() {
+        // MiniMax Code never reports a session id, so the pane has no reference
+        // to resume. The agent kind saved beside it is what picks the continue
+        // flag instead.
+        let mut resumed = HashSet::new();
+        let mut agent_restore = AgentRestoreState {
+            enabled: true,
+            resumed_sessions: &mut resumed,
+        };
+        let cwd = std::path::Path::new("/storage/Users/currentUser/workspace/hicodeer");
+        let startup = pane_restore_startup_for_agent(
+            None,
+            None,
+            Some("minimax"),
+            cwd,
+            None,
+            &mut agent_restore,
+        );
+        let plan = startup.restore_plan.expect("minimax should resume");
+        assert_eq!(plan.argv.first().map(String::as_str), Some("mcode"));
+        // The database may name the conversation; without it the agent falls
+        // back to its directory-scoped continue flag.
+        assert!(matches!(
+            plan.argv.get(1).map(String::as_str),
+            Some("--session") | Some("--continue")
+        ));
+    }
+
+    #[test]
+    fn pane_restore_startup_leaves_a_sessionless_agent_without_a_flag_alone() {
+        let mut resumed = HashSet::new();
+        let mut agent_restore = AgentRestoreState {
+            enabled: true,
+            resumed_sessions: &mut resumed,
+        };
+        let cwd = std::path::Path::new("/storage/Users/currentUser/workspace/hicodeer");
+        let startup =
+            pane_restore_startup_for_agent(None, None, Some("codex"), cwd, None, &mut agent_restore);
+        assert!(startup.restore_plan.is_none());
+    }
+
+    #[test]
     fn pane_restore_startup_suppresses_history_for_native_agent_resume() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
             source: "hicodeer:pi".into(),
@@ -1559,6 +1673,7 @@ mod tests {
                             label: Some("reviewer".into()),
                             agent_name: Some("reviewer".into()),
                             managed_agent_kind: Some("opencode".into()),
+                            detected_agent: None,
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
                                 source: "hicodeer:opencode".into(),
                                 agent: "opencode".into(),
@@ -1648,6 +1763,7 @@ mod tests {
                                 label: None,
                                 agent_name: None,
                                 managed_agent_kind: None,
+                                detected_agent: None,
                                 agent_session: None,
                                 agent_resume: None,
                                 launch_argv: None,
@@ -1660,6 +1776,7 @@ mod tests {
                                 label: None,
                                 agent_name: None,
                                 managed_agent_kind: None,
+                                detected_agent: None,
                                 agent_session: None,
                                 agent_resume: None,
                                 launch_argv: None,
@@ -1714,6 +1831,7 @@ mod tests {
                     label: None,
                     agent_name: None,
                     managed_agent_kind: None,
+                    detected_agent: None,
                     agent_session: None,
                     agent_resume: None,
                     launch_argv: None,
@@ -1725,6 +1843,7 @@ mod tests {
             label: Some("planner".into()),
             agent_name: Some("planner".into()),
             managed_agent_kind: None,
+            detected_agent: None,
             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
                 source: "hicodeer:codex".into(),
                 agent: "codex".into(),
@@ -1882,6 +2001,7 @@ mod tests {
                             label: None,
                             agent_name: None,
                             managed_agent_kind: None,
+                            detected_agent: None,
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
                                 source: "hicodeer:codex".into(),
                                 agent: "codex".into(),
@@ -2193,6 +2313,7 @@ mod tests {
                 label: None,
                 agent_name: None,
                 managed_agent_kind: None,
+                detected_agent: None,
                 agent_session: None,
                 agent_resume: None,
                 launch_argv: None,

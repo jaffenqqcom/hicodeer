@@ -451,6 +451,77 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
     )
 }
 
+/// The conversations MiniMax Code keeps for a working directory, newest first.
+///
+/// It stores every conversation in one database keyed by the directory it ran
+/// in, so a pane that never reported a session id can still be matched back to
+/// the conversation it was showing.
+pub fn minimax_directory_sessions(cwd: &Path) -> Vec<String> {
+    const QUERY_LIMIT: usize = 32;
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return Vec::new();
+    };
+    let database = home.join(".minimax/v2/sqlite/runtime-state.sqlite");
+    if !database.is_file() {
+        return Vec::new();
+    }
+    let cwd = cwd.display().to_string().replace('\'', "''");
+    let sql = format!(
+        "select session_id from local_runtime_sessions \
+         where visibility = 'visible' and workspace_dir = '{cwd}' \
+         order by updated_at_ms desc limit {QUERY_LIMIT}"
+    );
+    crate::fetch_reply::sqlite_query(&database, &sql)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| row.get("session_id").and_then(|value| value.as_str()))
+        .filter(|session_id| valid_session_id(session_id))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A resume plan that names one conversation explicitly.
+pub fn session_plan(agent: &str, cwd: &Path, session_id: &str) -> Option<AgentResumePlan> {
+    let argv: Vec<String> = match agent {
+        "minimax" => vec!["mcode".into(), "--session".into(), session_id.to_string()],
+        _ => return None,
+    };
+    Some(AgentResumePlan {
+        agent: agent.to_string(),
+        argv,
+        dedupe_key: format!(
+            "{}\u{0}{}\u{0}{}\u{0}session\u{0}{}",
+            official_source_for(agent),
+            agent,
+            cwd.display(),
+            session_id
+        ),
+    })
+}
+
+/// A resume command for an agent whose pane never learned a session id.
+///
+/// MiniMax Code accepts only "UserPromptSubmit" and "Stop" in its hook table,
+/// so it never reports a session through "session_start". The continue flag
+/// resumes the latest session in the pane's own working directory, which is the
+/// closest thing the agent offers.
+pub fn continue_plan(agent: &str, cwd: &Path) -> Option<AgentResumePlan> {
+    let argv: Vec<String> = match agent {
+        "minimax" => vec!["mcode".into(), "--continue".into()],
+        _ => return None,
+    };
+    Some(AgentResumePlan {
+        agent: agent.to_string(),
+        argv,
+        dedupe_key: format!(
+            "{}\u{0}{}\u{0}{}\u{0}continue",
+            official_source_for(agent),
+            agent,
+            cwd.display()
+        ),
+    })
+}
+
 /// The `herdr:` integration source that owns an agent's resume plan.
 ///
 /// Only Antigravity differs: its CLI label is `agy`, while the integration is
@@ -798,6 +869,29 @@ mod tests {
                 "{agent} argv"
             );
         }
+    }
+
+    #[test]
+    fn minimax_session_plan_names_the_conversation() {
+        let cwd = Path::new("/storage/Users/currentUser/workspace/hicodeer");
+        let planned = session_plan("minimax", cwd, "mvs-1").expect("minimax session plan");
+        assert_eq!(planned.argv, vec!["mcode", "--session", "mvs-1"]);
+        assert_eq!(planned.agent, "minimax");
+    }
+
+    #[test]
+    fn minimax_without_a_session_continues_the_workspace_session() {
+        let cwd = Path::new("/storage/Users/currentUser/workspace/hicodeer");
+        let planned = continue_plan("minimax", cwd).expect("minimax should continue its session");
+        assert_eq!(planned.argv, vec!["mcode", "--continue"], "minimax continue argv");
+        assert_eq!(planned.agent, "minimax");
+    }
+
+    #[test]
+    fn agents_that_report_a_session_never_fall_back_to_continue() {
+        let cwd = Path::new("/storage/Users/currentUser/workspace/hicodeer");
+        assert!(continue_plan("codex", cwd).is_none());
+        assert!(continue_plan("claude", cwd).is_none());
     }
 
     #[test]

@@ -240,8 +240,8 @@ pub fn agent_icon(kind: &str) -> IconName {
 ///
 /// The settings page lists these under "Show History" so the user can see what
 /// is being scanned. The daemon owns the real set (`sessions/fad.rs::fad_stores`
-/// plus the stores written here); this list is the display side of the same
-/// agreement and has to be updated with it.
+/// plus the stores written here); this list is the display side and may name
+/// fewer agents than the daemon scans, never different spellings of one.
 ///
 /// Ordered alphabetically by display name, the same order the settings page's
 /// integration grid sorts itself into, so one agent sits in the same place in
@@ -250,17 +250,13 @@ pub const SCANNABLE_AGENTS: &[&str] = &[
     "atomcode",
     "claude",
     "codebuddy",
-    "codewhale",
     "codex",
-    "deepseek",
     "deveco",
     "gemini",
     "hermes",
     "kimi",
     "minimax",
-    "openclaw",
     "opencode",
-    "opendesk",
     "pi",
     "qwen",
     "zcode",

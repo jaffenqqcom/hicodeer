@@ -4,13 +4,26 @@
       {
         "name": "default",
         "material": {
-          "storePassword": "0000002098BF9B60A35F0A7FBD33FCCDCE6CB8DF699F75AD8CDF42ECD13856052D0F46FE79F86D21BC8F6177CDB08D4D",
-          "certpath": "/storage/Users/currentUser/.ohos/config/default_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.cer",
-          "keyAlias": "debugKey",
-          "keyPassword": "0000002098BF9B60A35F0A7FBD33FCCDCE6CB8DF699F75AD8CDF42ECD13856052D0F46FE79F86D21BC8F6177CDB08D4D",
-          "profile": "/storage/Users/currentUser/.ohos/config/default_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.p7b",
+          "storePassword": "0000001DAF98F06D318B61580CE7E9F5903940F2AA8D8D635729BDFFE6C59833F3DEB45E7FA99F84B7281C8A57",
+          "certpath": "/storage/Users/currentUser/Documents/APP正式证书密钥/Profile&Cer/HiCodeer-Release V1.0.cer",
+          "keyAlias": "jaffenqqcom",
+          "keyPassword": "0000001DAF98F06D318B61580CE7E9F5903940F2AA8D8D635729BDFFE6C59833F3DEB45E7FA99F84B7281C8A57",
+          "profile": "/storage/Users/currentUser/Documents/APP正式证书密钥/Profile&Cer/HiCodeer-Profile-Release V1.0Release.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/storage/Users/currentUser/.ohos/config/default_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.p12"
+          "storeFile": "/storage/Users/currentUser/Documents/APP正式证书密钥/APP正式证书密钥.p12"
+        },
+        "type": "HarmonyOS"
+      },
+      {
+        "name": "debug",
+        "material": {
+          "storePassword": "000000202CFF05D402524913EE4B182AA20651D2D3AED1A0AD57D2E7295162E8BEDC9CD9B0A46F8133B2694A5B4303AC",
+          "certpath": "/storage/Users/currentUser/.ohos/config/debug_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "000000202CFF05D402524913EE4B182AA20651D2D3AED1A0AD57D2E7295162E8BEDC9CD9B0A46F8133B2694A5B4303AC",
+          "profile": "/storage/Users/currentUser/.ohos/config/debug_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/storage/Users/currentUser/.ohos/config/debug_hapU6lCp-1YTTw2BUQBR_cFW18o1kGh34xD0nHKbO2TiRk.p12"
         },
         "type": "HarmonyOS"
       }
@@ -42,7 +55,7 @@
             ]
           }
         },
-        "signingConfig": "default",
+        "signingConfig": "debug",
         "bundleName": "com.hicodeer.edit"
       }
     ],

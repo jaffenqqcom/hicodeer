@@ -102,3 +102,4 @@ crates/gpui_ohos/depend/cmd-agent/hicodeerd/shim/musllib-shim.so
 !herdr/vendor/libghostty-vt/src/build/**
 !herdr/vendor/libghostty-vt/src/apprt/gtk/build/
 !herdr/vendor/libghostty-vt/src/apprt/gtk/build/**
+.atomcode/

@@ -60,7 +60,7 @@ footer（Add Skill 与 IM Channel 那一行）位于 overflow_y_scroll 的内容
 
 ### 面板视觉层级
 
-- space 图标改用 Folder（闭合态），与历史分组默认折叠时显示的图标一致
+- space 图标保持 FolderOpen（展开态），与历史分组展开时的图标一致
 - 历史 session 行改为单图标槽：缩进常量 HISTORY_ROW_INDENT = 22px（16 槽加 6 间距），槽内平时放 agent 图标、打开中放加载标记；标题因此从 50px 起，图标槽左边缘正好落在 28px，与 space 文字起点重合
 - 历史区上间距改为常量 HISTORY_TOP_GAP = 20px，约等于一个 Default label 的行高
 - 底部入口合并成一行：Add Skill 靠左、IM Channel 靠右，中间用 flex_1 弹簧撑开；Add Skill 图标用 IconName::Slash，并保留 tab_index 与 focus_visible 的键盘可达性
@@ -69,11 +69,11 @@ footer（Add Skill 与 IM Channel 那一行）位于 overflow_y_scroll 的内容
 
 ### 间距回归
 
-pb_1 改为只在最后一个 space 块上通过 when(is_last_space, ...) 生效。块间间距恢复 4 加 4 等于 8px，最后一个块到 footer 分隔线为 8px，与 Add Skill 到下方分隔线的 8px 一致。
+曾按检视意见把 pb_1 只加在最后一个 space 块上，以恢复块间的 8px。实机观感与该处已确认的间距不一致，故回退为每块都加 pb_1：块间距 12px，最后一个块到 footer 分隔线 8px，与 Add Skill 到下方分隔线的 8px 一致。
 
 ### 弹层位置
 
-说明弹层改到按钮行之前渲染（v_flex 内先 children(popover) 再 child(行)），展开方向变成向上占位，不再越过视口底部。
+曾把说明弹层改到按钮行之前渲染以避免底部裁剪，实机观感不佳，已回退为接在按钮行之后（向下展开）。
 
 ### 未保存文件
 
@@ -109,7 +109,7 @@ pb_1 改为只在最后一个 space 块上通过 when(is_last_space, ...) 生效
 
 ## 修改文件
 
-- crates/agent_panel/src/agent_panel.rs — space 图标改 Folder、历史区上间距、历史行单槽与缩进、footer 合并与分隔线、弹层改到按钮上方、选中态去焦点边框、space 末块留白
+- crates/agent_panel/src/agent_panel.rs — space 图标用 FolderOpen、历史区上间距、历史行单槽与缩进、footer 合并与分隔线、选中态去焦点边框、space 块底部留白
 - crates/agent_panel/src/talk_to_agent_modal.rs — 无路径时省略 File/Line、保留改动前标记、修正过期注释、新增两个测试
 - crates/editor/src/ohos_talk_to_agent.rs — 未保存 buffer 不再提前返回，file_path 允许为空
 - crates/localization/Cargo.toml — serde 启用 derive feature

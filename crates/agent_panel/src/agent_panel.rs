@@ -2986,10 +2986,6 @@ impl AgentPanel {
             .border_color(colors.border)
             .py_1()
             .gap_0p5()
-            // Above the row, not below: the footer lives inside the scrolling
-            // content, so a popover expanding downward would be clipped by the
-            // viewport whenever the footer is the last visible thing.
-            .children(popover)
             .child(
                 h_flex()
                     .id("agent-panel-footer-row")
@@ -3045,6 +3041,7 @@ impl AgentPanel {
                             })),
                     ),
             )
+            .children(popover)
             .into_any_element()
     }
 
@@ -3278,12 +3275,11 @@ fn status_marker(status: AgentStatus) -> (SharedString, Color) {
     }
 }
 
-/// The icon a space row starts with: a closed folder, the same mark a history
-/// group wears while collapsed, which is how the history tree first shows its
-/// spaces, so both lists open with the same glyph.
+/// The icon a space row starts with: an open folder, the same mark the history
+/// tree uses for an expanded space group, so both trees read the same way.
 fn space_icon_slot() -> impl IntoElement {
     h_flex().min_w(STATUS_SLOT_SIZE).justify_center().child(
-        Icon::new(IconName::Folder)
+        Icon::new(IconName::FolderOpen)
             .size(IconSize::Small)
             .color(Color::Muted),
     )
@@ -3351,14 +3347,12 @@ impl Render for AgentPanel {
             // read as one block, flush against the line with no extra gap.
             let mut rows: Vec<AnyElement> = Vec::new();
             for (index, space) in self.spaces.iter().enumerate() {
-                // Only the last block carries bottom air: its last agent row
-                // then sits as far above the footer divider as the Add Skill
-                // button sits above the divider under it. Adding it to every
-                // block would widen the gaps between spaces as well.
-                let is_last_space = index + 1 == self.spaces.len();
+                // The bottom padding matches the footer entries: a space's last
+                // agent row then sits as far above the divider as the Add Skill
+                // button sits above the one under it.
                 let mut block = v_flex()
                     .w_full()
-                    .when(is_last_space, |block| block.pb_1())
+                    .pb_1()
                     .border_t_1()
                     .border_color(cx.theme().colors().border);
                 // Everything after the first space carries the same gap below

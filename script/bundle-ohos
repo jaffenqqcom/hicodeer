@@ -1113,6 +1113,9 @@ CXX_DIR="$HAP_DIR/entry/.cxx/default/default/$BUILD_MODE/arm64-v8a"
 rm -f "$CXX_DIR/.ninja_log" "$CXX_DIR/.ninja_deps" 2>/dev/null || true
 
 # ==================== hvigor assembleHap ====================
+# 产品名同时决定 hvigor 打包哪项 product 与签名材料取哪项 product 的
+# signingConfig；两处共用同一个值，避免 build-profile.json5 增列产品后错配。
+HVIGOR_PRODUCT="${OHOS_PRODUCT:-default}"
 cd "$HAP_DIR"   # hvigor 必须在 HAP 工程根目录运行（找 hvigor-config.json5 / build-profile.json5）
 # 停止旧 daemon：hvigor daemon 常驻并缓存启动时的环境变量（DEVECO_SDK_HOME 等）
 $NO_SHIM "$NODE_CMD" "$HVIGORW_JS" --stop-daemon 2>/dev/null || true
@@ -1126,7 +1129,7 @@ echo ""
 
 $NO_SHIM "$NODE_CMD" "$HVIGORW_JS" \
   --mode module \
-  -p product=default \
+  -p product="$HVIGOR_PRODUCT" \
   -p buildMode="$BUILD_MODE" \
   assembleHap \
   --info --analyze=normal --parallel --incremental --no-daemon
@@ -1216,39 +1219,38 @@ with zipfile.ZipFile(packed) as packed_zip:
             sys.exit("%s size mismatch: %d != %d" % (entry, info.file_size, os.path.getsize(source)))
 print("verified %d hnp payload(s): %s" % (len(payloads), ", ".join(sorted(payloads))))
 PY
-    # 签名材料以 hap/build-profile.json5 的 signingConfigs[0] 为准（certpath /
-    # profile / storeFile / keyAlias 四个字段），与 DevEco「自动签名」写下的内容同源，
-    # 于是重新签发（换 bundleName、换证书）后不必改本脚本；口令由 read-sign-pwd.js
-    # 从同一文件的密文解出，密钥材料就在 dirname(storeFile)/material/ 下、随证书
-    # 一起搬运，因此换材料后也无需同步口令。环境变量 OHOS_SIGN_CER / OHOS_SIGN_P7B /
-    # OHOS_SIGN_P12 / OHOS_SIGN_ALIAS / OHOS_SIGN_PWD 仍可逐项覆盖，全给齐时连
-    # build-profile.json5 都不读。
+    # 签名材料以 hap/build-profile.json5 为准：先按 products[<name>].signingConfig
+    # 取配置名（例如 "debug"），再在 signingConfigs 里按 name 找到那一套，取它的
+    # certpath / profile / storeFile / keyAlias 四个字段。口令由 read-sign-pwd.js
+    # 从同一配置的密文解出，密钥材料就在 dirname(storeFile)/material/ 下、随证书
+    # 一起搬运，因此换材料后也无需同步口令。OHOS_SIGN_CER / OHOS_SIGN_P7B /
+    # OHOS_SIGN_P12 / OHOS_SIGN_ALIAS / OHOS_SIGN_PWD 仍可逐项覆盖；OHOS_SIGN_CONFIG
+    # 可指定配置名，四项材料全部由环境变量提供却没给 OHOS_SIGN_CONFIG 时，必须
+    # 显式给 OHOS_SIGN_PWD，否则无法判断该解哪一套口令。
     if [ -z "${OHOS_SIGN_CER:-}" ] || [ -z "${OHOS_SIGN_P7B:-}" ] || [ -z "${OHOS_SIGN_P12:-}" ] || [ -z "${OHOS_SIGN_ALIAS:-}" ]; then
-      SIGN_MATERIAL="$("$NODE_CMD" -e '
-const fs = require("fs");
-const text = fs.readFileSync(process.argv[1], "utf-8");
-const field = (name) => {
-  const match = new RegExp("\"" + name + "\"\\s*:\\s*\"([^\"]+)\"").exec(text);
-  if (!match) {
-    process.stderr.write("read-sign-material: no \"" + name + "\" in build-profile.json5\n");
-    process.exit(1);
-  }
-  return match[1];
-};
-process.stdout.write(
-  [field("certpath"), field("profile"), field("storeFile"), field("keyAlias")].join("\n") + "\n"
-);
-' "$HAP_DIR/build-profile.json5")" || {
-        echo "[hicodeer-ohos-build] ERROR: 无法从 $HAP_DIR/build-profile.json5 读出签名材料，请用 OHOS_SIGN_CER/OHOS_SIGN_P7B/OHOS_SIGN_P12/OHOS_SIGN_ALIAS 指定" >&2
+      SIGN_ARGS="--product $HVIGOR_PRODUCT --material"
+      if [ -n "${OHOS_SIGN_CONFIG:-}" ]; then
+        SIGN_ARGS="$SIGN_ARGS --config $OHOS_SIGN_CONFIG"
+      fi
+      SIGN_MATERIAL="$("$NODE_CMD" "$SCRIPT_DIR/read-sign-pwd.js" "$HAP_DIR" $SIGN_ARGS)" || {
+        echo "[hicodeer-ohos-build] ERROR: 无法从 $HAP_DIR/build-profile.json5 读出签名材料；可用 OHOS_SIGN_CONFIG 指定 signingConfigs 里的配置名，或逐项给 OHOS_SIGN_CER / OHOS_SIGN_P7B / OHOS_SIGN_P12 / OHOS_SIGN_ALIAS" >&2
         exit 1
       }
       OHOS_SIGN_CER="${OHOS_SIGN_CER:-$(printf '%s\n' "$SIGN_MATERIAL" | sed -n '1p')}"
       OHOS_SIGN_P7B="${OHOS_SIGN_P7B:-$(printf '%s\n' "$SIGN_MATERIAL" | sed -n '2p')}"
       OHOS_SIGN_P12="${OHOS_SIGN_P12:-$(printf '%s\n' "$SIGN_MATERIAL" | sed -n '3p')}"
       OHOS_SIGN_ALIAS="${OHOS_SIGN_ALIAS:-$(printf '%s\n' "$SIGN_MATERIAL" | sed -n '4p')}"
+      SIGNING_CONFIG_NAME="$(printf '%s\n' "$SIGN_MATERIAL" | sed -n '5p')"
+      echo "[hicodeer-ohos-build] signingConfig: $SIGNING_CONFIG_NAME"
+    else
+      SIGNING_CONFIG_NAME="${OHOS_SIGN_CONFIG:-}"
     fi
     if [ -z "${OHOS_SIGN_PWD:-}" ]; then
-      OHOS_SIGN_PWD="$("$NODE_CMD" "$SCRIPT_DIR/read-sign-pwd.js" "$HAP_DIR")" || {
+      if [ -z "${SIGNING_CONFIG_NAME:-}" ]; then
+        echo "[hicodeer-ohos-build] ERROR: 签名材料全部由 OHOS_SIGN_* 提供，但没有 OHOS_SIGN_CONFIG 指明配置名；请补 OHOS_SIGN_CONFIG 或直接给 OHOS_SIGN_PWD" >&2
+        exit 1
+      fi
+      OHOS_SIGN_PWD="$("$NODE_CMD" "$SCRIPT_DIR/read-sign-pwd.js" "$HAP_DIR" --product "$HVIGOR_PRODUCT" --config "$SIGNING_CONFIG_NAME")" || {
         echo "[hicodeer-ohos-build] ERROR: 无法从 $HAP_DIR 的签名材料解出口令，请用 OHOS_SIGN_PWD 指定" >&2
         exit 1
       }

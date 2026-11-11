@@ -111,12 +111,11 @@ impl Editor {
             }
         }
 
-        let Some(file_path) = file_path else {
-            log::warn!("talk_to_agent: the buffer has no file path");
-            return;
-        };
-
-        let file_path = file_path.to_string_lossy().into_owned();
+        // An unsaved buffer has no path: the dialog still opens, it just sends
+        // the selected text without a file reference or a line range.
+        let file_path = file_path
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
 
         window.dispatch_action(
             Box::new(SendSelectionToAgent {

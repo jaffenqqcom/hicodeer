@@ -129,6 +129,11 @@ const SCROLLBAR_GUTTER: Pixels = px(9.);
 /// right edge across the whole Agent panel.
 const ROW_ACTION_GAP: Pixels = px(2.);
 const ROW_ACTION_SIDE_PADDING: Pixels = px(4.);
+/// Gap between the footer row and the history tree: one default label line.
+const HISTORY_TOP_GAP: Pixels = px(20.0);
+/// Indent of a history session row: its icon slot starts where a space row's
+/// label starts, one icon slot (16px) and one gap (6px) in from the row start.
+const HISTORY_ROW_INDENT: Pixels = px(22.0);
 /// Key written once the user finishes setup. While it is absent the panel stays
 /// closed. Spelled out here because this crate cannot depend on the onboarding
 /// crate, which depends on this one.
@@ -2384,9 +2389,8 @@ impl AgentPanel {
 
         v_flex()
             .w_full()
-            // pt_3 plus two row heights: History used to sit too close to the
-            // space list above it.
-            .pt(px(12.0 + 2.0 * 34.0))
+            // One label line of air below the footer row.
+            .pt(HISTORY_TOP_GAP)
             .border_t_1()
             .border_color(cx.theme().colors().border)
             .child(history_section)
@@ -2660,8 +2664,19 @@ impl AgentPanel {
             (SharedString::from(""), Color::Muted)
         };
 
+        // One icon slot in front of the title, aligned with the space rows: the
+        // agent icon normally, and the loading marker while the session opens.
+        let leading: AnyElement = if marker.is_empty() {
+            history_agent_icon(&key.agent).into_any_element()
+        } else {
+            Label::new(marker)
+                .size(LabelSize::Small)
+                .color(marker_color)
+                .into_any_element()
+        };
+
         let row_id = SharedString::from(format!("history-row-{}:{}", key.agent, key.session_id));
-        let mut row = row_container(ElementId::Name(row_id.clone()), AGENT_INDENT, false, cx)
+        let mut row = row_container(ElementId::Name(row_id.clone()), HISTORY_ROW_INDENT, false, cx)
             .group(row_id.clone())
             .when(archived, |row| row.opacity(0.6))
             .child(
@@ -2669,8 +2684,12 @@ impl AgentPanel {
                     .relative()
                     .w_full()
                     .gap_1p5()
-                    .child(status_slot(marker, marker_color))
-                    .child(history_agent_icon(&key.agent))
+                    .child(
+                        h_flex()
+                            .min_w(STATUS_SLOT_SIZE)
+                            .justify_center()
+                            .child(leading),
+                    )
                     .child(title)
                     // The time sits at the right edge, lined up with the section's
                     // "click to open" hint above the list.
@@ -2947,46 +2966,84 @@ impl AgentPanel {
             .into_any_element()
     }
 
-    /// Entry that opens the editor's settings at the IM channel section.
-    ///
-    /// The channel itself is configured on the Agent Container page, so this
-    /// row is only a shortcut and carries no state of its own.
-    fn render_im_channel_entry(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Footer row of the panel: Add Skill flush with the left edge, the IM
+    /// Channel shortcut flush with the right. Both entries style themselves the
+    /// same way the "New Space" row does, so all three read as one family.
+    fn render_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let popover = if self.show_add_skill_popover {
+            Some(self.render_add_skill_popover(cx).into_any_element())
+        } else {
+            None
+        };
         let colors = cx.theme().colors();
-        // Same shell as the "New Space" row in render_actions: an outer row
-        // with one flexed cell that carries its own side padding, so the label
-        // keeps the identical size and height in both places.
-        h_flex()
-            .id("agent-panel-im-channel-row")
+
+        v_flex()
+            .id("agent-panel-footer")
             .w_full()
+            // The same divider a space block draws above itself, so the last
+            // space's last tab is closed off from the footer the same way.
+            .border_t_1()
+            .border_color(colors.border)
             .py_1()
+            .gap_0p5()
+            // Above the row, not below: the footer lives inside the scrolling
+            // content, so a popover expanding downward would be clipped by the
+            // viewport whenever the footer is the last visible thing.
+            .children(popover)
             .child(
-                div()
-                    .id("agent-panel-im-channel")
-                    .flex_1()
-                    .min_w_0()
-                    .py_1()
-                    .pl(ROW_SIDE_PADDING)
-                    .pr(ROW_SIDE_PADDING)
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(transparent_black())
-                    .cursor_pointer()
-                    .hover(|style| style.bg(colors.ghost_element_hover))
-                    .active(|style| style.bg(colors.ghost_element_active))
-                    .child(action_content(
-                        IconName::Message,
-                        localization::localized_str!("IM Channel"),
-                    ))
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(
-                            Box::new(zed_actions::OpenSettingsPage {
-                                page: localization::localized_str!("IM Assistant").to_string(),
-                                target: None,
-                            }),
-                            cx,
-                        );
-                    })),
+                h_flex()
+                    .id("agent-panel-footer-row")
+                    .w_full()
+                    .child(
+                        div()
+                            .id("agent-panel-add-skill")
+                            .py_1()
+                            .pl(ROW_SIDE_PADDING)
+                            .pr(ROW_SIDE_PADDING)
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(transparent_black())
+                            .tab_index(0)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(colors.ghost_element_hover))
+                            .active(|style| style.bg(colors.ghost_element_active))
+                            .focus_visible(|style| style.border_color(colors.border_focused))
+                            .child(action_content(
+                                IconName::Slash,
+                                localization::localized_str!("Add Skill"),
+                            ))
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.copy_add_skill(cx);
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("agent-panel-im-channel")
+                            .py_1()
+                            .pl(ROW_SIDE_PADDING)
+                            .pr(ROW_SIDE_PADDING)
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(transparent_black())
+                            .cursor_pointer()
+                            .hover(|style| style.bg(colors.ghost_element_hover))
+                            .active(|style| style.bg(colors.ghost_element_active))
+                            .child(action_content(
+                                IconName::Message,
+                                localization::localized_str!("IM Channel"),
+                            ))
+                            .on_click(cx.listener(|_, _, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(zed_actions::OpenSettingsPage {
+                                        page: localization::localized_str!("IM Assistant")
+                                            .to_string(),
+                                        target: None,
+                                    }),
+                                    cx,
+                                );
+                            })),
+                    ),
             )
             .into_any_element()
     }
@@ -2995,21 +3052,14 @@ impl AgentPanel {
     /// Settings live in the editor's own settings page, so the panel has no
     /// entry of its own.
     fn render_actions(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let popover = if self.show_add_skill_popover {
-            Some(self.render_add_skill_popover(cx).into_any_element())
-        } else {
-            None
-        };
         let colors = cx.theme().colors();
 
-        // No horizontal padding here: the two entries carry their own side
-        // padding. The row is split into two same-styled entries so the add
-        // skill button never falls inside the new space click target.
+        // The entry carries its own side padding, so its label lines up with the
+        // tree below without a wrapper inset.
         v_flex()
             .id("agent-panel-actions")
             .w_full()
             .py_1()
-            .gap_0p5()
             .child(
                 h_flex()
                     .id("agent-panel-actions-row")
@@ -3033,31 +3083,8 @@ impl AgentPanel {
                                 localization::localized_str!("New Space"),
                             ))
                             .on_click(cx.listener(|this, _, _window, cx| this.create_space(cx))),
-                    )
-                    .child(
-                        div()
-                            .id("agent-panel-add-skill")
-                            .py_1()
-                            .pl(ROW_SIDE_PADDING)
-                            .pr(ROW_SIDE_PADDING)
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(transparent_black())
-                            .tab_index(0)
-                            .cursor_pointer()
-                            .hover(|style| style.bg(colors.ghost_element_hover))
-                            .active(|style| style.bg(colors.ghost_element_active))
-                            .focus_visible(|style| style.border_color(colors.border_focused))
-                            .child(action_content(
-                                IconName::Plus,
-                                localization::localized_str!("Add Skill"),
-                            ))
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.copy_add_skill(cx);
-                            })),
                     ),
             )
-            .children(popover)
     }
 
     /// Copies the skill instructions to the system clipboard and opens the
@@ -3153,10 +3180,9 @@ fn row_container(
     cx: &App,
 ) -> gpui::Stateful<Div> {
     let colors = cx.theme().colors();
-    // The same cue the settings rows use for keyboard-reachable controls: a
-    // focus-coloured border that follows the theme, plus the selected fill.
-    // The border stays present but transparent when unselected so rows do not
-    // shift by a pixel when selection moves.
+    // Selection paints the background only. The border belongs to a keyboard
+    // cursor, not to selection, so a mouse click never draws a frame; it stays
+    // present but transparent to keep the row's box from shifting.
     div()
         .id(id)
         .w_full()
@@ -3165,11 +3191,7 @@ fn row_container(
         .pr(ROW_SIDE_PADDING)
         .rounded_sm()
         .border_1()
-        .border_color(if selected {
-            colors.border_focused
-        } else {
-            colors.border_focused.opacity(0.0)
-        })
+        .border_color(colors.border_focused.opacity(0.0))
         .cursor_pointer()
         .when(selected, |this| this.bg(colors.element_selected))
         .hover(|style| style.bg(colors.ghost_element_hover))
@@ -3256,12 +3278,12 @@ fn status_marker(status: AgentStatus) -> (SharedString, Color) {
     }
 }
 
-/// The icon a space row starts with: the same one the Agent panel itself wears
-/// in the status bar, because a space is this panel's unit, not an agent. An
-/// agent's working state belongs on the agent row.
+/// The icon a space row starts with: a closed folder, the same mark a history
+/// group wears while collapsed, which is how the history tree first shows its
+/// spaces, so both lists open with the same glyph.
 fn space_icon_slot() -> impl IntoElement {
     h_flex().min_w(STATUS_SLOT_SIZE).justify_center().child(
-        Icon::new(IconName::Sparkle)
+        Icon::new(IconName::Folder)
             .size(IconSize::Small)
             .color(Color::Muted),
     )
@@ -3329,8 +3351,14 @@ impl Render for AgentPanel {
             // read as one block, flush against the line with no extra gap.
             let mut rows: Vec<AnyElement> = Vec::new();
             for (index, space) in self.spaces.iter().enumerate() {
+                // Only the last block carries bottom air: its last agent row
+                // then sits as far above the footer divider as the Add Skill
+                // button sits above the divider under it. Adding it to every
+                // block would widen the gaps between spaces as well.
+                let is_last_space = index + 1 == self.spaces.len();
                 let mut block = v_flex()
                     .w_full()
+                    .when(is_last_space, |block| block.pb_1())
                     .border_t_1()
                     .border_color(cx.theme().colors().border);
                 // Everything after the first space carries the same gap below
@@ -3371,7 +3399,7 @@ impl Render for AgentPanel {
                             .overflow_y_scroll()
                             .track_scroll(&self.scroll_handle)
                             .child(tree)
-                            .child(self.render_im_channel_entry(cx))
+                            .child(self.render_footer_actions(cx))
                             .child(history),
                     )
                     .custom_scrollbars(

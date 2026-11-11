@@ -287,6 +287,11 @@ impl TalkToAgentModal {
     }
 
     fn render_header(&self, _cx: &mut Context<Self>) -> AnyElement {
+        // A selection from an unsaved buffer has no path and no line range.
+        if self.context.file_path.is_empty() {
+            return div().into_any_element();
+        }
+
         let lines = if self.context.start_line == self.context.end_line {
             localization::format_message(
                 "Line {line}",
@@ -613,8 +618,8 @@ struct ModalSizes {
 /// Reproduces the git commit modal's footprint exactly, computed once when the
 /// dialog is built, which is when the git commit modal computes its own.
 fn modal_sizes(window: &Window, cx: &App) -> ModalSizes {
-    // Sized from the UI font, which is also what both text boxes use, so the
-    // dialog and the terminal quick input end up the same size.
+    // Sized from the UI font, matching the git commit modal and the terminal
+    // quick input. The text boxes render in the buffer font, not this font.
     let settings = ThemeSettings::get_global(cx);
     let font = settings.ui_font.clone();
     let font_size = settings.ui_font_size(cx);
@@ -816,28 +821,42 @@ fn compose_message(context: &TalkToAgentContext, typed: &str) -> String {
     message.push_str(typed);
     message.push_str("\n\n");
 
-    let mut path_line =
-        localization::format_message("File: {path}", &[("path", context.file_path.clone())]);
-    if context.is_before_change {
-        path_line.push(' ');
-        path_line.push_str(localization::localized_str!("(before changes)"));
-    }
-    message.push_str(&path_line);
-    message.push('\n');
+    // An unsaved buffer has no path, and then there is no line range to quote
+    // either: the message carries only the selected text.
+    if !context.file_path.is_empty() {
+        let mut path_line = localization::format_message(
+            "File: {path}",
+            &[("path", context.file_path.clone())],
+        );
+        if context.is_before_change {
+            path_line.push(' ');
+            path_line.push_str(localization::localized_str!("(before changes)"));
+        }
+        message.push_str(&path_line);
+        message.push('\n');
 
-    let line_range = if context.start_line == context.end_line {
-        localization::format_message("Line {line}", &[("line", context.start_line.to_string())])
-    } else {
-        localization::format_message(
-            "Line {start} to Line {end}",
-            &[
-                ("start", context.start_line.to_string()),
-                ("end", context.end_line.to_string()),
-            ],
-        )
-    };
-    message.push_str(&line_range);
-    message.push('\n');
+        let line_range = if context.start_line == context.end_line {
+            localization::format_message(
+                "Line {line}",
+                &[("line", context.start_line.to_string())],
+            )
+        } else {
+            localization::format_message(
+                "Line {start} to Line {end}",
+                &[
+                    ("start", context.start_line.to_string()),
+                    ("end", context.end_line.to_string()),
+                ],
+            )
+        };
+        message.push_str(&line_range);
+        message.push('\n');
+    } else if context.is_before_change {
+        // No path to hang the marker on, but which side of the diff the text
+        // came from still matters to the agent reading the message.
+        message.push_str(localization::localized_str!("(before changes)"));
+        message.push('\n');
+    }
 
     message.push_str("\u{0060}\u{0060}\u{0060}\u{0060}");
     message.push_str(&context.language_name);
@@ -904,5 +923,30 @@ mod tests {
         let message = compose_message(&context(1, 1, "one\n", false), "check");
 
         assert!(message.contains("rust\none\n\u{0060}\u{0060}\u{0060}\u{0060}"));
+    }
+
+    #[test]
+    fn composes_a_selection_from_an_unsaved_buffer() {
+        let mut context = context(1, 1, "let x = 1;", false);
+        context.file_path.clear();
+
+        let message = compose_message(&context, "explain this");
+
+        assert!(message.starts_with("explain this\n\n"));
+        assert!(!message.contains("File: "));
+        assert!(!message.contains("Line "));
+        assert!(message.contains("\u{0060}\u{0060}\u{0060}\u{0060}rust\nlet x = 1;\n"));
+    }
+
+    #[test]
+    fn marks_the_pre_change_side_even_without_a_path() {
+        let mut context = context(1, 1, "old line", true);
+        context.file_path.clear();
+
+        let message = compose_message(&context, "why this change");
+
+        assert!(!message.contains("File: "));
+        assert!(!message.contains("Line "));
+        assert!(message.contains("(before changes)\n"));
     }
 }

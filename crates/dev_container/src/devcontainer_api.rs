@@ -15,6 +15,14 @@ use walkdir::WalkDir;
 use workspace::Workspace;
 use worktree::Snapshot;
 
+// [OHOS PORT BEGIN] The dev-container error must not name the upstream product.
+// To restore upstream wording, delete this block.
+#[cfg(target_env = "ohos")]
+const DEV_CONTAINER_OWNER: &str = "HiCodeer";
+#[cfg(not(target_env = "ohos"))]
+const DEV_CONTAINER_OWNER: &str = "Zed";
+// [OHOS PORT END]
+
 use crate::{
     DevContainerContext, DevContainerFeature, DevContainerTemplate,
     devcontainer_json::DevContainer,
@@ -121,9 +129,10 @@ impl Display for DevContainerError {
                 DevContainerError::DevContainerValidationFailed(failure) => failure.to_string(),
                 DevContainerError::MultipleMatchingContainers(ids) => format!(
                     "Multiple containers match this project's dev container labels ({}). \
-                     Zed can't decide which to connect to. Stop and remove the stale one(s) with \
+                     {} can't decide which to connect to. Stop and remove the stale one(s) with \
                      `docker stop <id>` and `docker rm <id>`, then try again.",
-                    ids.join(", ")
+                    ids.join(", "),
+                    DEV_CONTAINER_OWNER
                 ),
             }
         )

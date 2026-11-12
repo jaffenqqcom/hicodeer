@@ -34,10 +34,19 @@ pub(crate) fn start(client: Arc<Client>, cx: &mut App) {
     start_hang_detection(hang_time, client, cx);
 
     cx.on_action(move |_: &HangAction, _| {
+        // [OHOS PORT BEGIN] The log text must not name the upstream product.
+        // To restore upstream wording, delete this block.
+        #[cfg(target_env = "ohos")]
+        log::warn!(
+            "Hanging the foreground for {hang_time:?} by blocking in an action. \
+            HiCodeer will be unresponsive for that time. This should trigger a report in the log",
+        );
+        #[cfg(not(target_env = "ohos"))]
         log::warn!(
             "Hanging the foreground for {hang_time:?} by blocking in an action. \
             Zed will be unresponsive for that time. This should trigger a report in the log",
         );
+        // [OHOS PORT END]
         thread::sleep(hang_time + Duration::from_micros(1));
         log::warn!("Hang ended");
     });
@@ -54,11 +63,21 @@ pub(crate) fn start(client: Arc<Client>, cx: &mut App) {
     });
     cx.on_action(move |_: &HangForeground, cx| {
         cx.spawn(async move |_| {
+            // [OHOS PORT BEGIN] The log text must not name the upstream product.
+            // To restore upstream wording, delete this block.
+            #[cfg(target_env = "ohos")]
+            log::warn!(
+                "Hanging the foreground executor for {hang_time:?} seconds to test \
+                performance monitoring! HiCodeer will be unresponsive for that time. \
+                This should trigger a report in the log"
+            );
+            #[cfg(not(target_env = "ohos"))]
             log::warn!(
                 "Hanging the foreground executor for {hang_time:?} seconds to test \
                 performance monitoring! Zed will be unresponsive for that time. \
                 This should trigger a report in the log"
             );
+            // [OHOS PORT END]
             thread::sleep(hang_time + Duration::from_micros(1));
             log::warn!("Hang ended");
         })

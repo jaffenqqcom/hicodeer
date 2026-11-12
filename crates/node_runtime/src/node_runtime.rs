@@ -28,6 +28,15 @@ use util::archive::extract_zip;
 
 const NODE_CA_CERTS_ENV_VAR: &str = "NODE_EXTRA_CA_CERTS";
 
+// ===== [OHOS PORT BEGIN] Managed Node.js is provisioned by HiCodeer on this
+// platform, so its log text must not name the upstream product. To restore
+// upstream wording, delete this block.
+#[cfg(target_env = "ohos")]
+const MANAGED_NODE_PRODUCT_NAME: &str = "HiCodeer";
+#[cfg(not(target_env = "ohos"))]
+const MANAGED_NODE_PRODUCT_NAME: &str = "Zed";
+// ===== [OHOS PORT END] =====
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct NodeBinaryOptions {
     pub allow_path_lookup: bool,
@@ -163,7 +172,8 @@ impl NodeRuntime {
                 Ok(instance) => {
                     log::log!(
                         log_level,
-                        "using Zed managed Node.js at {} since {}",
+                        "using {} managed Node.js at {} since {}",
+                        MANAGED_NODE_PRODUCT_NAME,
                         instance.installation_path.display(),
                         why_using_managed
                     );
@@ -667,7 +677,8 @@ impl ManagedNodeRuntime {
                         true
                     } else {
                         log::warn!(
-                            "Zed managed Node.js binary at {} failed check with output: {:?}",
+                            "{} managed Node.js binary at {} failed check with output: {:?}",
+                            MANAGED_NODE_PRODUCT_NAME,
                             node_binary.display(),
                             output
                         );
@@ -676,8 +687,9 @@ impl ManagedNodeRuntime {
                 }
                 Err(err) => {
                     log::warn!(
-                        "Zed managed Node.js binary at {} failed check, so re-downloading it. \
+                        "{} managed Node.js binary at {} failed check, so re-downloading it. \
                         Error: {}",
+                        MANAGED_NODE_PRODUCT_NAME,
                         node_binary.display(),
                         err
                     );

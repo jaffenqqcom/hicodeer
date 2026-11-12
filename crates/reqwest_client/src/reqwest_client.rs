@@ -301,10 +301,10 @@ impl http_client::HttpClient for ReqwestClient {
             let is_extension_api = path == "/extensions" || path.starts_with("/extensions/");
             if is_zed_host && !is_extension_api {
                 let uri = parts.uri.to_string();
-                log::warn!("blocked request to zed service on OHOS: {uri}");
+                log::warn!("blocked request to vendor service on OHOS: {uri}");
                 return Box::pin(async move {
                     Err(anyhow::anyhow!(
-                        "blocked request to zed service on OHOS: {uri}"
+                        "blocked request to vendor service on OHOS: {uri}"
                     ))
                 });
             }

@@ -118,7 +118,7 @@ impl WgpuContext {
                 let info = adapter.get_info();
                 if info.device == device_id {
                     log::info!(
-                        "Found GPU matching ZED_DEVICE_ID={:#06x}: {}",
+                        "Found GPU matching device id filter {:#06x}: {}",
                         device_id,
                         info.name
                     );
@@ -129,7 +129,7 @@ impl WgpuContext {
             }
 
             log::warn!(
-                "No GPU found matching ZED_DEVICE_ID={:#06x}. Available devices:",
+                "No GPU found matching device id filter {:#06x}. Available devices:",
                 device_id
             );
 

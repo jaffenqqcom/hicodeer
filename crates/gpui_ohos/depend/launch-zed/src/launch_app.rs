@@ -89,7 +89,7 @@ fn start_zed_main(base_path: Option<String>, home_directory: Option<String>) {
             // No home directory (the ets side skipped the picker): leave the
             // data root to the platform defaults rather than inventing one in a
             // directory the user never asked for.
-            log::info!("start_zed_main: no home directory; using the platform data root");
+            log::info!("launch_app: no home directory; using the platform data root");
         }
     }
     zed::hicodeer_main();
@@ -116,7 +116,7 @@ fn export_system_locale(locales: Option<String>) {
 fn write_home_directory_record(base_path: &str, home_directory: &str) {
     let record = PathBuf::from(base_path).join(HOME_DIRECTORY_RECORD_FILE);
     if let Err(err) = std::fs::write(&record, home_directory) {
-        log::error!("start_zed_main: write {} failed: {err}", record.display());
+        log::error!("launch_app: write {} failed: {err}", record.display());
     }
 }
 

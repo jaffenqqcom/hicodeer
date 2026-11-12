@@ -18,6 +18,15 @@ const _: () = assert!(
      Forks: update APP_NAME in crates/paths/src/paths.rs when renaming the binary.",
 );
 
+// [OHOS PORT BEGIN] Product name shown in startup diagnostics. HiCodeer must not
+// present the upstream product name in its own log output. To restore upstream
+// wording, delete this block.
+#[cfg(target_env = "ohos")]
+const PRODUCT_NAME: &str = "HiCodeer";
+#[cfg(not(target_env = "ohos"))]
+const PRODUCT_NAME: &str = "Zed";
+// [OHOS PORT END]
+
 use anyhow::{Context as _, Result};
 use clap::Parser;
 use cli::FORCE_CLI_MODE_ENV_VAR_NAME;
@@ -341,7 +350,8 @@ fn main() {
         .unwrap();
 
     log::info!(
-        "========== starting zed version {}, sha {} ==========",
+        "========== starting {} version {}, sha {} ==========",
+        PRODUCT_NAME,
         app_version,
         app_commit_sha
             .as_ref()
@@ -766,10 +776,6 @@ fn main() {
         // never get them and the panel's status bar button would do nothing.
         #[cfg(target_env = "ohos")]
         agent_panel::init(cx);
-        // [OHOS PORT BEGIN] feedback files issues on Zed's GitHub repository.
-        #[cfg(not(target_env = "ohos"))]
-        feedback::init(cx);
-        // [OHOS PORT END]
         markdown_preview::init(cx);
         tabular_data_preview::init(cx);
         svg_preview::init(cx);

@@ -644,7 +644,7 @@ impl Platform for OhosPlatform {
         // (`file:`, `zed:`, `mailto:`, ...) are unaffected.
         // To restore upstream behavior, delete this block.
         if is_zed_web_url(url) {
-            warn!("open_url blocked (zed web url): {url}");
+            warn!("open_url blocked (vendor web url): {url}");
             return;
         }
         // [OHOS PORT END]

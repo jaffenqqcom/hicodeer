@@ -105,6 +105,13 @@ fn render_inspector(
 }
 
 fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
+    // [OHOS PORT BEGIN] The tooltip must not name the upstream product on OHOS,
+    // where no upstream CLI exists. To restore upstream wording, delete this block.
+    #[cfg(target_env = "ohos")]
+    let source_location_tooltip = localization::localized_str!("Click to open the source location");
+    #[cfg(not(target_env = "ohos"))]
+    let source_location_tooltip = localization::localized_str!("Click to open by running Zed CLI");
+    // [OHOS PORT END]
     let source_location = inspector_id.path.source_location;
     // For unknown reasons, for some elements the path is absolute.
     let source_location_string = source_location.to_string();
@@ -147,7 +154,7 @@ fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
                 .font_buffer(cx)
                 .text_xs()
                 .child(source_location_string)
-                .tooltip(Tooltip::text(localization::localized_str!("Click to open by running Zed CLI")))
+                .tooltip(Tooltip::text(source_location_tooltip))
                 .on_click(move |_, _window, cx| {
                     cx.background_spawn(open_zed_source_location(source_location))
                         .detach_and_log_err(cx);
@@ -168,8 +175,15 @@ fn render_inspector_id(inspector_id: &InspectorElementId, cx: &App) -> Div {
 async fn open_zed_source_location(
     location: &'static std::panic::Location<'static>,
 ) -> anyhow::Result<()> {
+    // [OHOS PORT BEGIN] The context must not name the upstream product on OHOS.
+    // To restore upstream wording, delete this block.
+    #[cfg(target_env = "ohos")]
+    let dev_repo_root_context = "locating the source checkout to open sources from";
+    #[cfg(not(target_env = "ohos"))]
+    let dev_repo_root_context = "locating the zed checkout to open sources from";
+    // [OHOS PORT END]
     let mut path = util::dev_repo_root()
-        .context("locating the zed checkout to open sources from")?
+        .context(dev_repo_root_context)?
         .to_path_buf();
     path.push(Path::new(location.file()));
     let path_arg = format!(

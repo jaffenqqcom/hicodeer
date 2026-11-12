@@ -50,7 +50,7 @@ zed_actions.workspace = true
 # [OHOS PORT BEGIN] Secure Shield mode query for the extensions page banner.
 # Delete this section to restore the upstream dependency set.
 [target.'cfg(target_env = "ohos")'.dependencies]
-openharmony-ability = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
+openharmony-ability = { git = "https://github.com/jaffenqqcom/openharmony-ability-hicodeer", branch = "main" }
 # [OHOS PORT END]
 
 [dev-dependencies]

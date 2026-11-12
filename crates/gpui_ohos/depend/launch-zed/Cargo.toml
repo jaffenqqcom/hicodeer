@@ -30,8 +30,8 @@ gpui_ohos = { path = "../.." }
 # crate instance as gpui_ohos's dependency: two copies would carry separate
 # `global_app` statics, so the app this NAPI entry publishes would never be seen by
 # the platform layer.
-openharmony-ability = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
-openharmony-ability-derive = { git = "https://github.com/jaffenqqcom/openharmony-ability-zed", branch = "main" }
+openharmony-ability = { git = "https://github.com/jaffenqqcom/openharmony-ability-hicodeer", branch = "main" }
+openharmony-ability-derive = { git = "https://github.com/jaffenqqcom/openharmony-ability-hicodeer", branch = "main" }
 # Link-time shim for the path-taking libc calls. Its `__wrap_*` symbols are what
 # build.rs redirects `open`/`stat`/... to, so the crate has to stay linked into
 # the final cdylib even though no Rust code calls into it.

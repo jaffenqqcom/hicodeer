@@ -77,7 +77,13 @@ impl TextDiffView {
         });
 
         let Some((source_buffer, expanded_selection_range)) = selection_data else {
+            // [OHOS PORT BEGIN] The log text must not name the upstream product. To restore
+            // upstream wording, delete this block.
+            #[cfg(target_env = "ohos")]
+            log::warn!("There should always be at least one selection in HiCodeer. This is a bug.");
+            #[cfg(not(target_env = "ohos"))]
             log::warn!("There should always be at least one selection in Zed. This is a bug.");
+            // [OHOS PORT END]
             return None;
         };
 

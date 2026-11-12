@@ -553,7 +553,13 @@ impl Editor {
             .all::<MultiBufferOffset>(&self.display_snapshot(cx));
 
         if selections.is_empty() {
+            // [OHOS PORT BEGIN] The log text must not name the upstream product. To restore
+            // upstream wording, delete this block.
+            #[cfg(target_env = "ohos")]
+            log::warn!("There should always be at least one selection in HiCodeer. This is a bug.");
+            #[cfg(not(target_env = "ohos"))]
             log::warn!("There should always be at least one selection in Zed. This is a bug.");
+            // [OHOS PORT END]
             return;
         };
 

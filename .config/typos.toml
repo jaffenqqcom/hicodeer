@@ -4,9 +4,6 @@ ignore-hidden = false
 extend-exclude = [
     ".git/",
 
-    # Typewriter model names used for agent branch names aren't typos.
-    "crates/agent_ui/src/branch_names.rs",
-
     # Contributor names aren't typos.
     ".mailmap",
 
@@ -16,9 +13,6 @@ extend-exclude = [
 
     # Some mock data is flagged as typos.
     "crates/assistant_tools/src/web_search_tool.rs",
-
-    # Suppress false positives in database schema.
-    "crates/collab/migrations/20251208000000_test_schema.sql",
 
     # Vendored JSON schemas from SchemaStore.
     "crates/json_schema_store/src/schemas/",
@@ -66,10 +60,7 @@ extend-exclude = [
     # Macos apis
     "crates/gpui_macos/src/dispatcher.rs",
     # Tests contain partially incomplete words (by design)
-    "crates/edit_prediction_cli/src/split_commit.rs",
     "crates/edit_prediction_metrics/src/kept_rate.rs",
-    # Eval examples contain intentionally partial words (e.g. "secur" for "secure")
-    "crates/edit_prediction_cli/evals/",
     # Tests contain `baˇr` that cause `"ba" should be "by" or "be".`-like false-positives
     "crates/editor/src/document_symbols.rs",
 ]

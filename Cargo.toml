@@ -8,7 +8,6 @@ members = [
     "crates/assets",
     "crates/audio",
     "crates/auto_update",
-    "crates/auto_update_helper",
     "crates/auto_update_ui",
     "crates/bench_metrics",
     "crates/breadcrumbs",
@@ -48,7 +47,6 @@ members = [
     "crates/extensions_ui",
     "crates/feature_flags",
     "crates/feature_flags_macros",
-    "crates/feedback",
     "crates/file_content",
     "crates/file_finder",
     "crates/file_icons",
@@ -276,7 +274,6 @@ extension_suggest = { path = "crates/extension_suggest" }
 extensions_ui = { path = "crates/extensions_ui" }
 feature_flags = { path = "crates/feature_flags" }
 feature_flags_macros = { path = "crates/feature_flags_macros" }
-feedback = { path = "crates/feedback" }
 file_content = { path = "crates/file_content" }
 file_finder = { path = "crates/file_finder" }
 file_icons = { path = "crates/file_icons" }
@@ -944,18 +941,18 @@ wgpu-core = { git = "https://github.com/jaffenqqcom/wgpu-zed", tag = "v29.0.3-ze
 wgpu-hal = { git = "https://github.com/jaffenqqcom/wgpu-zed", tag = "v29.0.3-zed.1" }
 wgpu-types = { git = "https://github.com/jaffenqqcom/wgpu-zed", tag = "v29.0.3-zed.1" }
 naga = { git = "https://github.com/jaffenqqcom/wgpu-zed", tag = "v29.0.3-zed.1" }
-ohos-xcomponent-binding = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-xcomponent-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-arkui-input-binding = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-arkui-input-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-arkui-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-enum-derive = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-native-buffer-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-resource-manager-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-image-native-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-image-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-native-drawing-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
-ohos-udmf-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-zed", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-xcomponent-binding = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-xcomponent-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-arkui-input-binding = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-arkui-input-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-arkui-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-enum-derive = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-native-buffer-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-resource-manager-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-image-native-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-image-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-native-drawing-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
+ohos-udmf-sys = { git = "https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer", tag = "ohos-xcomponent-binding-v0.3.2-zed.1" }
 # ===== [OHOS PORT END] =====
 
 # corgi runs build.rs/proc-macros in a sandbox with no write access outside the

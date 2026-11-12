@@ -1038,22 +1038,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "auto_update_helper"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "localization",
- "log",
- "scopeguard",
- "serde",
- "serde_json_lenient",
- "simplelog",
- "tempfile",
- "windows 0.62.2",
- "windows_resources",
-]
-
-[[package]]
 name = "auto_update_ui"
 version = "0.1.0"
 dependencies = [
@@ -4752,21 +4736,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "feedback"
-version = "0.1.0"
-dependencies = [
- "client",
- "extension_host",
- "gpui",
- "localization",
- "system_specs",
- "urlencoding",
- "util",
- "workspace",
- "zed_actions",
 ]
 
 [[package]]
@@ -10416,7 +10385,7 @@ dependencies = [
 [[package]]
 name = "ohos-accessibility-sys"
 version = "0.0.3"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "ohos-arkui-input-sys",
 ]
@@ -10440,7 +10409,7 @@ dependencies = [
 [[package]]
 name = "ohos-arkui-input-binding"
 version = "0.1.2"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "ohos-arkui-input-sys",
  "ohos-enum-derive",
@@ -10449,12 +10418,12 @@ dependencies = [
 [[package]]
 name = "ohos-arkui-input-sys"
 version = "0.1.2"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 
 [[package]]
 name = "ohos-arkui-sys"
 version = "0.1.2"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "napi-sys-ohos",
  "ohos-arkui-input-sys",
@@ -10482,7 +10451,7 @@ checksum = "65ddb93bf0499a9bd15a445100e82e9a82a54dc493e07f2228b09b6b63fb920e"
 [[package]]
 name = "ohos-enum-derive"
 version = "0.1.1"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "convert_case 0.6.0",
  "proc-macro2",
@@ -10493,7 +10462,7 @@ dependencies = [
 [[package]]
 name = "ohos-image-native-sys"
 version = "0.0.3"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "napi-sys-ohos",
  "ohos-native-buffer-sys",
@@ -10503,7 +10472,7 @@ dependencies = [
 [[package]]
 name = "ohos-image-sys"
 version = "0.0.3"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "napi-sys-ohos",
  "ohos-resource-manager-sys",
@@ -10535,12 +10504,12 @@ dependencies = [
 [[package]]
 name = "ohos-native-buffer-sys"
 version = "0.1.2"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 
 [[package]]
 name = "ohos-native-drawing-sys"
 version = "0.2.2"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "ohos-image-native-sys",
  "ohos-image-sys",
@@ -10549,7 +10518,7 @@ dependencies = [
 [[package]]
 name = "ohos-resource-manager-sys"
 version = "0.3.2"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "napi-sys-ohos",
 ]
@@ -10557,7 +10526,7 @@ dependencies = [
 [[package]]
 name = "ohos-udmf-sys"
 version = "0.0.3"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "ohos-image-native-sys",
 ]
@@ -10565,7 +10534,7 @@ dependencies = [
 [[package]]
 name = "ohos-xcomponent-binding"
 version = "0.3.2"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -10579,7 +10548,7 @@ dependencies = [
 [[package]]
 name = "ohos-xcomponent-sys"
 version = "0.1.2"
-source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-zed?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
+source = "git+https://github.com/jaffenqqcom/ohos-native-bindings-hicodeer?tag=ohos-xcomponent-binding-v0.3.2-zed.1#c7c7df9a07f58357784d30deb64b785b775bb005"
 dependencies = [
  "ohos-accessibility-sys",
  "ohos-arkui-input-sys",
@@ -10727,7 +10696,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "futures-channel",
  "log",
@@ -10743,7 +10712,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-derive"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -10753,7 +10722,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-cursor"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "log",
  "napi-derive-ohos",
@@ -10764,7 +10733,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-filedropin"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "log",
  "napi-derive-ohos",
@@ -10775,7 +10744,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-filelaunch"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "log",
  "napi-derive-ohos",
@@ -10786,7 +10755,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-filepicker"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -10796,7 +10765,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-ime"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "log",
  "napi-derive-ohos",
@@ -10807,7 +10776,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-openbysys"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -10817,7 +10786,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-permission"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -10827,7 +10796,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-pinch"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "log",
  "napi-derive-ohos",
@@ -10838,7 +10807,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-play-notification"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "log",
  "napi-derive-ohos",
@@ -10849,7 +10818,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-url"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "log",
  "napi-derive-ohos",
@@ -20039,7 +20008,7 @@ dependencies = [
 [[package]]
 name = "worker-pool"
 version = "0.1.0"
-source = "git+https://github.com/jaffenqqcom/openharmony-ability-zed?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
+source = "git+https://github.com/jaffenqqcom/openharmony-ability-hicodeer?branch=main#02fa617c17f99391093c51b2dd4d3090b687eadb"
 dependencies = [
  "log",
 ]
@@ -20550,7 +20519,6 @@ dependencies = [
  "extension_host",
  "extensions_ui",
  "feature_flags",
- "feedback",
  "file_finder",
  "fs",
  "futures 0.3.34",

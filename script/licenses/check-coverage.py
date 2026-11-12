@@ -78,8 +78,7 @@ def main(report_path):
         if f"## [{name}]" not in report:
             failures.append(f"font {name!r} ships without a license entry")
 
-    if "ca-bundle.crt" not in report:
-        failures.append("the CA bundle (resfile/ca-bundle.crt) is not declared in BUNDLED ASSET LICENSES")
+    # The CA bundle is not shipped in the HAP anymore, so it needs no entry here.
 
     # The franken stack is filtered out of cargo-about's own output (custom
     # expression, text only in `license-file`), so its terms are contributed by

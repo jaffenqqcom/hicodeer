@@ -22,7 +22,7 @@ const LOG_LEVEL_ERROR: i32 = 6;
 // Application service domain; values from 0x0001 up are available for custom use.
 const HILOG_DOMAIN: u32 = 0x0001;
 // hilog tag (at most 31 bytes) used to aggregate logs by application.
-const HILOG_TAG: &CStr = c"Zed";
+const HILOG_TAG: &CStr = c"HiCodeer";
 // Format string: the whole message is delivered verbatim as a public argument.
 const HILOG_FORMAT: &CStr = c"%{public}s";
 

@@ -430,7 +430,11 @@ export NAPI_BUILD_TARGET_NAME=core
 # 全量编译加 -A warnings 避免既有警告阻塞；
 # release 用 codegen-units=2：Cargo.toml 的 1 在本机内存下编译不了，
 # 16 又会让单态化重复过多、产物体积偏大，越小体积越省但内存峰值越高
-export RUSTFLAGS="${RUSTFLAGS:-} -A warnings"
+# Strip the checkout path and the upstream directory name from paths embedded
+# in the binary (panic locations, tracing events, debug info). rustc applies
+# these in order and the last match wins, so the broad prefix comes first and
+# the herdr-specific one comes last.
+export RUSTFLAGS="${RUSTFLAGS:-} -A warnings --remap-path-prefix=$PROJECT_ROOT=/src --remap-path-prefix=$PROJECT_ROOT/herdr=/build"
 if [ "$IS_RELEASE" = true ]; then
   export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=2
 else

@@ -4,13 +4,7 @@
       {
         "name": "default",
         "material": {
-          "storePassword": "0000001DAF98F06D318B61580CE7E9F5903940F2AA8D8D635729BDFFE6C59833F3DEB45E7FA99F84B7281C8A57",
-          "certpath": "/storage/Users/currentUser/Documents/APP正式证书密钥/Profile&Cer/HiCodeer-Release V1.0.cer",
-          "keyAlias": "jaffenqqcom",
-          "keyPassword": "0000001DAF98F06D318B61580CE7E9F5903940F2AA8D8D635729BDFFE6C59833F3DEB45E7FA99F84B7281C8A57",
-          "profile": "/storage/Users/currentUser/Documents/APP正式证书密钥/Profile&Cer/HiCodeer-Profile-Release V1.0Release.p7b",
-          "signAlg": "SHA256withECDSA",
-          "storeFile": "/storage/Users/currentUser/Documents/APP正式证书密钥/APP正式证书密钥.p12"
+
         },
         "type": "HarmonyOS"
       },

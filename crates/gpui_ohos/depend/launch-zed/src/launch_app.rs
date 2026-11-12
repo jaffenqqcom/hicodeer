@@ -178,7 +178,6 @@ fn ensure_shell_env(base_path: Option<String>, home_directory: Option<String>) {
         path_extra.push(base_path_ref.to_string());
     }
     const APP_MODULE_NAME: &str = "entry";
-    const CA_BUNDLE_FILE: &str = "ca-bundle.crt";
     let resource_dir = match openharmony_ability::application_resource_dir(APP_MODULE_NAME) {
         Ok(resource_dir) => resource_dir,
         Err(err) => {
@@ -190,19 +189,6 @@ fn ensure_shell_env(base_path: Option<String>, home_directory: Option<String>) {
     };
     if !resource_dir.is_empty() {
         path_extra.push(resource_dir.clone());
-        // Point TLS at the CA bundle shipped in the resfile so device-local
-        // git over https validate certificates instead of failing
-        // "unable to get local issuer certificate". Child processes inherit it.
-        let ca_bundle = format!("{resource_dir}/{CA_BUNDLE_FILE}");
-        if std::fs::metadata(&ca_bundle)
-            .map(|metadata| metadata.is_file())
-            .unwrap_or(false)
-        {
-            std::env::set_var("SSL_CERT_FILE", &ca_bundle);
-            std::env::set_var("CURL_CA_BUNDLE", &ca_bundle);
-        } else {
-            log::warn!("ensure_shell_env: {ca_bundle} missing in resfile");
-        }
     }
     if !path_extra.is_empty() {
         let current_path = std::env::var("PATH").unwrap_or_default();

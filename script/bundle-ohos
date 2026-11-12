@@ -527,7 +527,20 @@ if [ "$MODE" != "hap" ]; then
   # they are the artifacts that ship.
   if [ "$IS_RELEASE" = true ]; then
     echo "[hicodeer-ohos-build] Generating assets/licenses.md ..."
-    script/generate-licenses
+    # Rewriting this file bumps its mtime, and cargo tracks it through
+    # rust-embed's include_bytes (it shows up in the assets crate's dep-info),
+    # so an unconditional rewrite makes every downstream crate rebuild even
+    # when the licenses did not change. Stage the report and replace the
+    # tracked file only when the bytes actually differ.
+    LICENSES_STAGING="$(mktemp)"
+    script/generate-licenses "$LICENSES_STAGING"
+    if [ -f assets/licenses.md ] && cmp -s "$LICENSES_STAGING" assets/licenses.md; then
+      echo "[hicodeer-ohos-build] assets/licenses.md unchanged; keeping the existing file"
+    else
+      cp "$LICENSES_STAGING" assets/licenses.md
+      echo "[hicodeer-ohos-build] assets/licenses.md updated"
+    fi
+    rm -f "$LICENSES_STAGING"
   fi
 
   NPROC=$(nproc 2>/dev/null || echo 4)
@@ -1140,17 +1153,19 @@ $NO_SHIM "$NODE_CMD" "$HVIGORW_JS" \
     find "$CMAKE_STAGING_DIR" -depth -delete 2>/dev/null || true
   fi
 
-  # ==================== HNP 装配（官方打包工具重打 + 重签，默认执行） ====================
+  # ==================== HNP 装配（在原 HAP 上追加 hnp 条目 + 重签，默认执行） ====================
   # hvigor 不接 hnp：PackageHap 拼打包命令时从不传 --hnp-path（插件 src 里没有 hnp
-  # 字样），官方文档也写明 IDE 侧「暂不支持」，所以 assembleHap 产出的 unsigned HAP
-  # 必然不含 .hnp 实体。官方能力在 SDK 的 ohos_packing_tool 上，这里按 hvigor 的
-  # 同一条命令重打一次并补 --hnp-path，让 hnp 由官方打包器写入：hnp 条目以 Stored
-  # 原样存储，并走它对 hnpPackages 的一致性校验。
+  # 字样），官方文档也写明 IDE 侧「暂不支持」，所以 assembleHap 产出的 HAP 必然
+  # 不含 .hnp 实体。
   #
-  # 参数集必须与 hvigor 完全一致（来源：.hvigor/outputs/build-logs/build.log 里
-  # PackageHap 的实际命令行）。漏一项就会丢条目——例如漏 --pkg-context-path 会少
-  # pkgContextInfo.json——所以重打后逐条比对 unsigned HAP，缺项/多项都直接失败。
-  # 载荷缺失 / 证书未配齐同样显式报错，不产出“看似可装”的包。
+  # 早先的做法是用 ohos_packing_tool 带 --hnp-path 整包重打，但它会按自己的遍历
+  # 顺序写条目（module.json 不再排第一）并多出一个 .pages.info，与 DevEco 出包
+  # 的结构不同，hokit 这类按 hap 规范解析的工具会直接拒绝。现在改为保留 hvigor
+  # 产出的 HAP 原样：只以 Stored 方式追加 hnp 条目，条目集合与顺序都与 DevEco
+  # 一致，再重新签名。
+  #
+  # 追加后逐条校验：module.json 必须在首位、原条目顺序不得变化、多余条目只能是
+  # 本次追加的 hnp。载荷缺失 / 证书未配齐同样显式报错，不产出“看似可装”的包。
   HNP_SRC_DIR="$HAP_DIR/entry/hnp/arm64-v8a"
   if [ -d "$HNP_SRC_DIR" ] && ls "$HNP_SRC_DIR"/*.hnp >/dev/null 2>&1; then
     # unsigned HAP 是条目比对的基准，必须由本次 assembleHap 重新产出。
@@ -1166,58 +1181,124 @@ $NO_SHIM "$NODE_CMD" "$HVIGORW_JS" \
       echo "[hicodeer-ohos-build] ERROR: 找不到条目比对基准（unsigned / signed 都不存在）" >&2
       exit 1
     fi
-    if [ ! -x "$OHOS_PACKING_TOOL" ]; then
-      echo "[hicodeer-ohos-build] ERROR: 官方打包工具不可用: $OHOS_PACKING_TOOL" >&2
-      exit 1
-    fi
-    HAP_INTERMEDIATES="$HAP_DIR/entry/build/default/intermediates"
     HAP_OUTPUT_DIR="$HAP_DIR/entry/build/default/outputs/default"
     PACKED_HAP="${UNSIGNED_HAP%.hap}-packed.hap"
-    echo "[hicodeer-ohos-build] repack with hnp: $UNSIGNED_HAP -> $PACKED_HAP"
+    echo "[hicodeer-ohos-build] injecting hnp into hap: $BASELINE_HAP -> $PACKED_HAP"
     rm -f "$PACKED_HAP"
-    $NO_SHIM "$OHOS_PACKING_TOOL" pack --mode hap --force true \
-      --lib-path "$HAP_INTERMEDIATES/stripped_native_libs/default" \
-      --json-path "$HAP_INTERMEDIATES/package/default/module.json" \
-      --resources-path "$HAP_INTERMEDIATES/res/default/resources" \
-      --index-path "$HAP_INTERMEDIATES/res/default/resources.index" \
-      --pack-info-path "$HAP_OUTPUT_DIR/pack.info" \
-      --out-path "$PACKED_HAP" \
-      --ets-path "$HAP_INTERMEDIATES/loader_out/default/ets" \
-      --pkg-context-path "$HAP_INTERMEDIATES/loader/default/pkgContextInfo.json" \
-      --hnp-path "$HAP_DIR/entry/hnp"
+    cp "$BASELINE_HAP" "$PACKED_HAP"
     python3 - "$PACKED_HAP" "$BASELINE_HAP" "$HNP_SRC_DIR" arm64-v8a <<'PY'
-import os, sys, zipfile
-packed, unsigned, hnp_dir, abi = sys.argv[1:5]
-# 官方打包器把 hnp 放到 HAP 根的 hnp/<abi>/ 下，条目名用 ABI 目录下的相对路径
-# （module.json5 的 hnpPackages.package 也是这个口径，支持子目录）。
-payloads = {}
+import os, shutil, struct, sys, zipfile
+
+packed, baseline, hnp_dir, abi = sys.argv[1:5]
+
+# hnp files live under the ABI directory and are addressed relative to it, the
+# same layout module.json5's hnpPackages.package expects.
+payloads = []
 for root, _dirs, files in os.walk(hnp_dir):
     for name in files:
         if name.endswith(".hnp"):
             full = os.path.join(root, name)
             rel = os.path.relpath(full, hnp_dir).replace(os.sep, "/")
-            payloads["hnp/%s/%s" % (abi, rel)] = full
+            payloads.append(("hnp/%s/%s" % (abi, rel), full))
+payloads.sort()
 if not payloads:
     sys.exit("no .hnp payload found under " + hnp_dir)
-with zipfile.ZipFile(unsigned) as baseline_zip:
-    # signed 基准多出 META-INF/ 签名块；重打包的包未签名，不会带这些条目。
-    baseline = {name for name in baseline_zip.namelist() if not name.startswith("META-INF/")}
-with zipfile.ZipFile(packed) as packed_zip:
-    actual = set(packed_zip.namelist())
-    missing = (baseline | set(payloads)) - actual
-    extra = actual - baseline - set(payloads)
-    if missing:
-        sys.exit("repacked HAP is missing entries: " + ", ".join(sorted(missing)))
-    if extra:
-        sys.exit("repacked HAP has unexpected entries: " + ", ".join(sorted(extra)))
-    for entry, source in sorted(payloads.items()):
-        info = packed_zip.getinfo(entry)
-        # hnp 自身已是压缩包，官方打包器原样存储。Deflate 说明包不是官方工具产的。
+
+
+def append_payloads(zout):
+    for arcname, source in payloads:
+        # hnp is already a compressed archive, so store it as-is.
+        info = zipfile.ZipInfo(arcname, date_time=(1980, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_STORED
+        info.external_attr = 0
+        with zout.open(info, "w") as dst, open(source, "rb") as src:
+            shutil.copyfileobj(src, dst, 1 << 20)
+
+
+with zipfile.ZipFile(packed) as existing:
+    has_signature = any(n.startswith("META-INF/") for n in existing.namelist())
+
+if has_signature:
+    # An old signature block cannot survive the edit and zipfile cannot drop an
+    # entry in place, so rebuild without META-INF while keeping every other
+    # entry's order and compression type, then append the payloads.
+    rebuilt = packed + ".rebuilt"
+    with zipfile.ZipFile(packed) as zin, zipfile.ZipFile(rebuilt, "w") as zout:
+        for info in zin.infolist():
+            if info.filename.startswith("META-INF/"):
+                continue
+            with zin.open(info) as src, zout.open(info, "w") as dst:
+                shutil.copyfileobj(src, dst, 1 << 20)
+        append_payloads(zout)
+    os.replace(rebuilt, packed)
+else:
+    # Unsigned hap: append in place, which leaves every existing entry untouched.
+    with zipfile.ZipFile(packed, "a") as zout:
+        append_payloads(zout)
+
+
+def zero_payload_attributes(path):
+    """Match the attribute bytes ohos_packing_tool writes for hnp entries.
+
+    zipfile forces external_attr to 0o600<<16 when it is zero and stamps
+    create_system=3 (Unix) plus a 1980-01-01 DOS date on every entry it writes.
+    The official packer writes version-made-by 0, external_attr 0 and the
+    1980-01-00 date instead, so rewrite those fields of the appended records.
+    """
+    with open(path, "r+b") as handle:
+        size = os.path.getsize(path)
+        handle.seek(max(0, size - 65557))
+        tail = handle.read()
+        eocd = tail.rfind(b"PK\x05\x06")
+        if eocd < 0:
+            sys.exit("EOCD not found in " + path)
+        cd_size, cd_offset = struct.unpack("<II", tail[eocd + 12:eocd + 20])
+        handle.seek(cd_offset)
+        directory = handle.read(cd_size)
+        pos = 0
+        while pos + 46 <= len(directory) and directory[pos:pos + 4] == b"PK\x01\x02":
+            name_len = struct.unpack("<H", directory[pos + 28:pos + 30])[0]
+            extra_len = struct.unpack("<H", directory[pos + 30:pos + 32])[0]
+            comment_len = struct.unpack("<H", directory[pos + 32:pos + 34])[0]
+            name = directory[pos + 46:pos + 46 + name_len].decode()
+            if name.startswith("hnp/"):
+                local_offset = struct.unpack("<I", directory[pos + 42:pos + 46])[0]
+                for offset, payload in (
+                    (cd_offset + pos + 4, b"\x00\x00"),          # version made by
+                    (cd_offset + pos + 12, b"\x00\x00"),         # DOS time
+                    (cd_offset + pos + 14, b"\x20\x00"),         # DOS date 1980-01-00
+                    (cd_offset + pos + 38, b"\x00\x00\x00\x00"),  # external attributes
+                    (local_offset + 10, b"\x00\x00"),            # local DOS time
+                    (local_offset + 12, b"\x20\x00"),            # local DOS date
+                ):
+                    handle.seek(offset)
+                    handle.write(payload)
+            pos += 46 + name_len + extra_len + comment_len
+
+
+zero_payload_attributes(packed)
+
+# The entry layout is what hokit-style parsers rely on: module.json first, the
+# hvigor entries untouched in their original order, and only the hnp payloads
+# appended after them.
+with zipfile.ZipFile(packed) as z, zipfile.ZipFile(baseline) as b:
+    names = z.namelist()
+    originals = [n for n in b.namelist() if not n.startswith("META-INF/")]
+    if not names or names[0] != "module.json":
+        sys.exit("module.json is not the first entry: " + (names[0] if names else "<empty>"))
+    if names[: len(originals)] != originals:
+        sys.exit("entry order or set diverged from the hvigor hap")
+    trailing = names[len(originals):]
+    expected = [arcname for arcname, _ in payloads]
+    if trailing != expected:
+        sys.exit("unexpected trailing entries: " + ", ".join(trailing))
+    for arcname, source in payloads:
+        info = z.getinfo(arcname)
         if info.compress_type != zipfile.ZIP_STORED:
-            sys.exit("%s is not stored (compress_type=%d)" % (entry, info.compress_type))
+            sys.exit("%s is not stored (compress_type=%d)" % (arcname, info.compress_type))
         if info.file_size != os.path.getsize(source):
-            sys.exit("%s size mismatch: %d != %d" % (entry, info.file_size, os.path.getsize(source)))
-print("verified %d hnp payload(s): %s" % (len(payloads), ", ".join(sorted(payloads))))
+            sys.exit("%s size mismatch: %d != %d" % (arcname, info.file_size, os.path.getsize(source)))
+print("verified %d hap entries + %d hnp payload(s)" % (len(originals), len(payloads)))
 PY
     # 签名材料以 hap/build-profile.json5 为准：先按 products[<name>].signingConfig
     # 取配置名（例如 "debug"），再在 signingConfigs 里按 name 找到那一套，取它的
@@ -1292,8 +1373,72 @@ PY
 
 fi
 
+# ==================== App Pack（.app） ====================
+# hvigor's PackageHap never passes --hnp-path, so an .app produced by
+# `hvigor assembleApp` would carry a hap without the hnp payloads. Repack from
+# the injected and signed hap above instead, so the app pack ships exactly what
+# the device installs. The project-level pack.info / pac.json are the ones the
+# hvigor run just wrote.
+APP_OUTPUT_DIR="$HAP_DIR/build/outputs/default"
+APP_PACK_INFO="$APP_OUTPUT_DIR/pack.info"
+APP_PAC_JSON="$APP_OUTPUT_DIR/pac.json"
+APP_UNSIGNED="$APP_OUTPUT_DIR/hap-default-unsigned.app"
+APP_SIGNED="$APP_OUTPUT_DIR/hap-default-signed.app"
+# Feed the app pack the unsigned hap that already carries the hnp payloads.
+# Both signing tools rewrite the entry order (module.json no longer first) and
+# the jar one also adds .pages.info, which is exactly what makes hokit refuse
+# the package; DevEco's app pack ships an unsigned inner hap too, its integrity
+# covered by the app-level signature. Fall back to the signed hap only when the
+# hnp injection did not run.
+APP_HAP_SOURCE="${PACKED_HAP:-}"
+if [ ! -f "$APP_HAP_SOURCE" ]; then
+  # Without the hnp injection, prefer hvigor's unsigned hap: it keeps
+  # module.json as the first entry, which is what DevEco's app pack contains.
+  APP_HAP_SOURCE="$HAP_DIR/entry/build/default/outputs/default/entry-default-unsigned.hap"
+fi
+if [ ! -f "$APP_HAP_SOURCE" ]; then
+  APP_HAP_SOURCE="$HAP_DIR/entry/build/default/outputs/default/entry-default-signed.hap"
+fi
+# The app pack stores the hap under its module-level name (entry-default.hap),
+# which is what hvigor stages under <outputs>/app/ before packing.
+APP_HAP_STAGE="$APP_OUTPUT_DIR/app/entry-default.hap"
+if [ -f "$APP_PACK_INFO" ] && [ -f "$APP_HAP_SOURCE" ]; then
+  echo "[hicodeer-ohos-build] Packing app package ..."
+  mkdir -p "$APP_OUTPUT_DIR/app"
+  cp "$APP_HAP_SOURCE" "$APP_HAP_STAGE"
+  APP_PACK_ARGS=(pack --mode app
+    --pack-info-path "$APP_PACK_INFO"
+    --hap-path "$APP_HAP_STAGE"
+    --hsp-path ''
+    --force true
+    --out-path "$APP_UNSIGNED"
+    --main-module-limit 2
+    --normal-module-limit 2)
+  if [ -f "$APP_PAC_JSON" ]; then
+    APP_PACK_ARGS+=(--pac-json-path "$APP_PAC_JSON")
+  fi
+  rm -f "$APP_UNSIGNED"
+  $NO_SHIM "$OHOS_PACKING_TOOL" "${APP_PACK_ARGS[@]}"
+  if [ -n "${OHOS_SIGN_CER:-}" ] && [ -n "${OHOS_SIGN_PWD:-}" ]; then
+    rm -f "$APP_SIGNED"
+    echo "[hicodeer-ohos-build] sign-app (app) -> $APP_SIGNED"
+    $NO_SHIM java -jar "$SIGN_TOOL_JAR" sign-app \
+      -keyAlias "$OHOS_SIGN_ALIAS" -signAlg SHA256withECDSA -mode localSign \
+      -appCertFile "$OHOS_SIGN_CER" -profileFile "$OHOS_SIGN_P7B" -keystoreFile "$OHOS_SIGN_P12" \
+      -inFile "$APP_UNSIGNED" -outFile "$APP_SIGNED" \
+      -keyPwd "$OHOS_SIGN_PWD" -keystorePwd "$OHOS_SIGN_PWD" -signCode 1 -profileSigned 1
+    rm -f "$APP_UNSIGNED"
+    echo "[hicodeer-ohos-build] INSTALLABLE (app): $APP_SIGNED"
+  else
+    echo "[hicodeer-ohos-build] WARN: 签名材料不可用，仅产出未签名 app 包: $APP_UNSIGNED" >&2
+  fi
+else
+  echo "[hicodeer-ohos-build] WARN: 缺 $APP_PACK_INFO 或 $APP_HAP_SOURCE，跳过 .app 打包" >&2
+fi
+
 echo ""
 echo "=== HAP BUILD SUCCESSFUL ==="
 echo "产物："
 echo "  $HAP_DIR/entry/build/default/outputs/*/entry-*-*.hap"
+echo "  $APP_OUTPUT_DIR/*.app"
 echo "如需清理本地构建缓存：删除 $PROJECT_ROOT/build 目录"

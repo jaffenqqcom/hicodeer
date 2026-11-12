@@ -146,16 +146,6 @@
         "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       },
       {
-        "name": "ohos.permission.MICROPHONE",
-        "reason": "$string:perm_microphone_reason",
-        "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
-          "when": "inuse"
-        }
-      },
-      {
         "name": "ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY",
         "reason": "$string:perm_writable_code_memory_reason",
         "usedScene": {
@@ -167,10 +157,6 @@
       }
     ],
     "hnpPackages": [
-      {
-        "package": "git.hnp",
-        "type": "private"
-      },
       {
         "package": "hicodeerd.hnp",
         "type": "public"

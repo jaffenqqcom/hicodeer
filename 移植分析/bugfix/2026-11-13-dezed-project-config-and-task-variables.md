@@ -119,4 +119,24 @@ HiCodeer 的项目本地配置目录与任务变量前缀仍然沿用 Zed 的命
 ## 遗留
 
 - `crates/debugger_ui/src/new_process_modal.rs` 的 Program 占位符是本轮复核时才补的（原文 `ENV=Zed ~/bin/program --option`），此前只改了工作目录占位符。
-- 本轮未处理的更大范围文案（欢迎页 `Welcome to Zed`、Inspector `Click to open by running Zed CLI`、onboarding 等）不属于本项目本地配置这条线，属独立的去品牌任务，另行处理。
+
+## 关于「其它 Zed 文案是否会进 image」的核查
+
+初稿曾把欢迎页 `Welcome to Zed`、Inspector `Click to open by running Zed CLI`、onboarding `Welcome to Zed` 等列为「待处理的遗留」，这个判断是错的：只 grep 到源码文本就下结论，没有看 cfg 上下文。实际核查结果如下。
+
+代码侧文案全部不进货：
+
+- `crates/workspace/src/welcome.rs` 的 `welcome_headline()` 与 `welcome_tagline()`、`crates/onboarding/src/onboarding.rs` 的 `onboarding_title()`、`crates/inspector_ui/src/inspector.rs` 的 tooltip 都已按平台分叉，OHOS 走 `Welcome to HiCodeer` / `Click to open the source location`。
+- `crates/title_bar/src/title_bar.rs` 的 `Please restart/update Zed to Collaborate` 整段在 `#[cfg(not(target_env = "ohos"))]` 内。
+- `crates/auto_update`、`crates/install_cli`、`crates/ui/src/components/collab/`、`crates/zed/src/zed/move_to_applications.rs` 不参与 OHOS 构建或属 macOS 专属。
+
+实测判据（对 HAP 内 `libs/arm64-v8a/libcore.so` 流式逐块搜索，362 392 968 字节）：
+
+- `Welcome to Zed`、`Welcome back to Zed`、`Click to open by running Zed CLI`、`Please restart Zed to Collaborate`、`Checking for Zed Updates`、`Move Zed to Applications`、`Zed was installed via a package manager`：全部 0 命中。
+- 对照组 `Welcome to HiCodeer`、`Click to open the source location`、`Close Project`：全部命中。
+
+语言包资源侧会进 image，但没有运行时出口：
+
+- `assets/locales/zh-CN.json` 由 rust-embed 嵌入 `libcore.so`（DEFLATE 压缩，直接 `strings` 搜不到），文件名表里 `zh-CN.json`、`index.json`、`default.json` 均命中，已删除的 `ja-JP.json`、`fr-FR.json` 为 0。
+- 该语言包里有 129 条 key 与 value 含 `Zed`（例如 `About Zed` → `关于 Zed`、`Click to open by running Zed CLI` → `点击即可通过 Zed CLI 打开`）。这些条目对应的代码都在非 OHOS 分支，OHOS 运行时不会请求，用户看不到。
+- 按本项目既定口径「只删代码已被删除的 orphan 条目，代码仍在的即使没编译也不删」，这 129 条保留不动：它们是非 OHOS 平台的正常词条，删掉会导致那些平台缺词条。

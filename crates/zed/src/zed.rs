@@ -2422,12 +2422,12 @@ fn open_worktree_setup_tasks_file(
     // Kept harmless on purpose: tasks with the `create_worktree` hook run automatically
     // when a worktree is created, so the example must be safe to save unedited.
     const WORKTREE_SETUP_TASK_EXAMPLE: &str = r#"  {
-    // Runs automatically after Zed creates a new git worktree.
-    // $ZED_WORKTREE_ROOT is the new worktree's root directory, and
-    // $ZED_MAIN_GIT_WORKTREE is the original repository's working directory.
+    // Runs automatically after HiCodeer creates a new git worktree.
+    // $HICODEER_WORKTREE_ROOT is the new worktree's root directory, and
+    // $HICODEER_MAIN_GIT_WORKTREE is the original repository's working directory.
     "label": "Set up new worktree",
-    "command": "echo \"Setting up $ZED_WORKTREE_ROOT — edit this command\"",
-    "cwd": "$ZED_WORKTREE_ROOT",
+    "command": "echo \"Setting up $HICODEER_WORKTREE_ROOT — edit this command\"",
+    "cwd": "$HICODEER_WORKTREE_ROOT",
     "hooks": ["create_worktree"]
   }"#;
 
@@ -5874,14 +5874,14 @@ mod tests {
             .insert_tree(
                 Path::new("/root"),
                 json!({
-                    ".zed": {
+                    ".hicodeer": {
                         "settings.json": settings_init
                     }
                 }),
             )
             .await;
 
-        eprintln!("Created project with .zed/settings.json containing UNIQUEVALUE");
+        eprintln!("Created project with .hicodeer/settings.json containing UNIQUEVALUE");
 
         // 2. Create a project with the file system and load it
         let project = Project::test(app_state.fs.clone(), [Path::new("/root")], cx).await;
@@ -5889,7 +5889,7 @@ mod tests {
         // Save original settings content for comparison
         let original_settings = app_state
             .fs
-            .load(Path::new("/root/.zed/settings.json"))
+            .load(Path::new("/root/.hicodeer/settings.json"))
             .await
             .unwrap();
 
@@ -5906,7 +5906,7 @@ mod tests {
         cx.update_global::<SettingsStore, _>(|store, cx| {
             store.update_user_settings(cx, |worktree_settings| {
                 worktree_settings.project.worktree.file_scan_exclusions =
-                    Some(SplicingVec::from(vec![".zed".to_string()]));
+                    Some(SplicingVec::from(vec![".hicodeer".to_string()]));
             });
         });
 
@@ -5919,7 +5919,7 @@ mod tests {
         let worktree = cx.update(|cx| project.read(cx).worktrees(cx).next().unwrap());
 
         let has_zed_entry =
-            cx.update(|cx| worktree.read(cx).entry_for_path(rel_path(".zed")).is_some());
+            cx.update(|cx| worktree.read(cx).entry_for_path(rel_path(".hicodeer")).is_some());
 
         eprintln!(
             "Is .zed directory visible in worktree after exclusion: {}",
@@ -5955,7 +5955,7 @@ mod tests {
         // 8. Verify file contents after calling function
         let new_content = app_state
             .fs
-            .load(Path::new("/root/.zed/settings.json"))
+            .load(Path::new("/root/.hicodeer/settings.json"))
             .await
             .unwrap();
 

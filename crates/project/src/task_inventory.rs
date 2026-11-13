@@ -18,7 +18,7 @@ use language::{
     language_settings::LanguageSettings,
 };
 use lsp::{LanguageServerId, LanguageServerName};
-use paths::{debug_task_file_name, task_file_name};
+use paths::{debug_task_file_name, local_settings_folder_name, task_file_name};
 use settings::{InvalidSettingsError, parse_json_with_comments};
 use task::{
     DebugScenario, ResolvedTask, SharedTaskContext, TaskContext, TaskHook, TaskId, TaskTemplate,
@@ -89,8 +89,10 @@ impl<T: InventoryContents> InventoryFor<T> {
         let worktree_dirs = self.worktree.get(&worktree);
         let has_zed_dir = worktree_dirs
             .map(|dirs| {
-                dirs.keys()
-                    .any(|dir| dir.file_name().is_some_and(|name| name == ".zed"))
+                dirs.keys().any(|dir| {
+                    dir.file_name()
+                        .is_some_and(|name| name == local_settings_folder_name())
+                })
             })
             .unwrap_or(false);
 
@@ -147,7 +149,7 @@ impl<T> Default for InventoryFor<T> {
 pub enum TaskSourceKind {
     /// bash-like commands spawned by users, not associated with any path
     UserInput,
-    /// Tasks from the worktree's .zed/task.json
+    /// Tasks from the worktree's project tasks file (see `local_tasks_file_relative_path`).
     Worktree {
         id: WorktreeId,
         directory_in_worktree: Arc<RelPath>,
@@ -499,8 +501,10 @@ impl Inventory {
             .worktree
             .iter()
             .filter(|(_, dirs)| {
-                dirs.keys()
-                    .any(|dir| dir.file_name().is_some_and(|name| name == ".zed"))
+                dirs.keys().any(|dir| {
+                    dir.file_name()
+                        .is_some_and(|name| name == local_settings_folder_name())
+                })
             })
             .map(|(id, _)| *id)
             .collect();
@@ -1164,9 +1168,9 @@ mod tests {
 
     fn greeting_template() -> TaskTemplate {
         TaskTemplate {
-            label: "echo $ZED_CUSTOM_GREETING".to_string(),
+            label: "echo $HICODEER_CUSTOM_GREETING".to_string(),
             command: "echo".to_string(),
-            args: vec!["$ZED_CUSTOM_GREETING".to_string()],
+            args: vec!["$HICODEER_CUSTOM_GREETING".to_string()],
             ..TaskTemplate::default()
         }
     }

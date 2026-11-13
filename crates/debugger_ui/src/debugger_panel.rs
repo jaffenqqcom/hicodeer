@@ -1223,9 +1223,18 @@ impl DebugPanel {
                             .project()
                             .read(cx)
                             .project_path_for_absolute_path(path, cx)
-                            .context(
-                                "Couldn't get project path for .zed/debug.json in active worktree",
-                            )
+                            .context({
+                                // [OHOS PORT BEGIN] HiCodeer keeps project-local configuration in `.hicodeer`.
+                                #[cfg(target_env = "ohos")]
+                                {
+                                    "Couldn't get project path for .hicodeer/debug.json in active worktree"
+                                }
+                                // [OHOS PORT END]
+                                #[cfg(not(target_env = "ohos"))]
+                                {
+                                    "Couldn't get project path for .zed/debug.json in active worktree"
+                                }
+                            })
                     })??;
 
                     let editor = this

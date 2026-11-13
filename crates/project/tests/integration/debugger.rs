@@ -12,7 +12,7 @@ mod go_locator {
             command: "go".into(),
             args: vec!["build".into(), ".".into()],
             env: Default::default(),
-            cwd: Some("${ZED_WORKTREE_ROOT}".into()),
+            cwd: Some("$HICODEER_WORKTREE_ROOT".into()),
             use_new_terminal: false,
             allow_concurrent_runs: false,
             reveal: RevealStrategy::Always,
@@ -41,7 +41,7 @@ mod go_locator {
             command: "cargo".into(),
             args: vec!["build".into()],
             env: Default::default(),
-            cwd: Some("${ZED_WORKTREE_ROOT}".into()),
+            cwd: Some("$HICODEER_WORKTREE_ROOT".into()),
             use_new_terminal: false,
             allow_concurrent_runs: false,
             reveal: RevealStrategy::Always,
@@ -219,7 +219,7 @@ mod go_locator {
             command: "go".into(),
             args: vec!["clean".into()],
             env: Default::default(),
-            cwd: Some("${ZED_WORKTREE_ROOT}".into()),
+            cwd: Some("$HICODEER_WORKTREE_ROOT".into()),
             use_new_terminal: false,
             allow_concurrent_runs: false,
             reveal: RevealStrategy::Always,
@@ -252,15 +252,15 @@ mod python_locator {
     async fn test_python_locator() {
         let adapter = DebugAdapterName("Debugpy".into());
         let build_task = TaskTemplate {
-            label: "run module '$ZED_FILE'".into(),
-            command: "$ZED_CUSTOM_PYTHON_ACTIVE_ZED_TOOLCHAIN".into(),
-            args: vec!["-m".into(), "$ZED_CUSTOM_PYTHON_MODULE_NAME".into()],
+            label: "run module '$HICODEER_FILE'".into(),
+            command: "$HICODEER_CUSTOM_PYTHON_ACTIVE_ZED_TOOLCHAIN".into(),
+            args: vec!["-m".into(), "$HICODEER_CUSTOM_PYTHON_MODULE_NAME".into()],
             env: {
                 let mut env = HashMap::default();
                 env.insert("PYTHON_ENV".to_string(), "production".to_string());
                 env
             },
-            cwd: Some("$ZED_WORKTREE_ROOT".into()),
+            cwd: Some("$HICODEER_WORKTREE_ROOT".into()),
             use_new_terminal: false,
             allow_concurrent_runs: false,
             reveal: task::RevealStrategy::Always,
@@ -280,10 +280,10 @@ mod python_locator {
             build: None,
             config: json!({
                 "request": "launch",
-                "python": "$ZED_CUSTOM_PYTHON_ACTIVE_ZED_TOOLCHAIN",
+                "python": "$HICODEER_CUSTOM_PYTHON_ACTIVE_ZED_TOOLCHAIN",
                 "args": [],
-                "cwd": "$ZED_WORKTREE_ROOT",
-                "module": "$ZED_CUSTOM_PYTHON_MODULE_NAME",
+                "cwd": "$HICODEER_WORKTREE_ROOT",
+                "module": "$HICODEER_CUSTOM_PYTHON_MODULE_NAME",
                 "env": { "PYTHON_ENV": "production" },
             }),
             tcp_connection: None,

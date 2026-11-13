@@ -46020,7 +46020,7 @@ async fn test_local_worktree_trust(cx: &mut TestAppContext) {
     fs.insert_tree(
         path!("/project"),
         json!({
-            ".zed": {
+            ".hicodeer": {
                 "settings.json": r#"{"languages":{"Rust":{"language_servers":["override-rust-analyzer"]}}}"#
             },
             "main.rs": "fn main() {}"
@@ -46119,7 +46119,7 @@ async fn test_local_worktree_trust(cx: &mut TestAppContext) {
             [language::language_settings::ConfiguredLanguageServer::new(
                 "..."
             )],
-            "local .zed/settings.json must not apply before trust approval"
+            "local .hicodeer/settings.json must not apply before trust approval"
         )
     });
 
@@ -46154,7 +46154,7 @@ async fn test_local_worktree_trust(cx: &mut TestAppContext) {
             [language::language_settings::ConfiguredLanguageServer::new(
                 "override-rust-analyzer"
             )],
-            "local .zed/settings.json should apply after trust approval"
+            "local .hicodeer/settings.json should apply after trust approval"
         )
     });
     let _fake_language_server = fake_language_server.await.unwrap();
@@ -50359,13 +50359,13 @@ async fn test_soft_wrap_indent_updated_on_file_move_between_directories(
         root,
         serde_json::json!({
             "dir_a": {
-                ".zed": {
+                ".hicodeer": {
                     "settings.json": "{\n  \"soft_wrap_indent\": \"same\"\n}"
                 },
                 "test.txt": "    let a_long_variable = 123456789;\n"
             },
             "dir_b": {
-                ".zed": {
+                ".hicodeer": {
                     "settings.json": "{\n  \"soft_wrap_indent\": \"none\"\n}"
                 }
             }

@@ -200,9 +200,18 @@ impl Render for SecurityModal {
                                 .color(Color::Muted),
                             )
                             .child(
-                                Label::new(
-                                    localization::localized_str!("Review .zed/settings.json for any extensions or commands configured by this project."),
-                                )
+                                Label::new({
+                                    // [OHOS PORT BEGIN] HiCodeer keeps project-local configuration in `.hicodeer`.
+                                    #[cfg(target_env = "ohos")]
+                                    {
+                                        localization::localized_str!("Review .hicodeer/settings.json for any extensions or commands configured by this project.")
+                                    }
+                                    // [OHOS PORT END]
+                                    #[cfg(not(target_env = "ohos"))]
+                                    {
+                                        localization::localized_str!("Review .zed/settings.json for any extensions or commands configured by this project.")
+                                    }
+                                })
                                 .color(Color::Muted),
                             ),
                     )

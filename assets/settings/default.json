@@ -1655,7 +1655,8 @@
       "**/*.crt",
       "**/.dev.vars",
       "**/secrets.yml",
-      "**/.zed/settings.json", // zed project settings
+      "**/.zed/settings.json", // upstream project settings
+      "**/.hicodeer/settings.json", // HiCodeer project settings
       "/**/zed/settings.json", // zed user settings
       "/**/zed/keymap.json",
     ],
@@ -2035,6 +2036,7 @@
   "file_types": {
     "JSONC": [
       "**/.zed/*.json",
+      "**/.hicodeer/*.json",
       "**/.vscode/**/*.json",
       "**/{zed,Zed}/{settings,keymap,tasks,debug}.json",
       "tsconfig*.json",

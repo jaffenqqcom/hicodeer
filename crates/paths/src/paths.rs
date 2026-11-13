@@ -500,9 +500,18 @@ pub fn devcontainer_dir() -> &'static PathBuf {
     DEVCONTAINER_DIR.get_or_init(|| data_dir().join("devcontainer"))
 }
 
-/// Returns the relative path to a `.zed` folder within a project.
+/// Returns the relative path to the project-local configuration folder.
 pub fn local_settings_folder_name() -> &'static str {
-    ".zed"
+    // [OHOS PORT BEGIN] HiCodeer keeps project-local configuration in `.hicodeer`.
+    #[cfg(target_env = "ohos")]
+    {
+        ".hicodeer"
+    }
+    // [OHOS PORT END]
+    #[cfg(not(target_env = "ohos"))]
+    {
+        ".zed"
+    }
 }
 
 /// Returns the relative path to a `.vscode` folder within a project.
@@ -512,16 +521,38 @@ pub fn local_vscode_folder_name() -> &'static str {
 
 /// Returns the relative path to a `settings.json` file within a project.
 pub fn local_settings_file_relative_path() -> &'static RelPath {
-    static CACHED: LazyLock<&'static RelPath> =
-        LazyLock::new(|| RelPath::from_unix_str(".zed/settings.json").unwrap());
-    *CACHED
+    // [OHOS PORT BEGIN] HiCodeer keeps project-local configuration in `.hicodeer`.
+    #[cfg(target_env = "ohos")]
+    {
+        static CACHED: LazyLock<&'static RelPath> =
+            LazyLock::new(|| RelPath::from_unix_str(".hicodeer/settings.json").unwrap());
+        *CACHED
+    }
+    // [OHOS PORT END]
+    #[cfg(not(target_env = "ohos"))]
+    {
+        static CACHED: LazyLock<&'static RelPath> =
+            LazyLock::new(|| RelPath::from_unix_str(".zed/settings.json").unwrap());
+        *CACHED
+    }
 }
 
 /// Returns the relative path to a `tasks.json` file within a project.
 pub fn local_tasks_file_relative_path() -> &'static RelPath {
-    static CACHED: LazyLock<&'static RelPath> =
-        LazyLock::new(|| RelPath::from_unix_str(".zed/tasks.json").unwrap());
-    *CACHED
+    // [OHOS PORT BEGIN] HiCodeer keeps project-local configuration in `.hicodeer`.
+    #[cfg(target_env = "ohos")]
+    {
+        static CACHED: LazyLock<&'static RelPath> =
+            LazyLock::new(|| RelPath::from_unix_str(".hicodeer/tasks.json").unwrap());
+        *CACHED
+    }
+    // [OHOS PORT END]
+    #[cfg(not(target_env = "ohos"))]
+    {
+        static CACHED: LazyLock<&'static RelPath> =
+            LazyLock::new(|| RelPath::from_unix_str(".zed/tasks.json").unwrap());
+        *CACHED
+    }
 }
 
 /// Returns the relative path to a `.vscode/tasks.json` file within a project.
@@ -539,12 +570,23 @@ pub fn task_file_name() -> &'static str {
     "tasks.json"
 }
 
-/// Returns the relative path to a `debug.json` file within a project.
-/// .zed/debug.json
+/// Returns the relative path to a `debug.json` file within a project's
+/// local configuration folder.
 pub fn local_debug_file_relative_path() -> &'static RelPath {
-    static CACHED: LazyLock<&'static RelPath> =
-        LazyLock::new(|| RelPath::from_unix_str(".zed/debug.json").unwrap());
-    *CACHED
+    // [OHOS PORT BEGIN] HiCodeer keeps project-local configuration in `.hicodeer`.
+    #[cfg(target_env = "ohos")]
+    {
+        static CACHED: LazyLock<&'static RelPath> =
+            LazyLock::new(|| RelPath::from_unix_str(".hicodeer/debug.json").unwrap());
+        *CACHED
+    }
+    // [OHOS PORT END]
+    #[cfg(not(target_env = "ohos"))]
+    {
+        static CACHED: LazyLock<&'static RelPath> =
+            LazyLock::new(|| RelPath::from_unix_str(".zed/debug.json").unwrap());
+        *CACHED
+    }
 }
 
 /// Returns the relative path to a `.vscode/launch.json` file within a project.

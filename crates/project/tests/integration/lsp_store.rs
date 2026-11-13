@@ -874,7 +874,7 @@ async fn test_user_initialization_options_override_adapter_arrays(cx: &mut TestA
     fs.insert_tree(
         path!("/the-root"),
         json!({
-            ".zed": {
+            ".hicodeer": {
                 "settings.json": user_settings.to_string(),
             },
             "main.rs": "fn main() {}",
@@ -963,7 +963,7 @@ async fn test_other_adapters_lsp_configuration_contributions_are_unioned(cx: &mu
     fs.insert_tree(
         path!("/the-root"),
         json!({
-            ".zed": {
+            ".hicodeer": {
                 "settings.json": user_settings.to_string(),
             },
             "main.rs": "fn main() {}",

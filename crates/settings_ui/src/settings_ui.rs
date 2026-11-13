@@ -6141,7 +6141,7 @@ mod project_settings_update_tests {
         let fs = FakeFs::new(cx.executor());
         let tree = if let Some(settings_content) = initial_settings {
             json!({
-                ".zed": {
+                ".hicodeer": {
                     "settings.json": settings_content
                 },
                 "src": { "main.rs": "" }
@@ -6158,7 +6158,7 @@ mod project_settings_update_tests {
             (worktree.read(cx).id(), worktree.downgrade())
         });
 
-        let rel_path: Arc<RelPath> = RelPath::from_unix_str(".zed/settings.json")
+        let rel_path: Arc<RelPath> = RelPath::from_unix_str(".hicodeer/settings.json")
             .expect("valid path")
             .into_arc();
         let project_path = ProjectPath {
@@ -6388,7 +6388,7 @@ mod project_settings_update_tests {
 
         let file_content = setup
             .fs
-            .load("/project/.zed/settings.json".as_ref())
+            .load("/project/.hicodeer/settings.json".as_ref())
             .await
             .unwrap();
         assert_eq!(
@@ -6421,7 +6421,7 @@ mod project_settings_update_tests {
         setup
             .fs
             .save(
-                "/project/.zed/settings.json".as_ref(),
+                "/project/.hicodeer/settings.json".as_ref(),
                 &r#"{ "tab_size": 99 }"#.into(),
                 Default::default(),
             )

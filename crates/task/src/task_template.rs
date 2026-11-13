@@ -10,7 +10,7 @@ use util::{ResultExt, truncate_and_remove_front};
 
 use crate::{
     AttachRequest, ResolvedTask, RevealTarget, Shell, SpawnInTerminal, TaskContext, TaskId,
-    VariableName, ZED_VARIABLE_NAME_PREFIX, serde_helpers::non_empty_string_vec,
+    VariableName, HICODEER_VARIABLE_NAME_PREFIX, serde_helpers::non_empty_string_vec,
 };
 
 /// A template definition of a Zed task to run.
@@ -303,11 +303,11 @@ impl TaskTemplate {
         })
     }
 
-    /// Validates that all `$ZED_*` variables used in this template are known
+    /// Validates that all `$HICODEER_*` variables used in this template are known
     /// variable names, returning a vector with all of the unique unknown
     /// variables.
     ///
-    /// Note that `$ZED_CUSTOM_*` variables are never considered to be invalid
+    /// Note that `$HICODEER_CUSTOM_*` variables are never considered to be invalid
     /// since those are provided dynamically by extensions.
     pub fn unknown_variables(&self) -> Vec<String> {
         let mut variables = HashSet::default();
@@ -338,8 +338,8 @@ impl TaskTemplate {
             let colon_position = variable.find(':').unwrap_or(variable.len());
             let variable_name = &variable[..colon_position];
 
-            if variable_name.starts_with(ZED_VARIABLE_NAME_PREFIX)
-                && let without_prefix = &variable_name[ZED_VARIABLE_NAME_PREFIX.len()..]
+            if variable_name.starts_with(HICODEER_VARIABLE_NAME_PREFIX)
+                && let without_prefix = &variable_name[HICODEER_VARIABLE_NAME_PREFIX.len()..]
                 && !without_prefix.starts_with("CUSTOM_")
                 && variable_name.parse::<VariableName>().is_err()
             {
@@ -412,7 +412,7 @@ fn substitute_all_template_variables_in_str<A: AsRef<str>>(
             }
             // Got a task variable hit - use the variable value, ignore default
             return Ok(Some(name.as_ref().to_owned()));
-        } else if variable_name.starts_with(ZED_VARIABLE_NAME_PREFIX) {
+        } else if variable_name.starts_with(HICODEER_VARIABLE_NAME_PREFIX) {
             // Unknown ZED variable - use default if available
             if !default.is_empty() {
                 // Strip the colon and return the default value
@@ -854,7 +854,7 @@ mod tests {
         let task = TaskTemplate {
             label: "My task".into(),
             command: "echo".into(),
-            args: vec!["$ZED_VARIABLE".into()],
+            args: vec!["$HICODEER_VARIABLE".into()],
             ..TaskTemplate::default()
         };
         assert!(
@@ -1032,7 +1032,7 @@ mod tests {
                 VariableName::File.to_string() + ":fallback.txt"
             ),
             args: vec![
-                "${ZED_MISSING_VAR:default_value}".to_string(),
+                "${HICODEER_MISSING_VAR:default_value}".to_string(),
                 format!("${{{}}}", VariableName::Row.to_string() + ":42"),
             ],
             ..TaskTemplate::default()
@@ -1088,7 +1088,7 @@ mod tests {
         // Test 3: Missing ZED variable without default should fail
         let task_no_default = TaskTemplate {
             label: "test no default".to_string(),
-            command: "${ZED_MISSING_NO_DEFAULT}".to_string(),
+            command: "${HICODEER_MISSING_NO_DEFAULT}".to_string(),
             ..TaskTemplate::default()
         };
 
@@ -1105,19 +1105,19 @@ mod tests {
         // Variable names starting with `ZED_` that are not valid should be
         // reported.
         let label = "test unknown variables".to_string();
-        let command = "$ZED_UNKNOWN".to_string();
+        let command = "$HICODEER_UNKNOWN".to_string();
         let task = TaskTemplate {
             label,
             command,
             ..TaskTemplate::default()
         };
 
-        assert_eq!(task.unknown_variables(), vec!["ZED_UNKNOWN".to_string()]);
+        assert_eq!(task.unknown_variables(), vec!["HICODEER_UNKNOWN".to_string()]);
 
         // Variable names starting with `ZED_CUSTOM_` should never be reported,
         // as those are dynamically provided by extensions.
         let label = "test custom variables".to_string();
-        let command = "$ZED_CUSTOM_UNKNOWN".to_string();
+        let command = "$HICODEER_CUSTOM_UNKNOWN".to_string();
         let task = TaskTemplate {
             label,
             command,
@@ -1129,18 +1129,18 @@ mod tests {
         // Unknown variable names with defaults should still be reported,
         // otherwise the default would always be silently used.
         let label = "test custom variables".to_string();
-        let command = "${ZED_UNKNOWN:default_value}".to_string();
+        let command = "${HICODEER_UNKNOWN:default_value}".to_string();
         let task = TaskTemplate {
             label,
             command,
             ..TaskTemplate::default()
         };
 
-        assert_eq!(task.unknown_variables(), vec!["ZED_UNKNOWN".to_string()]);
+        assert_eq!(task.unknown_variables(), vec!["HICODEER_UNKNOWN".to_string()]);
 
         // Valid variable names are not reported.
         let label = "test custom variables".to_string();
-        let command = "$ZED_FILE".to_string();
+        let command = "$HICODEER_FILE".to_string();
         let task = TaskTemplate {
             label,
             command,
@@ -1152,11 +1152,11 @@ mod tests {
     #[test]
     fn test_git_variables_resolution() {
         let task = TaskTemplate {
-            label: "Show $ZED_GIT_SHA_SHORT in $ZED_GIT_REPOSITORY_NAME".to_string(),
+            label: "Show $HICODEER_GIT_SHA_SHORT in $HICODEER_GIT_REPOSITORY_NAME".to_string(),
             command: "git".to_string(),
-            args: vec!["show".to_string(), "$ZED_GIT_SHA".to_string()],
-            cwd: Some("$ZED_GIT_REPOSITORY_PATH".to_string()),
-            env: HashMap::from_iter([("COMMIT".to_string(), "$ZED_GIT_SHA".to_string())]),
+            args: vec!["show".to_string(), "$HICODEER_GIT_SHA".to_string()],
+            cwd: Some("$HICODEER_GIT_REPOSITORY_PATH".to_string()),
+            env: HashMap::from_iter([("COMMIT".to_string(), "$HICODEER_GIT_SHA".to_string())]),
             ..TaskTemplate::default()
         };
         let sha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();

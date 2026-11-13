@@ -159,7 +159,7 @@ impl DebugAdapter for GoDebugAdapter {
             "cwd": {
                 "type": "string",
                 "description": "Workspace relative or absolute path to the working directory of the program being debugged.",
-                "default": "${ZED_WORKTREE_ROOT}"
+                "default": "$HICODEER_WORKTREE_ROOT"
             },
             "dlvFlags": {
                 "type": "array",
@@ -255,7 +255,7 @@ impl DebugAdapter for GoDebugAdapter {
             "program": {
                 "type": "string",
                 "description": "Path to the program folder or file to debug.",
-                "default": "${ZED_WORKTREE_ROOT}"
+                "default": "$HICODEER_WORKTREE_ROOT"
             },
             "args": {
                 "type": ["array", "string"],

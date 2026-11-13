@@ -214,10 +214,20 @@ impl Component for AlertModal {
                                             .child(Label::new("~/projects/my-project").color(Color::Muted))
                                     )
                             )
-                            .child(
-                                "Untrusted workspaces are opened in Restricted Mode to protect your system.
-Review .zed/settings.json for any extensions or commands configured by this project.",
-                            )
+                            .child({
+                                // [OHOS PORT BEGIN] HiCodeer keeps project-local configuration in `.hicodeer`.
+                                #[cfg(target_env = "ohos")]
+                                {
+                                    "Untrusted workspaces are opened in Restricted Mode to protect your system.
+Review .hicodeer/settings.json for any extensions or commands configured by this project."
+                                }
+                                // [OHOS PORT END]
+                                #[cfg(not(target_env = "ohos"))]
+                                {
+                                    "Untrusted workspaces are opened in Restricted Mode to protect your system.
+Review .zed/settings.json for any extensions or commands configured by this project."
+                                }
+                            })
                             .child(
                                 v_flex()
                                     .mt_1()

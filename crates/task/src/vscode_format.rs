@@ -211,15 +211,15 @@ mod tests {
         // And now, the actual replacing
         let replacer = EnvVariableReplacer::new(HashMap::from_iter([(
             "PATH".to_owned(),
-            "ZED_PATH".to_owned(),
+            "HICODEER_PATH".to_owned(),
         )]));
         assert_eq!(replacer.replace("Food"), "Food");
         assert_eq!(
             replacer.replace("$PATH is an environment variable"),
-            "${ZED_PATH} is an environment variable"
+            "${HICODEER_PATH} is an environment variable"
         );
-        assert_eq!(replacer.replace("${PATH}"), "${ZED_PATH}");
-        assert_eq!(replacer.replace("${PATH:food}"), "${ZED_PATH:food}");
+        assert_eq!(replacer.replace("${PATH}"), "${HICODEER_PATH}");
+        assert_eq!(replacer.replace("${PATH:food}"), "${HICODEER_PATH:food}");
     }
 
     #[test]
@@ -326,21 +326,21 @@ mod tests {
                 label: "With path".to_string(),
                 command: "npm".to_string(),
                 args: vec!["run".to_string(), "build".to_string()],
-                cwd: Some("$ZED_WORKTREE_ROOT/packages/components".to_string()),
+                cwd: Some("$HICODEER_WORKTREE_ROOT/packages/components".to_string()),
                 ..Default::default()
             },
             TaskTemplate {
                 label: "With cwd".to_string(),
                 command: "npm".to_string(),
                 args: vec!["run".to_string(), "build".to_string()],
-                cwd: Some("${ZED_WORKTREE_ROOT}/packages/app".to_string()),
+                cwd: Some("${HICODEER_WORKTREE_ROOT}/packages/app".to_string()),
                 ..Default::default()
             },
             TaskTemplate {
                 label: "With path and cwd".to_string(),
                 command: "npm".to_string(),
                 args: vec!["run".to_string(), "build".to_string()],
-                cwd: Some("${ZED_WORKTREE_ROOT}/packages/app".to_string()),
+                cwd: Some("${HICODEER_WORKTREE_ROOT}/packages/app".to_string()),
                 ..Default::default()
             },
         ];
@@ -399,9 +399,9 @@ mod tests {
                 label: "With args".to_string(),
                 command: "node".to_string(),
                 args: vec![
-                    "${ZED_WORKTREE_ROOT}/node_modules/typescript/lib/tsc.js".to_string(),
+                    "${HICODEER_WORKTREE_ROOT}/node_modules/typescript/lib/tsc.js".to_string(),
                     "--build".to_string(),
-                    "${ZED_WORKTREE_ROOT}/src".to_string(),
+                    "${HICODEER_WORKTREE_ROOT}/src".to_string(),
                     "--watch".to_string(),
                 ],
                 ..Default::default()
@@ -486,14 +486,14 @@ mod tests {
                 label: "Build Extension in Background".to_string(),
                 command: "npm".to_string(),
                 args: vec!["run".to_string(), "watch".to_string()],
-                cwd: Some("$ZED_WORKTREE_ROOT/editors/code/".to_string()),
+                cwd: Some("$HICODEER_WORKTREE_ROOT/editors/code/".to_string()),
                 ..Default::default()
             },
             TaskTemplate {
                 label: "Build Extension".to_string(),
                 command: "npm".to_string(),
                 args: vec!["run".to_string(), "build".to_string()],
-                cwd: Some("$ZED_WORKTREE_ROOT/editors/code/".to_string()),
+                cwd: Some("$HICODEER_WORKTREE_ROOT/editors/code/".to_string()),
                 ..Default::default()
             },
             TaskTemplate {
@@ -510,7 +510,7 @@ mod tests {
                 label: "Pretest".to_string(),
                 command: "npm".to_string(),
                 args: vec!["run".to_string(), "pretest".to_string()],
-                cwd: Some("$ZED_WORKTREE_ROOT/editors/code/".to_string()),
+                cwd: Some("$HICODEER_WORKTREE_ROOT/editors/code/".to_string()),
                 ..Default::default()
             },
         ];

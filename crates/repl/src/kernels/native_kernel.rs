@@ -425,7 +425,7 @@ mod test {
         fs.insert_tree(
             "/jupyter",
             json!({
-                ".zed": {
+                ".hicodeer": {
                     "settings.json": r#"{ "tab_size": 8 }"#,
                     "tasks.json": r#"[{
                         "label": "cargo check",

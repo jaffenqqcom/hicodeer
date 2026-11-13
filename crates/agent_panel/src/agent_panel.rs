@@ -44,8 +44,8 @@ use settings::{IntoGpui, RegisterSetting, Settings, SettingsStore, update_settin
 use terminal_view::TerminalView;
 use theme::ActiveTheme as _;
 use ui::{
-    Color, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, ScrollAxes, Scrollbars,
-    Tooltip, WithScrollbar, prelude::*,
+    Color, Icon, IconName, IconSize, Label, LabelCommon, LabelSize, ScrollAxes, Scrollbars, Switch,
+    ToggleState, Tooltip, WithScrollbar, prelude::*,
 };
 #[cfg(target_env = "ohos")]
 use workspace::MultiWorkspace;
@@ -465,6 +465,12 @@ pub struct AgentPanel {
     history_loading: bool,
     /// Whether the "add skill" helper popover is showing below the actions row.
     show_add_skill_popover: bool,
+    /// Whether the footer switch has temporarily muted IM notifications.
+    ///
+    /// This is not a setting: the value lives in memory only, so a restart
+    /// goes back to delivering, and it never touches the stored IM channel
+    /// configuration.
+    im_notifications_muted: bool,
     /// Scroll position of the space/agent tree, shared with its scrollbar.
     scroll_handle: ScrollHandle,
 }
@@ -547,6 +553,7 @@ impl AgentPanel {
             expanded_history_groups: HashSet::new(),
             history_loading: false,
             show_add_skill_popover: false,
+            im_notifications_muted: false,
             scroll_handle: ScrollHandle::new(),
         }
     }
@@ -740,10 +747,13 @@ impl AgentPanel {
                 // The row mark needs no switch: it is the panel's own record of
                 // which agent changed.
                 self.attention_agents.insert(agent.pane_id.clone());
-                // The IM channel is a separate output: it has its own switch in
-                // the settings page, so it is fed before the toast decides
-                // whether the user is already looking at this agent.
-                im_notify::forward(spaces, space, agent, kind);
+                // The IM channel is a separate output: it is fed before the
+                // toast decides whether the user is already looking at this
+                // agent, and the footer switch can mute it for a while without
+                // touching the stored configuration.
+                if !self.im_notifications_muted {
+                    im_notify::forward(spaces, space, agent, kind);
+                }
                 if sound_enabled {
                     match kind {
                         im_notify::AgentNotification::NeedsAttention => audio::play_system_bell(),
@@ -2966,9 +2976,10 @@ impl AgentPanel {
             .into_any_element()
     }
 
-    /// Footer row of the panel: Add Skill flush with the left edge, the IM
-    /// Channel shortcut flush with the right. Both entries style themselves the
-    /// same way the "New Space" row does, so all three read as one family.
+    /// Footer rows of the panel, top to bottom: New Space, Add Skill, then the
+    /// IM Channel shortcut with the temporary mute switch at the far right.
+    /// Every row fills the footer's width and styles itself the same way, so all
+    /// three read as one family whatever the language's text length.
     fn render_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         let popover = if self.show_add_skill_popover {
             Some(self.render_add_skill_popover(cx).into_any_element())
@@ -2976,6 +2987,15 @@ impl AgentPanel {
             None
         };
         let colors = cx.theme().colors();
+        // The switch is offered only when the selected channel can actually
+        // deliver, and it asks through the same check the settings page uses.
+        let im_configured = match im_channel::manager::status() {
+            Ok(status) => status.configured,
+            Err(error) => {
+                log::warn!("agent panel: cannot read the IM configuration: {error}");
+                false
+            }
+        };
 
         v_flex()
             .id("agent-panel-footer")
@@ -2987,72 +3007,177 @@ impl AgentPanel {
             .py_1()
             .gap_0p5()
             .child(
-                h_flex()
-                    .id("agent-panel-footer-row")
+                v_flex()
+                    .id("agent-panel-footer-rows")
                     .w_full()
                     .child(
-                        div()
-                            .id("agent-panel-add-skill")
-                            .py_1()
-                            .pl(ROW_SIDE_PADDING)
-                            .pr(ROW_SIDE_PADDING)
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(transparent_black())
-                            .tab_index(0)
-                            .cursor_pointer()
-                            .hover(|style| style.bg(colors.ghost_element_hover))
-                            .active(|style| style.bg(colors.ghost_element_active))
-                            .focus_visible(|style| style.border_color(colors.border_focused))
-                            .child(action_content(
-                                IconName::Slash,
-                                localization::localized_str!("Add Skill"),
-                            ))
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.copy_add_skill(cx);
-                            })),
+                        h_flex()
+                            .id("agent-panel-new-space-row")
+                            .w_full()
+                            .child(
+                                div()
+                                    .id("agent-panel-new-space")
+                                    .w_full()
+                                    .min_w_0()
+                                    .py_1()
+                                    .pl(ROW_SIDE_PADDING)
+                                    .pr(ROW_SIDE_PADDING)
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(transparent_black())
+                                    .tab_index(0)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(colors.ghost_element_hover))
+                                    .active(|style| style.bg(colors.ghost_element_active))
+                                    .focus_visible(|style| {
+                                        style.border_color(colors.border_focused)
+                                    })
+                                    .child(action_content(
+                                        IconName::Plus,
+                                        localization::localized_str!("New Space"),
+                                    ))
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.create_space(cx);
+                                    })),
+                            ),
                     )
-                    .child(div().flex_1())
                     .child(
-                        div()
-                            .id("agent-panel-im-channel")
-                            .py_1()
-                            .pl(ROW_SIDE_PADDING)
-                            .pr(ROW_SIDE_PADDING)
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(transparent_black())
-                            .cursor_pointer()
-                            .hover(|style| style.bg(colors.ghost_element_hover))
-                            .active(|style| style.bg(colors.ghost_element_active))
-                            .child(action_content(
-                                IconName::Message,
-                                localization::localized_str!("IM Channel"),
-                            ))
-                            .on_click(cx.listener(|_, _, window, cx| {
-                                window.dispatch_action(
-                                    Box::new(zed_actions::OpenSettingsPage {
-                                        page: localization::localized_str!("IM Assistant")
-                                            .to_string(),
-                                        target: None,
-                                    }),
-                                    cx,
-                                );
-                            })),
+                        h_flex()
+                            .id("agent-panel-add-skill-row")
+                            .w_full()
+                            .child(
+                                div()
+                                    .id("agent-panel-add-skill")
+                                    .w_full()
+                                    .min_w_0()
+                                    .py_1()
+                                    .pl(ROW_SIDE_PADDING)
+                                    .pr(ROW_SIDE_PADDING)
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(transparent_black())
+                                    .tab_index(0)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(colors.ghost_element_hover))
+                                    .active(|style| style.bg(colors.ghost_element_active))
+                                    .focus_visible(|style| {
+                                        style.border_color(colors.border_focused)
+                                    })
+                                    .child(action_content(
+                                        IconName::Slash,
+                                        localization::localized_str!("Add Skill"),
+                                    ))
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.copy_add_skill(cx);
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .id("agent-panel-im-channel-row")
+                            .w_full()
+                            .items_center()
+                            .child(
+                                div()
+                                    .id("agent-panel-im-channel")
+                                    .w_full()
+                                    .min_w_0()
+                                    .py_1()
+                                    .pl(ROW_SIDE_PADDING)
+                                    .pr(ROW_SIDE_PADDING)
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(transparent_black())
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(colors.ghost_element_hover))
+                                    .active(|style| style.bg(colors.ghost_element_active))
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .items_center()
+                                            .child(action_content(
+                                                IconName::Message,
+                                                localization::localized_str!("IM Channel"),
+                                            ))
+                                            .child(div().flex_1())
+                                            .when(im_configured, |row| {
+                                                row.child(
+                                                    h_flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .child(
+                                                            Label::new(
+                                                                localization::localized_str!(
+                                                                    "Temporarily off"
+                                                                ),
+                                                            )
+                                                            .size(LabelSize::XSmall)
+                                                            .color(Color::Muted),
+                                                        )
+                                                        .child(
+                                                            Switch::new(
+                                                                "agent-panel-im-mute",
+                                                                if self
+                                                                    .im_notifications_muted
+                                                                {
+                                                                    ToggleState::Unselected
+                                                                } else {
+                                                                    ToggleState::Selected
+                                                                },
+                                                            )
+                                                            .tab_index(0_isize)
+                                                            .aria_label(
+                                                                localization::localized_str!(
+                                                                    "Mute IM notifications"
+                                                                ),
+                                                            )
+                                                            .aria_description(
+                                                                localization::localized_str!(
+                                                                    "Stops the agent panel from sending notifications to the IM channel until HiCodeer restarts"
+                                                                ),
+                                                            )
+                                                            .on_click(cx.listener(
+                                                                |this,
+                                                                 state: &ToggleState,
+                                                                 _window,
+                                                                 cx| {
+                                                                    // The switch is inside the
+                                                                    // clickable row, so it has to
+                                                                    // keep the click for itself.
+                                                                    cx.stop_propagation();
+                                                                    this.im_notifications_muted =
+                                                                        *state
+                                                                            == ToggleState::Unselected;
+                                                                    cx.notify();
+                                                                },
+                                                            )),
+                                                        ),
+                                                )
+                                            }),
+                                    )
+                                    .on_click(cx.listener(|_, _, window, cx| {
+                                        window.dispatch_action(
+                                            Box::new(zed_actions::OpenSettingsPage {
+                                                page: localization::localized_str!(
+                                                    "IM Assistant"
+                                                )
+                                                .to_string(),
+                                                target: None,
+                                            }),
+                                            cx,
+                                        );
+                                    })),
+                            ),
                     ),
             )
             .children(popover)
             .into_any_element()
     }
 
-    /// Header of the panel: the space creator, pinned above the scrolling tree.
-    /// Settings live in the editor's own settings page, so the panel has no
-    /// entry of its own.
-    fn render_actions(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let colors = cx.theme().colors();
-
-        // The entry carries its own side padding, so its label lines up with the
-        // tree below without a wrapper inset.
+    /// Header of the panel: the workspace list's heading, pinned above the
+    /// scrolling tree. The space creator now lives in the footer. Settings live
+    /// in the editor's own settings page, so the panel has no entry of its own.
+    fn render_actions(&self, _cx: &mut Context<Self>) -> impl IntoElement + use<> {
         v_flex()
             .id("agent-panel-actions")
             .w_full()
@@ -3061,25 +3186,13 @@ impl AgentPanel {
                 h_flex()
                     .id("agent-panel-actions-row")
                     .w_full()
+                    .pl(ROW_SIDE_PADDING)
+                    .pr(ROW_SIDE_PADDING)
                     .child(
-                        div()
-                            .id("agent-panel-new-space")
-                            .flex_1()
-                            .min_w_0()
-                            .py_1()
-                            .pl(ROW_SIDE_PADDING)
-                            .pr(ROW_SIDE_PADDING)
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(transparent_black())
-                            .cursor_pointer()
-                            .hover(|style| style.bg(colors.ghost_element_hover))
-                            .active(|style| style.bg(colors.ghost_element_active))
-                            .child(action_content(
-                                IconName::Plus,
-                                localization::localized_str!("New Space"),
-                            ))
-                            .on_click(cx.listener(|this, _, _window, cx| this.create_space(cx))),
+                        Label::new(localization::localized_str!("Workspaces"))
+                            .size(LabelSize::Default)
+                            .weight(FontWeight::BOLD)
+                            .color(Color::Muted),
                     ),
             )
     }

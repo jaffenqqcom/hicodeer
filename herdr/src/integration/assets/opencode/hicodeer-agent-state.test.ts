@@ -47,9 +47,9 @@ beforeEach(() => {
   requestWaiters.length = 0;
   autoAcknowledge = true;
   process.argv = ["bun", "/$bunfs/root/src/index.js", "run"];
-  process.env.HERDR_ENV = "1";
+  process.env.HICODEER_ENV = "1";
   process.env.HICODEER_AGENT_SOCKET_PATH = "test.sock";
-  process.env.HERDR_PANE_ID = "test:p1";
+  process.env.HICODEER_PANE_ID = "test:p1";
 });
 
 async function loadPlugin() {

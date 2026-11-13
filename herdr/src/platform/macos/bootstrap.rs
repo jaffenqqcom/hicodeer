@@ -4,7 +4,7 @@ use std::process::Command;
 
 use libc::{c_char, c_int, c_void, mach_port_t, uid_t};
 
-const SERVER_CONTEXT_ENV: &str = "HERDR_MACOS_SERVER_CONTEXT";
+const SERVER_CONTEXT_ENV: &str = "HICODEER_MACOS_SERVER_CONTEXT";
 const USER_CONTEXT: &str = "user";
 const TASK_BOOTSTRAP_PORT: c_int = 4;
 

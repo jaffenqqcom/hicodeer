@@ -244,8 +244,6 @@ pub(super) fn snapshot_with_completions(
         revision,
         config_diagnostic: config_diagnostic.map(str::to_owned),
         product_announcement,
-        update_available: app.state.update_available.clone(),
-        update_install_command: app.state.update_install_command.clone(),
         server_keybindings_toml: app.client_shell_keybindings_profile().map(str::to_owned),
         latest_release_notes_available: app.state.latest_release_notes_available,
         integration_updates_available: app.state.integration_updates_available(),
@@ -718,7 +716,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_projects_cached_release_and_update_facts() {
+    fn snapshot_projects_cached_release_notes() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = crate::app::App::new(
             &crate::config::Config::default(),
@@ -728,8 +726,6 @@ mod tests {
             crate::api::EventHub::default(),
         );
         app.state.integration_recommendations.clear();
-        app.state.update_available = Some("0.8.3".into());
-        app.state.update_install_command = "hicodeerd update".into();
         app.state.latest_release_notes_available = true;
         app.state.latest_release_notes = Some(crate::release_notes::ReleaseNotes {
             version: "0.8.3".into(),
@@ -739,8 +735,6 @@ mod tests {
 
         let snapshot = snapshot(&app, "boot", 7, None, None);
 
-        assert_eq!(snapshot.update_available.as_deref(), Some("0.8.3"));
-        assert_eq!(snapshot.update_install_command, "hicodeerd update");
         assert!(snapshot.latest_release_notes_available);
         assert!(!snapshot.integration_updates_available);
         assert_eq!(

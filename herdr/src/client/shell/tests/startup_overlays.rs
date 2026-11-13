@@ -372,7 +372,7 @@ fn startup_onboarding_shows_configured_prefix() {
 #[test]
 fn onboarding_completion_persists_and_opens_endpoint_integrations() {
     let path = std::env::temp_dir().join(format!(
-        "herdr-client-onboarding-{}-{}.toml",
+        "hicodeer-client-onboarding-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -479,7 +479,7 @@ fn unavailable_integration_list_does_not_wedge_settings() {
     let mut config =
         ClientShellConfig::from_config(&Config::default()).with_startup_onboarding(true);
     config.local_config_path = std::env::temp_dir().join(format!(
-        "herdr-client-onboarding-unavailable-{}-{}.toml",
+        "hicodeer-client-onboarding-unavailable-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -571,7 +571,7 @@ fn config_diagnostic_offsets_only_the_pane_rows_it_overlaps() {
             workspace_id: None,
             tab_id: None,
             pane_id: None,
-            position: Some(crate::config::ToastHerdrPosition::TopRight),
+            position: Some(crate::config::ToastHicodeerPosition::TopRight),
         },
         deadline: std::time::Instant::now(),
     });
@@ -599,7 +599,7 @@ fn config_diagnostic_offsets_only_the_pane_rows_it_overlaps() {
         .as_mut()
         .expect("visible notification")
         .event
-        .position = Some(crate::config::ToastHerdrPosition::BottomRight);
+        .position = Some(crate::config::ToastHicodeerPosition::BottomRight);
     state.compose(106, 20).expect("bottom notification frame");
     assert_eq!(state.hits.notification_toast.bottom(), 19);
 }
@@ -660,10 +660,9 @@ fn live_client_config_keeps_sound_diagnostics() {
 }
 
 #[test]
-fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version() {
+fn whats_new_menu_opens_client_owned_release_notes_and_dismisses_by_version() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     let mut endpoint_snapshot = snapshot();
-    endpoint_snapshot.update_available = Some("0.8.3".into());
     endpoint_snapshot.latest_release_notes_available = true;
     endpoint_snapshot.release_notes = Some(crate::protocol::ClientShellReleaseNotes {
         version: "0.8.3".into(),
@@ -675,46 +674,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
     });
     state.set_snapshot(Box::new(endpoint_snapshot.clone()));
     state.set_pane_surface(surface());
-    let shell = state.compose(106, 30).expect("shell frame");
-    assert_eq!(state.hits.global_launcher.width, 8);
-    let launcher = state.hits.global_launcher;
-    let shell_buffer = shell.to_ratatui_buffer().expect("shell buffer");
-    let badge_x = launcher.right().saturating_sub(6);
-    assert_eq!(
-        shell_buffer[(badge_x, launcher.y)].fg,
-        state.config.palette.accent
-    );
-    assert_eq!(
-        shell_buffer[(badge_x + 2, launcher.y)].fg,
-        state.config.palette.overlay0
-    );
-
-    state.sidebar_collapsed = true;
-    let collapsed = state.compose(106, 30).expect("collapsed update shell");
-    let collapsed_buffer = collapsed.to_ratatui_buffer().expect("collapsed buffer");
-    assert_eq!(
-        collapsed_buffer[(state.hits.sidebar_toggle.x, state.hits.sidebar_toggle.y)].fg,
-        state.config.palette.accent
-    );
-    state.sidebar_collapsed = false;
-    state.mode = ClientShellMode::Navigate;
-    let navigate = state.compose(106, 30).expect("navigate update status");
-    let navigate_text = navigate
-        .cells
-        .iter()
-        .map(|cell| cell.symbol.as_str())
-        .collect::<String>();
-    assert!(navigate_text.contains("update ready"));
-    state.mode = ClientShellMode::Prefix;
-    let prefix = state
-        .compose(106, 30)
-        .expect("prefix without update status");
-    let prefix_text = prefix
-        .cells
-        .iter()
-        .map(|cell| cell.symbol.as_str())
-        .collect::<String>();
-    assert!(!prefix_text.contains("update ready"));
+    state.compose(106, 30).expect("shell frame");
     state.mode = ClientShellMode::Navigate;
 
     state.toggle_global_menu();
@@ -729,18 +689,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("● update ready"));
-    let update_row = state.hits.global_menu_rows[3].0;
-    assert_eq!(update_row.width, 16);
-    let menu_buffer = menu.to_ratatui_buffer().expect("menu buffer");
-    assert_eq!(
-        menu_buffer[(update_row.x + 1, update_row.y)].fg,
-        state.config.palette.accent
-    );
-    assert_eq!(
-        menu_buffer[(update_row.x + 3, update_row.y)].fg,
-        state.config.palette.text
-    );
+    assert!(text.contains("what's new"));
     state.activate_global_menu_item(3, &mut ClientShellInput::default());
     let notes = state.compose(106, 30).expect("release notes");
     let bottom_row_start = usize::from(notes.width) * usize::from(notes.height - 1);
@@ -760,8 +709,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("v0.8.3"));
-    assert!(text.contains("update ready"));
-    assert!(text.contains("detach, run hicodeerd update"));
+    assert!(text.contains("what's new in this release"));
     assert!(!state.hits.release_notes_scrollbar.is_empty());
     let outer = crate::ui::centered_popup_rect(
         Rect::new(0, 0, 106, 30),
@@ -879,7 +827,6 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
 
     endpoint_snapshot.boot_id = "boot-2".into();
     endpoint_snapshot.revision = 2;
-    endpoint_snapshot.update_available = None;
     endpoint_snapshot
         .release_notes
         .as_mut()
@@ -907,7 +854,6 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
 fn coalesced_release_notes_open_and_scroll_uses_current_geometry() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     let mut endpoint_snapshot = snapshot();
-    endpoint_snapshot.update_available = Some("0.8.3".into());
     endpoint_snapshot.latest_release_notes_available = true;
     endpoint_snapshot.release_notes = Some(crate::protocol::ClientShellReleaseNotes {
         version: "0.8.3".into(),
@@ -951,7 +897,6 @@ fn coalesced_release_notes_open_and_mouse_uses_current_geometry() {
         .collect::<Vec<_>>()
         .join("\n");
     let mut endpoint_snapshot = snapshot();
-    endpoint_snapshot.update_available = Some("0.8.3".into());
     endpoint_snapshot.latest_release_notes_available = true;
     endpoint_snapshot.release_notes = Some(crate::protocol::ClientShellReleaseNotes {
         version: "0.8.3".into(),
@@ -978,7 +923,6 @@ fn coalesced_release_notes_open_and_mouse_uses_current_geometry() {
     };
     let metrics = crate::ui::release_notes_scroll_metrics(
         &notes,
-        "hicodeerd update",
         stack.content,
         &state.config.palette,
     );
@@ -1089,10 +1033,9 @@ fn outdated_integration_badges_launcher_settings_and_settings_tab() {
 }
 
 #[test]
-fn combined_update_and_integration_attention_preserves_both_badges() {
+fn integration_attention_keeps_its_badge_without_update_attention() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     let mut endpoint_snapshot = snapshot();
-    endpoint_snapshot.update_available = Some("0.8.3".into());
     endpoint_snapshot.latest_release_notes_available = true;
     endpoint_snapshot.integration_updates_available = true;
     endpoint_snapshot.release_notes = Some(crate::protocol::ClientShellReleaseNotes {
@@ -1112,9 +1055,8 @@ fn combined_update_and_integration_attention_preserves_both_badges() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    let settings = text.find("● settings").expect("settings badge");
-    let update = text.find("● update ready").expect("update badge");
-    assert!(settings < update);
+    assert!(text.contains("● settings"));
+    assert!(!text.contains("● update ready"));
 
     state.overlay = None;
     state.mode = ClientShellMode::Navigate;
@@ -1124,7 +1066,7 @@ fn combined_update_and_integration_attention_preserves_both_badges() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(navigate_text.contains("update ready"));
+    assert!(!navigate_text.contains("update ready"));
 }
 
 #[test]

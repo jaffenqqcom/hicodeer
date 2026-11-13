@@ -534,7 +534,7 @@ pub(crate) fn print_outdated_update_notice() -> bool {
         .map(|integration| integration.target)
         .collect::<Vec<_>>();
     eprintln!(
-        "installed herdr integrations need updating; {}.",
+        "installed HiCodeer integrations need updating; {}.",
         integration_update_instructions(&targets).replace('`', "")
     );
     true
@@ -698,7 +698,7 @@ pub(crate) fn integration_status_at(
         state = super::IntegrationStatusKind::Outdated;
     }
 
-    // Grok only invokes the hook when the herdr-owned `hooks/herdr.json`
+    // Grok only invokes the hook when the hicodeer-owned `hooks/herdr.json`
     // registers it, so a current hook script with a missing or broken config
     // is a nonfunctional install: report it as outdated so `herdr integration
     // status` flags it and a reinstall rewrites both files.
@@ -735,7 +735,7 @@ pub(crate) fn integration_status_at(
 /// receive an unknown variant. They are installable and reportable as CLI-only
 /// targets until the agent registry replaces the enum-keyed registry.
 ///
-/// The tracked file is the one carrying the `HERDR_INTEGRATION_VERSION` marker:
+/// The tracked file is the one carrying the `HICODEER_INTEGRATION_VERSION` marker:
 /// for plugin packages that is the entry module, since neither manifest format
 /// accepts comments.
 fn experimental_integration_specs() -> Vec<(&'static str, io::Result<PathBuf>, u32)> {

@@ -6,9 +6,9 @@
 
 use std::io;
 
-pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
-pub(crate) const HERDR_ENV_VALUE: &str = "1";
-const NESTED_HERDR_MESSAGES: [&str; 6] = [
+pub(crate) const HICODEER_ENV_VAR: &str = "HICODEER_ENV";
+pub(crate) const HICODEER_ENV_VALUE: &str = "1";
+const NESTED_HICODEER_MESSAGES: [&str; 6] = [
     "inception detected. we need to go deeper... said no one ever.",
     "recursion is a pathway to many abilities some consider to be... unnatural.",
     "you were so preoccupied with whether you could, you didn't stop to think if you should. — dr. malcolm",
@@ -22,7 +22,6 @@ mod agent_view_eval;
 mod api;
 mod app;
 mod build_info;
-mod checksum;
 mod cli;
 mod client;
 mod config;
@@ -69,7 +68,7 @@ mod terminal_notify;
 mod terminal_theme;
 mod thread_spawn;
 mod ui;
-mod update;
+mod version;
 mod workspace;
 mod worktree;
 
@@ -84,7 +83,7 @@ pub fn api_socket_path() -> std::path::PathBuf {
 }
 
 const DEFAULT_CONFIG: &str = r##"# HiCodeer agent configuration
-# Place this file at ~/.config/herdr/config.toml
+# Place this file at ~/.config/hicodeer/config.toml
 
 # Show first-run notification setup on startup.
 # Missing also shows onboarding; set false after you've chosen.
@@ -140,16 +139,10 @@ const DEFAULT_CONFIG: &str = r##"# HiCodeer agent configuration
 # kitty_graphics = true
 
 [update]
-# Update channel used by background version checks and `hicodeerd update`.
-# Stable builds default to "stable". Windows preview builds default to "preview"
-# so existing preview installs stay there until explicitly switched.
-# channel = "stable"
-
-# Check herdr.dev for new HiCodeer versions in the background.
-# version_check = true
-
-# Check herdr.dev for remote agent-detection manifest updates in the background.
-# manifest_check = true
+# Check for remote agent-detection manifest updates in the background.
+# Off by default because there is no built-in catalog endpoint; set
+# HICODEER_AGENT_DETECTION_MANIFEST_CATALOG_URL and turn this on to use one.
+# manifest_check = false
 
 [keys]
 # Prefix key to enter prefix mode (default: "ctrl+b")
@@ -251,7 +244,7 @@ const DEFAULT_CONFIG: &str = r##"# HiCodeer agent configuration
 # headless_rows = 40
 
 # [worktrees]
-# directory = "~/.herdr/worktrees"
+# directory = "~/.hicodeer/worktrees"
 
 [ui]
 # Sidebar width (auto-scaled based on workspace names, this sets the default)
@@ -330,7 +323,7 @@ const DEFAULT_CONFIG: &str = r##"# HiCodeer agent configuration
 
 # Who draws the pane right-click menu. "host" leaves the gesture to an outer
 # application that renders the menu from the `pane.context_menu` API.
-# context_menu_owner = "herdr"
+# context_menu_owner = "hicodeer"
 
 # Keep split panes visually separated instead of sharing divider borders.
 # pane_gaps = true
@@ -395,13 +388,13 @@ const DEFAULT_CONFIG: &str = r##"# HiCodeer agent configuration
 # Background notification popup delivery
 [ui.toast]
 # off = disable pop-up notifications
-# herdr = show in-app toasts
+# hicodeer = show in-app toasts
 # terminal = ask the outer terminal to show a desktop notification
 # system = ask the OS notification service directly
 # delivery = "off"
 # delay_seconds = 1
 
-[ui.toast.herdr]
+[ui.toast.hicodeer]
 # position = "bottom-right"
 
 [ui.toast.clipboard]
@@ -477,11 +470,11 @@ pane_history = false
 const SKILL: &str = include_str!("../skills/herdr/SKILL.md");
 
 fn should_block_nested(config: &config::Config) -> bool {
-    should_block_nested_for_env(config, std::env::var(HERDR_ENV_VAR).ok().as_deref())
+    should_block_nested_for_env(config, std::env::var(HICODEER_ENV_VAR).ok().as_deref())
 }
 
 fn should_block_nested_for_env(config: &config::Config, herdr_env: Option<&str>) -> bool {
-    !config.experimental.allow_nested && herdr_env == Some(HERDR_ENV_VALUE)
+    !config.experimental.allow_nested && herdr_env == Some(HICODEER_ENV_VALUE)
 }
 
 fn random_nested_message() -> &'static str {
@@ -491,8 +484,8 @@ fn random_nested_message() -> &'static str {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.subsec_nanos() as usize)
         .unwrap_or(0);
-    let index = (nanos ^ (std::process::id() as usize)) % NESTED_HERDR_MESSAGES.len();
-    NESTED_HERDR_MESSAGES[index]
+    let index = (nanos ^ (std::process::id() as usize)) % NESTED_HICODEER_MESSAGES.len();
+    NESTED_HICODEER_MESSAGES[index]
 }
 
 fn exit_if_nested_disabled(config: &config::Config) {
@@ -611,32 +604,6 @@ pub fn run_cli_with_args(raw_args: Vec<String>) -> io::Result<()> {
         return run_client_entry();
     }
 
-    if args.get(1).map(|s| s.as_str()) == Some("update") {
-        let options = match update::parse_self_update_args(&args[2..]) {
-            Ok(options) => options,
-            Err(err) if err.starts_with("usage:") => {
-                eprintln!("{err}");
-                std::process::exit(0);
-            }
-            Err(err) => {
-                eprintln!("{err}");
-                eprintln!("usage: hicodeerd update [--handoff]");
-                std::process::exit(2);
-            }
-        };
-        match update::self_update(options) {
-            Ok(_) => return Ok(()),
-            Err(e) => {
-                if e.starts_with("self-update is disabled") {
-                    eprintln!("{e}");
-                } else {
-                    eprintln!("update failed: {e}");
-                }
-                std::process::exit(1);
-            }
-        }
-    }
-
     if args.iter().any(|a| a == "--help" || a == "-h") {
         platform::begin_cli_output();
         println!("hicodeerd — terminal workspace manager for AI coding agents");
@@ -647,15 +614,12 @@ pub fn run_cli_with_args(raw_args: Vec<String>) -> io::Result<()> {
         println!("       hicodeerd --remote <ssh-target> [--session <name>]");
         println!("       hicodeerd session attach <name>");
         println!("       hicodeerd completion zsh");
-        println!("       hicodeerd update [--handoff]");
-        println!("       hicodeerd channel set <stable|preview>");
         println!("       hicodeerd machine <subcommand> ...");
         println!("       hicodeerd server stop");
         println!("       hicodeerd server reload-config");
         println!("       hicodeerd api <subcommand> ...");
         println!("       hicodeerd completion <shell>");
         println!("       hicodeerd config <subcommand> ...");
-        println!("       hicodeerd channel <subcommand> ...");
         println!("       hicodeerd workspace <subcommand> ...");
         println!("       hicodeerd worktree <subcommand> ...");
         println!("       hicodeerd tab <subcommand> ...");
@@ -672,15 +636,10 @@ pub fn run_cli_with_args(raw_args: Vec<String>) -> io::Result<()> {
                 "hicodeerd status [server|client]",
                 "Show local client and running server status",
             ),
-            ("hicodeerd update", "Download and install the latest version"),
             ("hicodeerd completion zsh", "Generate shell completions for zsh"),
             (
                 "hicodeerd server stop",
                 "Stop the running server via the API socket",
-            ),
-            (
-                "hicodeerd channel set <stable|preview>",
-                "Choose the stable or preview update channel",
             ),
             (
                 "hicodeerd server reload-config",
@@ -689,10 +648,6 @@ pub fn run_cli_with_args(raw_args: Vec<String>) -> io::Result<()> {
             (
                 "hicodeerd config reset-keys",
                 "Back up config.toml and remove custom keybindings",
-            ),
-            (
-                "hicodeerd channel <subcommand>",
-                "Manage the stable or preview update channel",
             ),
             ("hicodeerd machine <subcommand>", "Manage saved SSH machines"),
             (
@@ -741,7 +696,7 @@ pub fn run_cli_with_args(raw_args: Vec<String>) -> io::Result<()> {
         println!("  --remote <target>   Attach through SSH to a remote HiCodeer server");
         println!("  --remote-keybindings <local|server>");
         println!("                      Keybindings for --remote app attach (default: local)");
-        println!("  --handoff           Opt into live handoff for update or remote attach");
+        println!("  --handoff           Opt into live handoff for remote attach");
         println!("  --default-config    Print default configuration and exit");
         println!("  --skill             Print the agent skill file and exit");
         println!("  --version, -V       Print version and exit");
@@ -749,8 +704,7 @@ pub fn run_cli_with_args(raw_args: Vec<String>) -> io::Result<()> {
         println!();
         println!("Config: {}", config::config_path().display());
         println!("Logs:   {}", logging::help_log_paths_summary());
-        println!("Env:    HERDR_CONFIG_PATH overrides config file path");
-        println!("Home:   https://herdr.dev");
+        println!("Env:    HICODEER_AGENT_CONFIG_PATH overrides config file path");
         println!();
         println!("{}", cli::AGENT_HELP_FOOTER);
         return Ok(());
@@ -799,10 +753,8 @@ pub fn run_cli_with_args(raw_args: Vec<String>) -> io::Result<()> {
                 "server",
                 "client",
                 "remote-client-bridge",
-                "update",
                 "status",
                 "config",
-                "channel",
                 "machine",
                 "workspace",
                 "worktree",
@@ -865,14 +817,14 @@ mod tests {
     #[test]
     fn nested_herdr_blocks_when_env_is_set() {
         let config = config::Config::default();
-        assert!(should_block_nested_for_env(&config, Some(HERDR_ENV_VALUE)));
+        assert!(should_block_nested_for_env(&config, Some(HICODEER_ENV_VALUE)));
     }
 
     #[test]
     fn nested_herdr_does_not_block_when_allowed() {
         let config: config::Config =
             toml::from_str("[experimental]\nallow_nested = true\n").unwrap();
-        assert!(!should_block_nested_for_env(&config, Some(HERDR_ENV_VALUE)));
+        assert!(!should_block_nested_for_env(&config, Some(HICODEER_ENV_VALUE)));
     }
 
     #[test]
@@ -884,12 +836,12 @@ mod tests {
     #[test]
     fn random_nested_message_comes_from_known_set() {
         let message = random_nested_message();
-        assert!(NESTED_HERDR_MESSAGES.contains(&message));
+        assert!(NESTED_HICODEER_MESSAGES.contains(&message));
     }
 
     #[test]
     fn nested_message_strings_no_longer_repeat_herdr_prefix() {
-        assert!(NESTED_HERDR_MESSAGES
+        assert!(NESTED_HICODEER_MESSAGES
             .iter()
             .all(|message| !message.starts_with("hicodeer:")));
     }

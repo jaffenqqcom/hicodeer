@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 use super::{agent_label, parse_agent_label, Agent};
 
 pub(crate) const MANIFEST_ENGINE_VERSION: u32 = 3;
-const DEFAULT_CATALOG_URL: &str = "https://herdr.dev/agent-detection/index.toml";
-const CATALOG_URL_ENV: &str = "HERDR_AGENT_DETECTION_MANIFEST_CATALOG_URL";
+/// Catalog endpoint for remote agent-detection manifests. There is no default:
+/// a deployment that wants remote manifests must point this at its own catalog.
+const CATALOG_URL_ENV: &str = "HICODEER_AGENT_DETECTION_MANIFEST_CATALOG_URL";
 const MAX_FETCH_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone)]
@@ -166,7 +167,11 @@ struct CatalogAgent {
 }
 
 pub(crate) fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
-    let result = check_and_update();
+    let Some(url) = catalog_url() else {
+        // No catalog configured for this deployment; nothing to check.
+        return;
+    };
+    let result = check_and_update_from_url(&url);
     let status = match result {
         Ok(output) => {
             let activated = agents_needing_cache_reload(&output);
@@ -233,7 +238,12 @@ pub(crate) struct ManifestUpdateOutput {
 }
 
 pub(crate) fn check_and_update() -> Result<ManifestUpdateOutput, String> {
-    check_and_update_from_url(&catalog_url())
+    let Some(url) = catalog_url() else {
+        return Err(format!(
+            "no agent detection manifest catalog configured; set {CATALOG_URL_ENV}"
+        ));
+    };
+    check_and_update_from_url(&url)
 }
 
 fn check_and_update_from_url(url: &str) -> Result<ManifestUpdateOutput, String> {
@@ -498,12 +508,11 @@ fn state_root() -> PathBuf {
     crate::config::state_dir().join("agent-detection")
 }
 
-fn catalog_url() -> String {
+fn catalog_url() -> Option<String> {
     std::env::var(CATALOG_URL_ENV)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_CATALOG_URL.to_string())
 }
 
 fn fetch_text(url: &str) -> Result<String, String> {
@@ -612,7 +621,7 @@ contains = ["{contains}"]
         let old_config = std::env::var_os("XDG_CONFIG_HOME");
         let old_state = std::env::var_os("XDG_STATE_HOME");
         let dir = std::env::temp_dir().join(format!(
-            "herdr-manifest-update-{name}-{}",
+            "hicodeer-manifest-update-{name}-{}",
             std::process::id()
         ));
         let config_dir = dir.join("config");
@@ -678,7 +687,7 @@ contains = ["{contains}"]
         with_state_dir("auto-update-reloads-cache", || {
             let old_catalog_url = std::env::var_os(CATALOG_URL_ENV);
             let web_dir = std::env::temp_dir()
-                .join(format!("herdr-manifest-update-web-{}", std::process::id()));
+                .join(format!("hicodeer-manifest-update-web-{}", std::process::id()));
             let _ = fs::remove_dir_all(&web_dir);
             fs::create_dir_all(&web_dir).unwrap();
             fs::write(
@@ -748,7 +757,7 @@ path = "codex.toml"
 
             let old_catalog_url = std::env::var_os(CATALOG_URL_ENV);
             let web_dir = std::env::temp_dir().join(format!(
-                "herdr-manifest-update-current-web-{}",
+                "hicodeer-manifest-update-current-web-{}",
                 std::process::id()
             ));
             let _ = fs::remove_dir_all(&web_dir);
@@ -817,7 +826,7 @@ path = "codex.toml"
 
             let old_catalog_url = std::env::var_os(CATALOG_URL_ENV);
             let web_dir = std::env::temp_dir().join(format!(
-                "herdr-manifest-update-partial-web-{}",
+                "hicodeer-manifest-update-partial-web-{}",
                 std::process::id()
             ));
             let _ = fs::remove_dir_all(&web_dir);

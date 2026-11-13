@@ -1,6 +1,6 @@
 ---
 name: hicodeer
-description: "Control HiCodeer, a terminal multiplexer for coding agents. Use only when the user explicitly mentions HiCodeer or asks to use HiCodeer to inspect or control panes, tabs, workspaces, commands, or another agent. Do not use merely because a task could benefit from a background terminal, delegation, or parallel work. Requires HERDR_ENV=1."
+description: "Control HiCodeer, a terminal multiplexer for coding agents. Use only when the user explicitly mentions HiCodeer or asks to use HiCodeer to inspect or control panes, tabs, workspaces, commands, or another agent. Do not use merely because a task could benefit from a background terminal, delegation, or parallel work. Requires HICODEER_ENV=1."
 ---
 
 # HiCodeer
@@ -10,7 +10,7 @@ HiCodeer organizes terminals into workspaces, tabs, and panes, recognizes coding
 Before issuing any control command, verify that this agent is running inside a HiCodeer-managed pane:
 
 ```bash
-test "${HERDR_ENV:-}" = 1
+test "${HICODEER_ENV:-}" = 1
 ```
 
 If the check fails, say that you are not running inside HiCodeer and stop. Do not inspect or control the focused HiCodeer session from outside HiCodeer.
@@ -77,18 +77,18 @@ Closed tab and pane IDs are not reused. A pane moved into another workspace rece
 HiCodeer injects the caller's context into each managed pane:
 
 ```bash
-printf '%s\n' "$HERDR_WORKSPACE_ID" "$HERDR_TAB_ID" "$HERDR_PANE_ID"
+printf '%s\n' "$HICODEER_WORKSPACE_ID" "$HICODEER_TAB_ID" "$HICODEER_PANE_ID"
 ```
 
-Prefer `--current` when a pane command should target the calling pane. An omitted `pane split` target uses the calling pane when `HERDR_PANE_ID` is available, otherwise the focused pane. Other commands may use the UI-focused pane, which can belong to the user or another client.
+Prefer `--current` when a pane command should target the calling pane. An omitted `pane split` target uses the calling pane when `HICODEER_PANE_ID` is available, otherwise the focused pane. Other commands may use the UI-focused pane, which can belong to the user or another client.
 
 Discover live state with:
 
 ```bash
 hicodeerd workspace list
-hicodeerd tab list --workspace "$HERDR_WORKSPACE_ID"
+hicodeerd tab list --workspace "$HICODEER_WORKSPACE_ID"
 hicodeerd pane current --current
-hicodeerd pane list --workspace "$HERDR_WORKSPACE_ID"
+hicodeerd pane list --workspace "$HICODEER_WORKSPACE_ID"
 hicodeerd agent list
 ```
 
@@ -117,7 +117,7 @@ Default to a sibling pane in the current tab and the current working directory. 
 Honor a direction requested by the user. Otherwise inspect the caller pane:
 
 ```bash
-hicodeerd pane layout --pane "$HERDR_PANE_ID"
+hicodeerd pane layout --pane "$HICODEER_PANE_ID"
 ```
 
 Split a wide pane to the right and a narrow or tall pane down. Avoid repeated same-direction splits that create unusably narrow columns or short rows. Keep the user's focus in the calling pane and explicitly preserve the caller's working directory:
@@ -128,7 +128,7 @@ hicodeerd pane split --current --direction right --cwd "$PWD" --no-focus
 
 Replace `right` with `down` when appropriate. Read the new pane ID from `.result.pane.pane_id`.
 
-`--current` requires `HERDR_PANE_ID` in the environment, which a process outside a managed pane does not have. That failure exits with status 2 and reports its error on stdout, not stderr. From such a process, pass an explicit pane ID instead; both `--pane <id>` and the positional `<pane_id>` are accepted:
+`--current` requires `HICODEER_PANE_ID` in the environment, which a process outside a managed pane does not have. That failure exits with status 2 and reports its error on stdout, not stderr. From such a process, pass an explicit pane ID instead; both `--pane <id>` and the positional `<pane_id>` are accepted:
 
 ```bash
 hicodeerd pane split --pane <id> --direction right --cwd "$PWD" --no-focus

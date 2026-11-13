@@ -8,9 +8,9 @@ const originalPlatform = process.platform;
 const originalArgv = process.argv;
 const originalCreateConnection = net.createConnection;
 const originalEnvironment = {
-  HERDR_ENV: process.env.HERDR_ENV,
-  HERDR_OMP_IDLE_DEBOUNCE_MS: process.env.HERDR_OMP_IDLE_DEBOUNCE_MS,
-  HERDR_PANE_ID: process.env.HERDR_PANE_ID,
+  HICODEER_ENV: process.env.HICODEER_ENV,
+  HICODEER_OMP_IDLE_DEBOUNCE_MS: process.env.HICODEER_OMP_IDLE_DEBOUNCE_MS,
+  HICODEER_PANE_ID: process.env.HICODEER_PANE_ID,
   HICODEER_AGENT_SOCKET_PATH: process.env.HICODEER_AGENT_SOCKET_PATH,
   OMPCODE: process.env.OMPCODE,
 };
@@ -90,9 +90,9 @@ function createExtensionHarness() {
 function configureIntegrationEnvironment(recordingSocketPath: string) {
   // Tests may run inside an OMP shell; nested-session cases opt in explicitly.
   delete process.env.OMPCODE;
-  process.env.HERDR_ENV = "1";
+  process.env.HICODEER_ENV = "1";
   process.env.HICODEER_AGENT_SOCKET_PATH = recordingSocketPath;
-  process.env.HERDR_PANE_ID = "test:p1";
+  process.env.HICODEER_PANE_ID = "test:p1";
 }
 
 function captureConnectionEndpoint() {
@@ -105,7 +105,7 @@ function captureConnectionEndpoint() {
 }
 
 async function startRecordingServer(name: string): Promise<unknown[]> {
-  const recordingSocketPath = join(tmpdir(), `herdr-${name}-${process.pid}.sock`);
+  const recordingSocketPath = join(tmpdir(), `hicodeer-${name}-${process.pid}.sock`);
   socketPath = recordingSocketPath;
   await rm(recordingSocketPath, { force: true });
 
@@ -134,7 +134,7 @@ async function startRecordingServer(name: string): Promise<unknown[]> {
 
 for (const socketPlugin of socketPlugins) {
   test(`${socketPlugin.name} maps the Windows socket marker path to a named pipe endpoint`, async () => {
-    const markerPath = `herdr-${socketPlugin.name.toLowerCase()}-${process.pid}.sock`;
+    const markerPath = `hicodeer-${socketPlugin.name.toLowerCase()}-${process.pid}.sock`;
     configureIntegrationEnvironment(markerPath);
     Object.defineProperty(process, "platform", { value: "win32" });
     const connectedEndpoint = captureConnectionEndpoint();
@@ -154,8 +154,8 @@ for (const socketPlugin of socketPlugins) {
 }
 
 test("OpenCode stays disabled without the Herdr socket environment", async () => {
-  process.env.HERDR_ENV = "1";
-  process.env.HERDR_PANE_ID = "test:p1";
+  process.env.HICODEER_ENV = "1";
+  process.env.HICODEER_PANE_ID = "test:p1";
   delete process.env.HICODEER_AGENT_SOCKET_PATH;
 
   const { HerdrAgentStatePlugin } = await importFresh("./opencode/hicodeer-agent-state.js");
@@ -165,7 +165,7 @@ test("OpenCode stays disabled without the Herdr socket environment", async () =>
 
 for (const integration of integrations) {
   test(`${integration.name} maps the Windows socket marker path to a named pipe endpoint`, async () => {
-    const markerPath = `herdr-${integration.name.toLowerCase().replaceAll(" ", "-")}-${process.pid}.sock`;
+    const markerPath = `hicodeer-${integration.name.toLowerCase().replaceAll(" ", "-")}-${process.pid}.sock`;
     configureIntegrationEnvironment(markerPath);
     Object.defineProperty(process, "platform", { value: "win32" });
     const connectedEndpoint = captureConnectionEndpoint();
@@ -406,7 +406,7 @@ test("Pi reports the session replacement source", async () => {
 });
 
 test("Pi waits for a replacement session report before publishing state", async () => {
-  const recordingSocketPath = join(tmpdir(), `herdr-pi-session-order-${process.pid}.sock`);
+  const recordingSocketPath = join(tmpdir(), `hicodeer-pi-session-order-${process.pid}.sock`);
   socketPath = recordingSocketPath;
   await rm(recordingSocketPath, { force: true });
 
@@ -482,7 +482,7 @@ test("Pi waits for a replacement session report before publishing state", async 
 });
 
 async function startDroppedFirstResponseServer(name: string) {
-  const recordingSocketPath = join(tmpdir(), `herdr-${name}-${process.pid}.sock`);
+  const recordingSocketPath = join(tmpdir(), `hicodeer-${name}-${process.pid}.sock`);
   socketPath = recordingSocketPath;
   await rm(recordingSocketPath, { force: true });
 
@@ -525,7 +525,7 @@ async function startDroppedFirstResponseServer(name: string) {
 
 test("Oh My Pi retries working before a queued idle state", async () => {
   const { attemptedRequests } = await startDroppedFirstResponseServer("omp-retry");
-  process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "0";
+  process.env.HICODEER_OMP_IDLE_DEBOUNCE_MS = "0";
   const { handlers, pi } = createExtensionHarness();
 
   const { default: install } = await importFresh("./omp/hicodeer-agent-state.ts");
@@ -555,7 +555,7 @@ test("Oh My Pi retries working before a queued idle state", async () => {
 
 test("Oh My Pi keeps working when a turn ends with a scheduled continuation", async () => {
   const requests = await startRecordingServer("omp-will-continue");
-  process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "0";
+  process.env.HICODEER_OMP_IDLE_DEBOUNCE_MS = "0";
   const { handlers, pi } = createExtensionHarness();
 
   const { default: install } = await importFresh("./omp/hicodeer-agent-state.ts");

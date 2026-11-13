@@ -1,5 +1,5 @@
 use crate::api::schema::{Method, NotificationShowParams, NotificationShowSound, Request};
-use crate::config::ToastHerdrPosition;
+use crate::config::ToastHicodeerPosition;
 
 pub(super) fn run_notification_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
@@ -106,12 +106,12 @@ fn parse_notification_show_args(
     })
 }
 
-fn parse_toast_position(value: &str) -> Result<ToastHerdrPosition, NotificationShowArgError> {
+fn parse_toast_position(value: &str) -> Result<ToastHicodeerPosition, NotificationShowArgError> {
     match value {
-        "top-left" => Ok(ToastHerdrPosition::TopLeft),
-        "top-right" => Ok(ToastHerdrPosition::TopRight),
-        "bottom-left" => Ok(ToastHerdrPosition::BottomLeft),
-        "bottom-right" => Ok(ToastHerdrPosition::BottomRight),
+        "top-left" => Ok(ToastHicodeerPosition::TopLeft),
+        "top-right" => Ok(ToastHicodeerPosition::TopRight),
+        "bottom-left" => Ok(ToastHicodeerPosition::BottomLeft),
+        "bottom-right" => Ok(ToastHicodeerPosition::BottomRight),
         _ => Err(NotificationShowArgError::Message(format!(
             "invalid position: {value} (expected top-left, top-right, bottom-left, or bottom-right)"
         ))),
@@ -164,7 +164,7 @@ mod tests {
             NotificationShowParams {
                 title: "build failed".into(),
                 body: Some("api workspace".into()),
-                position: Some(ToastHerdrPosition::TopRight),
+                position: Some(ToastHicodeerPosition::TopRight),
                 sound: NotificationShowSound::Request,
             }
         );

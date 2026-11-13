@@ -1,7 +1,7 @@
 #!/bin/sh
-# managed by herdr; reinstalling the integration replaces this file.
-# HERDR_INTEGRATION_ID=kimi
-# HERDR_INTEGRATION_VERSION=15
+# managed by HiCodeer; reinstalling the integration replaces this file.
+# HICODEER_INTEGRATION_ID=kimi
+# HICODEER_INTEGRATION_VERSION=15
 
 action="${1:-}"
 case "$action" in
@@ -9,9 +9,9 @@ case "$action" in
   *) exit 0 ;;
 esac
 
-[ "${HERDR_ENV:-}" = "1" ] || exit 0
+[ "${HICODEER_ENV:-}" = "1" ] || exit 0
 [ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || exit 0
-[ -n "${HERDR_PANE_ID:-}" ] || exit 0
+[ -n "${HICODEER_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 python3 -c '
@@ -77,7 +77,7 @@ def describe_prompt(hook_input, blocked=False):
     return None
 
 params = {
-    "pane_id": os.environ["HERDR_PANE_ID"],
+    "pane_id": os.environ["HICODEER_PANE_ID"],
     "source": "hicodeer:kimi",
     "agent": "kimi",
     "seq": seq,

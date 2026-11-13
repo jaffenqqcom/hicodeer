@@ -1,22 +1,22 @@
 // installed by HiCodeer
-// managed by herdr; reinstalling or updating the integration overwrites this file.
+// managed by HiCodeer; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
-// HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=13
+// HICODEER_INTEGRATION_ID=pi
+// HICODEER_INTEGRATION_VERSION=13
 // @ts-nocheck
 
 import net from "node:net";
 import path from "node:path";
 
-const HERDR_ENV = process.env.HERDR_ENV;
+const HICODEER_ENV = process.env.HICODEER_ENV;
 const socketPath = process.env.HICODEER_AGENT_SOCKET_PATH;
 const socketEndpoint =
   process.platform === "win32" && socketPath ? `\\\\.\\pipe\\${socketPath}` : socketPath;
-const paneId = process.env.HERDR_PANE_ID;
+const paneId = process.env.HICODEER_PANE_ID;
 const source = "hicodeer:pi";
 
 function enabled() {
-  return HERDR_ENV === "1" && !!socketPath && !!paneId;
+  return HICODEER_ENV === "1" && !!socketPath && !!paneId;
 }
 
 function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolean> {

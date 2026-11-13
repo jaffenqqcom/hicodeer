@@ -2,6 +2,13 @@ use std::path::{Path, PathBuf};
 
 const PLUGIN_CONFIG_PATH_COMPONENT_MAX_CHARS: usize = 120;
 
+/// Plugin manifest file name.
+pub(crate) const PLUGIN_MANIFEST_FILE_NAME: &str = "hicodeer-plugin.toml";
+
+pub(crate) fn plugin_manifest_path(directory: &Path) -> PathBuf {
+    directory.join(PLUGIN_MANIFEST_FILE_NAME)
+}
+
 pub(crate) fn managed_plugins_dir() -> PathBuf {
     crate::config::config_dir().join("plugins")
 }
@@ -146,7 +153,7 @@ mod tests {
     fn installations_never_reuse_or_move_existing_files() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let base = std::env::temp_dir().join(format!(
-            "herdr-installations-{}-{}",
+            "hicodeer-installations-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

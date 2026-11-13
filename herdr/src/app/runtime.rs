@@ -94,33 +94,6 @@ impl App {
         }
     }
 
-    pub(crate) fn run_auto_update_check(&mut self) {
-        if !background_update_check_enabled(
-            self.policy.background_updates,
-            self.update_version_check_enabled,
-        ) {
-            self.next_auto_update_check = None;
-            return;
-        }
-
-        self.next_auto_update_check = self
-            .state
-            .update_available
-            .is_none()
-            .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
-
-        if self.state.update_available.is_some() {
-            return;
-        }
-
-        let update_tx = self.event_tx.clone();
-        if let Err(err) = crate::thread_spawn::spawn_named("herdr-update-check", move || {
-            crate::update::auto_update(update_tx)
-        }) {
-            tracing::warn!(err = %err, "failed to spawn update check thread");
-        }
-    }
-
     pub(crate) fn run_agent_manifest_update_check(&mut self) {
         if !background_update_check_enabled(
             self.policy.background_updates,
@@ -133,7 +106,7 @@ impl App {
         self.next_agent_manifest_update_check = Some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
 
         let manifest_update_tx = self.event_tx.clone();
-        if let Err(err) = crate::thread_spawn::spawn_named("herdr-manifest-check", move || {
+        if let Err(err) = crate::thread_spawn::spawn_named("hicodeer-manifest-check", move || {
             crate::detect::manifest_update::auto_update(manifest_update_tx)
         }) {
             tracing::warn!(err = %err, "failed to spawn agent manifest check thread");
@@ -163,7 +136,6 @@ impl App {
                 .then(|| self.git_refresh_deadline())
                 .flatten(),
             self.restored_worktree_validation_retry_at,
-            self.next_auto_update_check,
             self.next_agent_manifest_update_check,
             self.agent_metadata_deadline,
             self.pending_agent_resume_deadline,

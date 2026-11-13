@@ -901,7 +901,7 @@ mod tests {
 id = "example.failed-link"
 name = "Failed link"
 version = "0.1.0"
-min_herdr_version = "0.9.3"
+min_hicodeer_version = "0.9.3"
 platforms = ["linux", "macos", "windows"]
 [[actions]]
 id = "open"
@@ -998,14 +998,14 @@ action = "open"
 
     fn write_manifest(root: &std::path::Path) -> std::path::PathBuf {
         std::fs::create_dir_all(root).unwrap();
-        let manifest = root.join("herdr-plugin.toml");
+        let manifest = root.join("hicodeer-plugin.toml");
         std::fs::write(
             &manifest,
             r#"
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 description = "Prepare new worktrees"
 platforms = ["linux", "macos", "windows"]
 
@@ -1040,7 +1040,7 @@ action = "bootstrap"
 
     fn write_manifest_content(root: &std::path::Path, content: &str) -> std::path::PathBuf {
         std::fs::create_dir_all(root).unwrap();
-        let manifest = root.join("herdr-plugin.toml");
+        let manifest = root.join("hicodeer-plugin.toml");
         std::fs::write(&manifest, content).unwrap();
         manifest
     }
@@ -1074,7 +1074,7 @@ action = "bootstrap"
 id = "example.config-dirs"
 name = "Config Dirs"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 "#,
         );
@@ -1109,7 +1109,7 @@ platforms = ["linux", "macos", "windows"]
 id = "example.legacy-config"
 name = "Legacy Config"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 "#,
         );
@@ -1149,7 +1149,7 @@ platforms = ["linux", "macos", "windows"]
         assert_eq!(plugin.version, "0.1.0");
         assert_eq!(
             plugin.manifest_path,
-            canonical_path_string(&root.join("herdr-plugin.toml"))
+            canonical_path_string(&root.join("hicodeer-plugin.toml"))
         );
         assert_eq!(
             plugin.plugin_root,
@@ -1217,7 +1217,7 @@ platforms = ["linux", "macos", "windows"]
 id = "example.whitespace-argv"
 name = "Whitespace argv"
 version = "0.1.0"
-min_herdr_version = "0.7.0"
+min_hicodeer_version = "0.7.0"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -1245,7 +1245,7 @@ command = ["awk", "-F", "\t", " {print $1} "]
 id = "example.empty-command-{name}"
 name = "Empty command {name}"
 version = "0.1.0"
-min_herdr_version = "0.7.0"
+min_hicodeer_version = "0.7.0"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -1272,7 +1272,7 @@ command = {command}
 id = "example.event-whitespace-order"
 name = "Event whitespace order"
 version = "0.1.0"
-min_herdr_version = "0.7.0"
+min_hicodeer_version = "0.7.0"
 platforms = ["linux", "macos"]
 
 [[events]]
@@ -1333,7 +1333,7 @@ command = ["echo", " a", "first "]
     }
 
     #[test]
-    fn link_rejects_invalid_min_herdr_versions() {
+    fn link_rejects_invalid_min_hicodeer_versions() {
         let cases = [
             (
                 "plugin-missing-min-herdr",
@@ -1343,7 +1343,7 @@ name = "Missing Min HiCodeer"
 version = "0.1.0"
 platforms = ["linux", "macos", "windows"]
 "#,
-                "invalid_plugin_min_herdr_version",
+                "invalid_plugin_min_hicodeer_version",
             ),
             (
                 "plugin-invalid-min-herdr",
@@ -1351,10 +1351,10 @@ platforms = ["linux", "macos", "windows"]
 id = "example.invalid-min-herdr"
 name = "Invalid Min HiCodeer"
 version = "0.1.0"
-min_herdr_version = "soon"
+min_hicodeer_version = "soon"
 platforms = ["linux", "macos", "windows"]
 "#,
-                "invalid_plugin_min_herdr_version",
+                "invalid_plugin_min_hicodeer_version",
             ),
             (
                 "plugin-future-min-herdr",
@@ -1362,7 +1362,7 @@ platforms = ["linux", "macos", "windows"]
 id = "example.future-min-herdr"
 name = "Future Min HiCodeer"
 version = "0.1.0"
-min_herdr_version = "999.0.0"
+min_hicodeer_version = "999.0.0"
 platforms = ["linux", "macos", "windows"]
 "#,
                 "plugin_requires_newer_herdr",
@@ -1373,7 +1373,7 @@ platforms = ["linux", "macos", "windows"]
 id = "example.non-popup-size"
 name = "Non Popup Size"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[panes]]
@@ -1409,7 +1409,7 @@ command = ["echo", "board"]
 id = "example.duplicate"
 name = "Duplicate"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -1438,7 +1438,7 @@ command = ["echo", "b"]
 id = "example.dotted-action"
 name = "Dotted Action"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -1462,7 +1462,7 @@ command = ["echo", "build"]
 id = "example.duplicate-pane"
 name = "Duplicate Pane"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[panes]]
@@ -1491,7 +1491,7 @@ command = ["echo", "b"]
 id = "example.startup-manifest"
 name = "Startup Manifest"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[startup]]
@@ -1660,7 +1660,7 @@ platforms = ["linux", "macos"]
         let where_exe = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
             .join("System32/where.exe");
         std::fs::copy(where_exe, &long_where).unwrap();
-        let where_probe = "herdr-long-path-probe.exe";
+        let where_probe = "hicodeer-long-path-probe.exe";
         std::fs::write(child_cwd.join(where_probe), b"").unwrap();
         assert!(
             root.as_os_str().encode_wide().count()
@@ -1680,7 +1680,7 @@ platforms = ["linux", "macos"]
 id = "example.pane-paths"
 name = "Pane Paths"
 version = "0.1.0"
-min_herdr_version = "0.7.0"
+min_hicodeer_version = "0.7.0"
 platforms = ["windows"]
 
 [[panes]]
@@ -1807,7 +1807,7 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn plugin_launch_survives_executable_replacement() {
-        const CHILD_ROOT: &str = "HERDR_TEST_PLUGIN_REPLACEMENT_ROOT";
+        const CHILD_ROOT: &str = "HICODEER_TEST_PLUGIN_REPLACEMENT_ROOT";
         if let Some(root) = std::env::var_os(CHILD_ROOT) {
             let root = std::path::PathBuf::from(root);
             let executable = std::env::current_exe().unwrap();
@@ -1829,18 +1829,18 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
 id = "example.update"
 name = "Update Probe"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux"]
 
 [[actions]]
 id = "probe"
 title = "Probe executable"
-command = ["sh", "-c", '"$HERDR_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" > action-status']
+command = ["sh", "-c", '"$HICODEER_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" > action-status']
 
 [[panes]]
 id = "probe"
 title = "Probe executable"
-command = ["sh", "-c", '"$HERDR_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" > pane-status']
+command = ["sh", "-c", '"$HICODEER_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" > pane-status']
 "#,
             );
             link_manifest(&mut app, &plugin_root);
@@ -1882,7 +1882,7 @@ command = ["sh", "-c", '"$HERDR_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" 
         }
 
         let root = std::path::PathBuf::from("/var/tmp").join(format!(
-            "herdr-plugin-update-{}-{}",
+            "hicodeer-plugin-update-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1940,13 +1940,13 @@ command = ["sh", "-c", '"$HERDR_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" 
 id = "example.pane"
 name = "Pane Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[panes]]
 id = "board"
 title = "Plugin Board"
-command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \"$HERDR_PLUGIN_ID\" \"$HERDR_PLUGIN_ENTRYPOINT_ID\" \"$HERDR_WORKSPACE_ID\" \"$HERDR_PANE_ID\" \"$HERDR_BIN_PATH\" \"$HERDR_PLUGIN_CONTEXT_JSON\" \"${{HERDR_CELL_WIDTH_PX-unset}}\" \"${{HERDR_CELL_HEIGHT_PX-unset}}\" > {}"]
+command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \"$HICODEER_PLUGIN_ID\" \"$HICODEER_PLUGIN_ENTRYPOINT_ID\" \"$HICODEER_WORKSPACE_ID\" \"$HICODEER_PANE_ID\" \"$HICODEER_BIN_PATH\" \"$HICODEER_PLUGIN_CONTEXT_JSON\" \"${{HICODEER_CELL_WIDTH_PX-unset}}\" \"${{HICODEER_CELL_HEIGHT_PX-unset}}\" > {}"]
 "#,
                 capture.display()
             ),
@@ -1967,17 +1967,17 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \
                 cwd: None,
                 focus: true,
                 env: std::collections::HashMap::from([
-                    ("HERDR_PLUGIN_ID".to_string(), "spoofed-plugin".to_string()),
+                    ("HICODEER_PLUGIN_ID".to_string(), "spoofed-plugin".to_string()),
                     (
-                        "HERDR_PLUGIN_ENTRYPOINT_ID".to_string(),
+                        "HICODEER_PLUGIN_ENTRYPOINT_ID".to_string(),
                         "spoofed-entrypoint".to_string(),
                     ),
                     (
-                        "HERDR_PLUGIN_CONTEXT_JSON".to_string(),
+                        "HICODEER_PLUGIN_CONTEXT_JSON".to_string(),
                         "{\"spoofed\":true}".to_string(),
                     ),
                     (
-                        "HERDR_BIN_PATH".to_string(),
+                        "HICODEER_BIN_PATH".to_string(),
                         "/tmp/spoofed-herdr".to_string(),
                     ),
                 ]),
@@ -2047,13 +2047,13 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \
 id = "example.path-env"
 name = "Path Env"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[panes]]
 id = "board"
 title = "Plugin Board"
-command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PLUGIN_CONFIG_DIR\" \"$HERDR_PLUGIN_STATE_DIR\" > {}"]
+command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HICODEER_PLUGIN_ROOT\" \"$HICODEER_PLUGIN_CONFIG_DIR\" \"$HICODEER_PLUGIN_STATE_DIR\" > {}"]
 "#,
                 capture.display()
             ),
@@ -2075,15 +2075,15 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
                 focus: true,
                 env: std::collections::HashMap::from([
                     (
-                        "HERDR_PLUGIN_ROOT".to_string(),
+                        "HICODEER_PLUGIN_ROOT".to_string(),
                         "/tmp/spoofed-root".to_string(),
                     ),
                     (
-                        "HERDR_PLUGIN_CONFIG_DIR".to_string(),
+                        "HICODEER_PLUGIN_CONFIG_DIR".to_string(),
                         "/tmp/spoofed-config".to_string(),
                     ),
                     (
-                        "HERDR_PLUGIN_STATE_DIR".to_string(),
+                        "HICODEER_PLUGIN_STATE_DIR".to_string(),
                         "/tmp/spoofed-state".to_string(),
                     ),
                 ]),
@@ -2151,7 +2151,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
 id = "example.tab"
 name = "Tab Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -2234,7 +2234,7 @@ command = ["sh", "-c", "sleep 1"]
 id = "example.split"
 name = "Split Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -2313,7 +2313,7 @@ command = ["sh", "-c", "sleep 1"]
 id = "example.overlay"
 name = "Overlay Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -2394,7 +2394,7 @@ command = ["sh", "-c", "sleep 1"]
 id = "example.popup"
 name = "Popup Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -2403,7 +2403,7 @@ title = "Plugin Popup"
 placement = "popup"
 width = "80%"
 height = "40%"
-command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
+command = ["sh", "-c", "printf %s ${{HICODEER_PANE_ID-unset}} > '{}'; sleep 1"]
 "#,
             env_capture.display()
         );
@@ -2812,13 +2812,13 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
 id = "example.runner"
 name = "Runner"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "run"
 title = "Run"
-command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_ACTION_ID\""]
+command = ["sh", "-c", "printf '%s' \"$HICODEER_PLUGIN_ACTION_ID\""]
 "#,
         );
         link_manifest(&mut app, &root);
@@ -2879,13 +2879,13 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_ACTION_ID\""]
 id = "example.action-paths"
 name = "Action Paths"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "run"
 title = "Run"
-command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PLUGIN_CONFIG_DIR\" \"$HERDR_PLUGIN_STATE_DIR\""]
+command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HICODEER_PLUGIN_ROOT\" \"$HICODEER_PLUGIN_CONFIG_DIR\" \"$HICODEER_PLUGIN_STATE_DIR\""]
 "#,
         );
         link_manifest(&mut app, &root);
@@ -2990,11 +2990,11 @@ command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PLUG
 id = "example.startup"
 name = "Startup"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[startup]]
-command = ["sh", "-c", "printf '%s:%s' \"$HERDR_PLUGIN_ID\" \"$HERDR_PLUGIN_EVENT\" > {}"]
+command = ["sh", "-c", "printf '%s:%s' \"$HICODEER_PLUGIN_ID\" \"$HICODEER_PLUGIN_EVENT\" > {}"]
 "#,
                 capture.display()
             ),
@@ -3037,12 +3037,12 @@ command = ["sh", "-c", "printf '%s:%s' \"$HERDR_PLUGIN_ID\" \"$HERDR_PLUGIN_EVEN
 id = "example.event-context"
 name = "Event Context"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[events]]
 on = "worktree.created"
-command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
+command = ["sh", "-c", "printf '%s' \"$HICODEER_PLUGIN_CONTEXT_JSON\" > {}"]
 "#,
                 capture.display()
             ),
@@ -3172,12 +3172,12 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
             key: "repo-key".into(),
             label: "herdr".into(),
             repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-issue".into(),
+            checkout_path: "/repo/hicodeer-issue".into(),
             is_linked_worktree: true,
         });
         let workspace = app.workspace_info(0);
         let worktree = crate::api::schema::WorktreeInfo {
-            path: "/repo/herdr-issue".into(),
+            path: "/repo/hicodeer-issue".into(),
             branch: Some("worktree/issue".into()),
             is_bare: false,
             is_detached: false,
@@ -3190,7 +3190,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
             key: "repo-key".into(),
             label: "herdr".into(),
             repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-other".into(),
+            checkout_path: "/repo/hicodeer-other".into(),
             is_linked_worktree: true,
         });
         let changed_context = app.plugin_context_for_event(
@@ -3210,7 +3210,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
                 .worktree
                 .as_ref()
                 .map(|worktree| worktree.checkout_path.as_str()),
-            Some("/repo/herdr-issue")
+            Some("/repo/hicodeer-issue")
         );
 
         app.state.workspaces.clear();
@@ -3235,7 +3235,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
                 .worktree
                 .as_ref()
                 .map(|worktree| worktree.checkout_path.as_str()),
-            Some("/repo/herdr-issue")
+            Some("/repo/hicodeer-issue")
         );
     }
 
@@ -3255,13 +3255,13 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
 id = "example.links"
 name = "Links"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "open"
 title = "Open link"
-command = ["sh", "-c", "printf '%s|%s' \"$HERDR_PLUGIN_LINK_HANDLER_ID\" \"$HERDR_PLUGIN_CLICKED_URL\""]
+command = ["sh", "-c", "printf '%s|%s' \"$HICODEER_PLUGIN_LINK_HANDLER_ID\" \"$HICODEER_PLUGIN_CLICKED_URL\""]
 
 [[link_handlers]]
 id = "github-issue"
@@ -3323,7 +3323,7 @@ action = "open"
 id = "example.link-order"
 name = "Link Order"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -3370,7 +3370,7 @@ action = "generic"
 id = "example.bad-links"
 name = "Bad Links"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -3413,7 +3413,7 @@ action = "open"
 id = "example.bad-link-action"
 name = "Bad Link Action"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -3456,7 +3456,7 @@ action = "missing"
             key: "repo-key".into(),
             label: "herdr".into(),
             repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-issue".into(),
+            checkout_path: "/repo/hicodeer-issue".into(),
             is_linked_worktree: true,
         });
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
@@ -3482,12 +3482,12 @@ action = "missing"
         // write a manifest with a "show" action in pane context
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
-            root.join("herdr-plugin.toml"),
+            root.join("hicodeer-plugin.toml"),
             r#"
 id = "example.context"
 name = "Context"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 
 [[actions]]
 id = "show"
@@ -3535,7 +3535,7 @@ command = ["show-ctx"]
         assert_eq!(worktree.repo_key, "repo-key");
         assert_eq!(worktree.repo_name, "herdr");
         assert_eq!(worktree.repo_root, "/repo/herdr");
-        assert_eq!(worktree.checkout_path, "/repo/herdr-issue");
+        assert_eq!(worktree.checkout_path, "/repo/hicodeer-issue");
         assert!(worktree.is_linked_worktree);
 
         let _ = std::fs::remove_dir_all(root);
@@ -3577,14 +3577,14 @@ command = ["show-ctx"]
 
     fn write_manifest_with_bad_event(root: &std::path::Path) -> std::path::PathBuf {
         std::fs::create_dir_all(root).unwrap();
-        let manifest = root.join("herdr-plugin.toml");
+        let manifest = root.join("hicodeer-plugin.toml");
         std::fs::write(
             &manifest,
             r#"
 id = "example.bad-event"
 name = "Bad Event Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 
 [[events]]
 on = "worktree.craeted"
@@ -3866,12 +3866,12 @@ command = ["sh", "-c", "echo ok"]
         let root = unique_temp_path("plugin-platforms");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
-            root.join("herdr-plugin.toml"),
+            root.join("hicodeer-plugin.toml"),
             r#"
 id = "example.platforms"
 name = "Platforms"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -3948,13 +3948,13 @@ command = ["run.bat"]
         };
 
         std::fs::write(
-            root.join("herdr-plugin.toml"),
+            root.join("hicodeer-plugin.toml"),
             format!(
                 r#"
 id = "example.reject"
 name = "Reject"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 {excluded_platforms}
 
 [[actions]]
@@ -4013,13 +4013,13 @@ command = ["act"]
         };
 
         std::fs::write(
-            root.join("herdr-plugin.toml"),
+            root.join("hicodeer-plugin.toml"),
             format!(
                 r#"
 id = "example.override"
 name = "Override"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -4065,12 +4065,12 @@ command = ["act"]
         let root = unique_temp_path("plugin-platform-undeclared");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
-            root.join("herdr-plugin.toml"),
+            root.join("hicodeer-plugin.toml"),
             r#"
 id = "example.nodecl"
 name = "No Decl"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 
 [[actions]]
 id = "act"
@@ -4123,12 +4123,12 @@ command = ["act"]
         let root = unique_temp_path("plugin-bad-platform");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
-            root.join("herdr-plugin.toml"),
+            root.join("hicodeer-plugin.toml"),
             r#"
 id = "example.badplatform"
 name = "Bad Platform"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "beos"]
 
 [[actions]]
@@ -4155,12 +4155,12 @@ command = ["act"]
         let root = unique_temp_path("plugin-platform-rt");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
-            root.join("herdr-plugin.toml"),
+            root.join("hicodeer-plugin.toml"),
             r#"
 id = "example.platform-rt"
 name = "Platform RT"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_hicodeer_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]

@@ -334,15 +334,6 @@ impl App {
             None
         };
 
-        let update_ready = if let AppEvent::UpdateReady {
-            version,
-            install_command,
-        } = &ev
-        {
-            Some((version.clone(), install_command.clone()))
-        } else {
-            None
-        };
         let manifest_update_agents =
             if let AppEvent::AgentDetectionManifestsUpdated { activated, .. } = &ev {
                 Some(activated.clone())
@@ -352,9 +343,6 @@ impl App {
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
         let previous_toast = self.state.toast.clone();
         let mut pane_updates = self.state.handle_app_event(ev);
-        if update_ready.is_some() {
-            self.state.latest_release_notes = crate::release_notes::load_latest();
-        }
         if checkpointed_pane_exit {
             self.finish_checkpointed_pane_exit();
         }
@@ -439,7 +427,7 @@ impl App {
     ) {
         if !matches!(
             self.state.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
+            crate::config::ToastDelivery::Hicodeer
         ) || self.state.toast == *previous_toast
         {
             return;
@@ -1296,7 +1284,7 @@ impl App {
 
         let reason = match self.state.toast_config.delivery {
             crate::config::ToastDelivery::Off => NotificationShowReason::Disabled,
-            crate::config::ToastDelivery::Herdr => {
+            crate::config::ToastDelivery::Hicodeer => {
                 if self.state.toast.is_some() {
                     NotificationShowReason::Busy
                 } else if self.api_notification_rate_limited(Instant::now()) {
@@ -1855,7 +1843,7 @@ mod tests {
         let root = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
-            "herdr-toast-context-{}-{}",
+            "hicodeer-toast-context-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1876,7 +1864,7 @@ mod tests {
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Hicodeer;
         app.state.toast_config.delay_seconds = 0;
 
         let (events, _) = tokio::sync::mpsc::channel(4);
@@ -1948,7 +1936,7 @@ mod tests {
         let root = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
-            "herdr-delayed-toast-context-{}-{}",
+            "hicodeer-delayed-toast-context-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1969,7 +1957,7 @@ mod tests {
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Hicodeer;
         app.state.toast_config.delay_seconds = 1;
 
         let (events, _) = tokio::sync::mpsc::channel(4);

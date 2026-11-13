@@ -27,7 +27,7 @@ pub struct PaneContextMenuSpec {
 pub struct PaneContextMenuParams {
     /// Public tab id the right-click happened in. When omitted the server uses
     /// the tab currently in front, which is what an outer application that
-    /// does not track herdr's tab ids needs.
+    /// does not track HiCodeer's tab ids needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
     /// Row/column in terminal cells, relative to the pane surface. `None`

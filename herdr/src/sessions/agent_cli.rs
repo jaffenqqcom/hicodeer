@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn session_id_in_store_refuses_a_database_outside_the_store() {
         let store = std::env::temp_dir().join(format!(
-            "herdr-agent-cli-{}-{}",
+            "hicodeer-agent-cli-{}-{}",
             std::process::id(),
             line!()
         ));

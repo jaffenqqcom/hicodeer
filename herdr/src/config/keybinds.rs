@@ -11,6 +11,10 @@ use crate::popup_size::PopupSize;
 pub type KeyCombo = (KeyCode, KeyModifiers);
 
 /// Built-in prefix used when `keys.prefix` is unset or invalid.
+///
+/// The embedded Agent panel has no prefix key, so only the standalone builds
+/// keep this fallback.
+#[cfg(not(target_env = "ohos"))]
 pub(crate) const DEFAULT_PREFIX: KeyCombo = (KeyCode::Char('b'), KeyModifiers::CONTROL);
 
 #[derive(Debug, Clone)]
@@ -2060,6 +2064,7 @@ prefix = ["ctrl+a", "wat"]
             .any(|diag| diag.contains("keys.prefix") && diag.contains("ignoring prefix")));
     }
 
+    #[cfg(not(target_env = "ohos"))]
     #[test]
     fn empty_prefix_list_is_rejected_and_keeps_the_fallback() {
         let config: Config = toml::from_str(

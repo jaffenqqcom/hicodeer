@@ -427,7 +427,7 @@ impl ClientShellState {
                 Method::PaneInputSet(PaneInputSetParams {
                     pane_id,
                     right_click: if right_click_passthrough {
-                        PaneRightClickTarget::Herdr
+                        PaneRightClickTarget::Hicodeer
                     } else {
                         PaneRightClickTarget::Pane
                     },

@@ -3,11 +3,11 @@
 pub const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn channel() -> &'static str {
-    non_empty(option_env!("HERDR_BUILD_CHANNEL")).unwrap_or("stable")
+    non_empty(option_env!("HICODEER_BUILD_CHANNEL")).unwrap_or("stable")
 }
 
 pub fn build_id() -> Option<&'static str> {
-    non_empty(option_env!("HERDR_BUILD_ID"))
+    non_empty(option_env!("HICODEER_BUILD_ID"))
 }
 
 pub fn version() -> String {
@@ -18,10 +18,6 @@ pub fn version() -> String {
             None => format!("{BASE_VERSION}-{channel}"),
         },
     }
-}
-
-pub fn is_preview() -> bool {
-    channel() == "preview"
 }
 
 fn non_empty(value: Option<&'static str>) -> Option<&'static str> {

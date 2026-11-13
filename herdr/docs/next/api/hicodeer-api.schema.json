@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "HiCodeer API",
   "schema_version": 1,
-  "protocol": 22,
+  "protocol": 24,
   "schemas": {
     "request": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -585,7 +585,23 @@
               "const": "agent.list"
             },
             "params": {
-              "$ref": "#/schemas/request/$defs/EmptyParams"
+              "$ref": "#/schemas/request/$defs/AgentListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "agent.reply"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentTarget"
             }
           },
           "required": [
@@ -1773,7 +1789,7 @@
             "position": {
               "anyOf": [
                 {
-                  "$ref": "#/schemas/request/$defs/ToastHerdrPosition"
+                  "$ref": "#/schemas/request/$defs/ToastHicodeerPosition"
                 },
                 {
                   "type": "null"
@@ -1788,7 +1804,7 @@
             "title"
           ]
         },
-        "ToastHerdrPosition": {
+        "ToastHicodeerPosition": {
           "type": "string",
           "enum": [
             "top-left",
@@ -2319,6 +2335,27 @@
             "insert_index"
           ]
         },
+        "AgentListParams": {
+          "description": "Parameters for listing agents.\n\nA status poll runs every few seconds, so it turns `include_reply` off: the\nreply comes from parsing the agent's transcript, while a poll only needs the\nstate.",
+          "type": "object",
+          "properties": {
+            "include_reply": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "AgentTarget": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ]
+        },
         "AgentSessionDeleteParams": {
           "description": "A session to remove.\n\nThe agent travels with the path because the store that owns the path is also\nthe one that knows how to remove an entry from it; the daemon routes the\nrequest to that store instead of deciding anything from the path itself.",
           "type": "object",
@@ -2333,17 +2370,6 @@
           "required": [
             "agent",
             "source_path"
-          ]
-        },
-        "AgentTarget": {
-          "type": "object",
-          "properties": {
-            "target": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "target"
           ]
         },
         "AgentReadParams": {
@@ -2865,7 +2891,7 @@
             },
             "right_click": {
               "$ref": "#/schemas/request/$defs/PaneRightClickTarget",
-              "default": "herdr"
+              "default": "hicodeer"
             },
             "env": {
               "type": "object",
@@ -2888,7 +2914,7 @@
         "PaneRightClickTarget": {
           "type": "string",
           "enum": [
-            "herdr",
+            "hicodeer",
             "pane"
           ]
         },
@@ -3076,7 +3102,7 @@
           "type": "object",
           "properties": {
             "tab_id": {
-              "description": "Public tab id the right-click happened in. When omitted the server uses\nthe tab currently in front, which is what an outer application that\ndoes not track herdr's tab ids needs.",
+              "description": "Public tab id the right-click happened in. When omitted the server uses\nthe tab currently in front, which is what an outer application that\ndoes not track HiCodeer's tab ids needs.",
               "type": [
                 "string",
                 "null"
@@ -3709,7 +3735,7 @@
               ]
             },
             "resume_argv": {
-              "description": "Command that resumes this agent's session after a Herdr restart. The\nfirst element must be a plain command name.",
+              "description": "Command that resumes this agent's session after a HiCodeer restart. The\nfirst element must be a plain command name.",
               "type": [
                 "array",
                 "null"
@@ -3774,7 +3800,7 @@
               ]
             },
             "resume_argv": {
-              "description": "Command that resumes this agent's session after a Herdr restart. The\nfirst element must be a plain command name.",
+              "description": "Command that resumes this agent's session after a HiCodeer restart. The\nfirst element must be a plain command name.",
               "type": [
                 "array",
                 "null"
@@ -4798,7 +4824,11 @@
             "atomcode",
             "deveco",
             "codewhale",
-            "zcode"
+            "zcode",
+            "gemini",
+            "minimax",
+            "openclaw",
+            "opendesk"
           ]
         },
         "IntegrationUninstallParams": {
@@ -5591,6 +5621,30 @@
               "required": [
                 "type",
                 "agent"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "agent_reply"
+                },
+                "reply": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "blocked_seq": {
+                  "description": "Which wait this reply describes; zero when the pane is not waiting.",
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "type"
               ]
             },
             {
@@ -7011,6 +7065,13 @@
             },
             "value": {
               "type": "string"
+            },
+            "path": {
+              "description": "Absolute path to the agent's transcript, when the hook reported one.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -7223,6 +7284,12 @@
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
             },
+            "blocked_seq": {
+              "description": "Which wait this pane is in. A new value means a different question, so\na reader can ignore a repeat of the one it already announced.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
             "screen_detection_skipped": {
               "type": "boolean"
             },
@@ -7284,6 +7351,13 @@
               ],
               "format": "uint64",
               "minimum": 0
+            },
+            "last_reply": {
+              "description": "The agent's final reply for that completed turn, recovered by the daemon\nfrom the agent's own transcript. `agent.list` carries it so the panel\nnever has to read session files it has no permission to open.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "cwd": {
               "type": [
@@ -8836,7 +8910,11 @@
             "atomcode",
             "deveco",
             "codewhale",
-            "zcode"
+            "zcode",
+            "gemini",
+            "minimax",
+            "openclaw",
+            "opendesk"
           ]
         },
         "IntegrationState": {
@@ -8948,7 +9026,7 @@
             "version": {
               "type": "string"
             },
-            "min_herdr_version": {
+            "min_hicodeer_version": {
               "type": "string",
               "default": ""
             },
@@ -10719,6 +10797,13 @@
             },
             "value": {
               "type": "string"
+            },
+            "path": {
+              "description": "Absolute path to the agent's transcript, when the hook reported one.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [

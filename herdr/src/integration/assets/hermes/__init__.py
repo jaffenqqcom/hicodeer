@@ -1,7 +1,7 @@
-"""Hermes plugin installed by Herdr to report resumable session identity."""
+"""Hermes plugin installed by HiCodeer to report resumable session identity."""
 
-# HERDR_INTEGRATION_ID=hermes
-# HERDR_INTEGRATION_VERSION=9
+# HICODEER_INTEGRATION_ID=hermes
+# HICODEER_INTEGRATION_VERSION=9
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def _reads_as_gateway_process() -> bool:
     """Looks for the gateway subcommand in this process's own command line.
 
     The gateway is a long-lived service and inherits the environment of
-    whatever launched it, so its `HERDR_PANE_ID` names an unrelated pane.
+    whatever launched it, so its `HICODEER_PANE_ID` names an unrelated pane.
     Hooks fire inside the gateway for every turn, which would report another
     pane's state and session. Hermes binds those from its status line instead.
     """
@@ -45,17 +45,17 @@ def _gateway_owns_the_turn() -> bool:
 
 
 def _pane_id() -> str | None:
-    if os.environ.get("HERDR_ENV") != "1":
+    if os.environ.get("HICODEER_ENV") != "1":
         return None
     if _gateway_owns_the_turn():
         return None
-    return os.environ.get("HERDR_PANE_ID", "").strip() or None
+    return os.environ.get("HICODEER_PANE_ID", "").strip() or None
 
 
 def _request(method: str, params: dict) -> None:
     """Sends one request to the agent socket the pane was started with.
 
-    The herdr CLI resolves its own socket path, which does not exist inside a
+    The HiCodeer CLI resolves its own socket path, which does not exist inside a
     pane sandbox, so every CLI call here failed silently. The socket path the
     pane inherits is the one the daemon listens on, so requests go there
     directly.

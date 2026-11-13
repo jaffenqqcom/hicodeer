@@ -69,9 +69,9 @@ impl SavedSshApiBridge {
         };
         let command = super::attach::cached_remote_api_command(&metadata, session);
         let path = crate::platform::remote_bridge_endpoint_path(
-            &format!("herdr-api-ssh-{}-{profile_id}.sock", std::process::id()),
+            &format!("hicodeer-api-ssh-{}-{profile_id}.sock", std::process::id()),
             &format!(
-                "herdr-api-{}-{}.sock",
+                "hicodeer-api-{}-{}.sock",
                 std::process::id(),
                 &profile_id[..16]
             ),
@@ -147,8 +147,8 @@ pub(crate) fn saved_ssh_failure_needs_attention(error: &io::Error) -> bool {
 
 fn saved_bridge_path(profile_id: &str) -> PathBuf {
     let pid = std::process::id();
-    let readable = format!("herdr-ssh-{pid}-{profile_id}.sock");
-    let short = format!("herdr-s-{pid}-{}.sock", &profile_id[..16]);
+    let readable = format!("hicodeer-ssh-{pid}-{profile_id}.sock");
+    let short = format!("hicodeer-s-{pid}-{}.sock", &profile_id[..16]);
     crate::platform::remote_bridge_endpoint_path(&readable, &short)
 }
 

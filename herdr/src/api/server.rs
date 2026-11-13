@@ -119,7 +119,7 @@ fn start_server_inner(
 
     let running = Arc::new(AtomicBool::new(true));
     let listener_running = Arc::clone(&running);
-    let spawned = crate::thread_spawn::spawn_named("herdr-api-accept", move || {
+    let spawned = crate::thread_spawn::spawn_named("hicodeer-api-accept", move || {
         run_accept_loop(
             listener.incoming(),
             &listener_running,
@@ -170,7 +170,7 @@ fn start_server_inner(
 /// Starts one connection's worker. When the OS refuses a thread, only this
 /// connection is dropped; the accept loop keeps serving.
 fn spawn_connection_handler(work: impl FnOnce() + Send + 'static) {
-    if let Err(err) = crate::thread_spawn::spawn_named("herdr-api-conn", work) {
+    if let Err(err) = crate::thread_spawn::spawn_named("hicodeer-api-conn", work) {
         warn!(err = %err, "failed to spawn api connection thread; dropping connection");
     }
 }

@@ -5,10 +5,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use portable_pty::CommandBuilder;
 
-pub(crate) const HERDR_PANE_ID_ENV_VAR: &str = "HERDR_PANE_ID";
-pub(crate) const HERDR_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
-pub(crate) const HERDR_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
-
+pub(crate) const HICODEER_PANE_ID_ENV_VAR: &str = "HICODEER_PANE_ID";
+pub(crate) const HICODEER_TAB_ID_ENV_VAR: &str = "HICODEER_TAB_ID";
+pub(crate) const HICODEER_WORKSPACE_ID_ENV_VAR: &str = "HICODEER_WORKSPACE_ID";
 pub(crate) const PI_CODING_AGENT_DIR_ENV_VAR: &str = "PI_CODING_AGENT_DIR";
 pub(crate) const OMP_CONFIG_DIR_ENV_VAR: &str = "PI_CONFIG_DIR";
 pub(crate) const CLAUDE_CONFIG_DIR_ENV_VAR: &str = "CLAUDE_CONFIG_DIR";
@@ -47,7 +46,7 @@ pub(crate) const XDG_CONFIG_HOME_ENV_VAR: &str = "XDG_CONFIG_HOME";
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
     if let Ok(executable) = crate::platform::launch_executable() {
-        cmd.env("HERDR_BIN_PATH", executable);
+        cmd.env("HICODEER_BIN_PATH", executable);
     }
 }
 
@@ -313,7 +312,7 @@ pub(crate) fn antigravity_cli_dir() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn grok_dir() -> io::Result<PathBuf> {
-    // GROK_CONFIG_DIR is a herdr-level override only (primarily a test
+    // GROK_CONFIG_DIR is a hicodeer-level override only (primarily a test
     // seam); the grok CLI does not honor it, so it stays first and explicit.
     if let Some(value) = std::env::var_os(GROK_CONFIG_DIR_ENV_VAR).filter(|value| !value.is_empty())
     {
@@ -405,7 +404,7 @@ mod tests {
     fn opencode_state_dir_honors_xdg_state_home() {
         let _lock = integration_env_lock();
         let original = std::env::var_os("XDG_STATE_HOME");
-        let xdg = std::env::temp_dir().join("herdr-xdg-state");
+        let xdg = std::env::temp_dir().join("hicodeer-xdg-state");
         std::env::set_var("XDG_STATE_HOME", &xdg);
         assert_eq!(opencode_state_dir().unwrap(), xdg.join("opencode"));
         match original {

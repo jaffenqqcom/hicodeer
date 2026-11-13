@@ -864,7 +864,7 @@ pub(crate) fn handle_client_handshake(
     // Spawn a writer thread that forwards messages from the channels to the stream.
     let write_stream = stream.try_clone()?;
     let writer_event_tx = server_event_tx.clone();
-    crate::thread_spawn::spawn_named("herdr-client-writer", move || {
+    crate::thread_spawn::spawn_named("hicodeer-client-writer", move || {
         client_writer_loop(write_stream, client_id, writer_queue, writer_event_tx);
     })?;
 
@@ -1447,7 +1447,7 @@ mod tests {
         }
         #[cfg(windows)]
         {
-            std::env::temp_dir().join(format!("herdr-{name}-{filename}"))
+            std::env::temp_dir().join(format!("hicodeer-{name}-{filename}"))
         }
     }
 

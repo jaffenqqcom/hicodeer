@@ -204,7 +204,7 @@ pub(super) fn caller_pane_id() -> Option<String> {
     if is_remote() {
         return None;
     }
-    std::env::var("HERDR_PANE_ID")
+    std::env::var("HICODEER_PANE_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
 }

@@ -58,9 +58,7 @@ pub(crate) fn render_client_overlay(
     match o {
         ClientShellOverlay::Onboarding => render_onboarding_overlay(b, k, p),
         ClientShellOverlay::ProductAnnouncement(v) => render_product_announcement_overlay(b, v, p),
-        ClientShellOverlay::ReleaseNotes(v) => {
-            render_release_notes_overlay(b, v, &s.update_install_command, p)
-        }
+        ClientShellOverlay::ReleaseNotes(v) => render_release_notes_overlay(b, v, p),
         ClientShellOverlay::Rename(v) => render_rename_overlay(b, v, p),
         ClientShellOverlay::ConfirmClose(v) => render_confirm_close_overlay(b, v, p),
         ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p),
@@ -308,7 +306,6 @@ fn contrast(p: &Palette) -> ratatui::style::Color {
 fn render_release_notes_overlay(
     b: &mut Buffer,
     notes: &crate::app::state::ReleaseNotesState,
-    install_command: &str,
     p: &Palette,
 ) -> Option<OverlayRender> {
     let outer = popup(
@@ -353,11 +350,7 @@ fn render_release_notes_overlay(
         subtitle_area.x,
         subtitle_area.y,
         subtitle_area.width,
-        if notes.preview {
-            "update ready"
-        } else {
-            "what's new in this release"
-        },
+        "what's new in this release",
         base.fg(p.overlay1),
     );
     let close = crate::ui::release_notes_close_button_rect(Rect::new(
@@ -378,8 +371,8 @@ fn render_release_notes_overlay(
     );
 
     let body = stack.content;
-    let lines = crate::ui::release_notes_display_lines(notes, install_command, p);
-    let metrics = crate::ui::release_notes_scroll_metrics(notes, install_command, body, p);
+    let lines = crate::ui::release_notes_display_lines(notes, p);
+    let metrics = crate::ui::release_notes_scroll_metrics(notes, body, p);
     let max_scroll = metrics.max_offset_from_bottom;
     let scroll = usize::from(notes.scroll).min(max_scroll);
     let track = crate::ui::release_notes_scrollbar_rect(body, metrics);

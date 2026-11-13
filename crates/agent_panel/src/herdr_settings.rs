@@ -51,7 +51,7 @@ impl ToastDelivery {
     fn as_str(self) -> &'static str {
         match self {
             ToastDelivery::Off => "off",
-            ToastDelivery::Herdr => "herdr",
+            ToastDelivery::Herdr => "hicodeer",
             ToastDelivery::Terminal => "terminal",
             ToastDelivery::System => "system",
         }
@@ -59,7 +59,7 @@ impl ToastDelivery {
 
     fn from_str(value: &str) -> Self {
         match value {
-            "herdr" => ToastDelivery::Herdr,
+            "hicodeer" => ToastDelivery::Herdr,
             "terminal" => ToastDelivery::Terminal,
             "system" => ToastDelivery::System,
             _ => ToastDelivery::Off,
@@ -572,10 +572,10 @@ mod tests {
     #[test]
     fn upsert_keeps_other_keys_and_adds_a_missing_section() {
         let original = "[ui]\nsidebar_width = 26\n";
-        let updated = upsert_section_value(original, TOAST_SECTION, TOAST_KEY, "\"herdr\"");
+        let updated = upsert_section_value(original, TOAST_SECTION, TOAST_KEY, "\"hicodeer\"");
 
         assert!(updated.contains("sidebar_width = 26"));
-        assert!(updated.contains("[ui.toast]\ndelivery = \"herdr\""));
+        assert!(updated.contains("[ui.toast]\ndelivery = \"hicodeer\""));
         assert_eq!(parse_settings(&updated).toast, ToastDelivery::Herdr);
     }
 

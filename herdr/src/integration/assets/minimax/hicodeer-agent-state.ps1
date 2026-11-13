@@ -1,13 +1,13 @@
 # installed by HiCodeer
-# managed by herdr; reinstalling or updating the integration overwrites this file.
-# HERDR_INTEGRATION_ID=minimax
-# HERDR_INTEGRATION_VERSION=1
+# managed by HiCodeer; reinstalling or updating the integration overwrites this file.
+# HICODEER_INTEGRATION_ID=minimax
+# HICODEER_INTEGRATION_VERSION=1
 
 param([string]$Action = "")
 
 if ($Action -notin @("session", "working", "blocked", "idle")) { exit 0 }
-if ($env:HERDR_ENV -ne "1") { exit 0 }
-if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { exit 0 }
+if ($env:HICODEER_ENV -ne "1") { exit 0 }
+if ([string]::IsNullOrWhiteSpace($env:HICODEER_PANE_ID)) { exit 0 }
 
 # Read hook input as raw bytes so UTF-8 payloads decode correctly even when the
 # console input code page is not UTF-8.
@@ -25,14 +25,14 @@ if (-not [string]::IsNullOrWhiteSpace($payload.subagent_id)) { exit 0 }
 
 $sessionId = $payload.session_id
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-$herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
+$hicodeer = if ([string]::IsNullOrWhiteSpace($env:HICODEER_BIN_PATH)) { "hicodeerd" } else { $env:HICODEER_BIN_PATH }
 try {
     if ($Action -eq "session") {
         if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
         $reportArgs = @(
             "pane",
             "report-agent-session",
-            $env:HERDR_PANE_ID,
+            $env:HICODEER_PANE_ID,
             "--source",
             "hicodeer:minimax",
             "--agent",
@@ -46,7 +46,7 @@ try {
         $reportArgs = @(
             "pane",
             "report-agent",
-            $env:HERDR_PANE_ID,
+            $env:HICODEER_PANE_ID,
             "--source",
             "hicodeer:minimax",
             "--agent",
@@ -71,6 +71,6 @@ try {
             if (-not [string]::IsNullOrWhiteSpace($text)) { $reportArgs += @("--message", "$text") }
         }
     }
-    & $herdr @reportArgs 2>$null | Out-Null
+    & $hicodeer @reportArgs 2>$null | Out-Null
 } catch {
 }

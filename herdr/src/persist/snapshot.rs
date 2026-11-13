@@ -541,7 +541,7 @@ mod tests {
             "current-herdr" => {
                 include_str!("../../tests/fixtures/session/current-herdr-session.json")
             }
-            "current-herdr-dev" => {
+            "current-hicodeer-dev" => {
                 include_str!("../../tests/fixtures/session/current-herdr-dev-session.json")
             }
             "legacy-pre-tabs-v2" => {
@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn current_dev_session_fixture_parses_additive_fields() {
-        let snap = parse_snapshot(session_fixture("current-herdr-dev")).unwrap();
+        let snap = parse_snapshot(session_fixture("current-hicodeer-dev")).unwrap();
 
         assert_eq!(snap.version, 3);
         assert_eq!(snap.workspaces.len(), 2);
@@ -1081,7 +1081,7 @@ mod tests {
     async fn capture_prefers_live_shell_cwd_and_keeps_it_after_exit() {
         let old = std::env::current_dir().unwrap();
         let new = std::env::temp_dir().join(format!(
-            "herdr-persist-cwd-{}-{}",
+            "hicodeer-persist-cwd-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1410,7 +1410,7 @@ mod tests {
         panes.insert(
             0,
             PaneSnapshot {
-                cwd: PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test"),
+                cwd: PathBuf::from("/tmp/this-directory-does-not-exist-for-hicodeer-test"),
                 label: None,
                 agent_name: None,
                 managed_agent_kind: None,
@@ -1474,7 +1474,7 @@ mod tests {
         assert_eq!(restored.workspaces.len(), 1);
         assert_eq!(
             restored.workspaces[0].tabs[0].panes[&0].cwd,
-            PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test")
+            PathBuf::from("/tmp/this-directory-does-not-exist-for-hicodeer-test")
         );
     }
 }

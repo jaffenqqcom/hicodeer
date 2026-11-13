@@ -125,10 +125,10 @@ mod tests {
         for (os, path, valid) in [
             ("linux", "/home/a b/herdr", true),
             ("macos", "/opt/homebrew/bin/herdr", true),
-            ("windows", r"C:\Program Files\herdr.exe", true),
-            ("windows", r"\\server\share\herdr.exe", true),
-            ("windows", "herdr.exe", false),
-            ("linux", "$HOME/.local/bin/herdr", false),
+            ("windows", r"C:\Program Files\hicodeer.exe", true),
+            ("windows", r"\\server\share\hicodeer.exe", true),
+            ("windows", "hicodeer.exe", false),
+            ("linux", "$HOME/.local/bin/hicodeer", false),
             ("linux", "/home/user/.local/share/mise/shims/herdr", false),
             ("linux", "/bin/herdr\nmalformed", false),
             ("unknown", "/bin/herdr", false),
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn metadata_is_disposable_fingerprinted_and_independent_per_profile() {
-        let root = std::env::temp_dir().join(format!("herdr-ssh-metadata-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("hicodeer-ssh-metadata-{}", std::process::id()));
         let first = SshMetadataCache {
             path: root.join("first.json"),
             target: "mac".into(),
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn metadata_does_not_follow_symlinks() {
         let root =
-            std::env::temp_dir().join(format!("herdr-ssh-metadata-link-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-ssh-metadata-link-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let cache = SshMetadataCache {
             path: root.join("cache.json"),

@@ -553,7 +553,7 @@ fn parse_pane_input_args(
     env_pane_id: Option<&str>,
 ) -> Result<PaneInputSetParams, String> {
     const USAGE: &str =
-        "usage: hicodeerd pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane";
+        "usage: hicodeerd pane input [<pane_id>|--pane ID|--current] --right-click hicodeer|pane";
 
     let args = super::expand_equals_args(args, &["--pane", "--right-click"]);
     let mut pane_id = None;
@@ -578,7 +578,7 @@ fn parse_pane_input_args(
                 pane_id = Some(
                     env_pane_id
                         .map(super::normalize_pane_id)
-                        .ok_or("--current requires HERDR_PANE_ID")?,
+                        .ok_or("--current requires HICODEER_PANE_ID")?,
                 );
                 index += 1;
             }
@@ -608,7 +608,7 @@ fn parse_pane_input_args(
 
 fn parse_right_click_target(value: &str) -> Result<PaneRightClickTarget, String> {
     match value {
-        "herdr" => Ok(PaneRightClickTarget::Herdr),
+        "hicodeer" => Ok(PaneRightClickTarget::Hicodeer),
         "pane" => Ok(PaneRightClickTarget::Pane),
         _ => Err(format!("invalid right-click target: {value}")),
     }
@@ -638,7 +638,7 @@ fn parse_pane_split_args(
     let mut ratio = None;
     let mut cwd = None;
     let mut focus = false;
-    let mut right_click = PaneRightClickTarget::Herdr;
+    let mut right_click = PaneRightClickTarget::Hicodeer;
 
     let mut index = 0;
     if args
@@ -661,7 +661,7 @@ fn parse_pane_split_args(
                 pane_id = Some(
                     env_pane_id
                         .map(super::normalize_pane_id)
-                        .ok_or("--current requires HERDR_PANE_ID")?,
+                        .ok_or("--current requires HICODEER_PANE_ID")?,
                 );
                 index += 1;
             }
@@ -722,7 +722,7 @@ fn parse_pane_split_args(
 
     let Some(direction) = direction else {
         return Err(
-            "usage: hicodeerd pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
+            "usage: hicodeerd pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click hicodeer|pane] [--focus] [--no-focus]"
                 .into(),
         );
     };
@@ -1685,9 +1685,9 @@ fn print_pane_help() {
     eprintln!("  hicodeerd pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]");
     eprintln!("  hicodeerd pane rename <pane_id> <label>|--clear");
     eprintln!("  hicodeerd pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
-    eprintln!("  hicodeerd pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane");
+    eprintln!("  hicodeerd pane input [<pane_id>|--pane ID|--current] --right-click hicodeer|pane");
     eprintln!(
-        "  hicodeerd pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
+        "  hicodeerd pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click hicodeer|pane] [--focus] [--no-focus]"
     );
     eprintln!("  hicodeerd pane swap --direction left|right|up|down [--pane ID|--current]");
     eprintln!("  hicodeerd pane swap --source-pane ID --target-pane ID");
@@ -1724,7 +1724,7 @@ mod tests {
         assert_eq!(params.target_pane_id, Some("issue-1".into()));
         assert_eq!(params.direction, crate::api::schema::SplitDirection::Right);
         assert_eq!(params.ratio, Some(0.333));
-        assert_eq!(params.right_click, PaneRightClickTarget::Herdr);
+        assert_eq!(params.right_click, PaneRightClickTarget::Hicodeer);
     }
 
     #[test]

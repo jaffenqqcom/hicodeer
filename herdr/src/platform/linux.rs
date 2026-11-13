@@ -15,9 +15,9 @@ use super::{
 };
 
 pub(crate) use super::unix_common::{
-    configure_status_command, create_remote_private_dir, create_remote_ssh_config_dir,
+    configure_status_command, create_remote_ssh_config_dir,
     create_remote_ssh_config_file, hostname, local_datetime, remote_bridge_endpoint_path,
-    remote_private_temp_base, remote_reattach_argument, remote_reattach_program,
+    remote_reattach_argument, remote_reattach_program,
     remote_ssh_config_paths, set_default_plugin_pane_pwd, shutdown_client_stream,
     status_commands_supported, wait_client_stream_readable, write_client_stream,
     ClientStreamReader, StatusCommandGuard,
@@ -30,7 +30,7 @@ mod shutdown;
 pub(crate) use shutdown::monitor_host_shutdown;
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
-const PROCESS_DETECTION_ENV_VAR: &str = "HERDR_PROCESS_DETECTION";
+const PROCESS_DETECTION_ENV_VAR: &str = "HICODEER_PROCESS_DETECTION";
 const CHILD_GROUPS_SCAN_LIMIT: usize = 64;
 /// Upper bound on the number of processes visited while resolving a pane's
 /// foreground process-group tree. Foreground-job detection reads /proc/<pid>/stat
@@ -1339,7 +1339,7 @@ fn detach_clipboard_owner(child: std::process::Child) -> bool {
     let child = std::sync::Arc::new(std::sync::Mutex::new(child));
     let reaper_child = std::sync::Arc::clone(&child);
     let reaper = std::thread::Builder::new()
-        .name("herdr-wl-copy-reaper".to_string())
+        .name("hicodeer-wl-copy-reaper".to_string())
         .spawn(move || {
             let wait_result = match reaper_child.lock() {
                 Ok(mut child) => child.wait(),
@@ -1922,9 +1922,9 @@ mod tests {
                         Some(path) => std::env::set_var("PATH", path),
                         None => std::env::remove_var("PATH"),
                     }
-                    std::env::remove_var("HERDR_TEST_WL_COPY_MARKER");
-                    std::env::remove_var("HERDR_TEST_WL_COPY_PAYLOAD");
-                    std::env::remove_var("HERDR_TEST_WL_COPY_ARGS");
+                    std::env::remove_var("HICODEER_TEST_WL_COPY_MARKER");
+                    std::env::remove_var("HICODEER_TEST_WL_COPY_PAYLOAD");
+                    std::env::remove_var("HICODEER_TEST_WL_COPY_ARGS");
                 }
                 let _ = std::fs::remove_dir_all(&self.temp_dir);
             }
@@ -1936,7 +1936,7 @@ mod tests {
             .expect("system time should follow unix epoch")
             .as_nanos();
         let temp_dir = std::env::temp_dir().join(format!(
-            "herdr-fake-wl-copy-{}-{unique}",
+            "hicodeer-fake-wl-copy-{}-{unique}",
             std::process::id()
         ));
         std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -1951,7 +1951,7 @@ mod tests {
         let args = temp_dir.join("args");
         std::fs::write(
             &fake_wl_copy,
-            "#!/bin/sh\ncat > \"$HERDR_TEST_WL_COPY_PAYLOAD\"\nprintf '%s\\n' \"$@\" > \"$HERDR_TEST_WL_COPY_ARGS\"\nprintf '%s' \"$$\" > \"$HERDR_TEST_WL_COPY_MARKER\"\nexec sleep 30\n",
+            "#!/bin/sh\ncat > \"$HICODEER_TEST_WL_COPY_PAYLOAD\"\nprintf '%s\\n' \"$@\" > \"$HICODEER_TEST_WL_COPY_ARGS\"\nprintf '%s' \"$$\" > \"$HICODEER_TEST_WL_COPY_MARKER\"\nexec sleep 30\n",
         )
         .expect("fake wl-copy should be written");
         let mut permissions = std::fs::metadata(&fake_wl_copy)
@@ -1971,9 +1971,9 @@ mod tests {
         };
         unsafe {
             std::env::set_var("PATH", test_path);
-            std::env::set_var("HERDR_TEST_WL_COPY_MARKER", &marker);
-            std::env::set_var("HERDR_TEST_WL_COPY_PAYLOAD", &payload);
-            std::env::set_var("HERDR_TEST_WL_COPY_ARGS", &args);
+            std::env::set_var("HICODEER_TEST_WL_COPY_MARKER", &marker);
+            std::env::set_var("HICODEER_TEST_WL_COPY_PAYLOAD", &payload);
+            std::env::set_var("HICODEER_TEST_WL_COPY_ARGS", &args);
         }
 
         let (result_tx, result_rx) = mpsc::channel();
@@ -2053,7 +2053,7 @@ mod tests {
                         Some(value) => std::env::set_var("DISPLAY", value),
                         None => std::env::remove_var("DISPLAY"),
                     }
-                    std::env::remove_var("HERDR_TEST_XCLIP_PAYLOAD");
+                    std::env::remove_var("HICODEER_TEST_XCLIP_PAYLOAD");
                 }
                 let _ = std::fs::remove_dir_all(&self.temp_dir);
             }
@@ -2065,7 +2065,7 @@ mod tests {
             .expect("system time should follow unix epoch")
             .as_nanos();
         let temp_dir = std::env::temp_dir().join(format!(
-            "herdr-failed-wl-copy-{}-{unique}",
+            "hicodeer-failed-wl-copy-{}-{unique}",
             std::process::id()
         ));
         std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -2082,7 +2082,7 @@ mod tests {
             .expect("fake wl-copy should be written");
         std::fs::write(
             &fake_xclip,
-            "#!/bin/sh\n/bin/cat > \"$HERDR_TEST_XCLIP_PAYLOAD\"\n",
+            "#!/bin/sh\n/bin/cat > \"$HICODEER_TEST_XCLIP_PAYLOAD\"\n",
         )
         .expect("fake xclip should be written");
         for command in [&fake_wl_copy, &fake_xclip] {
@@ -2098,7 +2098,7 @@ mod tests {
             std::env::set_var("PATH", &temp_dir);
             std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
             std::env::set_var("DISPLAY", ":0");
-            std::env::set_var("HERDR_TEST_XCLIP_PAYLOAD", &payload);
+            std::env::set_var("HICODEER_TEST_XCLIP_PAYLOAD", &payload);
         }
 
         assert!(write_clipboard(b"clipboard fallback"));
@@ -2201,7 +2201,7 @@ mod tests {
     fn read_clipboard_image_rejects_xclip_text_served_for_image_target() {
         let _guard = env_lock().lock().unwrap();
         let temp_dir =
-            std::env::temp_dir().join(format!("herdr-fake-xclip-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-fake-xclip-{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let fake_xclip = temp_dir.join("xclip");
         std::fs::write(&fake_xclip, "#!/bin/sh\nprintf '# Tasks'\n")
@@ -2253,7 +2253,7 @@ mod tests {
     fn read_clipboard_image_rejects_wayland_xclip_fallback_text_for_image_target() {
         let _guard = env_lock().lock().unwrap();
         let temp_dir =
-            std::env::temp_dir().join(format!("herdr-fake-wayland-xclip-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-fake-wayland-xclip-{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let fake_wl_paste = temp_dir.join("wl-paste");
         let fake_xclip = temp_dir.join("xclip");
@@ -2380,14 +2380,14 @@ mod tests {
         }
 
         let path =
-            std::env::temp_dir().join(format!("herdr-notify-send-args-{}", std::process::id()));
-        let script = "printf '%s\\n' \"$@\" > \"$HERDR_NOTIFY_ARGS\"";
+            std::env::temp_dir().join(format!("hicodeer-notify-send-args-{}", std::process::id()));
+        let script = "printf '%s\\n' \"$@\" > \"$HICODEER_NOTIFY_ARGS\"";
         let shown = show_desktop_notification_with_command("-danger", Some("body"), |_| {
             let mut cmd = Command::new("sh");
             cmd.arg("-c")
                 .arg(script)
                 .arg("notify-send")
-                .env("HERDR_NOTIFY_ARGS", &path);
+                .env("HICODEER_NOTIFY_ARGS", &path);
             cmd
         })
         .expect("notification command should run");

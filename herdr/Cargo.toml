@@ -6,22 +6,20 @@ build = "build.rs"
 description = "terminal workspace manager for AI coding agents"
 license = "Apache-2.0"
 repository = "https://github.com/herdrdev/herdr"
-homepage = "https://herdr.dev"
 keywords = ["terminal", "tui", "ai", "agents", "multiplexer"]
 categories = ["command-line-utilities"]
 include = [
     "src/**/*",
     "assets/sounds/*",
-    "docs/next/api/herdr-api.schema.json",
+    "docs/next/api/hicodeer-api.schema.json",
     "skills/herdr/SKILL.md",
-    "distribution/install.ps1",
     "README.md",
     "LICENSE",
     "Cargo.toml",
 ]
 
 [lib]
-name = "herdr"
+name = "hicodeer"
 path = "src/lib.rs"
 
 [[bin]]

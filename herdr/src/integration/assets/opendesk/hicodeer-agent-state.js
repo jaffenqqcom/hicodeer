@@ -1,8 +1,8 @@
 // installed by HiCodeer
-// managed by herdr; reinstalling or updating the integration overwrites this file.
+// managed by HiCodeer; reinstalling or updating the integration overwrites this file.
 // add custom hooks beside this file instead of editing it.
-// HERDR_INTEGRATION_ID=opendesk
-// HERDR_INTEGRATION_VERSION=1
+// HICODEER_INTEGRATION_ID=opendesk
+// HICODEER_INTEGRATION_VERSION=1
 
 import net from "node:net";
 import { definePlugin } from "@bitclub.ai/opendesk-plugin-sdk";
@@ -18,14 +18,14 @@ function nextReportSeq() {
 
 function reportingEnabled() {
   return Boolean(
-    process.env.HERDR_ENV === "1" &&
+    process.env.HICODEER_ENV === "1" &&
       process.env.HICODEER_AGENT_SOCKET_PATH &&
-      process.env.HERDR_PANE_ID,
+      process.env.HICODEER_PANE_ID,
   );
 }
 
 function request(method, params) {
-  const paneId = process.env.HERDR_PANE_ID;
+  const paneId = process.env.HICODEER_PANE_ID;
   const socketPath = process.env.HICODEER_AGENT_SOCKET_PATH;
 
   if (!paneId || !socketPath) {

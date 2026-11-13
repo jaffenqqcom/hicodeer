@@ -93,10 +93,6 @@ fn print_full_status(json: bool) -> std::io::Result<i32> {
 
     println!("client:");
     println!("  version: {}", crate::build_info::version());
-    println!(
-        "  channel: {}",
-        crate::config::Config::load().config.update.channel.as_str()
-    );
     println!("  protocol: {}", crate::protocol::PROTOCOL_VERSION);
     println!(
         "  endpoint_protocol_generation: {}",
@@ -133,10 +129,6 @@ fn print_client_status(json: bool) -> std::io::Result<()> {
     }
 
     println!("version: {}", crate::build_info::version());
-    println!(
-        "channel: {}",
-        crate::config::Config::load().config.update.channel.as_str()
-    );
     println!("protocol: {}", crate::protocol::PROTOCOL_VERSION);
     println!(
         "endpoint_protocol_generation: {}",
@@ -248,7 +240,6 @@ struct FullStatusJson {
 #[derive(Serialize)]
 struct ClientStatusJson {
     version: String,
-    channel: &'static str,
     protocol: u32,
     endpoint_protocol_generation: u32,
     endpoint_capabilities: Vec<&'static str>,
@@ -292,7 +283,6 @@ struct UpdateStatusJson {
 fn client_status_json() -> ClientStatusJson {
     ClientStatusJson {
         version: crate::build_info::version(),
-        channel: crate::config::Config::load().config.update.channel.as_str(),
         protocol: crate::protocol::PROTOCOL_VERSION,
         endpoint_protocol_generation: crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
         endpoint_capabilities: vec![

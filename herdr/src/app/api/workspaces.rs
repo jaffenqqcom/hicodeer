@@ -519,7 +519,7 @@ mod tests {
         shutdown_test_runtimes(&mut app);
 
         let focused_cwd = std::env::temp_dir().join(format!(
-            "herdr-ws-follow-{}-{}",
+            "hicodeer-ws-follow-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -581,7 +581,7 @@ mod tests {
         app.state.shell_mode = ShellModeConfig::NonLogin;
 
         let root = std::env::temp_dir().join(format!(
-            "herdr-reuse-root-{}-{}",
+            "hicodeer-reuse-root-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -590,7 +590,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let other = std::env::temp_dir().join(format!(
-            "herdr-reuse-other-{}-{}",
+            "hicodeer-reuse-other-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -661,7 +661,7 @@ mod tests {
         shutdown_test_runtimes(&mut app);
 
         let source_cwd =
-            std::env::temp_dir().join(format!("herdr-ws-explicit-source-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-ws-explicit-source-{}", std::process::id()));
         std::fs::create_dir_all(&source_cwd).unwrap();
         let pane_id = app.state.workspaces[1].focused_pane_id().unwrap();
         let terminal_id = app.state.workspaces[1]
@@ -744,7 +744,7 @@ mod tests {
             key: "repo-key".into(),
             label: "herdr".into(),
             repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-issue".into(),
+            checkout_path: "/repo/hicodeer-issue".into(),
             is_linked_worktree: true,
         });
         app

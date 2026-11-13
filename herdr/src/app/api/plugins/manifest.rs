@@ -14,7 +14,7 @@ struct RawPluginManifest {
     name: String,
     version: String,
     #[serde(default)]
-    min_herdr_version: Option<String>,
+    min_hicodeer_version: Option<String>,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
@@ -121,7 +121,7 @@ pub(crate) fn load_plugin_manifest(
 ) -> Result<InstalledPluginInfo, (&'static str, String)> {
     let path = std::path::PathBuf::from(path);
     let manifest_path = if path.is_dir() {
-        path.join("herdr-plugin.toml")
+        crate::plugin_paths::plugin_manifest_path(&path)
     } else {
         path
     };
@@ -147,7 +147,7 @@ pub(crate) fn load_plugin_manifest(
         "invalid_plugin_version",
         "plugin version is required",
     )?;
-    let min_herdr_version = validate_min_herdr_version(raw.min_herdr_version.as_deref())?;
+    let min_hicodeer_version = validate_min_hicodeer_version(raw.min_hicodeer_version.as_deref())?;
     let description = raw
         .description
         .map(|description| description.trim().to_string())
@@ -207,7 +207,7 @@ pub(crate) fn load_plugin_manifest(
         plugin_id,
         name,
         version,
-        min_herdr_version,
+        min_hicodeer_version,
         description,
         manifest_path: manifest_path.display().to_string(),
         plugin_root: plugin_root.display().to_string(),
@@ -224,28 +224,28 @@ pub(crate) fn load_plugin_manifest(
     })
 }
 
-fn validate_min_herdr_version(value: Option<&str>) -> Result<String, (&'static str, String)> {
+fn validate_min_hicodeer_version(value: Option<&str>) -> Result<String, (&'static str, String)> {
     let Some(value) = value else {
         return Err((
-            "invalid_plugin_min_herdr_version",
-            "plugin min_herdr_version is required".to_string(),
+            "invalid_plugin_min_hicodeer_version",
+            "plugin min_hicodeer_version is required".to_string(),
         ));
     };
     let value = non_empty_trimmed(
         value,
-        "invalid_plugin_min_herdr_version",
-        "plugin min_herdr_version is required",
+        "invalid_plugin_min_hicodeer_version",
+        "plugin min_hicodeer_version is required",
     )?;
-    let required = crate::update::Version::parse(&value).ok_or_else(|| {
+    let required = crate::version::Version::parse(&value).ok_or_else(|| {
         (
-            "invalid_plugin_min_herdr_version",
+            "invalid_plugin_min_hicodeer_version",
             format!(
-                "plugin min_herdr_version must be a semantic version like {}",
+                "plugin min_hicodeer_version must be a semantic version like {}",
                 crate::build_info::BASE_VERSION
             ),
         )
     })?;
-    let current = crate::update::Version::current();
+    let current = crate::version::Version::current();
     if required > current {
         return Err((
             "plugin_requires_newer_herdr",

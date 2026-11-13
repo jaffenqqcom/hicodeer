@@ -167,7 +167,7 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             &mut imports,
         )?;
         crate::server::handoff::report_restored(&mut received.stream)?;
-        if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("after_restored") {
+        if std::env::var("HICODEER_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("after_restored") {
             return Err(io::Error::other(
                 "test handoff import failure after restored",
             ));
@@ -219,11 +219,11 @@ fn run_handoff_import_server(_socket_path: &Path, _token: &str) -> io::Result<()
 
 fn print_ready_message(api_socket: &Path, client_socket: &Path) {
     let message = format!(
-        "hicodeerd server running; you can use any herdr CLI command in another terminal.\n\
+        "hicodeerd server running; you can use any HiCodeer CLI command in another terminal.\n\
          api socket: {}\n\
          client socket: {}\n\
          logs: {}\n\
-         did you mean to open the HiCodeer TUI? run `herdr`; you do not need `hicodeerd server`.\n",
+         did you mean to open the HiCodeer TUI? run `hicodeerd`; you do not need `hicodeerd server`.\n",
         api_socket.display(),
         client_socket.display(),
         crate::session::data_dir()

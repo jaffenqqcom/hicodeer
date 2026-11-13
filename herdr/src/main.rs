@@ -2,5 +2,5 @@
 //! (for example the HiCodeer daemon) can embed the server and the TUI client.
 
 fn main() -> std::io::Result<()> {
-    herdr::run_cli()
+    hicodeer::run_cli()
 }

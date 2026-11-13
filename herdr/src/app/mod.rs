@@ -152,9 +152,7 @@ pub struct App {
     pub(crate) pending_worktree_remove_runtime_exits: HashMap<crate::layout::PaneId, usize>,
     pub(crate) pending_worktree_remove_runtime_restores: HashMap<crate::layout::PaneId, u64>,
     pub(crate) next_api_worktree_operation_id: u64,
-    pub(crate) next_auto_update_check: Option<Instant>,
     pub(crate) next_agent_manifest_update_check: Option<Instant>,
-    pub(crate) update_version_check_enabled: bool,
     pub(crate) update_manifest_check_enabled: bool,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
@@ -486,12 +484,7 @@ impl App {
         );
 
         let latest_release_notes = crate::release_notes::load_latest();
-        let update_available = latest_release_notes
-            .as_ref()
-            .filter(|notes| notes.preview)
-            .map(|notes| notes.version.clone());
         let latest_release_notes_available = latest_release_notes.is_some();
-        let update_install_command = crate::update::update_install_command().to_string();
         let startup_product_announcement =
             crate::product_announcements::load_unseen_for_current_version();
 
@@ -541,10 +534,7 @@ impl App {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),
             },
-            update_available,
-            update_install_command,
             latest_release_notes_available,
-            update_dismissed: false,
             config_diagnostic,
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
@@ -602,26 +592,16 @@ impl App {
 
         state.terminals = restored_terminals;
 
-        // Background auto-update is disabled for non-persistent test apps
+        // Background manifest checks are disabled for non-persistent test apps
         // and in debug/test builds so local development never mutates the
         // running binary out from under spawned test processes.
-        let version_check_enabled =
-            background_update_check_enabled(policy.background_updates, config.update.version_check);
         let manifest_check_enabled = background_update_check_enabled(
             policy.background_updates,
             config.update.manifest_check,
         );
-        if version_check_enabled {
-            let update_tx = event_tx.clone();
-            if let Err(err) = crate::thread_spawn::spawn_named("herdr-update-check", move || {
-                crate::update::auto_update(update_tx)
-            }) {
-                tracing::warn!(err = %err, "failed to spawn update check thread");
-            }
-        }
         if manifest_check_enabled {
             let manifest_update_tx = event_tx.clone();
-            if let Err(err) = crate::thread_spawn::spawn_named("herdr-manifest-check", move || {
+            if let Err(err) = crate::thread_spawn::spawn_named("hicodeer-manifest-check", move || {
                 crate::detect::manifest_update::auto_update(manifest_update_tx)
             }) {
                 tracing::warn!(err = %err, "failed to spawn agent manifest check thread");
@@ -668,11 +648,8 @@ impl App {
             pending_worktree_remove_runtime_exits: HashMap::new(),
             pending_worktree_remove_runtime_restores: HashMap::new(),
             next_api_worktree_operation_id: 1,
-            next_auto_update_check: version_check_enabled
-                .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
             next_agent_manifest_update_check: manifest_check_enabled
                 .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
-            update_version_check_enabled: config.update.version_check,
             update_manifest_check_enabled: config.update.manifest_check,
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
@@ -995,22 +972,8 @@ impl App {
 
         if !invalid_section("update") {
             let now = Instant::now();
-            let previous_version_check_enabled = self.update_version_check_enabled;
             let previous_manifest_check_enabled = self.update_manifest_check_enabled;
-            self.update_version_check_enabled = config.update.version_check;
             self.update_manifest_check_enabled = config.update.manifest_check;
-
-            if !self.update_version_check_enabled {
-                self.next_auto_update_check = None;
-            } else if !previous_version_check_enabled
-                && background_update_check_enabled(
-                    self.policy.background_updates,
-                    self.update_version_check_enabled,
-                )
-                && self.state.update_available.is_none()
-            {
-                self.next_auto_update_check = Some(now);
-            }
 
             if !self.update_manifest_check_enabled {
                 self.next_agent_manifest_update_check = None;
@@ -1106,7 +1069,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{stamp}", std::process::id()))
+        std::env::temp_dir().join(format!("hicodeer-{name}-{}-{stamp}", std::process::id()))
     }
 
     fn config_env_lock() -> &'static Mutex<()> {
@@ -1115,7 +1078,7 @@ mod tests {
 
     fn temp_config_path(name: &str) -> std::path::PathBuf {
         let unique = format!(
-            "herdr-{name}-{}-{}",
+            "hicodeer-{name}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1231,7 +1194,7 @@ mod tests {
     #[test]
     fn notification_show_api_creates_herdr_toast_with_position() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Hicodeer;
 
         let response =
             app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
@@ -1240,7 +1203,7 @@ mod tests {
                     crate::api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: Some("api workspace".into()),
-                        position: Some(crate::config::ToastHerdrPosition::TopLeft),
+                        position: Some(crate::config::ToastHicodeerPosition::TopLeft),
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
                 ),
@@ -1259,7 +1222,7 @@ mod tests {
         assert_eq!(toast.context, "api workspace");
         assert_eq!(
             toast.position,
-            Some(crate::config::ToastHerdrPosition::TopLeft)
+            Some(crate::config::ToastHicodeerPosition::TopLeft)
         );
         assert!(app.toast_deadline.is_some());
     }
@@ -1296,7 +1259,7 @@ mod tests {
     #[test]
     fn notification_show_api_does_not_replace_existing_toast() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Hicodeer;
         app.state.toast = Some(crate::app::state::ToastNotification {
             kind: crate::app::state::ToastKind::NeedsAttention,
             title: "pi needs attention".to_string(),
@@ -1335,7 +1298,7 @@ mod tests {
     #[test]
     fn notification_show_api_is_rate_limited() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Hicodeer;
         app.mark_api_notification_shown(Instant::now());
 
         let response =
@@ -1380,33 +1343,31 @@ mod tests {
     #[test]
     fn internal_event_drain_limits_work_per_tick() {
         let mut app = test_app();
-        for i in 0..=APP_EVENT_DRAIN_LIMIT {
+        for _ in 0..=APP_EVENT_DRAIN_LIMIT {
             app.event_tx
-                .try_send(AppEvent::UpdateReady {
-                    version: format!("2.0.{i}"),
-                    install_command: "hicodeerd install".into(),
+                .try_send(AppEvent::TabBarCommandFinished {
+                    generation: 0,
+                    segment_index: 0,
+                    result: Ok(None),
                 })
                 .unwrap();
         }
 
-        assert!(app.drain_internal_events());
+        app.drain_internal_events();
 
-        let expected_version = format!("2.0.{}", APP_EVENT_DRAIN_LIMIT - 1);
-        assert_eq!(
-            app.state.update_available.as_deref(),
-            Some(expected_version.as_str())
-        );
+        // The drain stops at the per-tick limit, so one queued event remains.
         assert!(app.event_rx.try_recv().is_ok());
     }
 
     #[test]
     fn api_request_drains_all_pending_internal_events_before_reading_state() {
         let mut app = test_app();
-        for i in 0..=APP_EVENT_DRAIN_LIMIT {
+        for _ in 0..=APP_EVENT_DRAIN_LIMIT {
             app.event_tx
-                .try_send(AppEvent::UpdateReady {
-                    version: format!("3.0.{i}"),
-                    install_command: "hicodeerd install".into(),
+                .try_send(AppEvent::TabBarCommandFinished {
+                    generation: 0,
+                    segment_index: 0,
+                    result: Ok(None),
                 })
                 .unwrap();
         }
@@ -1420,11 +1381,6 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
         assert_eq!(response["result"]["type"], "ok");
-        let expected_version = format!("3.0.{APP_EVENT_DRAIN_LIMIT}");
-        assert_eq!(
-            app.state.update_available.as_deref(),
-            Some(expected_version.as_str())
-        );
         assert!(app.event_rx.try_recv().is_err());
     }
 
@@ -1588,9 +1544,9 @@ mod tests {
     }
 
     #[test]
-    fn startup_restores_preview_update_available_from_saved_notes() {
+    fn startup_restores_preview_release_notes_from_saved_notes() {
         let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("startup-preview-update-available");
+        let path = temp_config_path("startup-preview-release-notes");
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         // Use a bogus far-future version so preview=true regardless of current binary version.
@@ -1598,7 +1554,6 @@ mod tests {
 
         let app = test_app();
 
-        assert_eq!(app.state.update_available.as_deref(), Some("99.99.99"));
         assert!(app.state.latest_release_notes_available);
         assert_eq!(
             app.state
@@ -1606,33 +1561,6 @@ mod tests {
                 .as_ref()
                 .map(|notes| notes.version.as_str()),
             Some("99.99.99")
-        );
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn update_ready_refreshes_cached_release_notes() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("update-ready-refreshes-release-notes");
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-        let mut app = test_app();
-        assert!(app.state.latest_release_notes.is_none());
-
-        crate::release_notes::save_pending("99.99.99", "### Changed\n- One").unwrap();
-        app.handle_internal_event(AppEvent::UpdateReady {
-            version: "99.99.99".into(),
-            install_command: "hicodeerd update".into(),
-        });
-
-        assert_eq!(
-            app.state.latest_release_notes.as_ref().map(|notes| (
-                notes.version.as_str(),
-                notes.body.as_str(),
-                notes.preview
-            )),
-            Some(("99.99.99", "### Changed\n- One", true))
         );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
@@ -1681,17 +1609,20 @@ mod tests {
     }
 
     #[test]
-    fn startup_does_not_restore_update_available_from_older_saved_notes() {
+    fn startup_keeps_older_saved_notes_without_preview_marker() {
         let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("startup-stale-update-notes");
+        let path = temp_config_path("startup-stale-release-notes");
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         crate::release_notes::save_pending("0.4.9", "### Changed\n- One").unwrap();
 
         let app = test_app();
 
-        assert_eq!(app.state.update_available, None);
         assert!(app.state.latest_release_notes_available);
+        assert_eq!(
+            app.state.latest_release_notes.as_ref().map(|notes| notes.preview),
+            Some(false)
+        );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -1782,13 +1713,12 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nnew_workspace = \"prefix+m\"\nprefix = \"ctrl+a\"\n[update]\nversion_check = false\nmanifest_check = false\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"herdr\"\n",
+            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nnew_workspace = \"prefix+m\"\nprefix = \"ctrl+a\"\n[update]\nmanifest_check = false\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"hicodeer\"\n",
         )
         .unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         let mut app = test_app();
-        app.next_auto_update_check = Some(Instant::now());
         app.next_agent_manifest_update_check = Some(Instant::now());
         let report = app.reload_config();
 
@@ -1805,7 +1735,7 @@ mod tests {
             .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
         assert_eq!(
             app.state.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
+            crate::config::ToastDelivery::Hicodeer
         );
         assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
         let report = app.reload_config();
@@ -1820,9 +1750,7 @@ mod tests {
             app.state.new_terminal_cwd,
             crate::config::NewTerminalCwdConfig::Home
         );
-        assert!(!app.update_version_check_enabled);
         assert!(!app.update_manifest_check_enabled);
-        assert!(app.next_auto_update_check.is_none());
         assert!(app.next_agent_manifest_update_check.is_none());
         assert!(app.state.config_diagnostic.is_none());
         let toast = app.state.toast.as_ref().unwrap();
@@ -2146,7 +2074,7 @@ mod tests {
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Hicodeer;
         let report = app.reload_config();
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
@@ -2161,7 +2089,7 @@ mod tests {
             .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
         assert_eq!(
             app.state.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
+            crate::config::ToastDelivery::Hicodeer
         );
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -2465,10 +2393,10 @@ mod tests {
     fn new_terminal_cwd_follow_uses_source_cwd() {
         let cwd = creation::resolve_new_terminal_cwd(
             &crate::config::NewTerminalCwdConfig::Follow,
-            Some(std::path::PathBuf::from("/tmp/herdr-source")),
+            Some(std::path::PathBuf::from("/tmp/hicodeer-source")),
         );
 
-        assert_eq!(cwd, std::path::PathBuf::from("/tmp/herdr-source"));
+        assert_eq!(cwd, std::path::PathBuf::from("/tmp/hicodeer-source"));
     }
 
     #[test]
@@ -2486,11 +2414,11 @@ mod tests {
     #[test]
     fn new_terminal_cwd_path_uses_configured_path() {
         let cwd = creation::resolve_new_terminal_cwd(
-            &crate::config::NewTerminalCwdConfig::Path("/tmp/herdr-fixed".into()),
-            Some(std::path::PathBuf::from("/tmp/herdr-source")),
+            &crate::config::NewTerminalCwdConfig::Path("/tmp/hicodeer-fixed".into()),
+            Some(std::path::PathBuf::from("/tmp/hicodeer-source")),
         );
 
-        assert_eq!(cwd, std::path::PathBuf::from("/tmp/herdr-fixed"));
+        assert_eq!(cwd, std::path::PathBuf::from("/tmp/hicodeer-fixed"));
     }
 
     #[test]
@@ -3197,7 +3125,7 @@ mod tests {
             key: "repo-key".into(),
             label: "herdr".into(),
             repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-child".into(),
+            checkout_path: "/repo/hicodeer-child".into(),
             is_linked_worktree: true,
         });
         app.state.workspaces = vec![parent, child];
@@ -3238,7 +3166,7 @@ mod tests {
         let mut app = test_app();
         let now = Instant::now();
         app.session_save_deadline = Some(now + Duration::from_secs(2));
-        app.next_auto_update_check = Some(now + Duration::from_secs(6));
+        app.next_agent_manifest_update_check = Some(now + Duration::from_secs(6));
 
         assert_eq!(
             app.next_headless_loop_deadline_with_git_refresh(now, false, true),
@@ -3252,7 +3180,7 @@ mod tests {
         let now = Instant::now();
         app.config_diagnostic_deadline = None;
         app.toast_deadline = None;
-        app.next_auto_update_check = None;
+        app.next_agent_manifest_update_check = None;
         app.session_save_deadline = None;
         app.state.workspaces.clear();
 
@@ -3469,11 +3397,12 @@ mod tests {
             AgentState::Working
         );
 
-        for i in 0..APP_EVENT_CHANNEL_CAPACITY {
+        for _ in 0..APP_EVENT_CHANNEL_CAPACITY {
             app.event_tx
-                .try_send(AppEvent::UpdateReady {
-                    version: format!("9.9.{i}"),
-                    install_command: "hicodeerd update".into(),
+                .try_send(AppEvent::TabBarCommandFinished {
+                    generation: 0,
+                    segment_index: 0,
+                    result: Ok(None),
                 })
                 .unwrap();
         }

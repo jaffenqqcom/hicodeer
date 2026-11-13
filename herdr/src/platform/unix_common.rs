@@ -339,10 +339,6 @@ pub(crate) fn begin_cli_output() {
     set_sigpipe_disposition(libc::SIG_DFL);
 }
 
-pub(crate) fn end_cli_output() {
-    set_sigpipe_disposition(libc::SIG_IGN);
-}
-
 pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
     super::RemoteSshConfigPaths {
         user_config: std::env::var_os("HOME")
@@ -366,7 +362,7 @@ pub(crate) fn create_remote_ssh_config_dir(control_socket_name: &str) -> std::io
     let mut path_fits = false;
     for base in bases {
         for attempt in 0..100 {
-            let dir = base.join(format!("herdr-ssh-{}-{attempt}", std::process::id()));
+            let dir = base.join(format!("hicodeer-ssh-{}-{attempt}", std::process::id()));
             if !fits_unix_socket_path(&dir.join(control_socket_name)) {
                 continue;
             }
@@ -410,15 +406,7 @@ pub(crate) fn create_remote_ssh_config_file(path: &Path) -> std::io::Result<std:
         .open(path)
 }
 
-pub(crate) fn create_remote_private_dir(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
 
-    std::fs::DirBuilder::new().mode(0o700).create(path)
-}
-
-pub(crate) fn remote_private_temp_base() -> PathBuf {
-    std::env::temp_dir()
-}
 
 pub(crate) fn remote_bridge_endpoint_path(readable_name: &str, short_name: &str) -> PathBuf {
     let tmp = std::env::temp_dir();

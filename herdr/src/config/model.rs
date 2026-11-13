@@ -11,50 +11,19 @@ use super::{
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum UpdateChannelConfig {
-    #[default]
-    Stable,
-    Preview,
-}
-
-impl UpdateChannelConfig {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Stable => "stable",
-            Self::Preview => "preview",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(default)]
 pub struct UpdateConfig {
-    pub channel: UpdateChannelConfig,
-    pub version_check: bool,
     pub manifest_check: bool,
 }
 
 impl Default for UpdateConfig {
     fn default() -> Self {
         Self {
-            channel: default_update_channel(),
-            version_check: true,
-            manifest_check: true,
+            // There is no default catalog endpoint, so nothing is checked
+            // until a deployment configures one.
+            manifest_check: false,
         }
-    }
-}
-
-fn default_update_channel() -> UpdateChannelConfig {
-    default_update_channel_for_build(cfg!(windows), crate::build_info::is_preview())
-}
-
-fn default_update_channel_for_build(is_windows: bool, is_preview: bool) -> UpdateChannelConfig {
-    if is_windows && is_preview {
-        UpdateChannelConfig::Preview
-    } else {
-        UpdateChannelConfig::Stable
     }
 }
 
@@ -63,7 +32,7 @@ fn default_update_channel_for_build(is_windows: bool, is_preview: bool) -> Updat
 pub enum ToastDelivery {
     #[default]
     Off,
-    Herdr,
+    Hicodeer,
     Terminal,
     System,
 }
@@ -72,7 +41,7 @@ pub enum ToastDelivery {
     Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema, Default,
 )]
 #[serde(rename_all = "kebab-case")]
-pub enum ToastHerdrPosition {
+pub enum ToastHicodeerPosition {
     TopLeft,
     TopRight,
     BottomLeft,
@@ -206,7 +175,7 @@ pub struct ToastConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HerdrToastConfig {
-    pub position: ToastHerdrPosition,
+    pub position: ToastHicodeerPosition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -887,7 +856,7 @@ pub enum TabBarPositionConfig {
 #[serde(rename_all = "snake_case")]
 pub enum ContextMenuOwnerConfig {
     #[default]
-    Herdr,
+    Hicodeer,
     Host,
 }
 
@@ -1220,7 +1189,7 @@ impl Default for KeysConfig {
 impl Default for WorktreesConfig {
     fn default() -> Self {
         Self {
-            directory: "~/.herdr/worktrees".into(),
+            directory: "~/.hicodeer/worktrees".into(),
         }
     }
 }
@@ -1261,7 +1230,7 @@ impl Default for UiConfig {
             context_menu_owner: if cfg!(target_env = "ohos") {
                 ContextMenuOwnerConfig::Host
             } else {
-                ContextMenuOwnerConfig::Herdr
+                ContextMenuOwnerConfig::Hicodeer
             },
             tab_bar_position: TabBarPositionConfig::Top,
             tab_bar_right: Vec::new(),
@@ -1304,7 +1273,7 @@ impl Default for ToastConfig {
 impl Default for HerdrToastConfig {
     fn default() -> Self {
         Self {
-            position: ToastHerdrPosition::BottomRight,
+            position: ToastHicodeerPosition::BottomRight,
         }
     }
 }
@@ -1332,13 +1301,14 @@ impl<'de> Deserialize<'de> for ToastConfig {
             delivery: Option<ToastDelivery>,
             enabled: Option<bool>,
             delay_seconds: Option<u64>,
+            #[serde(rename = "hicodeer")]
             herdr: HerdrToastConfig,
             clipboard: ClipboardToastConfig,
         }
 
         let raw = RawToastConfig::deserialize(deserializer)?;
         let legacy_delivery = match raw.enabled {
-            Some(true) => ToastDelivery::Herdr,
+            Some(true) => ToastDelivery::Hicodeer,
             Some(false) | None => ToastDelivery::Off,
         };
         let delivery = raw.delivery.unwrap_or(legacy_delivery);
@@ -1384,51 +1354,14 @@ mod tests {
     #[test]
     fn update_config_defaults_and_parses() {
         let default_config = Config::default();
-        assert_eq!(default_config.update.channel, default_update_channel());
-        assert!(default_config.update.version_check);
-        assert!(default_config.update.manifest_check);
+        assert!(!default_config.update.manifest_check);
 
         let toml = r#"
 [update]
-channel = "preview"
-version_check = false
-manifest_check = false
+manifest_check = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.update.channel, UpdateChannelConfig::Preview);
-        assert_eq!(config.update.channel.as_str(), "preview");
-        assert!(!config.update.version_check);
-        assert!(!config.update.manifest_check);
-    }
-
-    #[test]
-    fn update_channel_default_follows_windows_build_identity() {
-        assert_eq!(
-            default_update_channel_for_build(true, true),
-            UpdateChannelConfig::Preview
-        );
-        assert_eq!(
-            default_update_channel_for_build(true, false),
-            UpdateChannelConfig::Stable
-        );
-        assert_eq!(
-            default_update_channel_for_build(false, true),
-            UpdateChannelConfig::Stable
-        );
-    }
-
-    #[test]
-    fn missing_update_channel_uses_build_default() {
-        let empty: Config = toml::from_str("").unwrap();
-        let without_update_channel: Config =
-            toml::from_str("[update]\nversion_check = false").unwrap();
-
-        assert_eq!(Config::default().update.channel, default_update_channel());
-        assert_eq!(empty.update.channel, default_update_channel());
-        assert_eq!(
-            without_update_channel.update.channel,
-            default_update_channel()
-        );
+        assert!(config.update.manifest_check);
     }
 
     #[test]
@@ -1582,7 +1515,7 @@ status_indicators = "symbols"
             if cfg!(target_env = "ohos") {
                 ContextMenuOwnerConfig::Host
             } else {
-                ContextMenuOwnerConfig::Herdr
+                ContextMenuOwnerConfig::Hicodeer
             }
         );
         assert_eq!(
@@ -1636,14 +1569,14 @@ tab_bar_right_separator = " · "
     #[test]
     fn worktrees_directory_defaults_and_parses() {
         let default_config = Config::default();
-        assert_eq!(default_config.worktrees.directory, "~/.herdr/worktrees");
+        assert_eq!(default_config.worktrees.directory, "~/.hicodeer/worktrees");
 
         let toml = r#"
 [worktrees]
-directory = "~/Projects/herdr-worktrees"
+directory = "~/Projects/hicodeer-worktrees"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.worktrees.directory, "~/Projects/herdr-worktrees");
+        assert_eq!(config.worktrees.directory, "~/Projects/hicodeer-worktrees");
     }
 
     #[test]
@@ -1946,7 +1879,7 @@ mouse_scroll_lines = 0
 delivery = "terminal"
 delay_seconds = 2
 
-[ui.toast.herdr]
+[ui.toast.hicodeer]
 position = "top-left"
 
 [ui.toast.clipboard]
@@ -1956,7 +1889,7 @@ position = "top-center"
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.toast.delivery, ToastDelivery::Terminal);
         assert_eq!(config.ui.toast.delay_seconds, 2);
-        assert_eq!(config.ui.toast.herdr.position, ToastHerdrPosition::TopLeft);
+        assert_eq!(config.ui.toast.herdr.position, ToastHicodeerPosition::TopLeft);
         assert!(!config.ui.toast.clipboard.enabled);
         assert_eq!(
             config.ui.toast.clipboard.position,
@@ -1971,7 +1904,7 @@ position = "top-center"
         assert_eq!(config.ui.toast.delay_seconds, 1);
         assert_eq!(
             config.ui.toast.herdr.position,
-            ToastHerdrPosition::BottomRight
+            ToastHicodeerPosition::BottomRight
         );
         assert!(config.ui.toast.clipboard.enabled);
         assert_eq!(
@@ -1997,7 +1930,7 @@ delivery = "system"
 enabled = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.toast.delivery, ToastDelivery::Herdr);
+        assert_eq!(config.ui.toast.delivery, ToastDelivery::Hicodeer);
     }
 
     #[test]

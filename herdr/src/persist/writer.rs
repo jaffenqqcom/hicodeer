@@ -274,7 +274,7 @@ mod tests {
 
     fn writer(protect_unloaded: bool) -> SessionWriter {
         let directory = std::env::temp_dir().join(format!(
-            "herdr-session-recovery-{}-{}",
+            "hicodeer-session-recovery-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

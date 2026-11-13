@@ -3,7 +3,7 @@
 //! The server:
 //! - Does not enter raw mode or read stdin
 //! - Creates and listens on both `herdr.sock` (existing JSON API) and
-//!   `herdr-client.sock` (new binary protocol)
+//!   `hicodeer-client.sock` (new binary protocol)
 //! - Initializes AppState and all PTYs from session restore or fresh state
 //! - Runs the main event loop (drain events, drain API requests, scheduled tasks)
 //! - Renders to a virtual ratatui Buffer in memory
@@ -271,7 +271,7 @@ fn spawn_windows_client_accept_thread(
     should_quit: Arc<AtomicBool>,
     server_event_tx: mpsc::Sender<ServerEvent>,
 ) -> io::Result<std::thread::JoinHandle<()>> {
-    crate::thread_spawn::spawn_named("herdr-client-accept", move || {
+    crate::thread_spawn::spawn_named("hicodeer-client-accept", move || {
         let mut next_client_id = 1_u64;
         while !should_quit.load(Ordering::Acquire) {
             let stream = match listener.accept() {
@@ -296,7 +296,7 @@ fn spawn_windows_client_accept_thread(
 
             let should_quit = should_quit.clone();
             let server_event_tx = server_event_tx.clone();
-            let spawned = crate::thread_spawn::spawn_named("herdr-client-conn", move || {
+            let spawned = crate::thread_spawn::spawn_named("hicodeer-client-conn", move || {
                 if let Err(err) = crate::server::client_transport::handle_client_handshake(
                     stream,
                     client_id,
@@ -3347,14 +3347,6 @@ impl HeadlessServer {
 
         if self.git_refresh_scheduled() {
             self.app.start_git_status_refresh_if_due(now);
-        }
-
-        if self
-            .app
-            .next_auto_update_check
-            .is_some_and(|deadline| now >= deadline)
-        {
-            self.app.run_auto_update_check();
         }
 
         if self

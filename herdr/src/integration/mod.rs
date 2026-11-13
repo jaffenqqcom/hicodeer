@@ -20,7 +20,7 @@ pub(crate) use actions::{
 #[cfg(test)]
 pub(crate) use env::integration_env_lock;
 pub(crate) use env::{
-    apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
+    apply_pane_base_env, HICODEER_PANE_ID_ENV_VAR, HICODEER_TAB_ID_ENV_VAR, HICODEER_WORKSPACE_ID_ENV_VAR,
 };
 pub(crate) use registry::{
     experimental_integration_statuses, installed_integration_statuses,
@@ -38,14 +38,14 @@ pub(crate) use types::{
 /// still point at them are removed on install, so an upgraded install cannot
 /// leave behind a hook that fails on every tool call.
 pub(crate) const LEGACY_HOOK_FILE_NAMES: &[&str] = &[
-    "herdr-agent-state.sh",
-    "herdr-agent-state.ps1",
-    "herdr-agent-session.sh",
-    "herdr-agent-session.ps1",
+    "hicodeer-agent-state.sh",
+    "hicodeer-agent-state.ps1",
+    "hicodeer-agent-session.sh",
+    "hicodeer-agent-session.ps1",
 ];
 
 /// The Hermes plugin directory and enable-list entry used before the rename.
-pub(crate) const LEGACY_HERMES_PLUGIN_NAME: &str = "herdr-agent-state";
+pub(crate) const LEGACY_HERMES_PLUGIN_NAME: &str = "hicodeer-agent-state";
 
 /// The paths this integration's hook may have been installed at before the
 /// rename. Every removal walks them too, so an upgrade cannot leave a hook that
@@ -68,13 +68,13 @@ pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta"];
 const PI_EXTENSION_INSTALL_NAME: &str = "hicodeer-agent-state.ts";
 /// The Pi extension file name used before the rename; still cleaned from the omp
 /// extensions directory so an upgrade does not leave a second reporter behind.
-pub(crate) const LEGACY_PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
+pub(crate) const LEGACY_PI_EXTENSION_INSTALL_NAME: &str = "hicodeer-agent-state.ts";
 const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/hicodeer-agent-state.ts");
 const PI_INTEGRATION_VERSION: u32 = 13;
 const OMP_EXTENSION_INSTALL_NAME: &str = "hicodeer-omp-agent-state.ts";
 /// The OMP extension file name used before the rename. Install removes it, so an
 /// upgrade cannot run the previous copy beside the current one.
-pub(crate) const LEGACY_OMP_EXTENSION_INSTALL_NAME: &str = "herdr-omp-agent-state.ts";
+pub(crate) const LEGACY_OMP_EXTENSION_INSTALL_NAME: &str = "hicodeer-omp-agent-state.ts";
 const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/hicodeer-agent-state.ts");
 const OMP_INTEGRATION_VERSION: u32 = 11;
 const CLAUDE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
@@ -170,8 +170,8 @@ const KIMI_INTEGRATION_VERSION: u32 = 15;
 const GEMINI_HOOK_INSTALL_NAME: &str = "hicodeer-agent-state.sh";
 const GEMINI_HOOK_ASSET: &str = include_str!("assets/gemini/hicodeer-agent-state.sh");
 const GEMINI_INTEGRATION_VERSION: u32 = 7;
-const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> herdr kimi integration";
-const KIMI_CONFIG_BLOCK_END: &str = "# <<< herdr kimi integration";
+const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> hicodeer kimi integration";
+const KIMI_CONFIG_BLOCK_END: &str = "# <<< hicodeer kimi integration";
 const KIMI_MIN_VERSION: &str = "0.14.0";
 const KIMI_ASK_USER_QUESTION_MATCHER: &str = "^AskUserQuestion$";
 const KIMI_OTHER_TOOL_MATCHER: &str = "^(?!AskUserQuestion$).*$";
@@ -302,14 +302,14 @@ const OPENCODE_V2_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/tui.js"
 const OPENCODE_INTEGRATION_VERSION: u32 = 14;
 /// The OpenCode plugin files and plugin entries used before the rename. Install
 /// removes them, so an upgraded install keeps a single reporter.
-pub(crate) const LEGACY_OPENCODE_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
-pub(crate) const LEGACY_OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "herdr-tui-session.js";
-pub(crate) const LEGACY_OPENCODE_TUI_PLUGIN_SPEC: &str = "./herdr-tui-session.js";
-pub(crate) const LEGACY_OPENCODE_V2_TUI_PLUGIN_DIR: &str = "herdr-opencode";
-pub(crate) const LEGACY_OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./herdr-opencode";
+pub(crate) const LEGACY_OPENCODE_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
+pub(crate) const LEGACY_OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "hicodeer-tui-session.js";
+pub(crate) const LEGACY_OPENCODE_TUI_PLUGIN_SPEC: &str = "./hicodeer-tui-session.js";
+pub(crate) const LEGACY_OPENCODE_V2_TUI_PLUGIN_DIR: &str = "hicodeer-opencode";
+pub(crate) const LEGACY_OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./hicodeer-opencode";
 const KILO_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
 /// The Kilo plugin file name used before the rename.
-pub(crate) const LEGACY_KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
+pub(crate) const LEGACY_KILO_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
 const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/hicodeer-agent-state.js");
 const KILO_INTEGRATION_VERSION: u32 = 5;
 /// Plugin packages for agents whose only lifecycle surface is an in-process
@@ -319,7 +319,7 @@ const KILO_INTEGRATION_VERSION: u32 = 5;
 /// mcode loads user-level Hooks from one document at the data dir root and runs
 /// none of them unless the top level carries `"enabled": true`. The declared
 /// command therefore points at a script beside that file, and the script - not
-/// the JSON - carries the `HERDR_INTEGRATION_VERSION` marker the registry
+/// the JSON - carries the `HICODEER_INTEGRATION_VERSION` marker the registry
 /// parses, because JSON cannot hold a comment.
 const MINIMAX_HOOKS_DIR_NAME: &str = "hooks";
 const MINIMAX_HOOKS_INSTALL_NAME: &str = "hooks.json";
@@ -442,7 +442,7 @@ const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
 const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 6;
 /// Antigravity CLI keys `hooks.json` by hook name, so every Herdr entry lives
 /// under one Herdr-owned block that install rewrites and uninstall removes.
-const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "herdr";
+const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "hicodeer";
 const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
 /// `(event, reported action)`. Session-only: `PreInvocation` is the only event
 /// we need because it carries `conversationId`. The others cannot express
@@ -459,7 +459,7 @@ const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, Option<&str>, &str); 4] = [
     ("PostToolUse", None, "working"),
     ("Stop", None, "idle"),
 ];
-const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
+const INTEGRATION_VERSION_MARKER: &str = "HICODEER_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {

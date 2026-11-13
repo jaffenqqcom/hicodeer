@@ -111,7 +111,7 @@ fn agent_version_requirement_only_set_for_kimi() {
 fn enforce_agent_version_warns_when_binary_missing() {
     let requirement = AgentVersionRequirement {
         label: "kimi code",
-        binary: "herdr-test-binary-that-does-not-exist",
+        binary: "hicodeer-test-binary-that-does-not-exist",
         args: &["--version"],
         min_version: "0.14.0",
     };
@@ -207,7 +207,7 @@ fn assert_kimi_hook(
 fn unique_base() -> PathBuf {
     clear_integration_path_env();
     std::env::temp_dir().join(format!(
-        "herdr-integration-install-test-{}-{}",
+        "hicodeer-integration-install-test-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -848,7 +848,7 @@ fn outdated_integrations_treat_missing_version_marker_as_legacy() {
     let ext_dir = home.join(".pi/agent/extensions");
     fs::create_dir_all(&ext_dir).unwrap();
     let extension_path = ext_dir.join(PI_EXTENSION_INSTALL_NAME);
-    fs::write(&extension_path, "// installed by herdr\n").unwrap();
+    fs::write(&extension_path, "// installed by HiCodeer\n").unwrap();
     std::env::set_var("HOME", &home);
 
     let outdated = outdated_installed_integrations();
@@ -876,7 +876,7 @@ fn outdated_integrations_detect_previous_pi_version() {
     let extension_path = ext_dir.join(PI_EXTENSION_INSTALL_NAME);
     fs::write(
         &extension_path,
-        "// HERDR_INTEGRATION_ID=pi\n// HERDR_INTEGRATION_VERSION=4\n",
+        "// HICODEER_INTEGRATION_ID=pi\n// HICODEER_INTEGRATION_VERSION=4\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -906,7 +906,7 @@ fn outdated_integrations_detect_previous_omp_version() {
     let extension_path = ext_dir.join(OMP_EXTENSION_INSTALL_NAME);
     fs::write(
         &extension_path,
-        "// HERDR_INTEGRATION_ID=omp\n// HERDR_INTEGRATION_VERSION=4\n",
+        "// HICODEER_INTEGRATION_ID=omp\n// HICODEER_INTEGRATION_VERSION=4\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -1162,7 +1162,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
     let hook_path = claude_hooks_dir.join(CLAUDE_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=claude\n# HERDR_INTEGRATION_VERSION=9\n",
+        "#!/bin/sh\n# HICODEER_INTEGRATION_ID=claude\n# HICODEER_INTEGRATION_VERSION=9\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -1201,7 +1201,7 @@ fn claude_v2_integration_status_is_outdated() {
     let hook_path = claude_hooks_dir.join(CLAUDE_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=claude\n# HERDR_INTEGRATION_VERSION=2\n",
+        "#!/bin/sh\n# HICODEER_INTEGRATION_ID=claude\n# HICODEER_INTEGRATION_VERSION=2\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -1291,10 +1291,10 @@ fn claude_windows_hook_reports_utf8_session_path() {
     let installed = install_claude().unwrap();
 
     let capture = base.join("args.txt");
-    let fake_herdr = base.join("herdr-capture.ps1");
+    let fake_herdr = base.join("hicodeer-capture.ps1");
     fs::write(
         &fake_herdr,
-        "$capture = $env:HERDR_TEST_CAPTURE\n[System.IO.File]::WriteAllText($capture, ($args -join \"`n\"), [System.Text.UTF8Encoding]::new($false))\n",
+        "$capture = $env:HICODEER_TEST_CAPTURE\n[System.IO.File]::WriteAllText($capture, ($args -join \"`n\"), [System.Text.UTF8Encoding]::new($false))\n",
     )
     .unwrap();
 
@@ -1310,10 +1310,10 @@ fn claude_windows_hook_reports_utf8_session_path() {
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&installed.hook_path)
         .arg("session")
-        .env("HERDR_ENV", "1")
-        .env("HERDR_PANE_ID", "w1:p2")
-        .env("HERDR_BIN_PATH", &fake_herdr)
-        .env("HERDR_TEST_CAPTURE", &capture)
+        .env("HICODEER_ENV", "1")
+        .env("HICODEER_PANE_ID", "w1:p2")
+        .env("HICODEER_BIN_PATH", &fake_herdr)
+        .env("HICODEER_TEST_CAPTURE", &capture)
         .env_remove("CURSOR_VERSION")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1461,7 +1461,7 @@ fn codex_status_is_current_only_when_the_config_registers_the_hook() {
     fs::write(
         &hook_path,
         format!(
-            "#!/bin/sh\n# HERDR_INTEGRATION_ID=codex\n# HERDR_INTEGRATION_VERSION={CODEX_INTEGRATION_VERSION}\n"
+            "#!/bin/sh\n# HICODEER_INTEGRATION_ID=codex\n# HICODEER_INTEGRATION_VERSION={CODEX_INTEGRATION_VERSION}\n"
         ),
     )
     .unwrap();
@@ -1506,7 +1506,7 @@ fn codex_v2_integration_status_is_outdated() {
     let hook_path = codex_dir.join(CODEX_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=codex\n# HERDR_INTEGRATION_VERSION=2\n",
+        "#!/bin/sh\n# HICODEER_INTEGRATION_ID=codex\n# HICODEER_INTEGRATION_VERSION=2\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -2071,7 +2071,7 @@ fn copilot_v1_integration_status_is_outdated() {
     let hook_path = copilot_hooks_dir.join(COPILOT_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=copilot\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# HICODEER_INTEGRATION_ID=copilot\n# HICODEER_INTEGRATION_VERSION=1\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -2579,7 +2579,7 @@ fn droid_v1_integration_status_is_outdated() {
     let hook_path = droid_hooks_dir.join(DROID_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=droid\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# HICODEER_INTEGRATION_ID=droid\n# HICODEER_INTEGRATION_VERSION=1\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -2865,7 +2865,7 @@ fn opencode_hard_link_rejection_precedes_install_and_uninstall_asset_changes() {
     let plugin = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
     fs::write(&plugin, "previous integration").unwrap();
     let config = dir.join("cli.json");
-    let original = r#"{"plugins":["./herdr-opencode"],"theme":"system"}"#;
+    let original = r#"{"plugins":["./hicodeer-opencode"],"theme":"system"}"#;
     fs::write(&config, original).unwrap();
     let alias = base.join("linked-config");
     fs::hard_link(&config, &alias).unwrap();
@@ -2934,8 +2934,8 @@ fn opencode_recovery_copy_blocks_retry_before_parsing_or_asset_changes() {
     let plugin = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
     fs::write(&plugin, "previous integration").unwrap();
     let config = dir.join("cli.json");
-    let backup = dir.join("cli.json.herdr-backup");
-    let original = r#"{"plugins":["./herdr-opencode"],"theme":"system"}"#;
+    let backup = dir.join("cli.json.hicodeer-backup");
+    let original = r#"{"plugins":["./hicodeer-opencode"],"theme":"system"}"#;
     fs::write(&backup, original).unwrap();
     let target = crate::api::schema::IntegrationTarget::Opencode;
     for contents in [Some("{"), Some(original), None] {
@@ -2949,7 +2949,7 @@ fn opencode_recovery_copy_blocks_retry_before_parsing_or_asset_changes() {
             uninstall_target(target).unwrap_err(),
         ] {
             assert!(error.to_string().contains("recovery copy"), "{error}");
-            assert!(error.to_string().contains("cli.json.herdr-backup"));
+            assert!(error.to_string().contains("cli.json.hicodeer-backup"));
         }
         assert_eq!(fs::read_to_string(&backup).unwrap(), original);
         if contents.is_none() {
@@ -2959,12 +2959,12 @@ fn opencode_recovery_copy_blocks_retry_before_parsing_or_asset_changes() {
     // A symlink invocation must discover the referent's recovery copy too.
     let referent = base.join("preferences.json");
     fs::write(&referent, "{").unwrap();
-    let linked_backup = base.join("preferences.json.herdr-backup");
+    let linked_backup = base.join("preferences.json.hicodeer-backup");
     fs::rename(&backup, &linked_backup).unwrap();
     if symlink_file(&referent, &config) {
         let link_before = fs::read_link(&config).unwrap();
         let error = install_target(target).unwrap_err();
-        assert!(error.to_string().contains("preferences.json.herdr-backup"));
+        assert!(error.to_string().contains("preferences.json.hicodeer-backup"));
         assert_eq!(fs::read_link(&config).unwrap(), link_before);
     }
     assert_eq!(fs::read_to_string(&plugin).unwrap(), "previous integration");
@@ -3634,7 +3634,7 @@ fn install_hermes_is_idempotent_for_quoted_flat_plugin_entry() {
     fs::create_dir_all(&hermes_dir).unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  - \"hicodeer-agent-state\" # installed by herdr\n",
+        "plugins:\n  - \"hicodeer-agent-state\" # installed by HiCodeer\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -3644,7 +3644,7 @@ fn install_hermes_is_idempotent_for_quoted_flat_plugin_entry() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - \"hicodeer-agent-state\" # installed by herdr\n"
+        "plugins:\n  - \"hicodeer-agent-state\" # installed by HiCodeer\n"
     );
 
     std::env::remove_var("HOME");
@@ -3785,7 +3785,7 @@ fn uninstall_hermes_removes_commented_flat_plugin_entry() {
     .unwrap();
     fs::write(
         hermes_dir.join("config.yaml"),
-        "plugins:\n  - other-plugin\n  - hicodeer-agent-state # installed by herdr\n",
+        "plugins:\n  - other-plugin\n  - hicodeer-agent-state # installed by HiCodeer\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -4230,7 +4230,7 @@ fn install_gemini_writes_state_hooks_and_preserves_settings() {
     assert!(settings.get("security").is_some());
 
     let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
-    assert!(hook_asset.contains("HERDR_INTEGRATION_ID=gemini"));
+    assert!(hook_asset.contains("HICODEER_INTEGRATION_ID=gemini"));
     assert!(hook_asset.contains("hicodeer:gemini"));
 
     install_gemini().unwrap();
@@ -4292,8 +4292,8 @@ fn install_qwen_writes_state_hook_and_preserves_settings() {
     assert!(command.ends_with("session"));
     assert!(settings.get("permissions").is_some());
     let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
-    assert!(hook_asset.contains("HERDR_INTEGRATION_ID=qwen"));
-    assert!(hook_asset.contains("HERDR_INTEGRATION_VERSION=7"));
+    assert!(hook_asset.contains("HICODEER_INTEGRATION_ID=qwen"));
+    assert!(hook_asset.contains("HICODEER_INTEGRATION_VERSION=7"));
     assert!(hook_asset.contains("hicodeer:qwen"));
 
     install_qwen().unwrap();
@@ -4450,10 +4450,10 @@ fn letta_session_hook_is_silent_and_encodes_default_conversation() {
     let mut child = Command::new("sh")
         .arg(&installed.hook_path)
         .arg("session")
-        .env("HERDR_ENV", "1")
-        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HICODEER_ENV", "1")
+        .env("HICODEER_PANE_ID", "w1:p2")
         .env("HICODEER_AGENT_SOCKET_PATH", "/tmp/hicodeer.sock")
-        .env("HERDR_BIN_PATH", &fake_herdr)
+        .env("HICODEER_BIN_PATH", &fake_herdr)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -4679,7 +4679,7 @@ fn cursor_v1_integration_status_is_outdated() {
     let hook_path = cursor_dir.join(CURSOR_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=cursor\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# HICODEER_INTEGRATION_ID=cursor\n# HICODEER_INTEGRATION_VERSION=1\n",
     )
     .unwrap();
     std::env::set_var(CURSOR_CONFIG_DIR_ENV_VAR, &cursor_dir);
@@ -5222,7 +5222,7 @@ fn antigravity_cli_v5_install_is_outdated_until_reinstalled() {
     fs::write(
         hook_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME),
         ANTIGRAVITY_CLI_HOOK_ASSET
-            .replace("HERDR_INTEGRATION_VERSION=6", "HERDR_INTEGRATION_VERSION=5"),
+            .replace("HICODEER_INTEGRATION_VERSION=6", "HICODEER_INTEGRATION_VERSION=5"),
     )
     .unwrap();
     std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
@@ -5342,7 +5342,7 @@ fn grok_v1_integration_status_is_outdated() {
     let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=grok\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# HICODEER_INTEGRATION_ID=grok\n# HICODEER_INTEGRATION_VERSION=1\n",
     )
     .unwrap();
     fs::write(
@@ -5526,7 +5526,7 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
         home_dir.join("hooks").join(GROK_HOOK_INSTALL_NAME)
     );
 
-    // The herdr-level test seam still wins over GROK_HOME when set.
+    // The hicodeer-level test seam still wins over GROK_HOME when set.
     let seam_dir = base.join("seam");
     fs::create_dir_all(&seam_dir).unwrap();
     std::env::set_var(GROK_CONFIG_DIR_ENV_VAR, &seam_dir);
@@ -6266,7 +6266,10 @@ fn openclaw_install_registers_plugin_and_uninstall_removes_it() {
     let installed = install_openclaw().expect("install openclaw plugin");
     assert!(installed.plugin_dir.join("package.json").is_file());
     assert!(installed.plugin_dir.join("openclaw.plugin.json").is_file());
-    assert!(installed.entry_path.is_file());
+    assert!(installed
+        .plugin_dir
+        .join(super::OPENCLAW_PLUGIN_ENTRY_INSTALL_NAME)
+        .is_file());
 
     let config_path = installed
         .config_path

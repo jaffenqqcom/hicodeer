@@ -603,7 +603,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!("hicodeer-{name}-{}-{nanos}", std::process::id()))
     }
 
     fn run_git(repo: &Path, args: &[&str]) {
@@ -688,7 +688,7 @@ mod tests {
     fn install_event_plugin(app: &mut App, name: &str, event: &str) -> PathBuf {
         let plugin_root = unique_temp_path(name);
         std::fs::create_dir_all(&plugin_root).unwrap();
-        let manifest_path = plugin_root.join("herdr-plugin.toml");
+        let manifest_path = plugin_root.join("hicodeer-plugin.toml");
         std::fs::write(&manifest_path, format!("id = 'example.{name}'\n")).unwrap();
         app.state.installed_plugins.insert(
             format!("example.{name}"),
@@ -696,7 +696,7 @@ mod tests {
                 plugin_id: format!("example.{name}"),
                 name: name.into(),
                 version: "0.1.0".into(),
-                min_herdr_version: "0.7.0".into(),
+                min_hicodeer_version: "0.7.0".into(),
                 description: None,
                 manifest_path: manifest_path.display().to_string(),
                 plugin_root: plugin_root.display().to_string(),
@@ -1071,9 +1071,10 @@ mod tests {
         app.state.worktree_directory = worktree_root.clone();
         while app
             .event_tx
-            .try_send(AppEvent::UpdateReady {
-                version: "9.9.9".into(),
-                install_command: "hicodeerd update".into(),
+            .try_send(AppEvent::TabBarCommandFinished {
+                generation: 0,
+                segment_index: 0,
+                result: Ok(None),
             })
             .is_ok()
         {}
@@ -2632,7 +2633,7 @@ mod tests {
     #[test]
     fn deferred_api_background_worktree_remove_preserves_focused_workspace() {
         let mut app = test_app();
-        let checkout = PathBuf::from("/repo/herdr-issue");
+        let checkout = PathBuf::from("/repo/hicodeer-issue");
         let membership = crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
             label: "herdr".into(),
@@ -2704,7 +2705,7 @@ mod tests {
     async fn deferred_api_worktree_remove_emits_removed_after_workspace_changes() {
         let event_hub = crate::api::EventHub::default();
         let mut app = test_app_with_event_hub(event_hub.clone());
-        let checkout = PathBuf::from("/repo/herdr-issue");
+        let checkout = PathBuf::from("/repo/hicodeer-issue");
         let mut child = Workspace::test_new("child");
         child.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),

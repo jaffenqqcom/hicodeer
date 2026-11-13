@@ -523,57 +523,6 @@ impl HeadlessServer {
 
                 true
             }
-            AppEvent::UpdateReady {
-                version,
-                install_command,
-            } => {
-                let toast_before = self.app.state.toast.clone();
-                let version = version.clone();
-                let install_command = install_command.clone();
-
-                self.app.handle_internal_event(ev);
-                self.send_to_client_shells(ServerMessage::SemanticNotification(
-                    protocol::SemanticNotification {
-                        kind: protocol::SemanticNotificationKind::UpdateInstalled,
-                        title: format!("HiCodeer v{version} available"),
-                        body: Some(crate::update::update_install_instruction(&install_command)),
-                        sound: None,
-                        agent: None,
-                        workspace_id: None,
-                        tab_id: None,
-                        pane_id: None,
-                        position: None,
-                    },
-                ));
-
-                let toast_msg =
-                    if should_forward_toast_to_clients(self.app.state.toast_config.delivery) {
-                        if self.app.state.toast.is_some() && self.app.state.toast != toast_before {
-                            self.app
-                                .state
-                                .toast
-                                .as_ref()
-                                .map(|toast| format!("{}: {}", toast.title, toast.context))
-                        } else {
-                            Some(format!(
-                                "v{version} available: {}",
-                                crate::update::update_install_instruction(&install_command)
-                            ))
-                        }
-                    } else {
-                        None
-                    };
-
-                if let Some(msg) = toast_msg {
-                    self.send_flat_toast_to_foreground_client(
-                        toast_notify_kind(self.app.state.toast_config.delivery)
-                            .expect("toast forwarding requires a client notification kind"),
-                        msg,
-                    );
-                }
-
-                true
-            }
             AppEvent::WorktreeReadFinished(result)
                 if matches!(&result.request.method, api::schema::Method::WorktreeList(_)) =>
             {

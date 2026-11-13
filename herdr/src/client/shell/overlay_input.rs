@@ -130,14 +130,8 @@ impl ClientShellState {
             stack.header.width,
             1,
         ));
-        let install_command = self
-            .snapshot
-            .as_deref()
-            .map(|snapshot| snapshot.update_install_command.as_str())
-            .unwrap_or_default();
         let metrics = crate::ui::release_notes_scroll_metrics(
             notes,
-            install_command,
             stack.content,
             &self.config.palette,
         );

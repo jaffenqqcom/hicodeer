@@ -1,12 +1,12 @@
-# managed by herdr; reinstalling the integration replaces this file.
-# HERDR_INTEGRATION_ID=letta
-# HERDR_INTEGRATION_VERSION=3
+# managed by HiCodeer; reinstalling the integration replaces this file.
+# HICODEER_INTEGRATION_ID=letta
+# HICODEER_INTEGRATION_VERSION=3
 
 param([string]$Action = "")
 
 if ($Action -ne "session") { exit 0 }
-if ($env:HERDR_ENV -ne "1") { exit 0 }
-if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { exit 0 }
+if ($env:HICODEER_ENV -ne "1") { exit 0 }
+if ([string]::IsNullOrWhiteSpace($env:HICODEER_PANE_ID)) { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:HICODEER_AGENT_SOCKET_PATH)) { exit 0 }
 
 # Read hook input as raw bytes so UTF-8 payloads decode correctly even when the
@@ -26,10 +26,10 @@ if ($sessionId -eq "default") {
     $sessionId = "default:" + [string]$payload.agent_id
 }
 
-$herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
+$hicodeer = if ([string]::IsNullOrWhiteSpace($env:HICODEER_BIN_PATH)) { "hicodeerd" } else { $env:HICODEER_BIN_PATH }
 $source = if ($payload.is_new_session -eq $true) { "new" } else { "resume" }
 $commandArgs = @(
-    "pane", "report-agent-session", $env:HERDR_PANE_ID,
+    "pane", "report-agent-session", $env:HICODEER_PANE_ID,
     "--source", "hicodeer:letta", "--agent", "letta",
     "--agent-session-id", $sessionId,
     "--seq", [string][DateTime]::UtcNow.Ticks,
@@ -40,7 +40,7 @@ try {
     $job = Start-Job -ScriptBlock {
         param($Executable, [object[]]$Arguments)
         & $Executable @Arguments *> $null
-    } -ArgumentList $herdr, (,$commandArgs)
+    } -ArgumentList , (,$commandArgs)
     if ($null -eq (Wait-Job -Job $job -Timeout 1)) {
         Stop-Job -Job $job
     }

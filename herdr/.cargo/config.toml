@@ -1,0 +1,5 @@
+# Build artifacts for this workspace live under the repository-level target
+# directory, next to the other crates' output, instead of herdr/target.
+# Relative paths are resolved from the directory containing this .cargo folder.
+[build]
+target-dir = "../target/herdr"

@@ -31,9 +31,9 @@ pub fn app_dir_name() -> &'static str {
     #[cfg(not(target_env = "ohos"))]
     {
         if cfg!(debug_assertions) {
-            "herdr-dev"
+            "hicodeer-dev"
         } else {
-            "herdr"
+            "hicodeer"
         }
     }
 }
@@ -875,7 +875,7 @@ mod tests {
     fn config_loaders_report_unreadable_path() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let path =
-            std::env::temp_dir().join(format!("herdr-config-unreadable-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-config-unreadable-{}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
 
@@ -945,7 +945,7 @@ delivery = "herdr"
         assert!(loaded.invalid_sections.is_empty());
         assert_eq!(
             loaded.config.ui.toast.delivery,
-            super::super::ToastDelivery::Herdr
+            super::super::ToastDelivery::Hicodeer
         );
     }
 
@@ -1004,7 +1004,7 @@ claude = [["terminal_title"]]
         assert!(!loaded.config.ui.mouse_capture);
         assert_eq!(
             loaded.config.ui.toast.delivery,
-            super::super::ToastDelivery::Herdr
+            super::super::ToastDelivery::Hicodeer
         );
         assert!(loaded
             .config
@@ -1055,7 +1055,7 @@ mouse_captur = true
     fn startup_config_accepts_legacy_agent_panel_scope_without_warning() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let path = std::env::temp_dir().join(format!(
-            "herdr-config-legacy-agent-panel-scope-{}.toml",
+            "hicodeer-config-legacy-agent-panel-scope-{}.toml",
             std::process::id()
         ));
         std::fs::write(&path, "[ui]\nagent_panel_scope = \"all\"\n").unwrap();
@@ -1073,7 +1073,7 @@ mouse_captur = true
     fn startup_config_load_warns_about_unknown_top_level_sections() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let path = std::env::temp_dir().join(format!(
-            "herdr-config-unknown-section-{}.toml",
+            "hicodeer-config-unknown-section-{}.toml",
             std::process::id()
         ));
         std::fs::write(
@@ -1191,7 +1191,7 @@ mouse_capture = false
     fn config_load_recovers_from_a_mid_file_bom() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let path = std::env::temp_dir().join(format!(
-            "herdr-config-mid-file-bom-{}.toml",
+            "hicodeer-config-mid-file-bom-{}.toml",
             std::process::id()
         ));
         std::fs::write(

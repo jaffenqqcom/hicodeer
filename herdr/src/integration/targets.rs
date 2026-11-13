@@ -147,7 +147,7 @@ pub(crate) fn install_pi() -> io::Result<PathBuf> {
 
     remove_legacy_integration_file(
         &dir.join(LEGACY_PI_EXTENSION_INSTALL_NAME),
-        "HERDR_INTEGRATION_ID=pi",
+        "HICODEER_INTEGRATION_ID=pi",
     )?;
     let path = dir.join(PI_EXTENSION_INSTALL_NAME);
     fs::write(&path, PI_EXTENSION_ASSET)?;
@@ -168,7 +168,7 @@ pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
     let removed_legacy_pi_extension = remove_legacy_pi_extension_from_omp_dir(&dir)?;
     remove_legacy_integration_file(
         &dir.join(LEGACY_OMP_EXTENSION_INSTALL_NAME),
-        "HERDR_INTEGRATION_ID=omp",
+        "HICODEER_INTEGRATION_ID=omp",
     )?;
     let extension_path = dir.join(OMP_EXTENSION_INSTALL_NAME);
     fs::write(&extension_path, OMP_EXTENSION_ASSET)?;
@@ -185,7 +185,7 @@ pub(crate) fn remove_legacy_pi_extension_from_omp_dir(dir: &Path) -> io::Result<
     }
 
     let content = fs::read_to_string(&legacy_path)?;
-    if content.contains("HERDR_INTEGRATION_ID=pi") {
+    if content.contains("HICODEER_INTEGRATION_ID=pi") {
         fs::remove_file(legacy_path)?;
         return Ok(true);
     }
@@ -1004,11 +1004,11 @@ pub(crate) fn install_opencode() -> io::Result<OpenCodeInstallPaths> {
 
     remove_legacy_integration_file(
         &plugins_dir.join(LEGACY_OPENCODE_PLUGIN_INSTALL_NAME),
-        "HERDR_INTEGRATION_ID=opencode",
+        "HICODEER_INTEGRATION_ID=opencode",
     )?;
     remove_legacy_integration_file(
         &dir.join(LEGACY_OPENCODE_TUI_PLUGIN_INSTALL_NAME),
-        "HERDR_INTEGRATION_ID=opencode-tui",
+        "HICODEER_INTEGRATION_ID=opencode-tui",
     )?;
     remove_tui_plugin(&dir, LEGACY_OPENCODE_TUI_PLUGIN_SPEC)?;
     remove_cli_plugin(&dir, LEGACY_OPENCODE_V2_TUI_PLUGIN_SPEC)?;
@@ -1050,7 +1050,7 @@ pub(crate) fn install_kilo() -> io::Result<KiloInstallPaths> {
 
     remove_legacy_integration_file(
         &plugins_dir.join(LEGACY_KILO_PLUGIN_INSTALL_NAME),
-        "HERDR_INTEGRATION_ID=kilo",
+        "HICODEER_INTEGRATION_ID=kilo",
     )?;
     let plugin_path = plugins_dir.join(KILO_PLUGIN_INSTALL_NAME);
     fs::write(&plugin_path, KILO_PLUGIN_ASSET)?;
@@ -1237,7 +1237,6 @@ pub(crate) fn install_openclaw() -> io::Result<PluginPackageInstallPaths> {
 
     Ok(PluginPackageInstallPaths {
         plugin_dir,
-        entry_path,
         config_path: Some(config_path),
     })
 }
@@ -1263,7 +1262,6 @@ pub(crate) fn install_opendesk() -> io::Result<PluginPackageInstallPaths> {
 
     Ok(PluginPackageInstallPaths {
         plugin_dir,
-        entry_path,
         config_path: None,
     })
 }

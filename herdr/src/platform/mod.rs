@@ -444,7 +444,7 @@ impl PtyInputGuard {
 pub(crate) mod unix_image_files;
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, ignore_server_hangup,
+    begin_cli_output, forward_remote_bridge_stdio, ignore_server_hangup,
     local_stream_peer_description, spawn_server_signal_monitor, RemoteBridgeWake,
 };
 
@@ -453,9 +453,6 @@ pub(crate) use client_state::{create_private_state_file, replace_file, sync_pare
 
 #[cfg(not(unix))]
 pub(crate) fn begin_cli_output() {}
-
-#[cfg(not(unix))]
-pub(crate) fn end_cli_output() {}
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -602,7 +599,7 @@ pub fn process_agent_hint(_pid: u32) -> Option<crate::detect::Agent> {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn parse_agent_env_hint(environ: &[u8]) -> Option<crate::detect::Agent> {
     for record in environ.split(|&byte| byte == 0) {
-        let Some(value) = record.strip_prefix(b"HERDR_AGENT=") else {
+        let Some(value) = record.strip_prefix(b"HICODEER_AGENT=") else {
             continue;
         };
         return crate::detect::parse_agent_label(std::str::from_utf8(value).ok()?);
@@ -828,11 +825,11 @@ mod tests {
     #[test]
     fn parse_agent_env_hint_accepts_known_agents() {
         assert_eq!(
-            parse_agent_env_hint(b"PATH=/bin\0HERDR_AGENT=claude\0TERM=xterm\0"),
+            parse_agent_env_hint(b"PATH=/bin\0HICODEER_AGENT=claude\0TERM=xterm\0"),
             Some(crate::detect::Agent::Claude)
         );
         assert_eq!(
-            parse_agent_env_hint(b"HERDR_AGENT=codex"),
+            parse_agent_env_hint(b"HICODEER_AGENT=codex"),
             Some(crate::detect::Agent::Codex)
         );
     }
@@ -841,7 +838,7 @@ mod tests {
     #[test]
     fn parse_agent_env_hint_ignores_missing_or_unknown_agents() {
         assert_eq!(parse_agent_env_hint(b"PATH=/bin\0TERM=xterm\0"), None);
-        assert_eq!(parse_agent_env_hint(b"HERDR_AGENT=not-an-agent\0"), None);
+        assert_eq!(parse_agent_env_hint(b"HICODEER_AGENT=not-an-agent\0"), None);
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

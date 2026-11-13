@@ -1161,7 +1161,7 @@ mod tests {
     #[test]
     fn restored_worktree_space_membership_preserves_unavailable_checkout_and_rejects_replacement() {
         let root = std::env::temp_dir().join(format!(
-            "herdr-restored-worktree-{}-{}",
+            "hicodeer-restored-worktree-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

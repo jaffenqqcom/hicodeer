@@ -7,16 +7,15 @@ pub(super) enum ClientGlobalMenuAction {
 }
 
 pub(super) fn global_menu_attention(snapshot: &ClientShellSnapshot) -> bool {
-    snapshot.update_available.is_some() || snapshot.integration_updates_available
+    snapshot.integration_updates_available
 }
 
 pub(super) fn global_menu_item_has_badge(
     snapshot: &ClientShellSnapshot,
     action: ClientGlobalMenuAction,
 ) -> bool {
-    (action == ClientGlobalMenuAction::WhatsNew && snapshot.update_available.is_some())
-        || (action == ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Settings)
-            && snapshot.integration_updates_available)
+    action == ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Settings)
+        && snapshot.integration_updates_available
 }
 
 pub(super) fn global_menu_items(
@@ -36,15 +35,8 @@ pub(super) fn global_menu_items(
             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::ReloadConfig),
         ),
     ];
-    if snapshot.update_available.is_some() || snapshot.latest_release_notes_available {
-        items.push((
-            if snapshot.update_available.is_some() {
-                "update ready"
-            } else {
-                "what's new"
-            },
-            ClientGlobalMenuAction::WhatsNew,
-        ));
+    if snapshot.latest_release_notes_available {
+        items.push(("what's new", ClientGlobalMenuAction::WhatsNew));
     }
     items.push((
         "detach",

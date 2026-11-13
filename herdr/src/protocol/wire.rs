@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 24;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -930,10 +930,6 @@ pub struct ClientShellSnapshot {
     pub config_diagnostic: Option<String>,
     /// Unseen announcement owned and persisted by this endpoint.
     pub product_announcement: Option<ClientShellProductAnnouncement>,
-    /// Future-version update advertised by the endpoint.
-    pub update_available: Option<String>,
-    /// Endpoint-specific command shown in update instructions.
-    pub update_install_command: String,
     /// Endpoint's normalized built-in keybindings, used only when a remote client selects server bindings.
     pub server_keybindings_toml: Option<String>,
     /// Whether the endpoint has a What's New entry, even if its body is unavailable.
@@ -1381,7 +1377,7 @@ pub struct SemanticNotification {
     pub workspace_id: Option<String>,
     pub tab_id: Option<String>,
     pub pane_id: Option<String>,
-    pub position: Option<crate::config::ToastHerdrPosition>,
+    pub position: Option<crate::config::ToastHicodeerPosition>,
 }
 
 /// Messages sent from the server to the client over the client protocol socket.
@@ -1778,7 +1774,7 @@ pub fn check_client_version(client_version: u32) -> VersionCheck {
         VersionCheck::Compatible
     } else if client_version < PROTOCOL_VERSION {
         VersionCheck::Incompatible(format!(
-            "client version {client_version} is older than server version {PROTOCOL_VERSION}; please upgrade your herdr client"
+            "client version {client_version} is older than server version {PROTOCOL_VERSION}; please upgrade your HiCodeer client"
         ))
     } else {
         VersionCheck::Incompatible(format!(
@@ -2817,12 +2813,10 @@ mod tests {
                 body: "### New\n- Client-owned chrome".into(),
                 preview: false,
             }),
-            update_available: Some("0.8.3".into()),
-            update_install_command: "hicodeerd update".into(),
             server_keybindings_toml: Some("[keys]\nprefix = \"ctrl+a\"\n".into()),
             latest_release_notes_available: true,
             integration_updates_available: true,
-            worktree_directory: "/tmp/herdr-worktrees".into(),
+            worktree_directory: "/tmp/hicodeer-worktrees".into(),
             release_notes: Some(ClientShellReleaseNotes {
                 version: "0.8.3".into(),
                 body: "### New\n- Update ready".into(),
@@ -2909,7 +2903,7 @@ mod tests {
             workspace_id: Some("w1".into()),
             tab_id: Some("w1:t1".into()),
             pane_id: Some("w1:p1".into()),
-            position: Some(crate::config::ToastHerdrPosition::TopRight),
+            position: Some(crate::config::ToastHicodeerPosition::TopRight),
         });
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ServerMessage, _) =

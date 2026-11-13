@@ -1,4 +1,4 @@
-const API_SCHEMA_JSON: &str = include_str!("../../docs/next/api/herdr-api.schema.json");
+const API_SCHEMA_JSON: &str = include_str!("../../docs/next/api/hicodeer-api.schema.json");
 
 use crate::api::schema::{EmptyParams, Method, Request};
 

@@ -1,7 +1,7 @@
 //! Thin client mode — connects to the server's client socket.
 //!
 //! The client:
-//! - Connects to `herdr-client.sock`, sends TerminalHello with terminal size and protocol version
+//! - Connects to `hicodeer-client.sock`, sends TerminalHello with terminal size and protocol version
 //! - Sets up the real terminal (raw mode, mouse capture, keyboard enhancements)
 //! - Receives Frame messages and blits them to the terminal (diff against last frame)
 //! - Reads stdin events (keystrokes, mouse, paste) and sends them as ClientMessage::Input

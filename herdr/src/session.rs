@@ -7,7 +7,7 @@ use interprocess::local_socket::traits::Stream as _;
 
 use crate::ipc::LocalStream;
 
-pub const SESSION_ENV_VAR: &str = "HERDR_SESSION";
+pub const SESSION_ENV_VAR: &str = "HICODEER_SESSION";
 pub const DEFAULT_SESSION_NAME: &str = "default";
 
 const MAX_SESSION_NAME_LEN: usize = 64;
@@ -521,7 +521,7 @@ mod tests {
 
         let _guard = env_lock().lock().unwrap();
         let config_home =
-            std::env::temp_dir().join(format!("herdr-session-denied-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-session-denied-{}", std::process::id()));
         let previous_config_home = std::env::var_os("XDG_CONFIG_HOME");
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         let denied_path = api_socket_path_for(Some("denied"));
@@ -584,7 +584,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!("hicodeer-{name}-{}-{nanos}", std::process::id()))
     }
 
     #[cfg(unix)]
@@ -852,7 +852,7 @@ mod tests {
     fn configure_from_args_maps_default_session_name_to_default_path() {
         let _guard = env_lock().lock().unwrap();
         let config_home =
-            std::env::temp_dir().join(format!("herdr-session-default-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-session-default-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::set_var(SESSION_ENV_VAR, "work");
         clear_explicit_session_for_test();
@@ -905,7 +905,7 @@ mod tests {
     fn env_default_session_name_uses_default_path() {
         let _guard = env_lock().lock().unwrap();
         let config_home =
-            std::env::temp_dir().join(format!("herdr-env-session-default-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-env-session-default-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
         std::env::set_var(SESSION_ENV_VAR, DEFAULT_SESSION_NAME);
@@ -1001,7 +1001,7 @@ mod tests {
     fn explicit_session_socket_ignores_inherited_socket_override() {
         let _guard = env_lock().lock().unwrap();
         let config_home =
-            std::env::temp_dir().join(format!("herdr-session-precedence-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-session-precedence-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::set_var(SESSION_ENV_VAR, "work");
         EXPLICIT_SESSION_REQUESTED.store(true, Ordering::Relaxed);
@@ -1139,7 +1139,7 @@ mod tests {
     fn list_sessions_skips_reserved_default_directory() {
         let _guard = env_lock().lock().unwrap();
         let config_home =
-            std::env::temp_dir().join(format!("herdr-session-list-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-session-list-{}", std::process::id()));
         let sessions_dir = config_home
             .join(crate::config::app_dir_name())
             .join("sessions");

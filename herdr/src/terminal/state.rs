@@ -1929,7 +1929,7 @@ impl TerminalState {
         })
     }
 
-    /// A reporter that Herdr cannot also identify by process holds this pane,
+    /// A reporter that HiCodeer cannot also identify by process holds this pane,
     /// so only the pane returning to its shell can tell Herdr it exited.
     pub fn self_reported_agent_active(&self) -> bool {
         self.hook_authority.as_ref().is_some_and(|authority| {

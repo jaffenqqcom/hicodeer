@@ -141,7 +141,6 @@ impl ClientShellState {
             self.mode,
             None,
             self.endpoint_error.as_deref(),
-            false,
             &self.config.keybinds,
             &self.config.palette,
         );
@@ -355,7 +354,6 @@ impl ClientShellState {
                 self.mode,
                 self.copy_mode.as_ref(),
                 self.endpoint_error.as_deref(),
-                snapshot.update_available.is_some(),
                 &self.config.keybinds,
                 &self.config.palette,
             )

@@ -388,7 +388,7 @@ mod tests {
 
     impl Harness {
         fn new(case: &str, intent: HostShutdownIntentCell) -> Self {
-            let prefix = format!("dev.herdr.test.{}.{case}.", std::process::id());
+            let prefix = format!("dev.hicodeer.test.{}.{case}.", std::process::id());
             let watcher = Arc::new(Watcher {
                 intent,
                 requested: Arc::new(AtomicBool::new(false)),

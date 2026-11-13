@@ -627,7 +627,7 @@ fn print_report(report: &Report) {
         total.herdr_owned
     );
 
-    if let Ok(path) = std::env::var("HERDR_INPUT_CONFORMANCE_FAILURES") {
+    if let Ok(path) = std::env::var("HICODEER_INPUT_CONFORMANCE_FAILURES") {
         let lines: Vec<String> = report
             .failures
             .iter()
@@ -648,7 +648,7 @@ fn print_report(report: &Report) {
 }
 
 // Ratchet: failure counts may only go down. Lower them when a change fixes
-// cases; a rise means a regression in Herdr's input transparency.
+// cases; a rise means a regression in HiCodeer's input transparency.
 // Remaining: Alt+], Alt+Shift+P/X, Alt+^, Alt+_ behind legacy hosts. Their bytes
 // also start host replies, so they are never forwarded and the reply-tail
 // discard can swallow the next keystroke (#344).
@@ -1138,7 +1138,7 @@ fn split_read_robustness() {
         pct(idle_mismatch.len()),
         idle_mismatch.len()
     );
-    if let Ok(path) = std::env::var("HERDR_INPUT_CONFORMANCE_FAILURES") {
+    if let Ok(path) = std::env::var("HICODEER_INPUT_CONFORMANCE_FAILURES") {
         let lines: Vec<String> = burst_mismatch
             .iter()
             .chain(&reply_burst_mismatch)

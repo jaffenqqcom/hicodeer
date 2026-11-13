@@ -101,7 +101,7 @@ impl App {
         #[cfg(test)]
         let test_gate = self.session_scan_test_gate.clone();
         let spawned = crate::thread_spawn::spawn_named_with_stack_size(
-            "herdr-agent-sessions",
+            "hicodeer-agent-sessions",
             AGENT_SESSION_SCAN_STACK_SIZE,
             move || {
                 #[cfg(test)]
@@ -293,7 +293,7 @@ impl App {
             std::sync::mpsc::Receiver<std::io::Result<()>>,
         )>();
         let waiter_respond_to = respond_to.clone();
-        let spawned = crate::thread_spawn::spawn_named("herdr-agent-prompt", move || {
+        let spawned = crate::thread_spawn::spawn_named("hicodeer-agent-prompt", move || {
             let Ok((id, agent, completion)) = handoff_rx.recv() else {
                 return;
             };

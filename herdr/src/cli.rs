@@ -47,10 +47,6 @@ const TERMINAL_SESSION_CONTROL_USAGE: &str =
     "usage: hicodeerd terminal session control <target> [--takeover] [--cols N] [--rows N]";
 pub(crate) const AGENT_HELP_FOOTER: &str = concat!(
     "Are you an AI? Use these resources ONLY IF your task specifically asks you to:\n",
-    "  Help a human understand or set up HiCodeer for the first time:\n",
-    "    https://herdr.dev/agent-guide.md\n",
-    "  Debug or investigate a problem with HiCodeer:\n",
-    "    https://herdr.dev/llms.txt\n",
     "  Control HiCodeer panes, agents, or workspaces:\n",
     "    SKIP if a HiCodeer skill is already in your context. Otherwise run: hicodeerd --skill",
 );
@@ -118,7 +114,6 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         "status" => status::run_status_command(&args[2..])?,
         "completion" | "completions" => completion::run_completion_command(&args[2..])?,
         "config" => run_config_command(&args[2..])?,
-        "channel" => run_channel_command(&args[2..])?,
         "machine" => machine::run_machine_command(&args[2..])?,
         "workspace" => workspace::run_workspace_command(&args[2..])?,
         "worktree" => worktree::run_worktree_command(&args[2..])?,
@@ -134,142 +129,6 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
     };
 
     Ok(CommandOutcome::Handled(exit_code))
-}
-
-fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
-    // A bare group name prints help and succeeds; only an unknown subcommand
-    // is a usage error.
-    if args.first().is_none() {
-        print_channel_help();
-        return Ok(0);
-    }
-    match args.first().map(|arg| arg.as_str()) {
-        Some("set") => channel_set(&args[1..]),
-        Some("show") if args.len() == 1 => {
-            let config = crate::config::Config::load().config;
-            println!("{}", config.update.channel.as_str());
-            Ok(0)
-        }
-        Some("help" | "--help" | "-h") => {
-            print_channel_help();
-            Ok(0)
-        }
-        _ => {
-            print_channel_help();
-            Ok(2)
-        }
-    }
-}
-
-fn channel_set(args: &[String]) -> std::io::Result<i32> {
-    let Some(channel) = parse_channel_set_arg(args) else {
-        eprintln!("usage: hicodeerd channel set <stable|preview>");
-        return Ok(2);
-    };
-
-    if let Some(reason) = channel_set_rejection(
-        channel,
-        crate::update::preview_channel_rejection_for_current_install(),
-    ) {
-        eprintln!("{reason}.");
-        return Ok(1);
-    }
-
-    let path = crate::config::config_path();
-    let content = if path.exists() {
-        std::fs::read_to_string(&path)?
-    } else {
-        String::new()
-    };
-    if let Err(err) = content.parse::<toml::Value>() {
-        eprintln!(
-            "config file at {} is invalid TOML: {err}. Fix it before changing the update channel.",
-            path.display()
-        );
-        return Ok(1);
-    }
-
-    let updated = crate::config::upsert_section_value(
-        &content,
-        "update",
-        "channel",
-        &format!("\"{channel}\""),
-    );
-    if let Err(err) = updated.parse::<toml::Value>() {
-        eprintln!(
-            "changing the update channel would make {} invalid TOML: {err}; leaving config unchanged",
-            path.display()
-        );
-        return Ok(1);
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, updated)?;
-    println!(
-        "HiCodeer update channel set to {channel} in {}.",
-        path.display()
-    );
-
-    match channel_set_install_action(
-        crate::update::package_manager_channel_update_guidance_for_current_install(),
-    ) {
-        ChannelSetInstallAction::PrintGuidance(guidance) => {
-            println!("{guidance}");
-            return Ok(0);
-        }
-        ChannelSetInstallAction::RunSelfUpdate => {}
-    }
-
-    crate::platform::end_cli_output();
-    if let Err(err) = crate::update::self_update(crate::update::SelfUpdateOptions::default()) {
-        eprintln!("update failed: {err}");
-        eprintln!("Run `hicodeerd update` to retry.");
-        return Ok(1);
-    }
-
-    Ok(0)
-}
-
-fn parse_channel_set_arg(args: &[String]) -> Option<&str> {
-    let channel = args.first().map(|arg| arg.as_str())?;
-    if args.len() == 1 && matches!(channel, "stable" | "preview") {
-        Some(channel)
-    } else {
-        None
-    }
-}
-
-fn channel_set_rejection(
-    channel: &str,
-    install_rejection: Option<&'static str>,
-) -> Option<&'static str> {
-    if channel == "preview" {
-        return install_rejection;
-    }
-
-    None
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ChannelSetInstallAction {
-    RunSelfUpdate,
-    PrintGuidance(&'static str),
-}
-
-fn channel_set_install_action(
-    package_manager_guidance: Option<&'static str>,
-) -> ChannelSetInstallAction {
-    match package_manager_guidance {
-        Some(guidance) => ChannelSetInstallAction::PrintGuidance(guidance),
-        None => ChannelSetInstallAction::RunSelfUpdate,
-    }
-}
-
-fn print_channel_help() {
-    eprintln!("hicodeerd channel commands:");
-    eprintln!("  hicodeerd channel show                  print the configured update channel");
-    eprintln!("  hicodeerd channel set <stable|preview>  choose the update channel");
 }
 
 fn run_config_command(args: &[String]) -> std::io::Result<i32> {
@@ -1065,48 +924,6 @@ fn _print_json<T: Serialize>(value: &T) {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn parses_channel_set_argument() {
-        assert_eq!(
-            super::parse_channel_set_arg(&["preview".to_string()]),
-            Some("preview")
-        );
-        assert_eq!(
-            super::parse_channel_set_arg(&["stable".to_string()]),
-            Some("stable")
-        );
-        assert_eq!(super::parse_channel_set_arg(&["nightly".to_string()]), None);
-        assert_eq!(
-            super::parse_channel_set_arg(&["preview".to_string(), "stable".to_string()]),
-            None
-        );
-    }
-
-    #[test]
-    fn channel_set_only_applies_package_rejection_to_preview() {
-        assert_eq!(
-            super::channel_set_rejection("preview", Some("no preview")),
-            Some("no preview")
-        );
-        assert_eq!(
-            super::channel_set_rejection("stable", Some("no preview")),
-            None
-        );
-        assert_eq!(super::channel_set_rejection("preview", None), None);
-    }
-
-    #[test]
-    fn channel_set_skips_self_update_for_package_manager_guidance() {
-        assert_eq!(
-            super::channel_set_install_action(Some("use package manager")),
-            super::ChannelSetInstallAction::PrintGuidance("use package manager")
-        );
-        assert_eq!(
-            super::channel_set_install_action(None),
-            super::ChannelSetInstallAction::RunSelfUpdate
-        );
-    }
-
-    #[test]
     fn session_name_parser_accepts_option_terminator() {
         for name in ["-h", "--json"] {
             assert_eq!(
@@ -1119,15 +936,15 @@ mod tests {
     #[test]
     fn parse_env_assignment_accepts_empty_values() {
         assert_eq!(
-            super::parse_env_assignment("HERDR_ROLE=").unwrap(),
-            ("HERDR_ROLE".to_string(), String::new())
+            super::parse_env_assignment("HICODEER_ROLE=").unwrap(),
+            ("HICODEER_ROLE".to_string(), String::new())
         );
     }
 
     #[test]
     fn parse_env_assignment_requires_key_value_separator() {
         assert_eq!(
-            super::parse_env_assignment("HERDR_ROLE").unwrap_err(),
+            super::parse_env_assignment("HICODEER_ROLE").unwrap_err(),
             "env must use KEY=VALUE"
         );
     }

@@ -20,7 +20,7 @@ pub(crate) fn init_file_logging(file_name: &str) {
     };
 
     let filter =
-        EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("herdr=info"));
+        EnvFilter::try_from_env("HICODEER_LOG").unwrap_or_else(|_| EnvFilter::new("hicodeer=info"));
 
     // The target defaults to the module path, which starts with the upstream
     // crate name. Every event already carries a `subsystem` field naming the
@@ -343,35 +343,6 @@ pub(crate) fn session_restored(workspaces: usize, outcome: &'static str) {
         outcome,
         workspaces,
         "session restore evaluated"
-    );
-}
-
-pub(crate) fn update_check_started() {
-    tracing::info!(
-        event = "update.check.start",
-        subsystem = "update",
-        outcome = "started",
-        "checking for updates"
-    );
-}
-
-pub(crate) fn update_check_failed(err: &str) {
-    tracing::warn!(
-        event = "update.check.complete",
-        subsystem = "update",
-        outcome = "error",
-        err,
-        "update check failed"
-    );
-}
-
-pub(crate) fn update_available(version: &str) {
-    tracing::info!(
-        event = "update.available",
-        subsystem = "update",
-        outcome = "ok",
-        version,
-        "update available"
     );
 }
 

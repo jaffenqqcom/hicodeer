@@ -1,9 +1,9 @@
 #!/bin/sh
 # installed by HiCodeer
-# managed by herdr; reinstalling or updating the integration overwrites this file.
+# managed by HiCodeer; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
-# HERDR_INTEGRATION_ID=copilot
-# HERDR_INTEGRATION_VERSION=10
+# HICODEER_INTEGRATION_ID=copilot
+# HICODEER_INTEGRATION_VERSION=10
 
 set -eu
 
@@ -11,12 +11,12 @@ hook_input_file="$(mktemp "${TMPDIR:-/tmp}/hicodeer-copilot-hook.XXXXXX")" || ex
 trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
-[ "${HERDR_ENV:-}" = "1" ] || exit 0
+[ "${HICODEER_ENV:-}" = "1" ] || exit 0
 [ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || exit 0
-[ -n "${HERDR_PANE_ID:-}" ] || exit 0
+[ -n "${HICODEER_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
-HERDR_HOOK_INPUT_FILE="$hook_input_file" python3 - <<'PY'
+HICODEER_HOOK_INPUT_FILE="$hook_input_file" python3 - <<'PY'
 import json
 import os
 import random
@@ -24,9 +24,9 @@ import socket
 import time
 
 source = "hicodeer:copilot"
-pane_id = os.environ.get("HERDR_PANE_ID")
+pane_id = os.environ.get("HICODEER_PANE_ID")
 socket_path = os.environ.get("HICODEER_AGENT_SOCKET_PATH")
-hook_input_file = os.environ.get("HERDR_HOOK_INPUT_FILE")
+hook_input_file = os.environ.get("HICODEER_HOOK_INPUT_FILE")
 
 if not pane_id or not socket_path:
     raise SystemExit(0)

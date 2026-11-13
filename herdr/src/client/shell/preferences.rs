@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn concurrent_stores_leave_complete_preferences() {
         let path = std::env::temp_dir().join(format!(
-            "herdr-shell-concurrent-preferences-{}.json",
+            "hicodeer-shell-concurrent-preferences-{}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn repeated_store_replaces_existing_preferences() {
         let path = std::env::temp_dir().join(format!(
-            "herdr-shell-preferences-{}.json",
+            "hicodeer-shell-preferences-{}.json",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

@@ -1485,7 +1485,7 @@ fn ensure_manifest_unchanged_after_build(
         return Ok(());
     }
     Err(io::Error::other(
-        "plugin build changed herdr-plugin.toml after install preview; aborting install",
+        "plugin build changed hicodeer-plugin.toml after install preview; aborting install",
     ))
 }
 
@@ -1697,16 +1697,16 @@ fn scrub_herdr_runtime_env(command: &mut Command) {
         crate::api::SOCKET_PATH_ENV_VAR,
         crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
         crate::session::SESSION_ENV_VAR,
-        "HERDR_BIN_PATH",
-        "HERDR_ENV",
-        "HERDR_WORKSPACE_ID",
-        "HERDR_TAB_ID",
-        "HERDR_PANE_ID",
+        "HICODEER_BIN_PATH",
+        "HICODEER_ENV",
+        "HICODEER_WORKSPACE_ID",
+        "HICODEER_TAB_ID",
+        "HICODEER_PANE_ID",
     ] {
         command.env_remove(key);
     }
     for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("HERDR_PLUGIN_") {
+        if key.to_string_lossy().starts_with("HICODEER_PLUGIN_") {
             command.env_remove(key);
         }
     }
@@ -1866,9 +1866,9 @@ mod tests {
             plugin_id: id.to_string(),
             name: "Test Plugin".to_string(),
             version: "0.1.0".to_string(),
-            min_herdr_version: crate::build_info::BASE_VERSION.to_string(),
+            min_hicodeer_version: crate::build_info::BASE_VERSION.to_string(),
             description: None,
-            manifest_path: format!("/tmp/{id}/herdr-plugin.toml"),
+            manifest_path: format!("/tmp/{id}/hicodeer-plugin.toml"),
             plugin_root: format!("/tmp/{id}"),
             enabled: true,
             platforms: None,

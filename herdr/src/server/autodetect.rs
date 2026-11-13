@@ -27,7 +27,7 @@ const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Private daemon-start hint used to seed a fresh headless server from the
 /// directory where the user ran `herdr`.
-pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HERDR_STARTUP_CWD";
+pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HICODEER_STARTUP_CWD";
 
 // ---------------------------------------------------------------------------
 // Server detection
@@ -196,7 +196,7 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
 /// The server process is fully detached:
 /// - Runs in its own session (setsid) so it survives the client exiting
 /// - Stdin/stdout/stderr are redirected to /dev/null
-/// - Inherits relevant environment variables (`XDG_CONFIG_HOME`, `HERDR_SESSION`,
+/// - Inherits relevant environment variables (`XDG_CONFIG_HOME`, `HICODEER_SESSION`,
 ///   socket overrides, etc.), except inherited socket overrides are cleared when
 ///   this CLI invocation explicitly selected a session.
 ///
@@ -205,7 +205,7 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
     let exe = std::env::current_exe().map_err(|err| {
         io::Error::new(
             err.kind(),
-            format!("failed to determine herdr executable path: {err}"),
+            format!("failed to determine HiCodeer executable path: {err}"),
         )
     })?;
 
@@ -244,7 +244,7 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
     if crate::session::explicit_session_requested() {
         command
             .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
-            .env_remove("HERDR_CLIENT_SOCKET_PATH");
+            .env_remove("HICODEER_CLIENT_SOCKET_PATH");
     }
 
     command
@@ -353,7 +353,7 @@ mod windows_tests {
     #[test]
     fn reachability_distinguishes_denied_silent_busy_and_absent_pipes() {
         let path =
-            std::env::temp_dir().join(format!("herdr-startup-probe-{}.sock", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-startup-probe-{}.sock", std::process::id()));
         let name = path.to_string_lossy();
         let denied = ListenerOptions::new()
             .name(name.to_ns_name::<GenericNamespaced>().unwrap())
@@ -440,7 +440,7 @@ mod tests {
     fn server_daemon_command_clears_socket_overrides_for_explicit_session() {
         let _guard = env_lock().lock().unwrap();
         std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/inherited.sock");
-        std::env::set_var("HERDR_CLIENT_SOCKET_PATH", "/tmp/inherited-client.sock");
+        std::env::set_var("HICODEER_CLIENT_SOCKET_PATH", "/tmp/inherited-client.sock");
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
         let args = vec![
@@ -450,17 +450,17 @@ mod tests {
         ];
         crate::session::configure_from_args(&args).unwrap();
 
-        let command = build_server_daemon_command(PathBuf::from("/tmp/herdr-test"));
+        let command = build_server_daemon_command(PathBuf::from("/tmp/hicodeer-test"));
         let envs: Vec<_> = command.get_envs().collect();
 
         assert!(envs.iter().any(|(key, value)| {
             *key == OsStr::new(crate::api::SOCKET_PATH_ENV_VAR) && value.is_none()
         }));
         assert!(envs.iter().any(|(key, value)| {
-            *key == OsStr::new("HERDR_CLIENT_SOCKET_PATH") && value.is_none()
+            *key == OsStr::new("HICODEER_CLIENT_SOCKET_PATH") && value.is_none()
         }));
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
-        std::env::remove_var("HERDR_CLIENT_SOCKET_PATH");
+        std::env::remove_var("HICODEER_CLIENT_SOCKET_PATH");
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
     }
@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn server_daemon_command_passes_current_dir_as_startup_cwd() {
         let expected = std::env::current_dir().unwrap();
-        let command = build_server_daemon_command(PathBuf::from("/tmp/herdr-test"));
+        let command = build_server_daemon_command(PathBuf::from("/tmp/hicodeer-test"));
         let envs: Vec<_> = command.get_envs().collect();
 
         assert!(envs.iter().any(|(key, value)| {

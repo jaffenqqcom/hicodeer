@@ -1,12 +1,12 @@
 #!/bin/sh
-# managed by herdr; reinstalling the integration replaces this file.
-# HERDR_INTEGRATION_ID=cursor
-# HERDR_INTEGRATION_VERSION=3
+# managed by HiCodeer; reinstalling the integration replaces this file.
+# HICODEER_INTEGRATION_ID=cursor
+# HICODEER_INTEGRATION_VERSION=3
 
 [ "${1:-}" = "session" ] || exit 0
-[ "${HERDR_ENV:-}" = "1" ] || exit 0
+[ "${HICODEER_ENV:-}" = "1" ] || exit 0
 [ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || exit 0
-[ -n "${HERDR_PANE_ID:-}" ] || exit 0
+[ -n "${HICODEER_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 python3 -c '
@@ -41,7 +41,7 @@ request = json.dumps({
     "id": f"hicodeer:cursor:{seq}",
     "method": "pane.report_agent_session",
     "params": {
-        "pane_id": os.environ["HERDR_PANE_ID"],
+        "pane_id": os.environ["HICODEER_PANE_ID"],
         "source": "hicodeer:cursor",
         "agent": "cursor",
         "seq": seq,

@@ -1,62 +1,6 @@
 use super::*;
 
 #[test]
-fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
-    let mut config = ClientShellConfig::from_config(&Config::default());
-    config.tab_bar_position = crate::config::TabBarPositionConfig::Bottom;
-    config.hide_tab_bar_when_single_tab = false;
-    let mut state = ClientShellState::new(config);
-    let mut endpoint_snapshot = snapshot();
-    endpoint_snapshot.update_available = Some("0.8.3".into());
-    state.set_snapshot(Box::new(endpoint_snapshot));
-    state.set_pane_surface(surface());
-    state.mode = ClientShellMode::Navigate;
-
-    let bottom = state.compose(106, 30).expect("bottom-tab update shell");
-    let row_text = |frame: &FrameData, row: u16| {
-        let width = usize::from(frame.width);
-        let start = usize::from(row) * width;
-        frame.cells[start..start + width]
-            .iter()
-            .map(|cell| cell.symbol.as_str())
-            .collect::<String>()
-    };
-    assert!(row_text(&bottom, 29).contains("update ready"));
-    assert!(!row_text(&bottom, 28).contains("update ready"));
-    assert!(state.hits.tabs.is_empty());
-    assert!(state.hits.new_tab.is_empty());
-    assert!(state.hits.tab_scroll_left.is_empty());
-    assert!(state.hits.tab_scroll_right.is_empty());
-
-    state.config.tab_bar_position = crate::config::TabBarPositionConfig::Top;
-    state.visible_notification = Some(ClientVisibleNotification {
-        endpoint_id: ClientEndpointId::Local,
-        event: SemanticNotification {
-            kind: SemanticNotificationKind::Custom,
-            title: "bottom notification".into(),
-            body: None,
-            sound: None,
-            agent: None,
-            workspace_id: None,
-            tab_id: None,
-            pane_id: None,
-            position: Some(crate::config::ToastHerdrPosition::BottomRight),
-        },
-        deadline: std::time::Instant::now(),
-    });
-    let top = state.compose(106, 30).expect("top-tab update shell");
-    assert!(row_text(&top, 29).contains("update ready"));
-
-    let mobile = state.compose(44, 30).expect("mobile update shell");
-    let mobile_text = mobile
-        .cells
-        .iter()
-        .map(|cell| cell.symbol.as_str())
-        .collect::<String>();
-    assert!(mobile_text.contains("update ready"));
-}
-
-#[test]
 fn mobile_layout_reserves_only_client_header() {
     let config = ClientShellConfig::from_config(&Config::default());
     let state = ClientShellState::new(config);

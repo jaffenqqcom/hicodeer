@@ -521,7 +521,7 @@ const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(25
 const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
 const FOREGROUND_SELECTION_CACHE_CAPACITY: usize = 1_024;
 const FOREGROUND_SELECTION_CACHE_RETENTION: Duration = Duration::from_secs(60);
-const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
+const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HICODEER_PANE_RUNTIME_ID";
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -3356,7 +3356,7 @@ mod tests {
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
         let path =
-            std::env::temp_dir().join(format!("herdr-user-pipe-{}.sock", std::process::id()));
+            std::env::temp_dir().join(format!("hicodeer-user-pipe-{}.sock", std::process::id()));
         let listener = crate::ipc::bind_local_listener(&path).unwrap();
         let mut raw_token = std::ptr::null_mut();
         assert_ne!(
@@ -3537,7 +3537,7 @@ mod tests {
     #[test]
     fn windows_plugin_runtime_path_keeps_extended_path_when_normal_form_is_not_equivalent() {
         let path = std::path::PathBuf::from(format!(
-            r"\\?\C:\herdr-missing-plugin-runtime-path-{}",
+            r"\\?\C:\hicodeer-missing-plugin-runtime-path-{}",
             std::process::id()
         ));
         assert_eq!(super::plugin_runtime_path_platform(&path), path);
@@ -3548,7 +3548,7 @@ mod tests {
         use std::os::windows::ffi::OsStrExt;
 
         let base = std::env::temp_dir().join(format!(
-            "herdr-plugin-runtime-path-limit-test-{}",
+            "hicodeer-plugin-runtime-path-limit-test-{}",
             std::process::id()
         ));
         fs::create_dir_all(&base).expect("create test base");
@@ -3592,7 +3592,7 @@ mod tests {
     #[test]
     fn private_remote_directory_supports_long_paths() {
         let base = std::env::temp_dir().join(format!(
-            "herdr-private-remote-dir-test-{}",
+            "hicodeer-private-remote-dir-test-{}",
             std::process::id()
         ));
         fs::create_dir_all(&base).expect("create test base");
@@ -3734,7 +3734,7 @@ mod tests {
     fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
         let _lock = crate::integration::integration_env_lock();
         let base = std::env::temp_dir().join(format!(
-            "herdr-agent-argv-{}-{}",
+            "hicodeer-agent-argv-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -3745,7 +3745,7 @@ mod tests {
         let helper = base.join("pi.cmd");
         fs::write(
             &helper,
-            "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\necho(%~7\r\n)\r\n",
+            "@echo off\r\n>\"%HICODEER_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\necho(%~7\r\n)\r\n",
         )
         .unwrap();
         let argv = vec![
@@ -3772,7 +3772,7 @@ mod tests {
             };
             process
                 .env("PATH", &path)
-                .env("HERDR_ARGV_CAPTURE", capture)
+                .env("HICODEER_ARGV_CAPTURE", capture)
                 .env("PSExecutionPolicyPreference", "Bypass")
                 .status()
                 .unwrap()
@@ -3803,7 +3803,7 @@ mod tests {
         fs::remove_file(helper).unwrap();
         fs::write(
             base.join("pi.ps1"),
-            "Set-Content -LiteralPath $env:HERDR_ARGV_CAPTURE -Value @(\"$($args[0])\", \"$($args[1])\", \"$($args[2])\", \"$($args[3])\", \"$($args[4])\", \"$($args[5])\", \"$($args[6])\")\r\n",
+            "Set-Content -LiteralPath $env:HICODEER_ARGV_CAPTURE -Value @(\"$($args[0])\", \"$($args[1])\", \"$($args[2])\", \"$($args[3])\", \"$($args[4])\", \"$($args[5])\", \"$($args[6])\")\r\n",
         )
         .unwrap();
         for shell in ["powershell.exe", "cmd.exe"] {
@@ -3820,13 +3820,13 @@ mod tests {
         let _ = fs::remove_dir_all(base);
     }
 
-    const CONSOLE_TEST_CHILD_ENV: &str = "HERDR_TEST_CONSOLE_CHILD_MODE";
-    const CONSOLE_TEST_PARENT_PID_ENV: &str = "HERDR_TEST_CONSOLE_PARENT_PID";
-    const WMI_DAEMON_TEST_CHILD_ENV: &str = "HERDR_TEST_WMI_DAEMON_CHILD";
+    const CONSOLE_TEST_CHILD_ENV: &str = "HICODEER_TEST_CONSOLE_CHILD_MODE";
+    const CONSOLE_TEST_PARENT_PID_ENV: &str = "HICODEER_TEST_CONSOLE_PARENT_PID";
+    const WMI_DAEMON_TEST_CHILD_ENV: &str = "HICODEER_TEST_WMI_DAEMON_CHILD";
 
     #[test]
     fn windows_daemon_readiness_checks_job_limits_and_console() {
-        const CHILD_ENV: &str = "HERDR_TEST_DAEMON_READINESS_CHILD";
+        const CHILD_ENV: &str = "HICODEER_TEST_DAEMON_READINESS_CHILD";
         if std::env::var_os(CHILD_ENV).is_some() {
             use super::*;
 
@@ -3911,7 +3911,7 @@ mod tests {
         }
 
         let base = std::env::temp_dir().join(format!(
-            "herdr-wmi-daemon-test-{}-{}",
+            "hicodeer-wmi-daemon-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4095,7 +4095,7 @@ mod tests {
     #[test]
     fn detached_custom_command_preserves_quoted_command_tail() {
         let path = std::env::temp_dir().join(format!(
-            "herdr-raw-command-quotes-{}.txt",
+            "hicodeer-raw-command-quotes-{}.txt",
             std::process::id()
         ));
         let command = format!(r#"echo "hi" > "{}""#, path.display());
@@ -5225,7 +5225,7 @@ mod tests {
 
     #[test]
     fn scrollback_editor_argv_falls_back_to_notepad() {
-        let path = std::path::Path::new(r"C:\Temp\herdr-scrollback.txt");
+        let path = std::path::Path::new(r"C:\Temp\hicodeer-scrollback.txt");
         let argv = super::scrollback_editor_argv_with_env(path, None).unwrap();
 
         assert_eq!(
@@ -5316,7 +5316,7 @@ mod tests {
     #[test]
     fn pane_runtime_marker_is_added_only_to_git_bash_environment() {
         let root = std::env::temp_dir().join(format!(
-            "herdr-git-bash-test-{}",
+            "hicodeer-git-bash-test-{}",
             super::next_pane_runtime_marker()
         ));
         fs::create_dir_all(root.join("bin")).expect("create Git Bash bin fixture");

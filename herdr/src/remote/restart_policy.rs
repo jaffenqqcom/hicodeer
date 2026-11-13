@@ -6,12 +6,6 @@ pub(super) enum RemoteServerRestartReason {
     DaemonDetach,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RemoteInstallRunningServerPlan {
-    KeepRunning,
-    LiveHandoff,
-    StopRequired(RemoteServerRestartReason),
-}
 
 pub(super) fn remote_server_restart_reason(
     endpoint_protocol_generation: Option<u32>,
@@ -36,30 +30,6 @@ pub(super) fn remote_server_restart_reason(
     None
 }
 
-pub(super) fn remote_install_running_server_plan(
-    endpoint_protocol_generation: Option<u32>,
-    detached_server_daemon: bool,
-    surface_interest: bool,
-    health_check: bool,
-    live_handoff: bool,
-    live_handoff_enabled: bool,
-    require_surface_interest: bool,
-) -> RemoteInstallRunningServerPlan {
-    let Some(reason) = remote_server_restart_reason(
-        endpoint_protocol_generation,
-        detached_server_daemon,
-        require_surface_interest,
-        surface_interest,
-        health_check,
-    ) else {
-        return RemoteInstallRunningServerPlan::KeepRunning;
-    };
-
-    if live_handoff_enabled && live_handoff {
-        return RemoteInstallRunningServerPlan::LiveHandoff;
-    }
-    RemoteInstallRunningServerPlan::StopRequired(reason)
-}
 
 #[cfg(test)]
 mod tests {
@@ -143,19 +113,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn saved_endpoint_can_explicitly_live_handoff_for_surface_support() {
-        assert_eq!(
-            remote_install_running_server_plan(
-                Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
-                true,
-                false,
-                false,
-                true,
-                true,
-                true
-            ),
-            RemoteInstallRunningServerPlan::LiveHandoff
-        );
-    }
 }

@@ -1,12 +1,12 @@
 #!/bin/sh
-# managed by herdr; reinstalling the integration replaces this file.
-# HERDR_INTEGRATION_ID=qodercli
-# HERDR_INTEGRATION_VERSION=5
+# managed by HiCodeer; reinstalling the integration replaces this file.
+# HICODEER_INTEGRATION_ID=qodercli
+# HICODEER_INTEGRATION_VERSION=5
 
 [ "${1:-}" = "session" ] || exit 0
-[ "${HERDR_ENV:-}" = "1" ] || exit 0
+[ "${HICODEER_ENV:-}" = "1" ] || exit 0
 [ -n "${HICODEER_AGENT_SOCKET_PATH:-}" ] || exit 0
-[ -n "${HERDR_PANE_ID:-}" ] || exit 0
+[ -n "${HICODEER_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 python3 -c '
@@ -23,8 +23,8 @@ try:
         raise ValueError
     subprocess.run(
         [
-            os.environ.get("HERDR_BIN_PATH") or "herdr",
-            "pane", "report-agent-session", os.environ["HERDR_PANE_ID"],
+            os.environ.get("HICODEER_BIN_PATH") or "hicodeerd",
+            "pane", "report-agent-session", os.environ["HICODEER_PANE_ID"],
             "--source", "hicodeer:qodercli", "--agent", "qodercli",
             "--agent-session-id", session_id, "--seq", str(time.time_ns()),
         ],

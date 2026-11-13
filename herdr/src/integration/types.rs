@@ -153,7 +153,6 @@ pub(crate) struct LettaUninstallResult {
 #[derive(Debug)]
 pub(crate) struct PluginPackageInstallPaths {
     pub plugin_dir: PathBuf,
-    pub entry_path: PathBuf,
     pub config_path: Option<PathBuf>,
 }
 

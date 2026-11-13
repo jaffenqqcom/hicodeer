@@ -104,7 +104,7 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     // when the remote side lacks matching terminfo entries.
     cmd.env("TERM", PANE_TERM);
     cmd.env("COLORTERM", PANE_COLORTERM);
-    cmd.env("TERM_PROGRAM", "herdr");
+    cmd.env("TERM_PROGRAM", "hicodeer");
     cmd.env("TERM_PROGRAM_VERSION", crate::build_info::version());
     // fish only skips its own resize repaint for terminals it recognizes as
     // reflowing. Herdr reflows too, and the competing repaint glues prompt copies.
@@ -199,7 +199,7 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }
-    cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
+    cmd.env(crate::HICODEER_ENV_VAR, crate::HICODEER_ENV_VALUE);
     crate::integration::apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
     match &launch_env.identity {
@@ -209,12 +209,12 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
             tab_id,
             pane_id,
         } => {
-            cmd.env(crate::integration::HERDR_WORKSPACE_ID_ENV_VAR, workspace_id);
-            cmd.env(crate::integration::HERDR_TAB_ID_ENV_VAR, tab_id);
-            cmd.env(crate::integration::HERDR_PANE_ID_ENV_VAR, pane_id);
+            cmd.env(crate::integration::HICODEER_WORKSPACE_ID_ENV_VAR, workspace_id);
+            cmd.env(crate::integration::HICODEER_TAB_ID_ENV_VAR, tab_id);
+            cmd.env(crate::integration::HICODEER_PANE_ID_ENV_VAR, pane_id);
         }
         PaneLaunchIdentity::OmitPane => {
-            cmd.env_remove(crate::integration::HERDR_PANE_ID_ENV_VAR);
+            cmd.env_remove(crate::integration::HICODEER_PANE_ID_ENV_VAR);
         }
     }
 }
@@ -438,7 +438,7 @@ async fn apply_agent_detection_publish_update(
 const AGENT_MISS_CONFIRMATION_ATTEMPTS: u8 = 6;
 const SELF_REPORTED_AGENT_SHELL_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Herdr cannot identify a self-reported agent's process, so the pane's shell
+/// HiCodeer cannot identify a self-reported agent's process, so the pane's shell
 /// returning to an idle prompt is the only sign that the agent exited.
 async fn report_self_reported_agent_shell_return(
     active: &AtomicBool,
@@ -1015,7 +1015,7 @@ fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessPr
 // process-group lookup nor the child-groups fallback can identify pane
 // agents. The pane's own PTY master fd still answers tcgetpgrp(); use it
 // as a fallback. Job membership degrades to the group leader, which is
-// enough for comm/argv matching and HERDR_AGENT environment hints.
+// enough for comm/argv matching and HICODEER_AGENT environment hints.
 #[cfg(unix)]
 fn detection_pty_actor(io: &PaneRuntimeIo) -> Option<PtyIoActorHandle> {
     match io {
@@ -4660,7 +4660,7 @@ mod tests {
         for key in keys {
             assert!(cmd.get_env(key).is_none(), "{key} must not leak into panes");
         }
-        assert_eq!(cmd.get_env("TERM_PROGRAM"), Some(OsStr::new("herdr")));
+        assert_eq!(cmd.get_env("TERM_PROGRAM"), Some(OsStr::new("hicodeer")));
         assert_eq!(
             cmd.get_env("TERM_PROGRAM_VERSION"),
             Some(OsStr::new(&crate::build_info::version()))
@@ -4740,7 +4740,7 @@ mod tests {
             .expect("clock should be after unix epoch")
             .as_nanos();
         let cwd = std::env::temp_dir().join(format!(
-            "herdr-reported-cwd-cache-{}-{stamp}",
+            "hicodeer-reported-cwd-cache-{}-{stamp}",
             std::process::id()
         ));
         std::fs::create_dir(&cwd).expect("create reported cwd");
@@ -4769,7 +4769,7 @@ mod tests {
             .expect("clock should be after unix epoch")
             .as_nanos();
         let base = std::env::temp_dir().join(format!(
-            "herdr-process-cwd-no-stat-{}-{stamp}",
+            "hicodeer-process-cwd-no-stat-{}-{stamp}",
             std::process::id()
         ));
         let private = base.join("private");
@@ -4845,7 +4845,7 @@ mod tests {
             })
             .unwrap();
         let output_path = std::env::temp_dir().join(format!(
-            "herdr-pane-term-test-{}-{}.txt",
+            "hicodeer-pane-term-test-{}-{}.txt",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4941,7 +4941,7 @@ mod tests {
     #[test]
     fn windows_default_pane_shell_prefers_pwsh_on_path() {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-pwsh-{}",
+            "hicodeer-windows-default-shell-pwsh-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -4960,7 +4960,7 @@ mod tests {
     #[test]
     fn windows_default_pane_shell_falls_back_to_inbox_powershell() {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-fallback-{}",
+            "hicodeer-windows-default-shell-fallback-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -4978,7 +4978,7 @@ mod tests {
     #[test]
     fn windows_default_pane_shell_rejects_non_executable_pe_images() {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-invalid-{}",
+            "hicodeer-windows-default-shell-invalid-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -5059,7 +5059,7 @@ mod tests {
     #[test]
     fn windows_executable_file_rejects_arm64_image_on_amd64_host() {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-arm64-{}",
+            "hicodeer-windows-default-shell-arm64-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -5079,7 +5079,7 @@ mod tests {
     #[test]
     fn windows_default_pane_shell_skips_invalid_pwsh_candidates() {
         let base = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-skip-{}",
+            "hicodeer-windows-default-shell-skip-{}",
             std::process::id()
         ));
         let invalid_dir = base.join("invalid");
@@ -6861,7 +6861,7 @@ mod tests {
     #[tokio::test]
     async fn spawned_pane_process_sees_fish_handle_reflow() {
         let output_dir = std::env::temp_dir().join(format!(
-            "herdr-fish-handle-reflow-test-{}-{}",
+            "hicodeer-fish-handle-reflow-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -6953,9 +6953,10 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(1);
         let pane_id = PaneId::from_raw(42);
 
-        tx.try_send(AppEvent::UpdateReady {
-            version: "9.9.9".into(),
-            install_command: "hicodeerd update".into(),
+        tx.try_send(AppEvent::TabBarCommandFinished {
+            generation: 0,
+            segment_index: 0,
+            result: Ok(None),
         })
         .unwrap();
 
@@ -6984,7 +6985,7 @@ mod tests {
             .await
             .expect("queue should yield first event")
             .expect("sender still alive");
-        assert!(matches!(first, AppEvent::UpdateReady { .. }));
+        assert!(matches!(first, AppEvent::TabBarCommandFinished { .. }));
 
         tokio::time::timeout(std::time::Duration::from_millis(50), async {
             (&mut publish).await;

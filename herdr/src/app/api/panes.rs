@@ -692,7 +692,7 @@ impl App {
                     PaneInputSetParams {
                         pane_id,
                         right_click: if enabled {
-                            crate::api::schema::PaneRightClickTarget::Herdr
+                            crate::api::schema::PaneRightClickTarget::Hicodeer
                         } else {
                             crate::api::schema::PaneRightClickTarget::Pane
                         },
@@ -3231,7 +3231,7 @@ mod tests {
             key: "repo-key".into(),
             label: "herdr".into(),
             repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-issue".into(),
+            checkout_path: "/repo/hicodeer-issue".into(),
             is_linked_worktree: true,
         });
         app
@@ -3247,7 +3247,7 @@ mod tests {
                         .or_insert_with(|| {
                             crate::terminal::TerminalState::new(
                                 pane.attached_terminal_id.clone(),
-                                std::path::PathBuf::from("/herdr-test"),
+                                std::path::PathBuf::from("/hicodeer-test"),
                             )
                         });
                 }

@@ -294,13 +294,14 @@ fn server_stop_interrupts_server_event_backlog() {
 #[test]
 fn headless_api_request_drains_all_pending_internal_events_before_reading_state() {
     let mut server = test_headless_server();
-    for i in 0..=crate::app::APP_EVENT_DRAIN_LIMIT {
+    for _ in 0..=crate::app::APP_EVENT_DRAIN_LIMIT {
         server
             .app
             .event_tx
-            .try_send(AppEvent::UpdateReady {
-                version: format!("4.0.{i}"),
-                install_command: "hicodeerd install".into(),
+            .try_send(AppEvent::TabBarCommandFinished {
+                generation: 0,
+                segment_index: 0,
+                result: Ok(None),
             })
             .unwrap();
     }
@@ -322,11 +323,6 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
     let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
     assert_eq!(response["result"]["type"], "ok");
-    let expected_version = format!("4.0.{}", crate::app::APP_EVENT_DRAIN_LIMIT);
-    assert_eq!(
-        server.app.state.update_available.as_deref(),
-        Some(expected_version.as_str())
-    );
     assert!(server.app.event_rx.try_recv().is_err());
 }
 
@@ -3339,7 +3335,7 @@ async fn worktree_discovery_does_not_block_client_typing() {
     let (runtime, mut input_rx) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 4);
     workspace.insert_test_runtime(pane_id, runtime);
-    let repo = std::env::temp_dir().join(format!("herdr-blocked-git-{}", workspace.id));
+    let repo = std::env::temp_dir().join(format!("hicodeer-blocked-git-{}", workspace.id));
     workspace.identity_cwd = repo.clone();
     workspace.cached_git_space = Some(crate::workspace::GitSpaceMetadata {
         key: repo.display().to_string(),
@@ -3439,7 +3435,7 @@ async fn worktree_discovery_does_not_block_client_typing() {
 async fn deferred_worktree_open_disconnect_keeps_other_clients_focus() {
     let mut server = test_headless_server();
     let mut source = crate::workspace::Workspace::test_new("pending-open-source");
-    let repo = std::env::temp_dir().join(format!("herdr-disconnected-open-{}", source.id));
+    let repo = std::env::temp_dir().join(format!("hicodeer-disconnected-open-{}", source.id));
     let checkout = repo.with_extension("checkout");
     let git = |args: &[&str]| {
         let output = std::process::Command::new("git")
@@ -4927,7 +4923,7 @@ fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
             .map(|key| (key, std::env::var_os(key))),
     );
     let config_home = std::env::temp_dir().join(format!(
-        "herdr-shutdown-{}-{}",
+        "hicodeer-shutdown-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5290,7 +5286,7 @@ fn terminal_attach_client_exits_when_worktree_runtime_restore_fails() {
 #[test]
 fn terminal_attach_client_exits_when_worktree_remove_succeeds() {
     let mut server = test_headless_server();
-    let checkout = PathBuf::from("/repo/herdr-issue");
+    let checkout = PathBuf::from("/repo/hicodeer-issue");
     let parent = crate::workspace::Workspace::test_new("parent");
     let mut workspace = crate::workspace::Workspace::test_new("worktree");
     workspace.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
@@ -7253,7 +7249,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
         api::schema::NotificationShowParams {
             title: "plugin title".into(),
             body: Some("plugin body".into()),
-            position: Some(crate::config::ToastHerdrPosition::TopLeft),
+            position: Some(crate::config::ToastHicodeerPosition::TopLeft),
             sound: api::schema::NotificationShowSound::Done,
         },
     );
@@ -7277,7 +7273,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
             workspace_id: None,
             tab_id: None,
             pane_id: None,
-            position: Some(crate::config::ToastHerdrPosition::TopLeft),
+            position: Some(crate::config::ToastHicodeerPosition::TopLeft),
         })
     );
 }
@@ -7431,87 +7427,6 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
 }
 
 #[test]
-fn update_notification_reaches_client_shell_independent_of_delivery() {
-    let mut server = test_headless_server();
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
-        version: "9.9.9".to_string(),
-        install_command: "hicodeerd update".into(),
-    });
-
-    assert!(changed);
-    assert!(matches!(
-        read_server_message(
-            client_control_rx
-                .recv_timeout(Duration::from_millis(100))
-                .expect("semantic update notification")
-        ),
-        ServerMessage::SemanticNotification(protocol::SemanticNotification {
-            kind: protocol::SemanticNotificationKind::UpdateInstalled,
-            ..
-        })
-    ));
-}
-
-#[test]
-fn update_notification_is_semantic_for_system_delivery() {
-    let mut server = test_headless_server();
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
-
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
-        version: "9.9.9".to_string(),
-        install_command: "hicodeerd update".into(),
-    });
-
-    assert!(changed);
-    match read_server_message(
-        client_control_rx
-            .recv_timeout(Duration::from_millis(100))
-            .expect("semantic update notification"),
-    ) {
-        ServerMessage::SemanticNotification(notification) => {
-            assert_eq!(
-                notification.kind,
-                protocol::SemanticNotificationKind::UpdateInstalled
-            );
-            assert_eq!(notification.title, "HiCodeer v9.9.9 available");
-            assert_eq!(
-                notification.body.as_deref(),
-                Some("detach, run `hicodeerd update`, then run HiCodeer again to reconnect")
-            );
-        }
-        other => panic!("expected semantic update notification, got {other:?}"),
-    }
-}
-
-#[test]
 fn notification_show_api_forwards_one_semantic_client_notification() {
     let mut server = test_headless_server();
     let (client_tx, client_control_rx, _client_rx) = test_client_writer();
@@ -7536,7 +7451,7 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
             method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
                 title: "build failed".into(),
                 body: Some("api workspace".into()),
-                position: Some(crate::config::ToastHerdrPosition::TopLeft),
+                position: Some(crate::config::ToastHicodeerPosition::TopLeft),
                 sound: api::schema::NotificationShowSound::Request,
             }),
         },
@@ -7711,7 +7626,7 @@ fn notification_show_api_includes_sound_in_semantic_event() {
         ),
     );
     server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Hicodeer;
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     assert!(

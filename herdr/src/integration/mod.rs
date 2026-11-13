@@ -27,34 +27,11 @@ pub(crate) use registry::{
     integration_recommendations, integration_target_from_label, integration_target_label,
     integration_target_labels, print_outdated_update_notice,
 };
-use std::path::{Path, PathBuf};
 
 pub(crate) use types::{
     ExperimentalIntegrationStatus, IntegrationRecommendation, IntegrationStatus,
     IntegrationStatusKind,
 };
-
-/// Hook file names this integration used before it was renamed. Commands that
-/// still point at them are removed on install, so an upgraded install cannot
-/// leave behind a hook that fails on every tool call.
-pub(crate) const LEGACY_HOOK_FILE_NAMES: &[&str] = &[
-    "hicodeer-agent-state.sh",
-    "hicodeer-agent-state.ps1",
-    "hicodeer-agent-session.sh",
-    "hicodeer-agent-session.ps1",
-];
-
-/// The Hermes plugin directory and enable-list entry used before the rename.
-pub(crate) const LEGACY_HERMES_PLUGIN_NAME: &str = "hicodeer-agent-state";
-
-/// The paths this integration's hook may have been installed at before the
-/// rename. Every removal walks them too, so an upgrade cannot leave a hook that
-/// keeps reporting a second time.
-pub(crate) fn legacy_hook_paths(hook_path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
-    LEGACY_HOOK_FILE_NAMES
-        .iter()
-        .map(move |name| hook_path.with_file_name(name))
-}
 
 /// CLI labels for experimental integrations that are intentionally not part of
 /// the frozen client endpoint `IntegrationTarget` enum. Empty this list once the
@@ -66,15 +43,9 @@ pub(crate) fn legacy_hook_paths(hook_path: &Path) -> impl Iterator<Item = PathBu
 pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta"];
 
 const PI_EXTENSION_INSTALL_NAME: &str = "hicodeer-agent-state.ts";
-/// The Pi extension file name used before the rename; still cleaned from the omp
-/// extensions directory so an upgrade does not leave a second reporter behind.
-pub(crate) const LEGACY_PI_EXTENSION_INSTALL_NAME: &str = "hicodeer-agent-state.ts";
 const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/hicodeer-agent-state.ts");
 const PI_INTEGRATION_VERSION: u32 = 13;
 const OMP_EXTENSION_INSTALL_NAME: &str = "hicodeer-omp-agent-state.ts";
-/// The OMP extension file name used before the rename. Install removes it, so an
-/// upgrade cannot run the previous copy beside the current one.
-pub(crate) const LEGACY_OMP_EXTENSION_INSTALL_NAME: &str = "hicodeer-omp-agent-state.ts";
 const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/hicodeer-agent-state.ts");
 const OMP_INTEGRATION_VERSION: u32 = 11;
 const CLAUDE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
@@ -300,16 +271,7 @@ const OPENCODE_V2_TUI_PLUGIN_DIR: &str = "hicodeer-opencode";
 const OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./hicodeer-opencode";
 const OPENCODE_V2_TUI_PLUGIN_ASSET: &str = include_str!("assets/opencode/tui.js");
 const OPENCODE_INTEGRATION_VERSION: u32 = 14;
-/// The OpenCode plugin files and plugin entries used before the rename. Install
-/// removes them, so an upgraded install keeps a single reporter.
-pub(crate) const LEGACY_OPENCODE_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
-pub(crate) const LEGACY_OPENCODE_TUI_PLUGIN_INSTALL_NAME: &str = "hicodeer-tui-session.js";
-pub(crate) const LEGACY_OPENCODE_TUI_PLUGIN_SPEC: &str = "./hicodeer-tui-session.js";
-pub(crate) const LEGACY_OPENCODE_V2_TUI_PLUGIN_DIR: &str = "hicodeer-opencode";
-pub(crate) const LEGACY_OPENCODE_V2_TUI_PLUGIN_SPEC: &str = "./hicodeer-opencode";
 const KILO_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
-/// The Kilo plugin file name used before the rename.
-pub(crate) const LEGACY_KILO_PLUGIN_INSTALL_NAME: &str = "hicodeer-agent-state.js";
 const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/hicodeer-agent-state.js");
 const KILO_INTEGRATION_VERSION: u32 = 5;
 /// Plugin packages for agents whose only lifecycle surface is an in-process

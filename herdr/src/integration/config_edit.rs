@@ -8,7 +8,6 @@ use super::command::{hook_command, legacy_bash_hook_command};
 use super::file_ops::legacy_bash_hook_path;
 use super::{
     HERMES_PLUGIN_INSTALL_NAME, KIMI_CONFIG_BLOCK_BEGIN, KIMI_CONFIG_BLOCK_END, KIMI_HOOK_EVENTS,
-    LEGACY_HERMES_PLUGIN_NAME,
 };
 
 pub(crate) fn ensure_hooks_object<'a>(
@@ -347,11 +346,8 @@ pub(crate) fn remove_hook_commands(
     action: Option<&str>,
 ) -> io::Result<bool> {
     let mut removed = false;
-    let paths = std::iter::once(hook_path.to_path_buf()).chain(super::legacy_hook_paths(hook_path));
-    for path in paths {
-        for command in hook_command_variants(&path, action) {
-            removed |= remove_command_hook(hooks, event, &command)?;
-        }
+    for command in hook_command_variants(hook_path, action) {
+        removed |= remove_command_hook(hooks, event, &command)?;
     }
     Ok(removed)
 }
@@ -363,11 +359,8 @@ pub(crate) fn remove_direct_hook_commands(
     action: Option<&str>,
 ) -> io::Result<bool> {
     let mut removed = false;
-    let paths = std::iter::once(hook_path.to_path_buf()).chain(super::legacy_hook_paths(hook_path));
-    for path in paths {
-        for command in hook_command_variants(&path, action) {
-            removed |= remove_direct_command_hook(hooks, event, &command)?;
-        }
+    for command in hook_command_variants(hook_path, action) {
+        removed |= remove_direct_command_hook(hooks, event, &command)?;
     }
     Ok(removed)
 }
@@ -411,11 +404,6 @@ pub(crate) fn remove_hermes_plugin_enabled(content: &str) -> String {
 /// enable or disable operation leaves the result unchanged.
 pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> String {
     update_hermes_named_plugin(content, HERMES_PLUGIN_INSTALL_NAME, enabled)
-}
-
-/// Disables the plugin entry the integration used before it was renamed.
-pub(crate) fn remove_hermes_legacy_plugin(content: &str) -> String {
-    update_hermes_named_plugin(content, LEGACY_HERMES_PLUGIN_NAME, false)
 }
 
 fn update_hermes_named_plugin(content: &str, plugin_name: &str, enabled: bool) -> String {

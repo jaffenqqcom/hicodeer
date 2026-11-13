@@ -647,32 +647,7 @@ fn install_omp_writes_embedded_asset_to_omp_extensions_dir() {
         installed.extension_path,
         ext_dir.join(OMP_EXTENSION_INSTALL_NAME)
     );
-    assert!(!installed.removed_legacy_pi_extension);
     assert_eq!(content, OMP_EXTENSION_ASSET);
-
-    std::env::remove_var("HOME");
-    let _ = fs::remove_dir_all(base);
-}
-
-#[test]
-fn install_omp_removes_legacy_pi_integration_from_omp_extensions_dir() {
-    let _lock = integration_env_lock();
-    let base = unique_base();
-    let home = base.join("home");
-    let ext_dir = home.join(".omp/agent/extensions");
-    fs::create_dir_all(&ext_dir).unwrap();
-    let legacy_path = ext_dir.join(LEGACY_PI_EXTENSION_INSTALL_NAME);
-    fs::write(&legacy_path, PI_EXTENSION_ASSET).unwrap();
-    std::env::set_var("HOME", &home);
-
-    let installed = install_omp().unwrap();
-
-    assert_eq!(
-        installed.extension_path,
-        ext_dir.join(OMP_EXTENSION_INSTALL_NAME)
-    );
-    assert!(installed.removed_legacy_pi_extension);
-    assert!(!legacy_path.exists());
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -695,7 +670,6 @@ fn install_omp_preserves_non_herdr_file_with_pi_install_name() {
         installed.extension_path,
         ext_dir.join(OMP_EXTENSION_INSTALL_NAME)
     );
-    assert!(!installed.removed_legacy_pi_extension);
     assert_eq!(
         fs::read_to_string(user_path).unwrap(),
         "// user extension\n"
@@ -721,7 +695,6 @@ fn install_omp_uses_pi_config_dir_env() {
         installed.extension_path,
         ext_dir.join(OMP_EXTENSION_INSTALL_NAME)
     );
-    assert!(!installed.removed_legacy_pi_extension);
 
     std::env::remove_var("HOME");
     clear_integration_path_env();
@@ -768,7 +741,6 @@ fn install_omp_creates_extensions_dir_when_agent_dir_exists() {
         ext_dir.join(OMP_EXTENSION_INSTALL_NAME)
     );
     assert!(ext_dir.is_dir());
-    assert!(!installed.removed_legacy_pi_extension);
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);

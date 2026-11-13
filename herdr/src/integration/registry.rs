@@ -698,9 +698,9 @@ pub(crate) fn integration_status_at(
         state = super::IntegrationStatusKind::Outdated;
     }
 
-    // Grok only invokes the hook when the hicodeer-owned `hooks/herdr.json`
+    // Grok only invokes the hook when the hicodeer-owned `hooks/hicodeer.json`
     // registers it, so a current hook script with a missing or broken config
-    // is a nonfunctional install: report it as outdated so `herdr integration
+    // is a nonfunctional install: report it as outdated so `hicodeer integration
     // status` flags it and a reinstall rewrites both files.
     if target == crate::api::schema::IntegrationTarget::Grok
         && state == super::IntegrationStatusKind::Current

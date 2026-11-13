@@ -14,7 +14,7 @@ use super::targets::{
     uninstall_atomcode, uninstall_codewhale, uninstall_deveco, uninstall_qodercli, uninstall_qwen, uninstall_zcode,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
-use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};
+use super::KIMI_MIN_VERSION;
 
 pub(crate) fn install_target(
     target: crate::api::schema::IntegrationTarget,
@@ -150,21 +150,10 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
         }
         crate::api::schema::IntegrationTarget::Omp => {
             let installed = install_omp()?;
-            let mut messages = Vec::new();
-            if installed.removed_legacy_pi_extension {
-                messages.push(format!(
-                    "removed legacy pi integration from omp extension directory at {}",
-                    installed
-                        .extension_path
-                        .with_file_name(PI_EXTENSION_INSTALL_NAME)
-                        .display()
-                ));
-            }
-            messages.push(format!(
+            vec![format!(
                 "installed omp integration to {}",
                 installed.extension_path.display()
-            ));
-            messages
+            )]
         }
         crate::api::schema::IntegrationTarget::Claude => {
             let installed = install_claude()?;

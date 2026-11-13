@@ -37,6 +37,11 @@ pub use remote_connections::RemoteSettings;
 pub use remote_servers::RemoteServerProjects;
 use settings::{DefaultOpenBehavior, Settings, WorktreeId};
 use workspace::ProjectGroupKey;
+// [OHOS PORT BEGIN] HiCodeer has no application menu, so the recent-projects
+// footer carries the only entry that dispatches CloseProject.
+#[cfg(target_env = "ohos")]
+use workspace::CloseProject;
+// [OHOS PORT END]
 
 use dev_container::{DevContainerContext, find_devcontainer_configs};
 use ui::{
@@ -1693,6 +1698,31 @@ impl PickerDelegate for RecentProjectsDelegate {
                     .gap_1()
                     .border_t_1()
                     .border_color(cx.theme().colors().border_variant)
+                    .child({
+                        // [OHOS PORT BEGIN] HiCodeer has no application menu, so
+                        // this popover carries the only entry that closes the
+                        // current project.
+                        #[cfg(target_env = "ohos")]
+                        {
+                            ButtonLike::new("close_project").child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_1()
+                                    .justify_between()
+                                    .child(Label::new(localization::localized_str!(
+                                        "Close Project"
+                                    ))),
+                            )
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(CloseProject), cx);
+                            })
+                        }
+                        // [OHOS PORT END]
+                        #[cfg(not(target_env = "ohos"))]
+                        {
+                            gpui::Empty
+                        }
+                    })
                     .child({
                         ButtonLike::new("open_local_folder")
                             .child(

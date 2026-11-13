@@ -562,6 +562,9 @@ fn restore_tab(
             .map(reported_resume_from_snapshot);
         let restored_agent_session =
             restored_terminal_agent_session(saved_agent_session, startup.duplicate_agent_session);
+        let remembered_agent_name = restored_agent_session.as_ref().and_then(|session| {
+            crate::persist::agent_names::lookup(&session.source, &session.session_ref.value)
+        });
         let initial_restore_agent = startup
             .restore_plan
             .as_ref()
@@ -617,6 +620,11 @@ fn restore_tab(
                 }
                 (Some(_), None) => {}
                 (None, _) => {}
+            }
+            if let Some(name) = remembered_agent_name.as_ref() {
+                if !remembered_agent_name_is_taken(&terminals, name) {
+                    terminal.set_agent_name(name.clone());
+                }
             }
             if let Some(agent) = initial_restore_agent {
                 let _ = terminal.set_detected_state_with_screen_signals_at(
@@ -725,6 +733,11 @@ fn restore_tab(
                     }
                     (Some(_), None) => {}
                     (None, _) => {}
+                }
+                if let Some(name) = remembered_agent_name.as_ref() {
+                    if !remembered_agent_name_is_taken(&terminals, name) {
+                        terminal.set_agent_name(name.clone());
+                    }
                 }
                 if let Some(agent) = initial_restore_agent {
                     let _ = terminal.set_detected_state_with_screen_signals_at(
@@ -965,6 +978,13 @@ fn persisted_agent_session_from_snapshot(
         session.kind,
         &session.value,
     )
+}
+
+/// A remembered name must not duplicate one already given to another pane.
+fn remembered_agent_name_is_taken(terminals: &[TerminalState], name: &str) -> bool {
+    terminals
+        .iter()
+        .any(|terminal| terminal.agent_name.as_deref() == Some(name))
 }
 
 fn restored_terminal_agent_session(

@@ -1735,27 +1735,70 @@ impl AppState {
         if let Some(terminal) = self.terminals.get(&terminal_id) {
             if terminal.agent_name.is_none() {
                 if let Some(kind) = terminal.effective_known_agent() {
+                    let remembered_name = terminal
+                        .current_session_identity_for_persistence()
+                        .and_then(|(source, _agent, _kind, value)| {
+                            crate::persist::agent_names::lookup(&source, &value)
+                        });
                     if let Some(tab_idx) = self
                         .workspaces
                         .get(ws_idx)
                         .and_then(|workspace| workspace.find_tab_index_for_pane(pane_id))
                     {
-                        let name = crate::app::agents::auto_agent_name_with(
-                            &self.workspaces,
-                            ws_idx,
-                            tab_idx,
-                            kind,
-                            |name| {
-                                self.terminals
-                                    .values()
-                                    .any(|terminal| terminal.agent_name.as_deref() == Some(name))
-                            },
-                        );
+                        let name = match remembered_name {
+                            Some(name)
+                                if !self.terminals.values().any(|other| {
+                                    other.id != terminal_id
+                                        && other.agent_name.as_deref() == Some(name.as_str())
+                                }) =>
+                            {
+                                name
+                            }
+                            _ => crate::app::agents::auto_agent_name_with(
+                                &self.workspaces,
+                                ws_idx,
+                                tab_idx,
+                                kind,
+                                |name| {
+                                    self.terminals.values().any(|terminal| {
+                                        terminal.agent_name.as_deref() == Some(name)
+                                    })
+                                },
+                            ),
+                        };
                         if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
                             terminal.set_agent_name(name);
                         }
                         self.mark_session_dirty();
                     }
+                }
+            }
+        }
+        // Session identity can land after the first detection pass named the
+        // pane. Replace that automatic name with the remembered one, but never
+        // a name the user chose.
+        if mutation.session_ref_changed {
+            let remembered_name = self
+                .terminals
+                .get(&terminal_id)
+                .filter(|terminal| terminal.agent_name_is_automatic())
+                .and_then(|terminal| {
+                    terminal
+                        .current_session_identity_for_persistence()
+                        .and_then(|(source, _agent, _kind, value)| {
+                            crate::persist::agent_names::lookup(&source, &value)
+                        })
+                });
+            if let Some(name) = remembered_name {
+                let taken = self.terminals.values().any(|other| {
+                    other.id != terminal_id
+                        && other.agent_name.as_deref() == Some(name.as_str())
+                });
+                if !taken {
+                    if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
+                        terminal.set_agent_name(name);
+                    }
+                    self.mark_session_dirty();
                 }
             }
         }

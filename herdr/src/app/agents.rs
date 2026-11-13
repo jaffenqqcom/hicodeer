@@ -238,9 +238,23 @@ impl App {
         if terminal.effective_agent_label().is_none() {
             return Err(AgentRenameError::NotAgent);
         }
+        let session_identity = terminal
+            .current_session_identity_for_persistence()
+            .map(|(source, _agent, _kind, value)| (source, value));
         match normalized_name {
-            Some(name) => terminal.set_agent_name(name),
-            None => terminal.clear_agent_name(),
+            Some(name) => {
+                if let Some((source, value)) = session_identity.as_ref() {
+                    crate::persist::agent_names::store(source, value, &name);
+                }
+                terminal.set_agent_name(name);
+                terminal.mark_agent_name_manual();
+            }
+            None => {
+                if let Some((source, value)) = session_identity.as_ref() {
+                    crate::persist::agent_names::remove(source, value);
+                }
+                terminal.clear_agent_name()
+            }
         }
         self.state.mark_session_dirty();
         self.schedule_session_save();

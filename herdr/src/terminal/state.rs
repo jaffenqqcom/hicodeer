@@ -148,6 +148,10 @@ pub struct TerminalState {
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
     agent_name_owner: Option<AgentNameOwner>,
+    /// Whether `agent_name` came from automatic naming or the persisted name
+    /// table. A user rename clears this so a later session identity change
+    /// cannot overwrite the user's choice.
+    agent_name_automatic: bool,
     managed_agent: Option<ManagedAgent>,
     codex_prompt_ready: bool,
     managed_agent_launch_session: Option<crate::agent_resume::PersistedAgentSession>,
@@ -188,6 +192,7 @@ impl TerminalState {
             manual_label: None,
             agent_name: None,
             agent_name_owner: None,
+            agent_name_automatic: true,
             managed_agent: None,
             codex_prompt_ready: false,
             managed_agent_launch_session: None,
@@ -2182,6 +2187,7 @@ impl TerminalState {
 
     pub fn set_agent_name(&mut self, name: String) {
         self.agent_name = (!name.is_empty()).then_some(name);
+        self.agent_name_automatic = true;
         self.agent_name_owner = self.agent_name.as_ref().and_then(|_| {
             self.hook_authority
                 .as_ref()
@@ -2382,6 +2388,17 @@ impl TerminalState {
         });
     }
 
+    /// Whether the current name was produced automatically or restored from the
+    /// persisted name table, rather than chosen by the user.
+    pub(crate) fn agent_name_is_automatic(&self) -> bool {
+        self.agent_name_automatic
+    }
+
+    /// Keeps a user rename from being replaced when the session identity lands.
+    pub(crate) fn mark_agent_name_manual(&mut self) {
+        self.agent_name_automatic = false;
+    }
+
     pub fn clear_agent_name(&mut self) {
         self.codex_prompt_ready = false;
         if self
@@ -2394,6 +2411,7 @@ impl TerminalState {
         }
         self.agent_name = None;
         self.agent_name_owner = None;
+        self.agent_name_automatic = true;
         self.managed_agent = None;
     }
 

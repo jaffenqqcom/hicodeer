@@ -3102,18 +3102,16 @@ impl AgentPanel {
                                             .child(div().flex_1())
                                             .when(im_configured, |row| {
                                                 row.child(
-                                                    h_flex()
-                                                        .items_center()
-                                                        .gap_1()
-                                                        .child(
-                                                            Label::new(
+                                                    div()
+                                                        .id("agent-panel-im-mute-tooltip")
+                                                        .tooltip(move |_, cx| {
+                                                            Tooltip::simple(
                                                                 localization::localized_str!(
                                                                     "Temporarily off"
                                                                 ),
+                                                                cx,
                                                             )
-                                                            .size(LabelSize::XSmall)
-                                                            .color(Color::Muted),
-                                                        )
+                                                        })
                                                         .child(
                                                             Switch::new(
                                                                 "agent-panel-im-mute",

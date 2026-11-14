@@ -4388,40 +4388,19 @@ impl GitPanel {
             ];
 
             let config_task = self.project.read(cx).git_config(path, args, cx);
-            // [OHOS PORT BEGIN] Re-check access right after a successful write.
-            // On OHOS the app's HOME is the sandbox while git runs in the daemon,
-            // whose HOME holds the global config, so the `.gitconfig` watch that
-            // normally emits `GlobalConfigurationUpdated` never fires and the
-            // panel keeps showing the stale `GitAccess::No` verdict.
-            // Remove this block to restore the upstream behaviour.
+            // [OHOS PORT BEGIN] Refresh the access verdict here instead of relying
+            // on the `.gitconfig` watch, which never fires on OHOS.
             #[cfg(target_env = "ohos")]
             {
                 let Some(repository) = self.active_repository.clone() else {
                     return;
                 };
-                cx.spawn_in(window, async move |git_panel, cx| {
-                    match config_task.await {
-                        Ok(_) => {
-                            let access =
-                                repository.update(cx, |repository, cx| repository.access(cx));
-                            let access = match access.await {
-                                Ok(access) => access,
-                                Err(_) => GitAccess::No,
-                            };
-                            git_panel
-                                .update_in(cx, |git_panel, window, cx| {
-                                    git_panel.git_access = Some(access);
-                                    git_panel.schedule_update(window, cx);
-                                    cx.notify();
-                                })
-                                .ok();
-                        }
-                        Err(error) => {
-                            log::error!("add_safe_directory: git config failed: {error}");
-                        }
-                    }
-                })
-                .detach();
+                self.recheck_git_access_after_safe_directory_write(
+                    repository,
+                    config_task,
+                    window,
+                    cx,
+                );
                 return;
             }
             // [OHOS PORT END]
@@ -4429,6 +4408,75 @@ impl GitPanel {
             config_task.detach_and_log_err(cx);
         }
     }
+
+    // [OHOS PORT BEGIN] Re-check access after the user trusted a directory.
+    // The upstream flow gets two things for free that OHOS does not: the
+    // `.gitconfig` watch fires and emits `GlobalConfigurationUpdated`, and a
+    // repository whose ownership check succeeded keeps a live git worker. Here
+    // the watch never fires (git runs outside the app's HOME), and a failed
+    // ownership check leaves a dead worker whose cached failure makes every
+    // later check fail too. Respawn that worker and ask for access again in one
+    // place so the trust button actually takes effect without an app restart.
+    // Remove this method to restore the upstream behaviour.
+    #[cfg(target_env = "ohos")]
+    fn recheck_git_access_after_safe_directory_write(
+        &self,
+        repository: Entity<Repository>,
+        config_task: Task<anyhow::Result<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project = self.project.downgrade();
+        cx.spawn_in(window, async move |git_panel, cx| {
+            match config_task.await {
+                Ok(_) => {
+                    if let Some(project) = project.upgrade() {
+                        let respawned = cx.update(|_window, cx| {
+                            project.update(cx, |project, cx| {
+                                project.git_store().update(cx, |git_store, cx| {
+                                    git_store.respawn_closed_local_repositories(cx);
+                                });
+                            });
+                        });
+                        if let Err(error) = respawned {
+                            log::error!(
+                                "recheck_git_access_after_safe_directory_write: respawn failed: {error}"
+                            );
+                        }
+                    } else {
+                        log::warn!(
+                            "recheck_git_access_after_safe_directory_write: project was dropped, skipping the git worker respawn"
+                        );
+                    }
+                    let access = repository.update(cx, |repository, cx| repository.access(cx));
+                    let access = match access.await {
+                        Ok(access) => access,
+                        Err(error) => {
+                            log::warn!(
+                                "recheck_git_access_after_safe_directory_write: access check was cancelled: {error}"
+                            );
+                            GitAccess::No
+                        }
+                    };
+                    let updated = git_panel.update_in(cx, |git_panel, window, cx| {
+                        git_panel.git_access = Some(access);
+                        git_panel.schedule_update(window, cx);
+                        cx.notify();
+                    });
+                    if let Err(error) = updated {
+                        log::error!(
+                            "recheck_git_access_after_safe_directory_write: panel refresh failed: {error}"
+                        );
+                    }
+                }
+                Err(error) => {
+                    log::error!("add_safe_directory: git config failed: {error}");
+                }
+            }
+        })
+        .detach();
+    }
+    // [OHOS PORT END]
 
     pub fn create_pull_request(&self, window: &mut Window, cx: &mut Context<Self>) {
         let result = (|| -> anyhow::Result<()> {

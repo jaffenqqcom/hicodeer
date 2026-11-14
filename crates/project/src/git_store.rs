@@ -2600,6 +2600,53 @@ impl GitStore {
         cx.emit(GitStoreEvent::JobsUpdated)
     }
 
+    // [OHOS PORT BEGIN] Recover local repositories whose worker was closed by
+    // a failed ownership check. The global-configuration handler already
+    // respawns them, but it only runs when the `.gitconfig` watch fires, and on
+    // OHOS git runs outside the app's HOME so that watch never fires. Callers
+    // that write `safe.directory` can request the same recovery explicitly.
+    // Remove this method to restore the upstream behaviour.
+    #[cfg(target_env = "ohos")]
+    pub fn respawn_closed_local_repositories(&mut self, cx: &mut Context<Self>) {
+        let GitStoreState::Local {
+            project_environment,
+            fs,
+            ..
+        } = &self.state
+        else {
+            return;
+        };
+        let project_environment = project_environment.downgrade();
+        let fs = fs.clone();
+        let repositories_to_respawn = self
+            .repositories
+            .iter()
+            .filter_map(|(repository_id, repository)| {
+                repository
+                    .read(cx)
+                    .job_sender
+                    .is_closed()
+                    .then_some((*repository_id, repository.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (repository_id, repository) in repositories_to_respawn {
+            let is_trusted = self.repository_is_trusted(repository_id, cx);
+            repository.update(cx, |repository, cx| {
+                repository.respawn_local_worker(
+                    project_environment.clone(),
+                    fs.clone(),
+                    is_trusted,
+                    cx,
+                );
+                repository.schedule_scan(None, cx);
+            });
+        }
+        // Matches the global-configuration handler: subscribers recompute their
+        // stored access verdict when this event arrives.
+        cx.emit(GitStoreEvent::GlobalConfigurationUpdated);
+    }
+    // [OHOS PORT END]
+
     fn repository_is_trusted(&self, repository_id: RepositoryId, cx: &mut Context<Self>) -> bool {
         let Some(worktree_ids) = self.worktree_ids.get(&repository_id) else {
             return false;

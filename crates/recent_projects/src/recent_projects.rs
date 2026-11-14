@@ -1691,6 +1691,60 @@ impl PickerDelegate for RecentProjectsDelegate {
         };
 
         if popover_style {
+            let open_local_folder_entry = ButtonLike::new("open_local_folder")
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_1()
+                        .justify_between()
+                        .child(Label::new(localization::localized_str!(
+                            "Open Local Folders"
+                        )))
+                        .child(KeyBinding::for_action_in(
+                            &workspace::Open {
+                                create_new_window: Some(self.create_new_window),
+                            },
+                            &focus_handle,
+                            cx,
+                        )),
+                )
+                .on_click({
+                    let workspace = self.workspace.clone();
+                    let create_new_window = self.create_new_window;
+                    move |_, window, cx| {
+                        open_local_project(workspace.clone(), create_new_window, window, cx);
+                    }
+                })
+                .into_any_element();
+            // [OHOS PORT BEGIN] HiCodeer has no application menu, so this popover
+            // carries the only entry that closes the current project. That entry
+            // sorts below the local-folder one; other platforms keep the upstream
+            // order untouched.
+            #[cfg(target_env = "ohos")]
+            let (first_footer_entry, second_footer_entry) = (
+                open_local_folder_entry,
+                ButtonLike::new("close_project")
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_1()
+                            .justify_between()
+                            .child(Label::new(localization::localized_str!(
+                                "Close Project"
+                            ))),
+                    )
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(CloseProject), cx);
+                    })
+                    .into_any_element(),
+            );
+            #[cfg(not(target_env = "ohos"))]
+            let (first_footer_entry, second_footer_entry) = (
+                gpui::Empty.into_any_element(),
+                open_local_folder_entry,
+            );
+            // [OHOS PORT END]
+
             return Some(
                 v_flex()
                     .flex_1()
@@ -1698,60 +1752,8 @@ impl PickerDelegate for RecentProjectsDelegate {
                     .gap_1()
                     .border_t_1()
                     .border_color(cx.theme().colors().border_variant)
-                    .child({
-                        // [OHOS PORT BEGIN] HiCodeer has no application menu, so
-                        // this popover carries the only entry that closes the
-                        // current project.
-                        #[cfg(target_env = "ohos")]
-                        {
-                            ButtonLike::new("close_project").child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_1()
-                                    .justify_between()
-                                    .child(Label::new(localization::localized_str!(
-                                        "Close Project"
-                                    ))),
-                            )
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(Box::new(CloseProject), cx);
-                            })
-                        }
-                        // [OHOS PORT END]
-                        #[cfg(not(target_env = "ohos"))]
-                        {
-                            gpui::Empty
-                        }
-                    })
-                    .child({
-                        ButtonLike::new("open_local_folder")
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_1()
-                                    .justify_between()
-                                    .child(Label::new(localization::localized_str!("Open Local Folders")))
-                                    .child(KeyBinding::for_action_in(
-                                        &workspace::Open {
-                                            create_new_window: Some(self.create_new_window),
-                                        },
-                                        &focus_handle,
-                                        cx,
-                                    )),
-                            )
-                            .on_click({
-                                let workspace = self.workspace.clone();
-                                let create_new_window = self.create_new_window;
-                                move |_, window, cx| {
-                                    open_local_project(
-                                        workspace.clone(),
-                                        create_new_window,
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            })
-                    })
+                    .child(first_footer_entry)
+                    .child(second_footer_entry)
                     .child({
                         // [OHOS PORT BEGIN] OHOS offers no remote folders, so the
                         // recent-projects popover only shows the local entry.

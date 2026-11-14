@@ -59,6 +59,7 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         search_and_files_page(),
         window_and_layout_page(),
         panels_page(),
+        debugger_page(),
         terminal_page(),
     ];
     // [OHOS PORT] The agent panel's layout settings have no upstream
@@ -4348,7 +4349,7 @@ fn search_and_files_page() -> SettingsPage {
 }
 
 fn window_and_layout_page() -> SettingsPage {
-    fn status_bar_section() -> [SettingsPageItem; 11] {
+    fn status_bar_section() -> [SettingsPageItem; 12] {
         [
             SettingsPageItem::SectionHeader(localization::localized_str!("Status Bar")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -4546,6 +4547,22 @@ fn window_and_layout_page() -> SettingsPage {
                             .search
                             .get_or_insert_default()
                             .button = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Debugger Button"),
+                description: localization::localized_str!(
+                    "Show the debugger button in the status bar."
+                ),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("debugger.button"),
+                    pick: |settings_content| settings_content.debugger.as_ref()?.button.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.debugger.get_or_insert_default().button = value;
                     },
                 }),
                 metadata: None,
@@ -7162,11 +7179,32 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
+    fn debugger_panel_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader(localization::localized_str!("Debugger Panel")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Debugger Panel Dock"),
+                description: localization::localized_str!("The dock position of the debug panel."),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("debugger.dock"),
+                    pick: |settings_content| settings_content.debugger.as_ref()?.dock.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.debugger.get_or_insert_default().dock = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
     let mut items = concat_sections![
         project_panel_section(),
         terminal_panel_section(),
         outline_panel_section(),
         git_panel_section(),
+        debugger_panel_section(),
     ]
     .into_vec();
     // [OHOS PORT] Last section of this page: the agent panel's own controls.
@@ -7176,6 +7214,135 @@ fn panels_page() -> SettingsPage {
     SettingsPage {
         title: localization::localized_str!("Panels"),
         items: items.into_boxed_slice(),
+    }
+}
+
+fn debugger_page() -> SettingsPage {
+    fn general_section() -> [SettingsPageItem; 6] {
+        [
+            SettingsPageItem::SectionHeader(localization::localized_str!("General")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Stepping Granularity"),
+                description: localization::localized_str!(
+                    "Determines the stepping granularity for debug operations."
+                ),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("debugger.stepping_granularity"),
+                    pick: |settings_content| {
+                        settings_content
+                            .debugger
+                            .as_ref()?
+                            .stepping_granularity
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .debugger
+                            .get_or_insert_default()
+                            .stepping_granularity = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Save Breakpoints"),
+                description: localization::localized_str!(
+                    "Whether breakpoints should be reused across HiCodeer sessions."
+                ),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("debugger.save_breakpoints"),
+                    pick: |settings_content| {
+                        settings_content
+                            .debugger
+                            .as_ref()?
+                            .save_breakpoints
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .debugger
+                            .get_or_insert_default()
+                            .save_breakpoints = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Timeout"),
+                description: localization::localized_str!(
+                    "Time in milliseconds until timeout error when connecting to a TCP debug adapter."
+                ),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("debugger.timeout"),
+                    pick: |settings_content| settings_content.debugger.as_ref()?.timeout.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.debugger.get_or_insert_default().timeout = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Log DAP Communications"),
+                description: localization::localized_str!(
+                    "Whether to log messages between active debug adapters and HiCodeer."
+                ),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("debugger.log_dap_communications"),
+                    pick: |settings_content| {
+                        settings_content
+                            .debugger
+                            .as_ref()?
+                            .log_dap_communications
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .debugger
+                            .get_or_insert_default()
+                            .log_dap_communications = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: localization::localized_str!("Format DAP Log Messages"),
+                description: localization::localized_str!(
+                    "Whether to format DAP messages when adding them to debug adapter logger."
+                ),
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("debugger.format_dap_log_messages"),
+                    pick: |settings_content| {
+                        settings_content
+                            .debugger
+                            .as_ref()?
+                            .format_dap_log_messages
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .debugger
+                            .get_or_insert_default()
+                            .format_dap_log_messages = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+        ]
+    }
+
+    SettingsPage {
+        title: localization::localized_str!("Debugger"),
+        items: concat_sections![general_section()],
     }
 }
 
@@ -10057,9 +10224,6 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
                 metadata: None,
                 files: USER | PROJECT,
             }),
-            // [OHOS PORT BEGIN] HiCodeer ships without the debugger stack, so a
-            // preferred-debugger list has nothing to drive.
-            #[cfg(not(target_env = "ohos"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: localization::localized_str!("Debuggers"),
                 description: localization::localized_str!("Preferred debuggers for this language."),

@@ -1653,12 +1653,11 @@ impl Render for ExtensionsPage {
                                 | ExtensionProvides::IndexedDocsProviders
                                 | ExtensionProvides::SlashCommands => false,
                                 // [OHOS PORT BEGIN] HiCodeer ships without
-                                // debug adapters and MCP servers, so a category
-                                // filter for either would only ever return an
-                                // empty list.
+                                // MCP servers, so a category filter for them
+                                // would only ever return an empty list. Debug
+                                // adapters are available again.
                                 #[cfg(target_env = "ohos")]
-                                ExtensionProvides::DebugAdapters
-                                | ExtensionProvides::ContextServers => false,
+                                ExtensionProvides::ContextServers => false,
                                 // [OHOS PORT END]
                                 _ => true,
                             })

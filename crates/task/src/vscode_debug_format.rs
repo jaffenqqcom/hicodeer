@@ -88,7 +88,9 @@ fn task_type_to_adapter_name(task_type: &str) -> String {
         | "msedge" | "pwa-msedge" => "JavaScript",
         "go" => "Delve",
         "php" => "Xdebug",
-        "cppdbg" | "lldb" => "CodeLLDB",
+        // [OHOS PORT] CodeLLDB is not shipped: it downloads a native binary that
+        // cannot be executed on this platform, so LLDB is the only native adapter.
+        "cppdbg" | "lldb" => "LLDB",
         "debugpy" => "Debugpy",
         "rdbg" => "rdbg",
         _ => task_type,
@@ -181,7 +183,7 @@ mod tests {
             zed,
             DebugTaskFile(vec![DebugScenario {
                 label: "Attach to Process".into(),
-                adapter: "CodeLLDB".into(),
+                adapter: "LLDB".into(),
                 config: json!({
                     "request": "attach",
                     "processId": expected_placeholder,

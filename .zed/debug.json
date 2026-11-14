@@ -1,7 +1,7 @@
 [
   {
-    "label": "Debug Zed (CodeLLDB)",
-    "adapter": "CodeLLDB",
+    "label": "Debug Zed (LLDB)",
+    "adapter": "LLDB",
     "build": {
       "label": "Build Zed",
       "command": "cargo",

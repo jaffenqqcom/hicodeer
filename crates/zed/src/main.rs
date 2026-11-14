@@ -592,6 +592,7 @@ fn main() {
 
         let node_runtime = NodeRuntime::new(client.http_client(), Some(shell_env_loaded_rx), rx);
 
+        debug_adapter_extension::init(extension_host_proxy.clone(), cx);
         languages::init(languages.clone(), fs.clone(), node_runtime.clone(), cx);
         let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
         let workspace_store = cx.new(|cx| WorkspaceStore::new(client.clone(), cx));
@@ -621,6 +622,8 @@ fn main() {
         #[cfg(target_os = "macos")]
         zed::move_to_applications::init(cx);
         project::Project::init(&client, cx);
+        debugger_ui::init(cx);
+        debugger_tools::init(cx);
         client::init(&client, cx);
         feature_flags::FeatureFlagStore::init(cx);
 
@@ -684,6 +687,7 @@ fn main() {
         AppState::set_global(app_state.clone(), cx);
 
         watcher_debug::init(app_state.clone(), cx);
+        dap_adapters::init(cx);
         // [OHOS PORT BEGIN] HiCodeer has no update feed, so the updater never
         // starts and no update affordance is created.
         #[cfg(not(target_env = "ohos"))]
@@ -1601,11 +1605,7 @@ fn init_paths() -> HashMap<io::ErrorKind, Vec<&'static Path>> {
         paths::config_dir(),
         paths::extensions_dir(),
         paths::languages_dir(),
-        // [OHOS PORT BEGIN] This build has no debugger, so the directory the
-        // adapter download would use must not be created either.
-        #[cfg(not(target_env = "ohos"))]
         paths::debug_adapters_dir(),
-        // [OHOS PORT END]
         paths::database_dir(),
         paths::logs_dir(),
         paths::temp_dir(),

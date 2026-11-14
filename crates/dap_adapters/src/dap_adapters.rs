@@ -1,7 +1,8 @@
-mod codelldb;
 mod gdb;
 mod go;
 mod javascript;
+#[cfg(target_env = "ohos")]
+mod lldb_vscode;
 mod python;
 
 #[cfg(test)]
@@ -10,7 +11,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use codelldb::CodeLldbDebugAdapter;
 use dap::{
     DapRegistry,
     adapters::{
@@ -22,17 +22,22 @@ use gdb::GdbDebugAdapter;
 use go::GoDebugAdapter;
 use gpui::{App, BorrowAppContext};
 use javascript::JsDebugAdapter;
+#[cfg(target_env = "ohos")]
+use lldb_vscode::LldbVscodeDebugAdapter;
 use python::PythonDebugAdapter;
 use serde_json::json;
 use task::{DebugScenario, ZedDebugConfig};
 
 pub fn init(cx: &mut App) {
     cx.update_default_global(|registry: &mut DapRegistry, _cx| {
-        registry.add_adapter(Arc::from(CodeLldbDebugAdapter::default()));
         registry.add_adapter(Arc::from(PythonDebugAdapter::default()));
         registry.add_adapter(Arc::from(JsDebugAdapter::default()));
         registry.add_adapter(Arc::from(GoDebugAdapter::default()));
         registry.add_adapter(Arc::from(GdbDebugAdapter));
+        // [OHOS PORT] The only native adapter that can run here; CodeLLDB needs
+        // a downloaded binary that the platform refuses to execute.
+        #[cfg(target_env = "ohos")]
+        registry.add_adapter(Arc::from(LldbVscodeDebugAdapter));
 
         #[cfg(any(test, feature = "test-support"))]
         {

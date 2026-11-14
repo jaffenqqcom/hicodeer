@@ -14,7 +14,7 @@ use smol::fs::File;
 use smol::io::AsyncReadExt;
 use smol::lock::OnceCell;
 use std::ffi::OsString;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 use std::{
     ffi::OsStr,
@@ -94,6 +94,25 @@ async fn handle_envs(
     config.remove("envFile");
     Some(())
 }
+
+// [OHOS PORT BEGIN] Arguments for driving the system debugpy installation as a
+// DAP server. The interpreter itself is resolved by `system_python_name`, so no
+// Python version is pinned here.
+fn system_debugpy_arguments(
+    host: IpAddr,
+    port: u16,
+    user_args: Option<Vec<String>>,
+) -> Vec<String> {
+    user_args.unwrap_or_else(|| {
+        vec![
+            "-m".to_string(),
+            "debugpy.adapter".to_string(),
+            format!("--host={host}"),
+            format!("--port={port}"),
+        ]
+    })
+}
+// [OHOS PORT END]
 
 impl PythonDebugAdapter {
     const ADAPTER_NAME: &'static str = "Debugpy";
@@ -176,6 +195,39 @@ impl PythonDebugAdapter {
             request,
         })
     }
+
+    // [OHOS PORT BEGIN] Start the system debugpy adapter installed by pip,
+    // over TCP. Kept separate from the upstream venv/wheel flow: the wheel is
+    // fetched into the app data directory, which the daemon that runs pip
+    // cannot see, so that flow can never complete on this platform.
+    async fn system_debugpy_binary(
+        &self,
+        delegate: &Arc<dyn DapDelegate>,
+        config: &DebugTaskDefinition,
+        user_args: Option<Vec<String>>,
+        user_env: Option<HashMap<String, String>>,
+    ) -> Result<DebugAdapterBinary> {
+        let python = Self::system_python_name(delegate)
+            .await
+            .context("Could not find a Python installation (python3, python or py)")?;
+        let host = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let port = dap::transport::TcpTransport::unused_port(host).await?;
+        let arguments = system_debugpy_arguments(host, port, user_args);
+
+        Ok(DebugAdapterBinary {
+            command: Some(python),
+            arguments,
+            connection: Some(adapters::TcpArguments {
+                host,
+                port,
+                timeout: None,
+            }),
+            cwd: Some(delegate.worktree_root_path().to_path_buf()),
+            envs: user_env.unwrap_or_default(),
+            request_args: self.request_args(delegate, config).await?,
+        })
+    }
+    // [OHOS PORT END]
 
     async fn fetch_wheel(
         &self,
@@ -877,6 +929,10 @@ impl DebugAdapter for PythonDebugAdapter {
         })
     }
 
+    #[cfg_attr(
+        target_env = "ohos",
+        allow(unreachable_code, unused_variables, unused_assignments)
+    )]
     async fn get_binary(
         &self,
         delegate: &Arc<dyn DapDelegate>,
@@ -886,6 +942,23 @@ impl DebugAdapter for PythonDebugAdapter {
         user_env: Option<HashMap<String, String>>,
         cx: &mut AsyncApp,
     ) -> Result<DebugAdapterBinary> {
+        // [OHOS PORT BEGIN] The bundled debugpy wheel cannot be installed for
+        // this target: it is downloaded into the app data directory, which the
+        // daemon that runs pip cannot see. Drive the system installation
+        // through `-m debugpy.adapter` instead; the interpreter comes from the
+        // dynamic python3/python/py probe, not a pinned version.
+        #[cfg(target_env = "ohos")]
+        {
+            if user_installed_path.is_some() {
+                log::warn!(
+                    "debugpy: a custom adapter binary is configured but ignored on this platform; using the system debugpy installation instead"
+                );
+            }
+            return self
+                .system_debugpy_binary(delegate, config, user_args, user_env)
+                .await;
+        }
+        // [OHOS PORT END]
         if let Some(local_path) = &user_installed_path {
             log::debug!(
                 "Using user-installed debugpy adapter from: {}",
@@ -1262,5 +1335,33 @@ mod tests {
             Some("claude"),
             "explicit env should take precedence over envFile"
         );
+    }
+
+    #[test]
+    fn test_system_debugpy_arguments_use_module_launch() {
+        let host = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+        let arguments = system_debugpy_arguments(host, 5678, None);
+        assert_eq!(
+            arguments,
+            vec![
+                "-m".to_string(),
+                "debugpy.adapter".to_string(),
+                "--host=127.0.0.1".to_string(),
+                "--port=5678".to_string(),
+            ],
+            "the system debugpy adapter must be started as a module, not a script path"
+        );
+    }
+
+    #[test]
+    fn test_system_debugpy_arguments_respect_user_args() {
+        let host = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+        let user_args = vec![
+            "-m".to_string(),
+            "debugpy.adapter".to_string(),
+            "--wait-for-client".to_string(),
+        ];
+        let arguments = system_debugpy_arguments(host, 5678, Some(user_args.clone()));
+        assert_eq!(arguments, user_args);
     }
 }

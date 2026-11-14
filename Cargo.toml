@@ -28,7 +28,11 @@ members = [
     "crates/crashes",
     "crates/credentials_provider",
     "crates/dap",
+    "crates/dap_adapters",
     "crates/db",
+    "crates/debug_adapter_extension",
+    "crates/debugger_tools",
+    "crates/debugger_ui",
     "crates/dev_container",
     "crates/docs_preprocessor",
     "crates/edit_prediction_types",
@@ -259,7 +263,11 @@ context_server = { path = "crates/context_server" }
 crashes = { path = "crates/crashes" }
 credentials_provider = { path = "crates/credentials_provider" }
 dap = { path = "crates/dap" }
+dap_adapters = { path = "crates/dap_adapters" }
 db = { path = "crates/db" }
+debug_adapter_extension = { path = "crates/debug_adapter_extension" }
+debugger_tools = { path = "crates/debugger_tools" }
+debugger_ui = { path = "crates/debugger_ui" }
 derive_refineable = { path = "crates/refineable/derive_refineable" }
 dev_container = { path = "crates/dev_container" }
 edit_prediction_types = { path = "crates/edit_prediction_types" }

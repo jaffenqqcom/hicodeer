@@ -220,7 +220,7 @@ pub struct SettingsContent {
     /// Default: VSCode
     pub base_keymap: Option<BaseKeymapContent>,
 
-
+    pub debugger: Option<DebuggerSettingsContent>,
 
     /// Configuration for Diagnostics-related features.
     pub diagnostics: Option<DiagnosticsSettingsContent>,
@@ -420,7 +420,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
     sections: { project, theme, extension, workspace, editor, remote },
     options: {
         call_hierarchy, command_palette, file_finder, git_panel, agent_panel, tabs, tab_bar, status_bar, preview_tabs,
-        audio, auto_update, base_keymap, diagnostics,
+        audio, auto_update, base_keymap, debugger, diagnostics,
         git,
         global_lsp_settings, image_viewer, markdown_preview, repl, helix_mode, hide_mouse,
         journal, log, line_indicator_format, outline_panel, project_panel,

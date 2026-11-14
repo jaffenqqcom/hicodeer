@@ -27,10 +27,26 @@ use std::{
 use crate::*;
 
 #[derive(Default, Debug)]
+#[cfg_attr(target_env = "ohos", allow(dead_code))]
 pub(crate) struct GoDebugAdapter {
     shim_path: OnceLock<PathBuf>,
 }
 
+// [OHOS PORT BEGIN] Arguments for driving dlv's own DAP server directly. The
+// same-user check has to be turned off: Delve rejects even same-uid loopback
+// connections on this platform.
+#[cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+fn system_delve_dap_arguments(host: std::net::IpAddr, port: u16) -> Vec<String> {
+    vec![
+        "dap".to_string(),
+        "--listen".to_string(),
+        format!("{host}:{port}"),
+        "--only-same-user=false".to_string(),
+    ]
+}
+// [OHOS PORT END]
+
+#[cfg_attr(target_env = "ohos", allow(dead_code))]
 impl GoDebugAdapter {
     const ADAPTER_NAME: &'static str = "Delve";
     async fn fetch_latest_adapter_version(
@@ -525,30 +541,53 @@ impl DebugAdapter for GoDebugAdapter {
                 timeout,
             });
         } else {
-            let minidelve_path = self.install_shim(delegate).await?;
-            let (host, port, _) =
-                crate::configure_tcp_connection(TcpArgumentsTemplate::default()).await?;
-            command = Some(minidelve_path.to_string_lossy().into_owned());
-            connection = None;
-            arguments = if let Some(mut args) = user_args {
-                args.insert(0, delve_path);
-                args
-            } else if cfg!(windows) {
-                vec![
-                    delve_path,
-                    "dap".into(),
-                    "--listen".into(),
-                    format!("{}:{}", host, port),
-                    "--headless".into(),
-                ]
-            } else {
-                vec![
-                    delve_path,
-                    "dap".into(),
-                    "--listen".into(),
-                    format!("{}:{}", host, port),
-                ]
-            };
+            // [OHOS PORT BEGIN] The minidelve shim is a downloaded binary and
+            // cannot be executed on this platform, so drive dlv's own DAP server
+            // directly over TCP. Delve rejects even same-uid loopback connections
+            // here, hence the disabled same-user check.
+            #[cfg(target_env = "ohos")]
+            {
+                // Custom adapter arguments are not supported on this path: dlv
+                // requires its own 'dap' subcommand to be the first argument.
+                let _ = user_args;
+                let (host, port, timeout) =
+                    crate::configure_tcp_connection(TcpArgumentsTemplate::default()).await?;
+                command = Some(delve_path);
+                connection = Some(TcpArguments {
+                    host,
+                    port,
+                    timeout,
+                });
+                arguments = system_delve_dap_arguments(host, port);
+            }
+            #[cfg(not(target_env = "ohos"))]
+            {
+                let minidelve_path = self.install_shim(delegate).await?;
+                let (host, port, _) =
+                    crate::configure_tcp_connection(TcpArgumentsTemplate::default()).await?;
+                command = Some(minidelve_path.to_string_lossy().into_owned());
+                connection = None;
+                arguments = if let Some(mut args) = user_args {
+                    args.insert(0, delve_path);
+                    args
+                } else if cfg!(windows) {
+                    vec![
+                        delve_path,
+                        "dap".into(),
+                        "--listen".into(),
+                        format!("{}:{}", host, port),
+                        "--headless".into(),
+                    ]
+                } else {
+                    vec![
+                        delve_path,
+                        "dap".into(),
+                        "--listen".into(),
+                        format!("{}:{}", host, port),
+                    ]
+                };
+            }
+            // [OHOS PORT END]
         }
         Ok(DebugAdapterBinary {
             command,
@@ -624,4 +663,25 @@ async fn handle_envs(
     // remove envFile now that it's been handled
     config.remove("envFile");
     Some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_system_delve_dap_arguments() {
+        let arguments =
+            system_delve_dap_arguments(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 1234);
+        assert_eq!(
+            arguments,
+            vec![
+                "dap".to_string(),
+                "--listen".to_string(),
+                "127.0.0.1:1234".to_string(),
+                "--only-same-user=false".to_string(),
+            ],
+            "dlv must be started in dap mode over tcp with the same-user check disabled"
+        );
+    }
 }

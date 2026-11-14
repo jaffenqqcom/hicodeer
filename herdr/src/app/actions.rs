@@ -1,9 +1,10 @@
 //! Pure state mutations on AppState.
 //! These don't need channels, async, or PTY runtime.
 
+use std::collections::BTreeSet;
 use std::time::Instant;
 
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::detect::{Agent, AgentState};
 use crate::events::AppEvent;
@@ -1532,18 +1533,112 @@ impl AppState {
                 seq,
                 session_ref,
                 session_start_source,
-            } => self
-                .update_terminal_state(pane_id, |terminal| {
-                    terminal.set_agent_session_ref_for_session_start(
-                        source,
-                        agent_label,
-                        session_ref,
-                        seq,
-                        session_start_source,
-                    )
-                })
-                .into_iter()
-                .collect(),
+            } => {
+                let continues = crate::agent_resume::continues_conversation(
+                    session_start_source.as_deref(),
+                );
+                let agent_label_for_adopt = agent_label.clone();
+                let session_ref_for_adopt = session_ref.clone();
+                let new_source = source.clone();
+                let mut old_identity: Option<(String, String)> = None;
+                let mut old_automatic = true;
+                let updates: Vec<PaneStateUpdate> = self
+                    .update_terminal_state(pane_id, |terminal| {
+                        old_identity = terminal.agent_name_identity();
+                        old_automatic = terminal.agent_name_is_automatic();
+                        terminal.set_agent_session_ref_for_session_start(
+                            source,
+                            agent_label,
+                            session_ref,
+                            seq,
+                            session_start_source,
+                        )
+                    })
+                    .into_iter()
+                    .collect();
+
+                // A compact/fork keeps the same agent running under a new
+                // session id. The name table is keyed by session, so copy the
+                // old entry to the new key and re-anchor the in-memory name and
+                // owner to the new identity; otherwise the reconcile that saw
+                // the id change clears the name and the detection naming path
+                // replaces it with an automatic one.
+                if continues {
+                    let terminal_id = self.workspaces.iter().find_map(|workspace| {
+                        workspace
+                            .pane_state(pane_id)
+                            .map(|pane| pane.attached_terminal_id.clone())
+                    });
+                    if let Some(terminal_id) = terminal_id {
+                        // The live identity still prefers the old hook
+                        // authority session ref: for most sources
+                        // set_agent_session_ref_for_session_start only rebinds
+                        // persisted_agent_session and leaves hook_authority
+                        // untouched. Build the new identity from this event's
+                        // arguments instead of reading the terminal back.
+                        let new_value = session_ref_for_adopt
+                            .as_ref()
+                            .map(|session_ref| session_ref.value.clone());
+                        if let (Some((old_source, old_value)), Some(new_value)) =
+                            (old_identity, new_value)
+                        {
+                            let identity_changed =
+                                (old_source.as_str(), old_value.as_str())
+                                    != (new_source.as_str(), new_value.as_str());
+                            let old_name =
+                                crate::persist::agent_names::lookup(&old_source, &old_value);
+                            let new_key_taken = crate::persist::agent_names::lookup(
+                                &new_source,
+                                &new_value,
+                            )
+                            .is_some();
+                            if identity_changed && !new_key_taken {
+                                if let Some(name) = old_name {
+                                    let in_use_keys: BTreeSet<String> = self
+                                        .terminals
+                                        .values()
+                                        .flat_map(|terminal| terminal.agent_name_in_use_keys())
+                                        .collect();
+                                    match crate::persist::agent_names::store(
+                                        &new_source,
+                                        &new_value,
+                                        &name,
+                                        &in_use_keys,
+                                    ) {
+                                        Ok(()) => {
+                                            if let Some(terminal) =
+                                                self.terminals.get_mut(&terminal_id)
+                                            {
+                                                if old_automatic {
+                                                    terminal.adopt_automatic_name_from_session(
+                                                        name,
+                                                        agent_label_for_adopt,
+                                                        session_ref_for_adopt,
+                                                    );
+                                                } else {
+                                                    terminal.adopt_manual_name_from_session(
+                                                        name,
+                                                        agent_label_for_adopt,
+                                                        session_ref_for_adopt,
+                                                    );
+                                                }
+                                            }
+                                            self.mark_session_dirty();
+                                        }
+                                        Err(err) => error!(
+                                            source = %new_source,
+                                            value = %new_value,
+                                            err = %err,
+                                            "failed to copy the agent name across compact/fork"
+                                        ),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                updates
+            }
             AppEvent::HookMetadataReported {
                 pane_id,
                 source,
@@ -1778,25 +1873,70 @@ impl AppState {
         // pane. Replace that automatic name with the remembered one, but never
         // a name the user chose.
         if mutation.session_ref_changed {
-            let remembered_name = self
+            // A manual rename made before the session identity was known is
+            // persisted now that the identity has arrived.
+            let in_use_keys: BTreeSet<String> = self
                 .terminals
-                .get(&terminal_id)
-                .filter(|terminal| terminal.agent_name_is_automatic())
-                .and_then(|terminal| {
-                    terminal
-                        .current_session_identity_for_persistence()
-                        .and_then(|(source, _agent, _kind, value)| {
-                            crate::persist::agent_names::lookup(&source, &value)
-                        })
-                });
-            if let Some(name) = remembered_name {
+                .values()
+                .flat_map(|terminal| terminal.agent_name_in_use_keys())
+                .collect();
+            let pending_write = self.terminals.get(&terminal_id).and_then(|terminal| {
+                terminal
+                    .pending_manual_agent_name()
+                    .map(str::to_string)
+                    .zip(terminal.agent_name_identity())
+            });
+            if let Some((name, (source, value))) = pending_write {
+                match crate::persist::agent_names::store(
+                    &source,
+                    &value,
+                    &name,
+                    &in_use_keys,
+                ) {
+                    Ok(()) => {
+                        if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
+                            terminal.clear_pending_manual_agent_name();
+                        }
+                        self.mark_session_dirty();
+                    }
+                    // Keep the pending name so a later identity report retries.
+                    Err(err) => {
+                        error!(err = %err, "failed to persist a pending manual agent name")
+                    }
+                }
+            }
+
+            // Session identity can land after the first detection pass named
+            // the pane. Replace that automatic name with the remembered one,
+            // but never a name the user chose.
+            let landing = self.terminals.get(&terminal_id).and_then(|terminal| {
+                if !terminal.agent_name_is_automatic() {
+                    return None;
+                }
+                terminal
+                    .current_session_identity_for_persistence()
+                    .and_then(|(source, agent, kind, value)| {
+                        crate::persist::agent_names::lookup(&source, &value)
+                            .map(|name| (name, agent, kind, value))
+                    })
+            });
+            if let Some((name, agent, kind, value)) = landing {
                 let taken = self.terminals.values().any(|other| {
                     other.id != terminal_id
                         && other.agent_name.as_deref() == Some(name.as_str())
                 });
                 if !taken {
                     if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
-                        terminal.set_agent_name(name);
+                        let session_ref = crate::agent_resume::AgentSessionRef {
+                            kind,
+                            value,
+                            transcript_path: None,
+                        };
+                        terminal.adopt_automatic_name_from_session(
+                            name,
+                            agent,
+                            Some(session_ref),
+                        );
                     }
                     self.mark_session_dirty();
                 }
@@ -4756,5 +4896,233 @@ mod tests {
         assert!(!deferred);
         assert_eq!(state.workspaces.len(), 1);
         assert_eq!(state.workspaces[0].display_name(), "notes");
+    }
+
+    fn with_temp_config<T>(run: impl FnOnce() -> T) -> T {
+        let _guard = crate::config::test_config_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let base = std::env::temp_dir().join(format!(
+            "hicodeer-actions-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &base);
+        let result = run();
+        match previous {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        if let Err(err) = std::fs::remove_dir_all(&base) {
+            eprintln!("action test cleanup failed for {}: {err}", base.display());
+        }
+        result
+    }
+
+    fn agent_names_entry_count() -> usize {
+        let path = crate::session::data_dir().join("agent-names.json");
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return 0;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return 0;
+        };
+        json["names"].as_object().map(|names| names.len()).unwrap_or(0)
+    }
+
+    /// Establishes a running, manually named agent on `old-session`, writes the
+    /// name to the table when `seed_old_name` is set, then reports one session
+    /// change. Returns the in-memory name, the old key lookup, the new key
+    /// lookup and the number of table entries.
+    fn reported_compact_scenario(
+        reason: Option<&str>,
+        new_session: &str,
+        seed_old_name: bool,
+    ) -> (String, Option<String>, Option<String>, usize) {
+        with_temp_config(|| {
+            let mut state = app_with_workspaces(&["ws"]);
+            let pane_id = state.workspaces[0].tabs[0].root_pane;
+            let terminal_id = state.workspaces[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+
+            state.handle_app_event(AppEvent::AgentProcessDetected {
+                pane_id,
+                agent: Agent::CodeBuddy,
+                observed_at: Instant::now(),
+            });
+            state.handle_app_event(AppEvent::AgentSessionReported {
+                pane_id,
+                source: "hicodeer:codebuddy".into(),
+                agent_label: "codebuddy".into(),
+                seq: Some(1),
+                session_ref: crate::agent_resume::AgentSessionRef::id("old-session"),
+                session_start_source: Some("startup".into()),
+            });
+            {
+                let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+                terminal.set_agent_name("reviewer".into());
+                terminal.mark_agent_name_manual();
+            }
+            if seed_old_name {
+                crate::persist::agent_names::store(
+                    "hicodeer:codebuddy",
+                    "old-session",
+                    "reviewer",
+                    &BTreeSet::new(),
+                )
+                .unwrap();
+            }
+
+            state.handle_app_event(AppEvent::AgentSessionReported {
+                pane_id,
+                source: "hicodeer:codebuddy".into(),
+                agent_label: "codebuddy".into(),
+                seq: Some(2),
+                session_ref: crate::agent_resume::AgentSessionRef::id(new_session),
+                session_start_source: reason.map(str::to_string),
+            });
+
+            let name = state.terminals[&terminal_id]
+                .agent_name
+                .clone()
+                .unwrap_or_default();
+            let old = crate::persist::agent_names::lookup("hicodeer:codebuddy", "old-session");
+            let new = crate::persist::agent_names::lookup("hicodeer:codebuddy", new_session);
+            (name, old, new, agent_names_entry_count())
+        })
+    }
+
+    #[test]
+    fn compact_with_a_new_session_id_keeps_the_remembered_name() {
+        let (name, old, new, _) = reported_compact_scenario(Some("compact"), "new-session", true);
+        assert_eq!(name, "reviewer", "the name must not degrade to an automatic one");
+        assert_eq!(old.as_deref(), Some("reviewer"), "the old key is kept");
+        assert_eq!(
+            new.as_deref(),
+            Some("reviewer"),
+            "the new key inherits the name"
+        );
+    }
+
+    #[test]
+    fn compact_without_an_old_table_entry_does_not_copy() {
+        let (_, old, new, _) = reported_compact_scenario(Some("compact"), "new-session", false);
+        assert_eq!(old, None);
+        assert_eq!(new, None, "nothing is copied when the old key has no name");
+    }
+
+    #[test]
+    fn non_continuation_session_changes_do_not_copy_the_name() {
+        for reason in [
+            Some("clear"),
+            Some("new"),
+            Some("branch"),
+            Some("select"),
+            None,
+        ] {
+            let (_, old, new, _) = reported_compact_scenario(reason, "new-session", true);
+            assert_eq!(old.as_deref(), Some("reviewer"), "reason {reason:?}");
+            assert_eq!(new, None, "reason {reason:?} must not inherit the name");
+        }
+    }
+
+    #[test]
+    fn compact_with_an_unchanged_session_id_does_not_add_an_entry() {
+        let (name, old, new, count) =
+            reported_compact_scenario(Some("compact"), "old-session", true);
+        assert_eq!(name, "reviewer");
+        assert_eq!(old.as_deref(), Some("reviewer"));
+        assert_eq!(new.as_deref(), Some("reviewer"));
+        assert_eq!(count, 1, "no extra entry for an unchanged id");
+    }
+
+    #[test]
+    fn compact_copies_the_name_when_hook_authority_keeps_the_old_session_id() {
+        with_temp_config(|| {
+            let mut state = app_with_workspaces(&["ws"]);
+            let pane_id = state.workspaces[0].tabs[0].root_pane;
+            let terminal_id = state.workspaces[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let old_ref = crate::agent_resume::AgentSessionRef::id("old-session").unwrap();
+            let new_ref = crate::agent_resume::AgentSessionRef::id("new-session").unwrap();
+
+            // A non-full-lifecycle source keeps its hook_authority across a
+            // session replacement, so the live identity still reports the old
+            // id after set_agent_session_ref_for_session_start has rebound the
+            // persisted session to the new id.
+            {
+                let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+                terminal.detected_agent = Some(Agent::CodeBuddy);
+                terminal.hook_authority = Some(crate::terminal::state::HookAuthority {
+                    source: "hicodeer:codebuddy".into(),
+                    agent_label: "codebuddy".into(),
+                    state: AgentState::Working,
+                    message: None,
+                    blocked_seq: 0,
+                    reported_at: Instant::now(),
+                    session_ref: Some(old_ref),
+                });
+                terminal.set_agent_name("reviewer".into());
+                terminal.mark_agent_name_manual();
+            }
+            crate::persist::agent_names::store(
+                "hicodeer:codebuddy",
+                "old-session",
+                "reviewer",
+                &BTreeSet::new(),
+            )
+            .unwrap();
+
+            state.handle_app_event(AppEvent::AgentSessionReported {
+                pane_id,
+                source: "hicodeer:codebuddy".into(),
+                agent_label: "codebuddy".into(),
+                seq: Some(1),
+                session_ref: Some(new_ref.clone()),
+                session_start_source: Some("compact".into()),
+            });
+
+            assert_eq!(
+                state.terminals[&terminal_id].agent_name.as_deref(),
+                Some("reviewer"),
+                "the in-memory name must survive the compact"
+            );
+            // The copy must re-anchor the name as manual. A later adopt from
+            // the new key would otherwise mask a wrong automatic-name branch.
+            assert!(
+                !state.terminals[&terminal_id].agent_name_is_automatic(),
+                "a manual name must stay manual once the copy lands"
+            );
+            assert_eq!(
+                crate::persist::agent_names::lookup("hicodeer:codebuddy", "new-session")
+                    .as_deref(),
+                Some("reviewer"),
+                "the new key must carry the copied name"
+            );
+
+            // A following hook report with the new id re-anchors the owner; the
+            // adopted name must not degrade to an automatic one.
+            state.handle_app_event(AppEvent::HookStateReported {
+                pane_id,
+                source: "hicodeer:codebuddy".into(),
+                agent_label: "codebuddy".into(),
+                state: AgentState::Working,
+                message: None,
+                seq: Some(2),
+                session_ref: Some(new_ref),
+            });
+            assert_eq!(
+                state.terminals[&terminal_id].agent_name.as_deref(),
+                Some("reviewer"),
+                "a later hook report must not reset the adopted name"
+            );
+        });
     }
 }

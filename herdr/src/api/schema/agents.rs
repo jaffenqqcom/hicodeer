@@ -42,9 +42,15 @@ pub struct AgentPromptWaitOptions {
     pub(crate) submission_deadline: Option<std::time::Instant>,
 }
 
+/// Renames one agent, or resets the whole name table.
+///
+/// A missing `name` (the CLI's `--clear`) is a global reset: it deletes
+/// `agent-names.json` and drops every session's name binding, not only the
+/// target's. `target` still selects the pane whose in-memory name is cleared.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentRenameParams {
     pub target: String,
+    /// `None` clears the whole name table instead of setting one name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }

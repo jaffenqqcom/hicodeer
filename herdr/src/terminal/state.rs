@@ -14,6 +14,11 @@ use crate::terminal::TerminalId;
 mod metadata;
 pub use metadata::{AgentMetadata, AgentMetadataReport, EffectivePresentation};
 
+/// Marks a name produced by automatic naming or restored from the name table.
+const AGENT_NAME_AUTOMATIC: bool = true;
+/// Marks a name the user chose, which a later identity change must not replace.
+const AGENT_NAME_MANUAL: bool = false;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HookAuthority {
     pub source: String,
@@ -152,6 +157,10 @@ pub struct TerminalState {
     /// table. A user rename clears this so a later session identity change
     /// cannot overwrite the user's choice.
     agent_name_automatic: bool,
+    /// A manual rename made before the session identity was known, kept only in
+    /// memory until the first identity report can write it to the name table.
+    /// It is deliberately not part of any serialized snapshot.
+    pending_manual_agent_name: Option<String>,
     managed_agent: Option<ManagedAgent>,
     codex_prompt_ready: bool,
     managed_agent_launch_session: Option<crate::agent_resume::PersistedAgentSession>,
@@ -193,6 +202,7 @@ impl TerminalState {
             agent_name: None,
             agent_name_owner: None,
             agent_name_automatic: true,
+            pending_manual_agent_name: None,
             managed_agent: None,
             codex_prompt_ready: false,
             managed_agent_launch_session: None,
@@ -1370,6 +1380,72 @@ impl TerminalState {
         })
     }
 
+    /// The session identity used to address this terminal's entry in the
+    /// agent-name table. A hook report without a session ref clears
+    /// `persisted_agent_session` and empties the live identity while the same
+    /// conversation keeps running, so the name owner's session ref is used as
+    /// a fallback together with the source still held by hook authority.
+    pub(crate) fn agent_name_identity(&self) -> Option<(String, String)> {
+        if let Some((source, _agent, _kind, value)) =
+            self.current_session_identity_for_persistence()
+        {
+            return Some((source, value));
+        }
+        let session_ref = self
+            .agent_name_owner
+            .as_ref()
+            .and_then(|owner| owner.session_ref.as_ref())?;
+        let source = self
+            .hook_authority
+            .as_ref()
+            .map(|authority| authority.source.clone())
+            .or_else(|| {
+                self.persisted_agent_session
+                    .as_ref()
+                    .map(|session| session.source.clone())
+            })?;
+        Some((source, session_ref.value.clone()))
+    }
+
+    /// Table keys still in use by this terminal. Both the live identity and the
+    /// name owner's session ref are included: during a hook report that carries
+    /// no session ref the live identity is temporarily empty, and dropping the
+    /// owner's key at that instant would let eviction delete a running agent's
+    /// remembered name.
+    pub(crate) fn agent_name_in_use_keys(&self) -> Vec<String> {
+        let mut keys = Vec::new();
+        if let Some((source, _agent, _kind, value)) =
+            self.current_session_identity_for_persistence()
+        {
+            keys.push(crate::persist::agent_names::key_for(&source, &value));
+        }
+        if let Some(owner) = self.agent_name_owner.as_ref() {
+            if let Some(session_ref) = owner.session_ref.as_ref() {
+                // Only trust the hook authority's source while it still belongs
+                // to the same agent as the name owner; otherwise the key would
+                // protect the wrong table entry. Fall back to the persisted
+                // session's source before giving up.
+                let source = self
+                    .hook_authority
+                    .as_ref()
+                    .filter(|authority| authority.agent_label == owner.agent_label)
+                    .map(|authority| authority.source.clone())
+                    .or_else(|| {
+                        self.persisted_agent_session
+                            .as_ref()
+                            .map(|session| session.source.clone())
+                    });
+                if let Some(source) = source {
+                    keys.push(crate::persist::agent_names::key_for(
+                        &source,
+                        &session_ref.value,
+                    ));
+                }
+            }
+        }
+        keys
+    }
+
     fn current_session_owner_conflicts(&self, source: &str, agent_label: &str) -> bool {
         self.current_session_identity_for_persistence().is_some_and(
             |(current_source, current_agent, _, _)| {
@@ -2213,6 +2289,57 @@ impl TerminalState {
         });
     }
 
+    /// Restores a name that follows a session identity: a remembered name
+    /// landing after a session ref change, or a compact/fork copying the old
+    /// entry to the new id. Unlike `set_agent_name`, the owner is pinned
+    /// explicitly to the supplied identity. `set_agent_name` rebuilds it from
+    /// hook authority, which can still point at the old session ref after a
+    /// compact and get the name cleared again by the next reconcile.
+    pub(crate) fn adopt_agent_name_from_session(
+        &mut self,
+        name: String,
+        agent_label: String,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        automatic: bool,
+    ) {
+        self.agent_name = (!name.is_empty()).then_some(name);
+        self.agent_name_owner = self.agent_name.as_ref().map(|_| AgentNameOwner {
+            agent_label,
+            session_ref,
+        });
+        self.agent_name_automatic = automatic;
+    }
+
+    /// Adopts a remembered name that came from automatic naming or the table.
+    pub(crate) fn adopt_automatic_name_from_session(
+        &mut self,
+        name: String,
+        agent_label: String,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+    ) {
+        self.adopt_agent_name_from_session(
+            name,
+            agent_label,
+            session_ref,
+            AGENT_NAME_AUTOMATIC,
+        );
+    }
+
+    /// Adopts a name the user chose; later identity changes must not replace it.
+    pub(crate) fn adopt_manual_name_from_session(
+        &mut self,
+        name: String,
+        agent_label: String,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+    ) {
+        self.adopt_agent_name_from_session(
+            name,
+            agent_label,
+            session_ref,
+            AGENT_NAME_MANUAL,
+        );
+    }
+
     pub fn begin_managed_agent(
         &mut self,
         name: String,
@@ -2399,6 +2526,20 @@ impl TerminalState {
         self.agent_name_automatic = false;
     }
 
+    /// Remembers a manual rename chosen before the session identity was known,
+    /// so the first identity report can persist it. In-memory only.
+    pub(crate) fn set_pending_manual_agent_name(&mut self, name: String) {
+        self.pending_manual_agent_name = Some(name);
+    }
+
+    pub(crate) fn pending_manual_agent_name(&self) -> Option<&str> {
+        self.pending_manual_agent_name.as_deref()
+    }
+
+    pub(crate) fn clear_pending_manual_agent_name(&mut self) {
+        self.pending_manual_agent_name = None;
+    }
+
     pub fn clear_agent_name(&mut self) {
         self.codex_prompt_ready = false;
         if self
@@ -2412,6 +2553,7 @@ impl TerminalState {
         self.agent_name = None;
         self.agent_name_owner = None;
         self.agent_name_automatic = true;
+        self.pending_manual_agent_name = None;
         self.managed_agent = None;
     }
 
@@ -2555,6 +2697,81 @@ mod tests {
 
     fn test_terminal() -> TerminalState {
         TerminalState::new(TerminalId::alloc(), "/tmp".into())
+    }
+
+    #[test]
+    fn adopt_agent_name_pins_owner_to_the_supplied_session() {
+        let mut terminal = test_terminal();
+        let old_ref = crate::agent_resume::AgentSessionRef::id("old-session").unwrap();
+        let new_ref = crate::agent_resume::AgentSessionRef::id("new-session").unwrap();
+        // A hook authority still pointing at the old session is exactly what a
+        // compact leaves behind. `set_agent_name` would rebuild the owner from
+        // it and the next reconcile would clear the name again.
+        terminal.hook_authority = Some(HookAuthority {
+            source: "hicodeer:codebuddy".into(),
+            agent_label: "codebuddy".into(),
+            state: AgentState::Working,
+            message: None,
+            blocked_seq: 0,
+            reported_at: Instant::now(),
+            session_ref: Some(old_ref),
+        });
+
+        terminal.adopt_agent_name_from_session(
+            "reviewer".into(),
+            "codebuddy".into(),
+            Some(new_ref.clone()),
+            false,
+        );
+
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+        assert_eq!(
+            terminal.agent_name_owner.as_ref().unwrap().session_ref,
+            Some(new_ref),
+            "the owner must follow the new identity, not the stale hook ref"
+        );
+        assert!(!terminal.agent_name_is_automatic());
+    }
+
+    #[test]
+    fn pending_manual_name_is_cleared_with_the_agent_name() {
+        let mut terminal = test_terminal();
+        terminal.set_pending_manual_agent_name("reviewer".into());
+        assert_eq!(terminal.pending_manual_agent_name(), Some("reviewer"));
+
+        terminal.clear_agent_name();
+        assert_eq!(terminal.pending_manual_agent_name(), None);
+    }
+
+    #[test]
+    fn in_use_keys_include_the_owner_session_ref_when_identity_is_empty() {
+        let mut terminal = test_terminal();
+        let session_ref = crate::agent_resume::AgentSessionRef::id("running-session").unwrap();
+        // The live identity is empty: a hook report without a session ref has
+        // cleared the persisted session, but the name owner still knows the id
+        // of the conversation that is running.
+        terminal.hook_authority = Some(HookAuthority {
+            source: "hicodeer:codebuddy".into(),
+            agent_label: "codebuddy".into(),
+            state: AgentState::Working,
+            message: None,
+            blocked_seq: 0,
+            reported_at: Instant::now(),
+            session_ref: None,
+        });
+        terminal.agent_name_owner = Some(AgentNameOwner {
+            agent_label: "codebuddy".into(),
+            session_ref: Some(session_ref),
+        });
+
+        assert_eq!(
+            terminal.agent_name_identity(),
+            Some(("hicodeer:codebuddy".to_string(), "running-session".to_string()))
+        );
+        assert_eq!(
+            terminal.agent_name_in_use_keys(),
+            vec!["hicodeer:codebuddy:running-session".to_string()]
+        );
     }
 
     fn test_session_path(name: &str) -> String {

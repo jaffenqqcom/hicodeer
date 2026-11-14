@@ -754,6 +754,33 @@ fn restore_tab(
                 if let Some(agent_state) = handoff_agent_state {
                     terminal.restore_handoff_agent_state(agent_state);
                 }
+                // Hot restore hands back hook authority (with its session ref)
+                // but not the remembered name. Look it up and adopt it against
+                // the restored identity so a later reconcile does not clear it.
+                let adopted_name = if terminal.agent_name.is_none() {
+                    terminal.hook_authority.as_ref().and_then(|authority| {
+                        authority.session_ref.as_ref().and_then(|session_ref| {
+                            crate::persist::agent_names::lookup(
+                                &authority.source,
+                                &session_ref.value,
+                            )
+                            .map(|name| {
+                                (name, authority.agent_label.clone(), session_ref.clone())
+                            })
+                        })
+                    })
+                } else {
+                    None
+                };
+                if let Some((name, agent_label, session_ref)) = adopted_name {
+                    if !remembered_agent_name_is_taken(&terminals, &name) {
+                        terminal.adopt_automatic_name_from_session(
+                            name,
+                            agent_label,
+                            Some(session_ref),
+                        );
+                    }
+                }
                 panes.insert(*id, PaneState::new(terminal_id.clone()));
                 terminal_runtimes.insert(terminal_id, runtime);
                 terminals.push(terminal);
@@ -1960,6 +1987,71 @@ mod tests {
             .all(|detail| detail.pane_id != agent_pane));
     }
 
+    #[tokio::test]
+    async fn restore_drops_a_saved_name_without_a_matching_session() {
+        let cwd = std::env::current_dir().unwrap();
+        let orphan_pane = super::super::snapshot::PaneSnapshot {
+            cwd: cwd.clone(),
+            label: None,
+            agent_name: Some("orphan".into()),
+            managed_agent_kind: None,
+            detected_agent: None,
+            agent_session: None,
+            agent_resume: None,
+            launch_argv: None,
+        };
+        let snapshot = SessionSnapshot {
+            version: super::super::snapshot::SNAPSHOT_VERSION,
+            workspaces: vec![WorkspaceSnapshot {
+                id: Some("w1".into()),
+                custom_name: None,
+                identity_cwd: cwd,
+                worktree_space: None,
+                public_pane_numbers: HashMap::from([(10, 1)]),
+                next_public_pane_number: 2,
+                public_tab_numbers: vec![1],
+                next_public_tab_number: 2,
+                tabs: vec![TabSnapshot {
+                    custom_name: None,
+                    layout: LayoutSnapshot::Pane(10),
+                    panes: HashMap::from([(10, orphan_pane)]),
+                    zoomed: false,
+                    focused: Some(10),
+                    root_pane: Some(10),
+                }],
+                active_tab: 0,
+            }],
+            active: Some(0),
+            selected: 0,
+            sidebar_width: None,
+            sidebar_section_split: None,
+            collapsed_space_keys: Default::default(),
+        };
+        let (events, _event_rx) = mpsc::channel(4);
+
+        let (workspaces, terminals, _runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            false,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+
+        let workspace = workspaces.first().expect("workspace should restore");
+        let pane = workspace.tabs[0].root_pane;
+        let terminal_id = &workspace.tabs[0].panes[&pane].attached_terminal_id;
+        assert!(
+            terminals[terminal_id].agent_name.is_none(),
+            "a name with no session to bind it to must be discarded"
+        );
+    }
+
     #[test]
     fn legacy_restore_precomputes_missing_public_pane_numbers() {
         let cwd = std::env::current_dir().unwrap();
@@ -2387,5 +2479,129 @@ mod tests {
         };
         history.layout_fingerprint = super::super::snapshot::layout_fingerprint(&snapshot);
         (snapshot, history)
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn hot_handoff_adopts_the_remembered_name_from_the_table() {
+        let _guard = crate::config::test_config_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let base = std::env::temp_dir().join(format!(
+            "hicodeer-restore-hot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &base);
+
+        let (snapshot, _) = snapshot_with_saved_pane_history();
+        let (events, _events_rx) = mpsc::channel(32);
+        let (workspaces, mut terminals, runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            4096,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            false,
+            events.clone(),
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+        let session_ref =
+            crate::agent_resume::AgentSessionRef::path("/var/tmp/hot-handoff.jsonl").unwrap();
+        {
+            let terminal = terminals.values_mut().next().unwrap();
+            terminal.set_detected_agent_process_at(
+                crate::detect::Agent::Pi,
+                std::time::Instant::now(),
+            );
+            terminal.set_persisted_agent_session(
+                crate::agent_resume::PersistedAgentSession {
+                    source: "hicodeer:pi".into(),
+                    agent: "pi".into(),
+                    session_ref: session_ref.clone(),
+                },
+            );
+            terminal.set_hook_authority_with_session_ref(
+                "hicodeer:pi".into(),
+                "pi".into(),
+                AgentState::Working,
+                None,
+                Some(session_ref.clone()),
+                Some(1),
+            );
+        }
+        crate::persist::agent_names::store(
+            "hicodeer:pi",
+            &session_ref.value,
+            "reviewer",
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+
+        let runtimes = crate::terminal::TerminalRuntimeRegistry::from(runtimes);
+        // A handoff snapshot carries no agent name or session; the running
+        // identity travels through the imported runtime's hook authority.
+        let mut snapshot = crate::persist::capture(&workspaces, &terminals, &runtimes, Some(0), 0);
+        for workspace in &mut snapshot.workspaces {
+            for tab in &mut workspace.tabs {
+                for pane in tab.panes.values_mut() {
+                    pane.agent_name = None;
+                    pane.agent_session = None;
+                }
+            }
+        }
+        let pane_id = workspaces[0].tabs[0].panes.keys().next().copied().unwrap();
+        let runtime = runtimes.values().next().unwrap();
+        runtime
+            .pause_handoff_reader(std::time::Duration::from_secs(2))
+            .unwrap();
+        let mut state = runtime.handoff_runtime_state(pane_id.raw());
+        state.agent_state = terminals.values().next().unwrap().handoff_agent_state();
+        let state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let mut imports = HashMap::from([(
+            pane_id.raw(),
+            crate::handoff_runtime::ImportedHandoffRuntime {
+                master_fd: runtime.duplicate_handoff_fd().unwrap(),
+                state,
+            },
+        )]);
+        let (_, restored_terminals, restored_runtimes) = restore_handoff(
+            &snapshot,
+            4096,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            &mut imports,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+        drop(restored_runtimes);
+        drop(runtimes);
+        let terminal = restored_terminals.values().next().unwrap();
+        assert_eq!(
+            terminal.agent_name.as_deref(),
+            Some("reviewer"),
+            "a hot handoff must adopt the remembered name from the table"
+        );
+
+        match previous {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        if let Err(err) = std::fs::remove_dir_all(&base) {
+            eprintln!(
+                "hot handoff test cleanup failed for {}: {err}",
+                base.display()
+            );
+        }
     }
 }

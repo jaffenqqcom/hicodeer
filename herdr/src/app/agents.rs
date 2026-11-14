@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -222,6 +223,15 @@ impl App {
             None => None,
         };
 
+        // Collect the running keys before taking a mutable borrow of one
+        // terminal, so lazy touch sees every agent including this one.
+        let in_use_keys: BTreeSet<String> = self
+            .state
+            .terminals
+            .values()
+            .flat_map(|terminal| terminal.agent_name_in_use_keys())
+            .collect();
+
         let Some(terminal) = self
             .state
             .terminals
@@ -238,22 +248,37 @@ impl App {
         if terminal.effective_agent_label().is_none() {
             return Err(AgentRenameError::NotAgent);
         }
-        let session_identity = terminal
-            .current_session_identity_for_persistence()
-            .map(|(source, _agent, _kind, value)| (source, value));
+        let session_identity = terminal.agent_name_identity();
         match normalized_name {
             Some(name) => {
                 if let Some((source, value)) = session_identity.as_ref() {
-                    crate::persist::agent_names::store(source, value, &name);
+                    if let Err(err) = crate::persist::agent_names::store(
+                        source,
+                        value,
+                        &name,
+                        &in_use_keys,
+                    ) {
+                        tracing::error!(err = %err, "failed to persist manual agent name");
+                        return Err(AgentRenameError::StoreFailed(err.to_string()));
+                    }
+                    // The identity is known and the name is safely on disk; a
+                    // stale pending value must not overwrite it on a later
+                    // identity change.
+                    terminal.clear_pending_manual_agent_name();
+                } else {
+                    // No identity yet; keep the choice in memory so the first
+                    // session report can persist it.
+                    terminal.set_pending_manual_agent_name(name.clone());
                 }
                 terminal.set_agent_name(name);
                 terminal.mark_agent_name_manual();
             }
             None => {
-                if let Some((source, value)) = session_identity.as_ref() {
-                    crate::persist::agent_names::remove(source, value);
+                if let Err(err) = crate::persist::agent_names::clear_all() {
+                    tracing::error!(err = %err, "failed to clear the agent name table");
+                    return Err(AgentRenameError::StoreFailed(err.to_string()));
                 }
-                terminal.clear_agent_name()
+                terminal.clear_agent_name();
             }
         }
         self.state.mark_session_dirty();
@@ -292,36 +317,17 @@ impl App {
         let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(&params.pane_id) else {
             return Err(AgentStartError::TargetNotFound(params.pane_id));
         };
-        // Naming has one home: the server. An explicit name is validated, and
-        // an absent one is generated from space, kind and tab — the same call
-        // the detection path uses for agents started from the command line.
-        let name = match params.name {
-            Some(name) => {
-                let name = normalize_agent_name(&name);
-                if !valid_agent_name(&name) {
-                    return Err(AgentStartError::InvalidName);
-                }
-                let conflicts = self.agent_name_conflicts(&name, "");
-                if !conflicts.is_empty() {
-                    return Err(AgentStartError::DuplicateName {
-                        name,
-                        candidates: conflicts,
-                    });
-                }
-                name
-            }
-            None => {
-                let tab_idx = self
-                    .state
-                    .workspaces
-                    .get(ws_idx)
-                    .and_then(|workspace| workspace.find_tab_index_for_pane(pane_id))
-                    // The pane resolved; only its tab is gone, so reporting
-                    // "pane not found" would point at the wrong level.
-                    .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
-                self.auto_agent_name(ws_idx, tab_idx, kind)
-            }
-        };
+        // Naming has one home: the server. An explicit name is validated; an
+        // absent one prefers the remembered name for the resumed session and
+        // otherwise falls back to space, kind and tab — the same call the
+        // detection path uses for agents started from the command line.
+        let name = self.agent_start_name(
+            &params,
+            kind,
+            ws_idx,
+            pane_id,
+            persisted_agent_session.as_ref(),
+        )?;
         let terminal_id = self
             .state
             .workspaces
@@ -510,6 +516,10 @@ impl App {
                 code: "agent_launch_pending".into(),
                 message: "agent name cannot change while startup is pending".into(),
             },
+            AgentRenameError::StoreFailed(message) => crate::api::schema::ErrorBody {
+                code: "agent_rename_store_failed".into(),
+                message: format!("failed to persist agent name: {message}"),
+            },
         }
     }
 
@@ -593,6 +603,55 @@ impl App {
             foreground_cwd: pane.foreground_cwd,
             revision: pane.revision,
         })
+    }
+
+    /// Resolves the name for a starting agent: an explicit name wins, then the
+    /// remembered name for a resumed session, then the automatic
+    /// space-kind-tab name. Validation and duplicate detection stay in the
+    /// explicit branch, so those semantics are unchanged.
+    fn agent_start_name(
+        &self,
+        params: &AgentStartParams,
+        kind: crate::detect::Agent,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+        persisted_session: Option<&crate::agent_resume::PersistedAgentSession>,
+    ) -> Result<String, AgentStartError> {
+        match params.name.as_deref() {
+            Some(name) => {
+                let name = normalize_agent_name(name);
+                if !valid_agent_name(&name) {
+                    return Err(AgentStartError::InvalidName);
+                }
+                let conflicts = self.agent_name_conflicts(&name, "");
+                if !conflicts.is_empty() {
+                    return Err(AgentStartError::DuplicateName {
+                        name,
+                        candidates: conflicts,
+                    });
+                }
+                Ok(name)
+            }
+            None => {
+                if let Some(name) = persisted_session.and_then(|session| {
+                    crate::persist::agent_names::lookup(
+                        &session.source,
+                        &session.session_ref.value,
+                    )
+                }) {
+                    return Ok(name);
+                }
+                let tab_idx = self
+                    .state
+                    .workspaces
+                    .get(ws_idx)
+                    .and_then(|workspace| workspace.find_tab_index_for_pane(pane_id))
+                    .ok_or_else(|| {
+                        AgentStartError::TargetUnavailable(params.pane_id.clone())
+                    })?;
+                Ok(self.auto_agent_name(ws_idx, tab_idx, kind))
+            }
+        }
     }
 
     /// The name every agent gets when nobody supplies one: its space, its kind
@@ -716,16 +775,19 @@ pub(super) enum AgentStartError {
     },
 }
 
+#[derive(Debug)]
 pub(super) enum AgentRenameError {
     Target(TerminalTargetError),
     InvalidName,
     NotAgent,
     PendingLaunch,
+    StoreFailed(String),
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_AGENT_NAME_CHARS, auto_agent_name_with, normalize_agent_name, valid_agent_name};
+    use super::*;
+    use crate::workspace::Workspace;
 
     #[test]
     fn auto_agent_name_uses_space_kind_and_tab_number() {
@@ -814,5 +876,267 @@ mod tests {
         ] {
             assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
         }
+    }
+
+    fn test_app() -> crate::app::App {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        )
+    }
+
+    fn with_temp_config<T>(run: impl FnOnce() -> T) -> T {
+        let _guard = crate::config::test_config_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let base = std::env::temp_dir().join(format!(
+            "hicodeer-agents-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &base);
+        let result = run();
+        match previous {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        if let Err(err) = std::fs::remove_dir_all(&base) {
+            eprintln!("agent test cleanup failed for {}: {err}", base.display());
+        }
+        result
+    }
+
+    fn named_resume_app() -> (crate::app::App, crate::layout::PaneId) {
+        let mut app = test_app();
+        app.state.workspaces.push(Workspace::test_new("proj"));
+        app.state.ensure_test_terminals();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        (app, pane_id)
+    }
+
+    fn start_params(name: Option<&str>, resume: Option<&str>) -> AgentStartParams {
+        AgentStartParams {
+            name: name.map(str::to_string),
+            kind: "codebuddy".into(),
+            pane_id: String::new(),
+            args: vec![],
+            resume_session: resume.map(str::to_string),
+            timeout_ms: None,
+        }
+    }
+
+    fn resolved_start_name(
+        app: &crate::app::App,
+        pane_id: crate::layout::PaneId,
+        params: &AgentStartParams,
+    ) -> String {
+        let kind = crate::detect::parse_agent_label("codebuddy").unwrap();
+        let persisted = params
+            .resume_session
+            .as_deref()
+            .and_then(|session| persisted_session_for_resume(kind, session));
+        match app.agent_start_name(params, kind, 0, pane_id, persisted.as_ref()) {
+            Ok(name) => name,
+            Err(_) => panic!("start name resolution should succeed"),
+        }
+    }
+
+    #[test]
+    fn agent_start_name_prefers_remembered_name_for_a_resumed_session() {
+        with_temp_config(|| {
+            crate::persist::agent_names::store(
+                "hicodeer:codebuddy",
+                "session-1",
+                "reviewer",
+                &BTreeSet::new(),
+            )
+            .unwrap();
+            let (app, pane_id) = named_resume_app();
+            let name = resolved_start_name(&app, pane_id, &start_params(None, Some("session-1")));
+            assert_eq!(name, "reviewer");
+        });
+    }
+
+    #[test]
+    fn agent_start_name_keeps_explicit_name_over_the_table() {
+        with_temp_config(|| {
+            crate::persist::agent_names::store(
+                "hicodeer:codebuddy",
+                "session-1",
+                "reviewer",
+                &BTreeSet::new(),
+            )
+            .unwrap();
+            let (app, pane_id) = named_resume_app();
+            let name = resolved_start_name(
+                &app,
+                pane_id,
+                &start_params(Some("chosen"), Some("session-1")),
+            );
+            assert_eq!(name, "chosen");
+        });
+    }
+
+    #[test]
+    fn agent_start_name_falls_back_to_automatic_when_the_table_misses() {
+        with_temp_config(|| {
+            let (app, pane_id) = named_resume_app();
+            let name =
+                resolved_start_name(&app, pane_id, &start_params(None, Some("session-404")));
+            let space = app.state.workspaces[0].id.to_lowercase();
+            assert_eq!(name, format!("{space}-codebuddy-1"));
+        });
+    }
+
+    #[test]
+    fn rename_reports_store_failure_without_changing_the_in_memory_name() {
+        with_temp_config(|| {
+            let (mut app, pane_id) = named_resume_app();
+            let terminal_id = app.state.workspaces[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            {
+                let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+                terminal.detected_agent = Some(crate::detect::Agent::CodeBuddy);
+                terminal.set_persisted_agent_session(
+                    crate::agent_resume::PersistedAgentSession {
+                        source: "hicodeer:codebuddy".into(),
+                        agent: "codebuddy".into(),
+                        session_ref: crate::agent_resume::AgentSessionRef::id("session-1")
+                            .unwrap(),
+                    },
+                );
+                terminal.set_agent_name("original".into());
+            }
+            // An unknown schema makes the save path fail without letting the
+            // store replace the file.
+            let path = crate::session::data_dir().join("agent-names.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, r#"{"schema_version": 99, "names": {}}"#).unwrap();
+
+            let result = app.rename_agent_target("original", Some("reviewer".into()));
+            let body = match result {
+                Ok(_) => panic!("a failed store must be reported as an error"),
+                Err(err) => app.agent_rename_error_body(err),
+            };
+            assert_eq!(body.code, "agent_rename_store_failed");
+            assert_eq!(
+                app.state.terminals[&terminal_id].agent_name.as_deref(),
+                Some("original"),
+                "the in-memory name must not change before the save succeeds"
+            );
+        });
+    }
+
+    #[test]
+    fn a_leftover_name_does_not_make_a_shell_pane_an_agent() {
+        let (mut app, pane_id) = named_resume_app();
+        let terminal_id = app.state.workspaces[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        {
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            assert!(!terminal.is_agent_terminal());
+            terminal.set_agent_name("leftover".into());
+            assert!(
+                !terminal.is_agent_terminal(),
+                "a leftover name must not keep a shell pane in agent.list"
+            );
+        }
+        assert!(
+            app.collect_agent_infos(true).is_empty(),
+            "agent.list must not contain a shell pane that only carries a name"
+        );
+    }
+
+    #[test]
+    fn pending_manual_name_is_written_when_the_identity_arrives() {
+        with_temp_config(|| {
+            let (mut app, pane_id) = named_resume_app();
+            let terminal_id = app.state.workspaces[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            {
+                let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+                terminal.detected_agent = Some(crate::detect::Agent::CodeBuddy);
+                // Addressable by name, but still without a session identity.
+                terminal.set_agent_name("before".into());
+            }
+
+            // No session identity yet, so the rename is held as pending. A
+            // failed rename here would make the assertions below meaningless.
+            app.rename_agent_target("before", Some("reviewer".into()))
+                .unwrap();
+            assert_eq!(
+                app.state.terminals[&terminal_id].pending_manual_agent_name(),
+                Some("reviewer")
+            );
+
+            // The identity arrives; session_ref_changed must persist the name.
+            app.state
+                .handle_app_event(crate::events::AppEvent::AgentSessionReported {
+                    pane_id,
+                    source: "hicodeer:codebuddy".into(),
+                    agent_label: "codebuddy".into(),
+                    seq: Some(1),
+                    session_ref: crate::agent_resume::AgentSessionRef::id("session-1"),
+                    session_start_source: Some("startup".into()),
+                });
+            assert_eq!(
+                crate::persist::agent_names::lookup("hicodeer:codebuddy", "session-1").as_deref(),
+                Some("reviewer")
+            );
+            assert_eq!(
+                app.state.terminals[&terminal_id].pending_manual_agent_name(),
+                None
+            );
+        });
+    }
+
+    #[test]
+    fn successful_rename_clears_a_stale_pending_name() {
+        with_temp_config(|| {
+            let (mut app, pane_id) = named_resume_app();
+            let terminal_id = app.state.workspaces[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            {
+                let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+                terminal.detected_agent = Some(crate::detect::Agent::CodeBuddy);
+                terminal.set_agent_name("before".into());
+                terminal.set_persisted_agent_session(
+                    crate::agent_resume::PersistedAgentSession {
+                        source: "hicodeer:codebuddy".into(),
+                        agent: "codebuddy".into(),
+                        session_ref: crate::agent_resume::AgentSessionRef::id("session-1")
+                            .unwrap(),
+                    },
+                );
+                // Simulate a pending value left behind by an earlier identity
+                // report that did not trigger session_ref_changed.
+                terminal.set_pending_manual_agent_name("stale".into());
+            }
+
+            app.rename_agent_target("before", Some("fresh".into()))
+                .unwrap();
+            assert_eq!(
+                app.state.terminals[&terminal_id].pending_manual_agent_name(),
+                None,
+                "a successful rename must drop a stale pending name"
+            );
+            assert_eq!(
+                crate::persist::agent_names::lookup("hicodeer:codebuddy", "session-1").as_deref(),
+                Some("fresh")
+            );
+        });
     }
 }

@@ -174,6 +174,14 @@ pub fn normalize_session_start_source(value: Option<String>) -> Option<String> {
     }
 }
 
+/// Whether a new session id still continues the same conversation, so a
+/// remembered name should carry over. Only `compact` and `fork` do that: a Qwen
+/// `branch` and the usual `clear`/`new`/`select`/`resume`/`startup` starts are
+/// different conversations and must not inherit the old name.
+pub fn continues_conversation(session_start_source: Option<&str>) -> bool {
+    matches!(session_start_source, Some("compact" | "fork"))
+}
+
 pub fn is_reserved_native_state_source(source: &str, agent: &str) -> bool {
     matches!(
         (source, agent),
@@ -1256,5 +1264,26 @@ mod tests {
             &AgentSessionRef::path(&agy_session).unwrap()
         )
         .is_none());
+    }
+
+    #[test]
+    fn continues_conversation_only_accepts_compact_and_fork() {
+        assert!(continues_conversation(Some("compact")));
+        assert!(continues_conversation(Some("fork")));
+        for source in [
+            "clear",
+            "new",
+            "branch",
+            "select",
+            "startup",
+            "resume",
+            "other",
+        ] {
+            assert!(
+                !continues_conversation(Some(source)),
+                "{source} must not inherit a name"
+            );
+        }
+        assert!(!continues_conversation(None));
     }
 }

@@ -758,6 +758,7 @@ fn agent_get_request(target: &str, request_id: &str) -> Request {
 fn agent_rename(args: &[String]) -> std::io::Result<i32> {
     let [target, value] = args else {
         eprintln!("usage: hicodeerd agent rename <target> <name>|--clear");
+        eprintln!("  --clear is a global reset: it deletes the agent name table and drops every session's name binding, not just this target's");
         return Ok(2);
     };
     let name = if value == "--clear" {
@@ -937,7 +938,7 @@ fn print_agent_help() {
     eprintln!("  hicodeerd agent read <target> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi]");
     eprintln!("  hicodeerd agent send-keys <target> <key> [key ...]");
     eprintln!("  hicodeerd agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]");
-    eprintln!("  hicodeerd agent rename <target> <name>|--clear");
+    eprintln!("  hicodeerd agent rename <target> <name>|--clear   (--clear: global reset, drops all saved name bindings)");
     eprintln!("  hicodeerd agent focus <target>");
     eprintln!("  hicodeerd agent wait <target> [--until STATUS]... [--timeout MS]");
     eprintln!("  hicodeerd agent attach <target> [--takeover]");

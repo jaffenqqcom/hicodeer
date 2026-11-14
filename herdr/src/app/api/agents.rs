@@ -1186,6 +1186,25 @@ mod tests {
 
     #[test]
     fn agent_rename_does_not_replace_the_pane_label() {
+        // The second rename clears the whole name table, so point
+        // `XDG_CONFIG_HOME` at a temporary directory; otherwise the test
+        // deletes the user's real `agent-names.json`. The lock serializes this
+        // with the other tests that rewrite the same variable.
+        let _guard = crate::config::test_config_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let config_home = std::env::temp_dir().join(format!(
+            "hicodeer-rename-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&config_home).unwrap();
+        let previous_config_home = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+
         let mut app = app_with_agent();
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
@@ -1209,6 +1228,17 @@ mod tests {
             assert_eq!(
                 app.state.terminals[&terminal_id].manual_label.as_deref(),
                 Some("shell-pane")
+            );
+        }
+
+        match previous_config_home {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        if let Err(err) = std::fs::remove_dir_all(&config_home) {
+            eprintln!(
+                "agent rename test cleanup failed for {}: {err}",
+                config_home.display()
             );
         }
     }

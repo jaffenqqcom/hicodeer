@@ -1506,13 +1506,15 @@ impl KeymapEditor {
     ) {
         let action = self
             .selected_binding()
-            .map(|binding| binding.action().name.to_string());
+            .map(|binding| binding.action().name);
         let Some(action) = action else {
             return;
         };
 
         telemetry::event!("Keybinding Action Copied", action = action);
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(action));
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            command_palette::rebranded_action_name(action),
+        ));
     }
 
     fn toggle_conflict_filter(
@@ -1756,7 +1758,7 @@ impl HumanizedActionNameCache {
         let cache = HashMap::from_iter(cx.all_action_names().iter().map(|&action_name| {
             (
                 action_name,
-                command_palette::humanize_action_name(action_name).into(),
+                command_palette::display_action_name(action_name).into(),
             )
         }));
         Self { cache }
@@ -2584,12 +2586,19 @@ impl KeybindingEditorModal {
 
             let humanized_names: HashMap<&'static str, SharedString> = actions
                 .iter()
-                .map(|&name| (name, command_palette::humanize_action_name(name).into()))
+                .map(|&name| (name, command_palette::display_action_name(name).into()))
                 .collect();
 
             let action_name_to_static: HashMap<String, &'static str> = actions
                 .iter()
-                .map(|&name| (name.to_string(), name))
+                .flat_map(|&name| {
+                    let rebranded = command_palette::rebranded_action_name(name);
+                    if rebranded == name {
+                        vec![(name.to_string(), name)]
+                    } else {
+                        vec![(name.to_string(), name), (rebranded, name)]
+                    }
+                })
                 .collect();
 
             let editor = cx.new(|cx| {
@@ -2894,7 +2903,7 @@ impl KeybindingEditorModal {
             .map_err(InputError::error)?;
 
         let humanized_action_name: SharedString =
-            command_palette::humanize_action_name(action_name).into();
+            command_palette::display_action_name(action_name).into();
 
         let action_information = ActionInformation::new(
             action_name,

@@ -347,7 +347,7 @@ mod tests {
         let (_, remaining_keystrokes) = chord.split_once(' ').expect("multi-keystroke binding");
         binding(
             remaining_keystrokes,
-            &command_palette::humanize_action_name(action_name),
+            &command_palette::display_action_name(action_name),
         )
     }
 
@@ -436,7 +436,7 @@ mod tests {
             let bindings = group_bindings(
                 sequences
                     .into_iter()
-                    .map(|sequence| binding(sequence, "zed: open settings"))
+                    .map(|sequence| binding(sequence, "hicodeer: open settings"))
                     .collect(),
             );
 
@@ -512,7 +512,7 @@ mod tests {
                 .into_iter()
                 .map(|binding| PendingBinding {
                     remaining_keystrokes: binding.keystrokes().iter().skip(1).cloned().collect(),
-                    action_name: command_palette::humanize_action_name(binding.action().name())
+                    action_name: command_palette::display_action_name(binding.action().name())
                         .into(),
                 })
                 .collect();
@@ -521,7 +521,7 @@ mod tests {
             let row = rows.first().expect("remaining binding");
             assert_eq!(
                 row.action_name.as_ref(),
-                command_palette::humanize_action_name(first_match.action().name())
+                command_palette::display_action_name(first_match.action().name())
             );
         }
     }
@@ -614,7 +614,10 @@ mod tests {
                 .map(|row| row.action_name.as_ref())
                 .collect::<Vec<_>>();
             action_names.sort();
-            assert_eq!(action_names, vec!["zed: open keymap", "zed: open settings"]);
+            assert_eq!(
+                action_names,
+                vec!["hicodeer: open keymap", "hicodeer: open settings"]
+            );
             assert!(rows.iter().all(|row| !row.is_group));
         }
     }
@@ -637,7 +640,7 @@ mod tests {
         assert_eq!(keys, vec![vec!["É"], vec!["é"]]);
         for row in rows {
             assert_eq!(text_for_keybinding_keystrokes(&row.keystrokes, cx), "É");
-            assert_eq!(row.action_name.as_ref(), "zed: open settings");
+            assert_eq!(row.action_name.as_ref(), "hicodeer: open settings");
             assert!(!row.is_group);
         }
     }
@@ -669,7 +672,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (parse_keystrokes("cmd-o"), "workspace: open", false),
-                (parse_keystrokes("cmd-s"), "zed: open keymap", false),
+                (parse_keystrokes("cmd-s"), "hicodeer: open keymap", false),
                 (
                     parse_keystrokes("cmd-o cmd-p"),
                     "workspace: reopen last picker",
@@ -686,8 +689,8 @@ mod tests {
         // A longer chord can sit between two bindings for the same keys, so duplicates aren't
         // always adjacent.
         let rows = group_bindings(vec![
-            binding("a", "zed: open keymap"),
-            binding("a b", "zed: open settings"),
+            binding("a", "hicodeer: open keymap"),
+            binding("a b", "hicodeer: open settings"),
             binding("a", "theme selector: toggle"),
         ]);
 
@@ -696,8 +699,8 @@ mod tests {
                 .map(|row| (row.keystrokes.to_vec(), row.action_name.as_ref()))
                 .collect::<Vec<_>>(),
             vec![
-                (parse_keystrokes("a"), "zed: open keymap"),
-                (parse_keystrokes("a b"), "zed: open settings"),
+                (parse_keystrokes("a"), "hicodeer: open keymap"),
+                (parse_keystrokes("a b"), "hicodeer: open settings"),
             ],
         );
         assert!(rows.iter().all(|row| !row.is_group));
@@ -748,7 +751,7 @@ mod tests {
             .into_iter()
             .map(|binding| PendingBinding {
                 remaining_keystrokes: binding.keystrokes().iter().skip(1).cloned().collect(),
-                action_name: command_palette::humanize_action_name(binding.action().name()).into(),
+                action_name: command_palette::display_action_name(binding.action().name()).into(),
             })
             .collect();
         let rows = prepare_pending_bindings(pending, cx);
@@ -763,12 +766,12 @@ mod tests {
             vec![
                 (
                     parse_keystrokes("cmd-s"),
-                    command_palette::humanize_action_name(first_match.action().name()),
+                    command_palette::display_action_name(first_match.action().name()),
                     false,
                 ),
                 (
                     parse_keystrokes("cmd-s cmd-,"),
-                    command_palette::humanize_action_name(zed_actions::OpenKeymapFile.name()),
+                    command_palette::display_action_name(zed_actions::OpenKeymapFile.name()),
                     false,
                 ),
             ],

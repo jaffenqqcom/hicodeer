@@ -98,7 +98,7 @@ impl CompletionProvider for ActionCompletionProvider {
                     project::Completion {
                         replace_range: replace_range.clone(),
                         label: language::CodeLabel::plain(humanized.to_string(), None),
-                        new_text: action_name.to_string(),
+                        new_text: command_palette::rebranded_action_name(action_name),
                         documentation: None,
                         source: project::CompletionSource::Custom,
                         icon_path: None,

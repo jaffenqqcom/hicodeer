@@ -19,7 +19,7 @@ use util::{
 };
 
 use crate::SettingsAssets;
-use settings_content::{ActionName, ActionWithArguments};
+use settings_content::{ActionName, ActionWithArguments, rebranded_action_name};
 use settings_json::{
     append_top_level_array_value_in_json_text, parse_json_with_comments,
     replace_top_level_array_value_in_json_text,
@@ -529,6 +529,15 @@ impl KeymapFile {
         Ok(name_and_input)
     }
 
+    /// Resolves the product-facing `hicodeer::` namespace to the internal
+    /// `zed::` namespace that actions are registered under.
+    fn normalized_action_name(name: &str) -> String {
+        match name.strip_prefix("hicodeer::") {
+            Some(rest) => format!("zed::{rest}"),
+            None => name.to_string(),
+        }
+    }
+
     fn build_keymap_action(
         action: &KeymapAction,
         cx: &App,
@@ -552,12 +561,16 @@ impl KeymapFile {
             }
             Some((name, Some(action_input))) => {
                 let action_input_string = action_input.to_string();
+                let action_name = Self::normalized_action_name(name);
                 (
-                    cx.build_action(name, Some(action_input.clone())),
+                    cx.build_action(&action_name, Some(action_input.clone())),
                     Some(action_input_string),
                 )
             }
-            Some((name, None)) => (cx.build_action(name, None), None),
+            Some((name, None)) => {
+                let action_name = Self::normalized_action_name(name);
+                (cx.build_action(&action_name, None), None)
+            }
             None => (Ok(NoAction.boxed_clone()), None),
         };
 
@@ -688,7 +701,10 @@ impl KeymapFile {
         }
 
         fn add_deprecation_preferred_name(schema: &mut schemars::Schema, new_name: &str) {
-            add_deprecation(schema, format!("Deprecated, use {new_name}"));
+            add_deprecation(
+                schema,
+                format!("Deprecated, use {}", rebranded_action_name(new_name)),
+            );
         }
 
         fn add_description(schema: &mut schemars::Schema, description: &str) {
@@ -752,7 +768,7 @@ impl KeymapFile {
             // Add an alternative for plain action names.
             let mut plain_action = json_schema!({
                 "type": "string",
-                "const": name
+                "const": rebranded_action_name(name)
             });
             if let Some(message) = deprecation_messages.get(name) {
                 add_deprecation(&mut plain_action, message.to_string());
@@ -775,7 +791,7 @@ impl KeymapFile {
                 && schema != empty_object
             {
                 let mut matches_action_name = json_schema!({
-                    "const": name
+                    "const": rebranded_action_name(name)
                 });
                 if let Some(description) = &description {
                     add_description(&mut matches_action_name, description);
@@ -796,9 +812,9 @@ impl KeymapFile {
                     unbind_target_action_alternatives.push(action_with_input);
                 }
             } else {
-                empty_schema_action_names.push(name);
+                empty_schema_action_names.push(rebranded_action_name(name));
                 if include_in_unbind_target_schema {
-                    empty_schema_unbind_target_action_names.push(name);
+                    empty_schema_unbind_target_action_names.push(rebranded_action_name(name));
                 }
             }
         }
@@ -975,7 +991,7 @@ impl KeymapFile {
                 .action_value()
                 .context("Failed to generate target action JSON value")?;
             let source_action_value = source
-                .action_value()
+                .serialized_action_value()
                 .context("Failed to generate source action JSON value")?;
 
             if let Some(binding_location) = find_binding(
@@ -1090,7 +1106,7 @@ impl KeymapFile {
 
             value.insert("bindings".to_string(), {
                 let mut bindings = serde_json::Map::new();
-                let action = keybinding.action_value()?;
+                let action = keybinding.serialized_action_value()?;
                 bindings.insert(keybinding.keystrokes_unparsed(), action);
                 bindings.into()
             });
@@ -1112,7 +1128,7 @@ impl KeymapFile {
                 let mut unbind = serde_json::Map::new();
                 unbind.insert(
                     suppression_unbind.keystrokes_unparsed(),
-                    suppression_unbind.action_value()?,
+                    suppression_unbind.serialized_action_value()?,
                 );
                 unbind.into()
             });
@@ -1133,6 +1149,7 @@ impl KeymapFile {
             keyboard_mapper: &dyn gpui::PlatformKeyboardMapper,
             deprecated_aliases: &HashMap<&'static str, &'static str>,
         ) -> Option<BindingLocation<'b>> {
+            let target_action_value = &normalized_action_value(target_action_value);
             let target_context_parsed =
                 KeyBindingContextPredicate::parse(target.context.unwrap_or("")).ok();
             for (index, section) in keymap.sections().enumerate() {
@@ -1221,6 +1238,22 @@ impl KeymapFile {
             None
         }
 
+        /// Resolves the product-facing `hicodeer::` namespace in an action
+        /// value so file entries and loaded bindings compare equal.
+        fn normalized_action_value(value: &Value) -> Value {
+            match value {
+                Value::String(name) => Value::String(KeymapFile::normalized_action_name(name)),
+                Value::Array(items) if items.len() == 2 => {
+                    let mut items = items.clone();
+                    if let Value::String(name) = &items[0] {
+                        items[0] = Value::String(KeymapFile::normalized_action_name(name));
+                    }
+                    Value::Array(items)
+                }
+                _ => value.clone(),
+            }
+        }
+
         /// Compares a keymap file entry's action value against the target action
         /// value. The target is built from a loaded binding's canonical action
         /// name, while the file entry may still use a deprecated alias.
@@ -1229,6 +1262,7 @@ impl KeymapFile {
             target_action_value: &Value,
             deprecated_aliases: &HashMap<&'static str, &'static str>,
         ) -> bool {
+            let action_value = &normalized_action_value(action_value);
             if action_value == target_action_value {
                 return true;
             }
@@ -1363,10 +1397,20 @@ pub struct KeybindUpdateTarget<'a> {
 
 impl<'a> KeybindUpdateTarget<'a> {
     fn action_value(&self) -> Result<Value> {
-        if self.action_name == gpui::NoAction.name() {
+        self.action_value_for_name(self.action_name)
+    }
+
+    /// Serializes the action value the way it should appear in the user's
+    /// keymap file, using the product-facing `hicodeer::` namespace.
+    fn serialized_action_value(&self) -> Result<Value> {
+        self.action_value_for_name(&rebranded_action_name(self.action_name))
+    }
+
+    fn action_value_for_name(&self, action_name: &str) -> Result<Value> {
+        if KeymapFile::normalized_action_name(action_name) == gpui::NoAction.name() {
             return Ok(Value::Null);
         }
-        let action_name: Value = self.action_name.into();
+        let action_name: Value = action_name.into();
         let value = match self.action_arguments {
             Some(args) if !args.is_empty() => {
                 let args = serde_json::from_str::<Value>(args)
@@ -1690,6 +1734,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_normalized_action_name_maps_product_namespace() {
+        assert_eq!(
+            KeymapFile::normalized_action_name("hicodeer::Quit"),
+            "zed::Quit"
+        );
+        assert_eq!(KeymapFile::normalized_action_name("zed::Quit"), "zed::Quit");
+        assert_eq!(
+            KeymapFile::normalized_action_name("editor::Newline"),
+            "editor::Newline"
+        );
+    }
+
     #[gpui::test]
     fn keymap_unbind_rejects_null(cx: &mut App) {
         match KeymapFile::load(
@@ -1838,14 +1895,14 @@ mod tests {
             "[]",
             KeybindUpdateOperation::add(KeybindUpdateTarget {
                 keystrokes: &parse_keystrokes("ctrl-a"),
-                action_name: "zed::SomeAction",
+                action_name: "hicodeer::SomeAction",
                 context: None,
                 action_arguments: None,
             }),
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -1856,14 +1913,14 @@ mod tests {
             "[]",
             KeybindUpdateOperation::add(KeybindUpdateTarget {
                 keystrokes: &parse_keystrokes("\\ a"),
-                action_name: "zed::SomeAction",
+                action_name: "hicodeer::SomeAction",
                 context: None,
                 action_arguments: None,
             }),
             r#"[
                 {
                     "bindings": {
-                        "\\ a": "zed::SomeAction"
+                        "\\ a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -1874,14 +1931,14 @@ mod tests {
             "[]",
             KeybindUpdateOperation::add(KeybindUpdateTarget {
                 keystrokes: &parse_keystrokes("ctrl-a"),
-                action_name: "zed::SomeAction",
+                action_name: "hicodeer::SomeAction",
                 context: None,
                 action_arguments: Some(""),
             }),
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -1892,26 +1949,26 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
             .unindent(),
             KeybindUpdateOperation::add(KeybindUpdateTarget {
                 keystrokes: &parse_keystrokes("ctrl-b"),
-                action_name: "zed::SomeOtherAction",
+                action_name: "hicodeer::SomeOtherAction",
                 context: None,
                 action_arguments: None,
             }),
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 },
                 {
                     "bindings": {
-                        "ctrl-b": "zed::SomeOtherAction"
+                        "ctrl-b": "hicodeer::SomeOtherAction"
                     }
                 }
             ]"#
@@ -1922,27 +1979,27 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
             .unindent(),
             KeybindUpdateOperation::add(KeybindUpdateTarget {
                 keystrokes: &parse_keystrokes("ctrl-b"),
-                action_name: "zed::SomeOtherAction",
+                action_name: "hicodeer::SomeOtherAction",
                 context: None,
                 action_arguments: Some(r#"{"foo": "bar"}"#),
             }),
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 },
                 {
                     "bindings": {
                         "ctrl-b": [
-                            "zed::SomeOtherAction",
+                            "hicodeer::SomeOtherAction",
                             {
                                 "foo": "bar"
                             }
@@ -1957,28 +2014,28 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
             .unindent(),
             KeybindUpdateOperation::add(KeybindUpdateTarget {
                 keystrokes: &parse_keystrokes("ctrl-b"),
-                action_name: "zed::SomeOtherAction",
+                action_name: "hicodeer::SomeOtherAction",
                 context: Some("Zed > Editor && some_condition = true"),
                 action_arguments: Some(r#"{"foo": "bar"}"#),
             }),
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 },
                 {
                     "context": "Zed > Editor && some_condition = true",
                     "bindings": {
                         "ctrl-b": [
-                            "zed::SomeOtherAction",
+                            "hicodeer::SomeOtherAction",
                             {
                                 "foo": "bar"
                             }
@@ -1993,7 +2050,7 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2001,13 +2058,13 @@ mod tests {
             KeybindUpdateOperation::Replace {
                 target: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-a"),
-                    action_name: "zed::SomeAction",
+                    action_name: "hicodeer::SomeAction",
                     context: None,
                     action_arguments: None,
                 },
                 source: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-b"),
-                    action_name: "zed::SomeOtherAction",
+                    action_name: "hicodeer::SomeOtherAction",
                     context: None,
                     action_arguments: Some(r#"{"foo": "bar"}"#),
                 },
@@ -2016,13 +2073,13 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 },
                 {
                     "bindings": {
                         "ctrl-b": [
-                            "zed::SomeOtherAction",
+                            "hicodeer::SomeOtherAction",
                             {
                                 "foo": "bar"
                             }
@@ -2031,7 +2088,7 @@ mod tests {
                 },
                 {
                     "unbind": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2044,7 +2101,7 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2052,13 +2109,13 @@ mod tests {
             KeybindUpdateOperation::Replace {
                 target: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-a"),
-                    action_name: "zed::SomeAction",
+                    action_name: "hicodeer::SomeAction",
                     context: None,
                     action_arguments: None,
                 },
                 source: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-a"),
-                    action_name: "zed::SomeOtherAction",
+                    action_name: "hicodeer::SomeOtherAction",
                     context: None,
                     action_arguments: None,
                 },
@@ -2067,12 +2124,12 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 },
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeOtherAction"
+                        "ctrl-a": "hicodeer::SomeOtherAction"
                     }
                 }
             ]"#
@@ -2086,7 +2143,7 @@ mod tests {
                 {
                     "context": "SomeContext",
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2094,13 +2151,13 @@ mod tests {
             KeybindUpdateOperation::Replace {
                 target: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-a"),
-                    action_name: "zed::SomeAction",
+                    action_name: "hicodeer::SomeAction",
                     context: Some("SomeContext"),
                     action_arguments: None,
                 },
                 source: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-b"),
-                    action_name: "zed::SomeOtherAction",
+                    action_name: "hicodeer::SomeOtherAction",
                     context: Some("SomeContext"),
                     action_arguments: None,
                 },
@@ -2110,19 +2167,19 @@ mod tests {
                 {
                     "context": "SomeContext",
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 },
                 {
                     "context": "SomeContext",
                     "bindings": {
-                        "ctrl-b": "zed::SomeOtherAction"
+                        "ctrl-b": "hicodeer::SomeOtherAction"
                     }
                 },
                 {
                     "context": "SomeContext",
                     "unbind": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2133,7 +2190,7 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "a": "zed::SomeAction"
+                        "a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2141,13 +2198,13 @@ mod tests {
             KeybindUpdateOperation::Replace {
                 target: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("a"),
-                    action_name: "zed::SomeAction",
+                    action_name: "hicodeer::SomeAction",
                     context: None,
                     action_arguments: None,
                 },
                 source: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-b"),
-                    action_name: "zed::SomeOtherAction",
+                    action_name: "hicodeer::SomeOtherAction",
                     context: None,
                     action_arguments: Some(r#"{"foo": "bar"}"#),
                 },
@@ -2157,7 +2214,7 @@ mod tests {
                 {
                     "bindings": {
                         "ctrl-b": [
-                            "zed::SomeOtherAction",
+                            "hicodeer::SomeOtherAction",
                             {
                                 "foo": "bar"
                             }
@@ -2172,7 +2229,7 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "\\ a": "zed::SomeAction"
+                        "\\ a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2180,13 +2237,13 @@ mod tests {
             KeybindUpdateOperation::Replace {
                 target: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("\\ a"),
-                    action_name: "zed::SomeAction",
+                    action_name: "hicodeer::SomeAction",
                     context: None,
                     action_arguments: None,
                 },
                 source: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("\\ b"),
-                    action_name: "zed::SomeOtherAction",
+                    action_name: "hicodeer::SomeOtherAction",
                     context: None,
                     action_arguments: Some(r#"{"foo": "bar"}"#),
                 },
@@ -2196,7 +2253,7 @@ mod tests {
                 {
                     "bindings": {
                         "\\ b": [
-                            "zed::SomeOtherAction",
+                            "hicodeer::SomeOtherAction",
                             {
                                 "foo": "bar"
                             }
@@ -2211,7 +2268,7 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "\\ a": "zed::SomeAction"
+                        "\\ a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2219,13 +2276,13 @@ mod tests {
             KeybindUpdateOperation::Replace {
                 target: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("\\ a"),
-                    action_name: "zed::SomeAction",
+                    action_name: "hicodeer::SomeAction",
                     context: None,
                     action_arguments: None,
                 },
                 source: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("\\ a"),
-                    action_name: "zed::SomeAction",
+                    action_name: "hicodeer::SomeAction",
                     context: None,
                     action_arguments: None,
                 },
@@ -2234,7 +2291,7 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "\\ a": "zed::SomeAction"
+                        "\\ a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2245,7 +2302,7 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 }
             ]"#
@@ -2253,13 +2310,13 @@ mod tests {
             KeybindUpdateOperation::Replace {
                 target: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-a"),
-                    action_name: "zed::SomeNonexistentAction",
+                    action_name: "hicodeer::SomeNonexistentAction",
                     context: None,
                     action_arguments: None,
                 },
                 source: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-b"),
-                    action_name: "zed::SomeOtherAction",
+                    action_name: "hicodeer::SomeOtherAction",
                     context: None,
                     action_arguments: None,
                 },
@@ -2268,12 +2325,12 @@ mod tests {
             r#"[
                 {
                     "bindings": {
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                     }
                 },
                 {
                     "bindings": {
-                        "ctrl-b": "zed::SomeOtherAction"
+                        "ctrl-b": "hicodeer::SomeOtherAction"
                     }
                 }
             ]"#
@@ -2285,7 +2342,7 @@ mod tests {
                 {
                     "bindings": {
                         // some comment
-                        "ctrl-a": "zed::SomeAction"
+                        "ctrl-a": "hicodeer::SomeAction"
                         // some other comment
                     }
                 }
@@ -2294,13 +2351,13 @@ mod tests {
             KeybindUpdateOperation::Replace {
                 target: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-a"),
-                    action_name: "zed::SomeAction",
+                    action_name: "hicodeer::SomeAction",
                     context: None,
                     action_arguments: None,
                 },
                 source: KeybindUpdateTarget {
                     keystrokes: &parse_keystrokes("ctrl-b"),
-                    action_name: "zed::SomeOtherAction",
+                    action_name: "hicodeer::SomeOtherAction",
                     context: None,
                     action_arguments: Some(r#"{"foo": "bar"}"#),
                 },
@@ -2311,7 +2368,7 @@ mod tests {
                     "bindings": {
                         // some comment
                         "ctrl-b": [
-                            "zed::SomeOtherAction",
+                            "hicodeer::SomeOtherAction",
                             {
                                 "foo": "bar"
                             }
@@ -2629,6 +2686,76 @@ mod tests {
             ]"#
             .unindent(),
         );
+    }
+
+    #[test]
+    fn serialized_action_value_uses_product_namespace() {
+        let target = KeybindUpdateTarget {
+            context: None,
+            keystrokes: &parse_keystrokes("ctrl-a"),
+            action_name: "zed::Quit",
+            action_arguments: None,
+        };
+        assert_eq!(
+            target.serialized_action_value().expect("serialize"),
+            serde_json::json!("hicodeer::Quit")
+        );
+
+        let target = KeybindUpdateTarget {
+            context: None,
+            keystrokes: &parse_keystrokes("ctrl-a"),
+            action_name: "editor::Newline",
+            action_arguments: None,
+        };
+        assert_eq!(
+            target.serialized_action_value().expect("serialize"),
+            serde_json::json!("editor::Newline")
+        );
+
+        let target = KeybindUpdateTarget {
+            context: None,
+            keystrokes: &parse_keystrokes("ctrl-a"),
+            action_name: "zed::OpenSettingsAt",
+            action_arguments: Some(r#"{"path":"keymap.json"}"#),
+        };
+        assert_eq!(
+            target.serialized_action_value().expect("serialize"),
+            serde_json::json!(["hicodeer::OpenSettingsAt", { "path": "keymap.json" }])
+        );
+
+        let target = KeybindUpdateTarget {
+            context: None,
+            keystrokes: &parse_keystrokes("ctrl-a"),
+            action_name: "zed::NoAction",
+            action_arguments: None,
+        };
+        assert_eq!(
+            target.serialized_action_value().expect("serialize"),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn update_matches_binding_written_with_product_namespace() {
+        zlog::init_test();
+
+        let result = KeymapFile::update_keybinding(
+            KeybindUpdateOperation::Remove {
+                target: KeybindUpdateTarget {
+                    context: None,
+                    keystrokes: &parse_keystrokes("ctrl-a"),
+                    action_name: "zed::Quit",
+                    action_arguments: None,
+                },
+                target_keybind_source: KeybindSource::User,
+            },
+            r#"[{"bindings": {"ctrl-a": "hicodeer::Quit"}}]"#.to_string(),
+            4,
+            &gpui::DummyKeyboardMapper,
+            &HashMap::default(),
+        );
+
+        assert!(result.is_ok(), "expected to find binding: {result:?}");
     }
 
     #[test]

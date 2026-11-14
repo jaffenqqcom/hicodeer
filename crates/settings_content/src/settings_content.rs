@@ -11,7 +11,7 @@ mod theme;
 mod title_bar;
 mod workspace;
 
-pub use action::{ActionName, ActionWithArguments, CommandAliasTarget};
+pub use action::{ActionName, ActionWithArguments, CommandAliasTarget, rebranded_action_name};
 use anyhow::Context;
 pub use editor::*;
 pub use extension::*;

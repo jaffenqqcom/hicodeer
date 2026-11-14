@@ -413,7 +413,7 @@ mod tests {
     };
 
     use super::*;
-    use command_palette::humanize_action_name;
+    use command_palette::display_action_name;
     use gpui::{
         Bounds, Entity, FocusHandle, InputHandler, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
         Pixels, PlatformInput, Point, TestAppContext, UTF16Selection, VisualTestContext, actions,
@@ -893,7 +893,7 @@ mod tests {
             snapshot.bindings,
             vec![(
                 vec!["j".to_string()],
-                humanize_action_name(zed_actions::dev::OpenKeyContextView.name()),
+                display_action_name(zed_actions::dev::OpenKeyContextView.name()),
             )]
         );
 
@@ -1179,11 +1179,11 @@ mod tests {
             vec![
                 (
                     vec!["h".to_string()],
-                    humanize_action_name(LongerBinding.name()),
+                    display_action_name(LongerBinding.name()),
                 ),
                 (
                     vec!["h".to_string(), "j".to_string()],
-                    humanize_action_name(LongestBinding.name()),
+                    display_action_name(LongestBinding.name()),
                 ),
             ]
         );
@@ -1200,7 +1200,7 @@ mod tests {
             second_render_state.bindings,
             vec![(
                 vec!["j".to_string()],
-                humanize_action_name(LongestBinding.name()),
+                display_action_name(LongestBinding.name()),
             )]
         );
 
@@ -1236,7 +1236,7 @@ mod tests {
             render_state.bindings,
             vec![(
                 vec!["j".to_string()],
-                humanize_action_name(LongerBinding.name()),
+                display_action_name(LongerBinding.name()),
             )]
         );
     }
@@ -1654,7 +1654,7 @@ mod tests {
             snapshot.bindings,
             vec![(
                 vec!["h".to_string()],
-                humanize_action_name(LongerBinding.name()),
+                display_action_name(LongerBinding.name()),
             )]
         );
         assert!(cx.debug_bounds("PENDING_KEYSTROKES_INDICATOR").is_some());

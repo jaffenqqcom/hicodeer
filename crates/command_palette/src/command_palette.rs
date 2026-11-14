@@ -26,6 +26,7 @@ use picker::Direction;
 use picker::{Picker, PickerDelegate};
 use postage::{sink::Sink, stream::Stream};
 use settings::Settings;
+pub use settings_content::rebranded_action_name;
 use ui::{
     ButtonLike, HighlightedLabel, KeyBinding, ListItem, ListItemSpacing, Tooltip, prelude::*,
 };
@@ -128,7 +129,7 @@ impl CommandPalette {
                 }
 
                 Some(Command {
-                    name: SharedString::from(palette_command_name(action.name())),
+                    name: SharedString::from(display_action_name(action.name())),
                     action,
                     usage: None,
                 })
@@ -931,9 +932,9 @@ pub fn humanize_action_name(name: &str) -> String {
     result
 }
 
-/// Builds the command palette display name, rebranding `zed` as `hicodeer`
+/// Builds the action name shown in the UI, rebranding `zed` as `hicodeer`
 /// while leaving the underlying action ids untouched.
-fn palette_command_name(action_name: &str) -> String {
+pub fn display_action_name(action_name: &str) -> String {
     let humanized = humanize_action_name(action_name);
     if !humanized.contains("zed") {
         return humanized;
@@ -1000,13 +1001,31 @@ mod tests {
     }
 
     #[test]
-    fn test_palette_command_name_rebrands_zed() {
+    fn test_display_action_name_rebrands_zed() {
         assert_eq!(
-            palette_command_name("zed::OpenSettings"),
+            display_action_name("zed::OpenSettings"),
             "hicodeer: open settings"
         );
-        assert_eq!(palette_command_name("zed::OpenZedUrl"), "hicodeer: open hicodeer url");
-        assert_eq!(palette_command_name("editor::Backspace"), "editor: backspace");
+        assert_eq!(
+            display_action_name("zed::OpenZedUrl"),
+            "hicodeer: open hicodeer url"
+        );
+        assert_eq!(
+            display_action_name("editor::Backspace"),
+            "editor: backspace"
+        );
+    }
+
+    #[test]
+    fn test_rebranded_action_name_rewrites_namespace_only() {
+        assert_eq!(
+            rebranded_action_name("zed::OpenSettings"),
+            "hicodeer::OpenSettings"
+        );
+        assert_eq!(
+            rebranded_action_name("editor::Backspace"),
+            "editor::Backspace"
+        );
     }
 
     #[test]

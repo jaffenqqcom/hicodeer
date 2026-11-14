@@ -326,10 +326,20 @@ fn template_and_validate_actions(book: &mut Book, errors: &mut HashSet<Preproces
     });
 }
 
+/// Maps the product-facing `hicodeer::` namespace back to the internal
+/// `zed::` namespace recorded in the action manifest.
+fn internal_action_name(name: &str) -> String {
+    match name.strip_prefix("hicodeer::") {
+        Some(rest) => format!("zed::{rest}"),
+        None => name.to_string(),
+    }
+}
+
 fn find_action_by_name(name: &str) -> Option<&ActionDef> {
+    let name = internal_action_name(name);
     ALL_ACTIONS
         .actions
-        .binary_search_by(|action| action.name.as_str().cmp(name))
+        .binary_search_by(|action| action.name.as_str().cmp(name.as_str()))
         .ok()
         .map(|index| &ALL_ACTIONS.actions[index])
 }
@@ -345,6 +355,7 @@ fn is_missing_action(name: &str) -> bool {
 // Find the last binding (in keymap order) for the given action.
 // Exact action matches are preferred over parameterized variants.
 fn find_binding_in_keymap(keymap: &KeymapFile, action: &str) -> Option<String> {
+    let action = internal_action_name(action);
     let find = |predicate: &dyn Fn(&str) -> bool| {
         keymap.sections().rev().find_map(|section| {
             section.bindings().rev().find_map(|(keystroke, a)| {
@@ -358,12 +369,12 @@ fn find_binding_in_keymap(keymap: &KeymapFile, action: &str) -> Option<String> {
     };
 
     // Look for exact match
-    if let Some(binding) = find(&|a| a == action) {
+    if let Some(binding) = find(&|a| a == action.as_str()) {
         return Some(binding);
     }
 
     // Look for parameterized match
-    find(&|a| name_for_action(a.to_string()) == action)
+    find(&|a| name_for_action(a.to_string()) == action.as_str())
 }
 
 fn find_binding(os: Os, action: &str) -> Option<String> {

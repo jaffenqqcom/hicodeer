@@ -47,7 +47,7 @@ impl CommandAliasTarget {
 
         let mut exclude = action_names
             .iter()
-            .map(|name| serde_json::json!({ "const": *name }))
+            .map(|name| serde_json::json!({ "const": rebranded_action_name(name) }))
             .collect::<Vec<Value>>();
 
         // Since we accept any arbitrary string, besides the list of registered
@@ -117,6 +117,15 @@ fn add_description(schema: &mut Schema, description: &str) {
     schema.insert("description".into(), Value::String(description.to_string()));
 }
 
+/// Rewrites the `zed::` action namespace to the product-facing `hicodeer::`
+/// namespace. Other namespaces, including deprecated aliases, are unchanged.
+pub fn rebranded_action_name(name: &str) -> String {
+    match name.strip_prefix("zed::") {
+        Some(rest) => format!("hicodeer::{rest}"),
+        None => name.to_string(),
+    }
+}
+
 impl ActionName {
     pub fn new(name: impl Into<String>) -> Self {
         Self(name.into())
@@ -134,15 +143,19 @@ impl ActionName {
         let mut alternatives = Vec::new();
 
         for action_name in action_names {
+            let display_name = rebranded_action_name(action_name);
             let mut entry = json_schema!({
                 "type": "string",
-                "const": action_name
+                "const": display_name
             });
 
             if let Some(message) = deprecation_messages.get(action_name) {
                 add_deprecation(&mut entry, message.to_string());
             } else if let Some(new_name) = deprecations.get(action_name) {
-                add_deprecation(&mut entry, format!("Deprecated, use {new_name}"));
+                add_deprecation(
+                    &mut entry,
+                    format!("Deprecated, use {}", rebranded_action_name(new_name)),
+                );
             }
 
             if let Some(description) = action_documentation.get(action_name) {
@@ -286,5 +299,26 @@ mod tests {
         );
         assert_eq!(name, Some("workspace::CloseActiveItem"));
         assert_eq!(schema_type, Some("string"));
+    }
+
+    #[test]
+    fn build_schema_rebrands_zed_namespace() {
+        let schema = ActionName::build_schema(
+            ["zed::OpenSettings"],
+            &HashMap::default(),
+            &HashMap::default(),
+            &HashMap::default(),
+        );
+
+        let value = schema.to_value();
+        let names: Vec<_> = value
+            .pointer("/anyOf")
+            .and_then(|v| v.as_array())
+            .expect("anyOf should be present")
+            .iter()
+            .filter_map(|entry| entry.get("const").and_then(Value::as_str))
+            .collect();
+
+        assert_eq!(names, vec!["hicodeer::OpenSettings"]);
     }
 }

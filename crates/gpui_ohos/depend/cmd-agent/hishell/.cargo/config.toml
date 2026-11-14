@@ -1,0 +1,8 @@
+# Build artifacts for this standalone workspace live under the repository-level
+# target directory, next to the other crates' output, instead of hishell/target.
+# Relative paths are resolved from the directory containing this .cargo folder.
+# script/bundle-ohos passes CARGO_TARGET_DIR=<repository>/target/hishell, which
+# takes precedence over this file; both point at the same directory so a direct
+# `cargo build` here reuses the cache the script produces.
+[build]
+target-dir = "../../../../../target/hishell"

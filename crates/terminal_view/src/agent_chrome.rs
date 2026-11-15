@@ -2,6 +2,7 @@
 //! inline pane rename, driven by the agent server JSON API.
 
 use super::*;
+use std::time::Instant;
 
 /// Hooks for the OHOS Agent terminal: the agent server owns the right-click
 /// menu and pane scroll state, while HiCodeer draws them. `agent_panel`
@@ -66,9 +67,71 @@ pub(super) struct AgentScrollWriter {
     _task: Task<()>,
 }
 
-/// How often the poll refreshes the Agent scrollbar's server metrics.
+/// Everything the host needs to draw and drive the Agent terminal's
+/// scrollbar: the server metrics, the drag in progress, the serial
+/// `pane.scroll` writer, and the on-demand poll that keeps them in step.
+///
+/// One struct rather than a field per mechanism, so the mechanism reads as a
+/// unit and only one `cfg` gate is needed.
 #[cfg(target_env = "ohos")]
-const AGENT_SCROLL_POLL_INTERVAL: Duration = Duration::from_millis(500);
+#[derive(Default)]
+pub(super) struct AgentScrollState {
+    /// Latest metrics reported by the agent server.
+    pub(super) metrics: Option<PaneScrollMetrics>,
+    /// Non-null while the thumb is being dragged.
+    pub(super) drag: Option<AgentScrollDrag>,
+    /// Serial writer for `pane.scroll`, holding only the newest offset.
+    pub(super) writer: Option<AgentScrollWriter>,
+    /// The on-demand poll task, kept so it is cancelled with the view.
+    pub(super) poll_task: Option<Task<()>>,
+    /// While this instant is in the future the poll refreshes the thumb at the
+    /// fast rate; scroll input pushes it forward.
+    pub(super) active_until: Option<Instant>,
+    /// Offset the thumb is drawn at, eased towards the polled value.
+    pub(super) visual_offset: Option<f32>,
+    /// Wakes the poll the moment an input arrives.
+    pub(super) wakeup: Option<postage::watch::Sender<u64>>,
+    /// True when the last two polls reported the same offset, i.e. the content
+    /// has stopped moving.
+    pub(super) settled: bool,
+}
+
+impl AgentScrollState {
+    /// Whether the poll should be refreshing the thumb right now.
+    fn poll_is_active(&self) -> bool {
+        self.active_until
+            .is_some_and(|deadline| Instant::now() < deadline)
+    }
+
+    /// Row offset the thumb is drawn at. Falls back to the polled value before
+    /// the first ease has run.
+    fn visual_rows(&self, polled: u64) -> f32 {
+        self.visual_offset.unwrap_or(polled as f32)
+    }
+}
+
+/// How long the poll keeps refreshing after the last scroll-causing input.
+///
+/// The TUI scrolls without telling the host, so the thumb can only follow the
+/// next poll. Coverage therefore has to outlast the input burst, including the
+/// momentum tail of a touch scroll, or the thumb would stop short of where the
+/// content came to rest.
+#[cfg(target_env = "ohos")]
+const AGENT_SCROLL_ACTIVE_WINDOW: Duration = Duration::from_millis(600);
+/// Poll interval inside the active window. This doubles as how quickly a stop
+/// is noticed: the thumb cannot settle before the next poll reports the same
+/// offset twice.
+#[cfg(target_env = "ohos")]
+const AGENT_SCROLL_ACTIVE_INTERVAL: Duration = Duration::from_millis(50);
+/// Fraction of the remaining distance the thumb covers per frame while easing
+/// towards a new polled offset. At 60fps this settles in roughly 60ms, which
+/// hides the poll's discrete jumps without feeling laggy.
+#[cfg(target_env = "ohos")]
+const AGENT_SCROLL_EASE_FACTOR: f32 = 0.5;
+/// Distance, in rows, below which the ease snaps to the target so the thumb
+/// stops with the content instead of crawling over the last row.
+#[cfg(target_env = "ohos")]
+const AGENT_SCROLL_EASE_SNAP: f32 = 1.0;
 
 /// Geometry of the host-drawn Agent terminal scrollbar, mirroring the Regular
 /// style in `ui::components::scrollbar` (thumb centred inside a track, inset
@@ -111,7 +174,7 @@ impl TerminalView {
         let track_color = cx.theme().colors().editor_background;
         let surface_color = cx.theme().colors().surface_background;
         let mut elements = Vec::new();
-        if let Some(metrics) = self.agent_scroll.clone() {
+        if let Some(metrics) = self.agent_scroll.metrics.as_ref() {
             if metrics.max_offset_from_bottom > 0 {
                 let bounds = self.terminal.read(cx).last_content().terminal_bounds;
                 let track_h = f32::from(bounds.bounds.size.height).max(1.0);
@@ -124,11 +187,12 @@ impl TerminalView {
                     .max(f32::from(AGENT_SCROLLBAR_MIN_THUMB))
                     .min(track_h);
                 let max_top = (track_h - thumb_h).max(0.0);
-                let scrolled = metrics
-                    .max_offset_from_bottom
-                    .saturating_sub(metrics.offset_from_bottom) as f32;
+                // Drawn from the eased offset rather than the polled one, so a
+                // new poll moves the thumb smoothly instead of jumping.
+                let visual_offset = self.agent_scroll.visual_rows(metrics.offset_from_bottom);
+                let scrolled = (metrics.max_offset_from_bottom as f32 - visual_offset).max(0.0);
                 let top =
-                    (scrolled / metrics.max_offset_from_bottom as f32 * max_top).min(max_top);
+                    (scrolled / metrics.max_offset_from_bottom as f32 * max_top).clamp(0.0, max_top);
                 // A track behind the thumb, like the terminal's own scrollbar.
                 // The thumb is inset from the right edge; drawing it at
                 // right_0 put the pointer into the window-resize hitbox.
@@ -143,7 +207,7 @@ impl TerminalView {
                         .bg(track_color)
                         .into_any_element(),
                 );
-                let dragging = self.agent_scroll_drag.is_some();
+                let dragging = self.agent_scroll.drag.is_some();
                 let pane_id = metrics.pane_id.clone();
                 let drag_start_offset = metrics.offset_from_bottom;
                 let drag_max = metrics.max_offset_from_bottom;
@@ -164,7 +228,7 @@ impl TerminalView {
                             cx.listener({
                                 let pane_id = pane_id.clone();
                                 move |this, event: &MouseDownEvent, _, cx| {
-                                    this.agent_scroll_drag = Some(AgentScrollDrag {
+                                    this.agent_scroll.drag = Some(AgentScrollDrag {
                                         pane_id: pane_id.clone(),
                                         start_y: f32::from(event.position.y),
                                         start_offset: drag_start_offset,
@@ -172,7 +236,6 @@ impl TerminalView {
                                         thumb_h,
                                         track_h,
                                     });
-                                    log::info!("agent scrollbar drag started on {pane_id}");
                                     cx.notify();
                                 }
                             }),
@@ -230,9 +293,12 @@ impl TerminalView {
         pressed_button: Option<MouseButton>,
         cx: &mut Context<Self>,
     ) {
-        let Some(drag) = self.agent_scroll_drag.clone() else {
+        let Some(drag) = self.agent_scroll.drag.clone() else {
             return;
         };
+        // A held button moving is exactly the input that changes the scroll
+        // position without a wheel event, so it keeps the window open too.
+        self.note_agent_scroll_activity();
         // The button was released outside this view (over the panel, another
         // window, or the desktop), so no mouse-up arrives here. End the drag
         // instead of leaving it latched forever.
@@ -247,7 +313,7 @@ impl TerminalView {
         let offset = (drag.start_offset as f32 - dy / max_top * drag.max as f32)
             .clamp(0.0, drag.max as f32) as u64;
         // Move the thumb immediately; the poll will confirm the server state.
-        if let Some(scroll) = self.agent_scroll.as_mut() {
+        if let Some(scroll) = self.agent_scroll.metrics.as_mut() {
             scroll.offset_from_bottom = offset;
         }
         // The writer sends these one at a time; storing the offset here
@@ -262,25 +328,28 @@ impl TerminalView {
     /// in-flight request plus the newest one.
     #[cfg(target_env = "ohos")]
     fn queue_agent_scroll(&mut self, pane_id: &str, offset: u64) {
-        let Some(writer) = self.agent_scroll_writer.as_mut() else {
+        let Some(writer) = self.agent_scroll.writer.as_mut() else {
             return;
         };
         *writer.pending.borrow_mut() = Some((pane_id.to_string(), offset));
     }
 
     /// Ends a drag and queues its final offset on the drag's own pane. The
-    /// poll may have replaced `agent_scroll`'s pane while the pointer moved, so
-    /// the write must not follow the polled pane id.
+    /// poll may have replaced the metrics' pane while the pointer moved, so the
+    /// write must not follow the polled pane id.
     #[cfg(target_env = "ohos")]
     pub(super) fn end_agent_scroll_drag(&mut self, cx: &mut Context<Self>) {
-        let Some(drag) = self.agent_scroll_drag.take() else {
+        let Some(drag) = self.agent_scroll.drag.take() else {
             return;
         };
-        let offset = self.agent_scroll.as_ref().map(|m| m.offset_from_bottom);
+        let offset = self
+            .agent_scroll
+            .metrics
+            .as_ref()
+            .map(|metrics| metrics.offset_from_bottom);
         if let Some(offset) = offset {
             self.queue_agent_scroll(&drag.pane_id, offset);
         }
-        log::info!("agent scrollbar drag ended on {}", drag.pane_id);
         cx.notify();
     }
 
@@ -289,7 +358,7 @@ impl TerminalView {
     /// one, and it stops when the view is dropped.
     #[cfg(target_env = "ohos")]
     pub(super) fn start_agent_scroll_writer(&mut self, cx: &mut Context<Self>) {
-        if self.agent_scroll_writer.is_some() {
+        if self.agent_scroll.writer.is_some() {
             return;
         }
         let Some(hooks) = cx.try_global::<agent_chrome::AgentChromeHooks>().copied() else {
@@ -315,36 +384,106 @@ impl TerminalView {
                 }
             }
         });
-        self.agent_scroll_writer = Some(AgentScrollWriter {
+        self.agent_scroll.writer = Some(AgentScrollWriter {
             pending,
             _task: task,
         });
+    }
+
+    /// Pushes the poll's active window forward after an input that can move
+    /// the Agent terminal's scroll position. Only these inputs refresh the
+    /// thumb; a view that is merely idle costs no requests at all.
+    #[cfg(target_env = "ohos")]
+    pub(super) fn note_agent_scroll_activity(&mut self) {
+        self.agent_scroll.active_until = Some(Instant::now() + AGENT_SCROLL_ACTIVE_WINDOW);
+        if let Some(wakeup) = self.agent_scroll.wakeup.as_mut() {
+            // Any change wakes the poll; the value itself carries no meaning.
+            *wakeup.borrow_mut() += 1;
+        }
+    }
+
+    /// Eases the thumb towards the latest polled offset instead of snapping to
+    /// it: at the poll's 50ms cadence a direct jump reads as a stuttering
+    /// thumb. Dragging bypasses the ease so the thumb stays under the pointer.
+    #[cfg(target_env = "ohos")]
+    pub(super) fn advance_agent_scroll_animation(&mut self, window: &mut Window) {
+        let Some(target) = self
+            .agent_scroll
+            .metrics
+            .as_ref()
+            .map(|metrics| metrics.offset_from_bottom as f32)
+        else {
+            return;
+        };
+        // Dragging follows the pointer, and a settled content position has
+        // nowhere left to ease towards: in both cases the thumb lands on the
+        // target now, so it stops when the terminal does.
+        if self.agent_scroll.drag.is_some()
+            || self.agent_scroll.settled
+            || !self.agent_scroll.poll_is_active()
+        {
+            self.agent_scroll.visual_offset = Some(target);
+            return;
+        }
+        let next = match self.agent_scroll.visual_offset {
+            None => target,
+            Some(current) => {
+                let remaining = target - current;
+                if remaining.abs() <= AGENT_SCROLL_EASE_SNAP {
+                    target
+                } else {
+                    // Keep frames coming until the ease settles.
+                    window.request_animation_frame();
+                    current + remaining * AGENT_SCROLL_EASE_FACTOR
+                }
+            }
+        };
+        self.agent_scroll.visual_offset = Some(next);
     }
 
     /// The Agent terminal's scrollbar is driven by the agent server, not by
     /// this terminal's scrollback, so its thumb needs the server's metrics.
     #[cfg(target_env = "ohos")]
     pub(super) fn start_agent_scroll_poll(&mut self, cx: &mut Context<Self>) {
-        if self.agent_scroll_poll_task.is_some() {
+        if self.agent_scroll.poll_task.is_some() {
             return;
         }
         let Some(hooks) = cx.try_global::<agent_chrome::AgentChromeHooks>().copied() else {
             return;
         };
+        let (wakeup_tx, mut wakeup_rx) = postage::watch::channel::<u64>();
+        self.agent_scroll.wakeup = Some(wakeup_tx);
+        // Load the initial metrics right away; from then on the poll only
+        // queries while scroll input keeps the active window open.
+        self.note_agent_scroll_activity();
         let view = cx.entity().downgrade();
         let task = cx.spawn(async move |_, cx| loop {
+            let Ok(active) = view.update(cx, |view, _| view.agent_scroll.poll_is_active()) else {
+                break;
+            };
+            if !active {
+                use futures::StreamExt;
+                // Nothing to poll: block until an input wakes us. The channel
+                // is the only wake-up; a dropped sender means the view is
+                // going away.
+                if wakeup_rx.next().await.is_none() {
+                    break;
+                }
+                continue;
+            }
             let metrics = cx.background_spawn(async move { (hooks.scroll)() }).await;
             let alive = view
                 .update(cx, |view, cx| {
                     match metrics {
                         Ok(mut metrics) => {
-                            let drag = view.agent_scroll_drag.clone();
+                            let drag = view.agent_scroll.drag.clone();
                             let offset = match drag {
                                 // Still dragging this pane: keep the local
                                 // offset so the thumb does not jump back under
                                 // the pointer every poll.
                                 Some(drag) if drag.pane_id == metrics.pane_id => view
                                     .agent_scroll
+                                    .metrics
                                     .as_ref()
                                     .map(|current| current.offset_from_bottom)
                                     .unwrap_or(metrics.offset_from_bottom),
@@ -356,12 +495,20 @@ impl TerminalView {
                                 }
                                 None => metrics.offset_from_bottom,
                             };
+                            // An unchanged offset means the content has
+                            // stopped moving, which is what lets the thumb
+                            // stop on the same frame instead of easing on.
+                            view.agent_scroll.settled = view
+                                .agent_scroll
+                                .metrics
+                                .as_ref()
+                                .is_some_and(|previous| previous.offset_from_bottom == offset);
                             metrics.offset_from_bottom = offset;
-                            view.agent_scroll = Some(metrics);
+                            view.agent_scroll.metrics = Some(metrics);
                         }
                         Err(err) => {
-                            if view.agent_scroll_drag.is_none()
-                                && view.agent_scroll.take().is_some()
+                            if view.agent_scroll.drag.is_none()
+                                && view.agent_scroll.metrics.take().is_some()
                             {
                                 log::warn!("agent scroll poll failed: {err}");
                             }
@@ -375,10 +522,10 @@ impl TerminalView {
                 break;
             }
             cx.background_executor()
-                .timer(AGENT_SCROLL_POLL_INTERVAL)
+                .timer(AGENT_SCROLL_ACTIVE_INTERVAL)
                 .await;
         });
-        self.agent_scroll_poll_task = Some(task);
+        self.agent_scroll.poll_task = Some(task);
     }
 
     /// Right-click in the Agent terminal: the item list comes from the agent
@@ -450,10 +597,6 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::info!(
-            "agent pane context menu opened for {pane_id} with {} items",
-            items.len()
-        );
         let entity = cx.entity().downgrade();
         let menu_focus = focus_handle.clone();
         let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
@@ -534,7 +677,6 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::info!("agent pane rename opened for {pane_id}");
         let editor = cx.new(|cx| Editor::single_line(window, cx));
         editor.update(cx, |editor, cx| {
             editor.set_text(current_label, window, cx);
@@ -555,7 +697,6 @@ impl TerminalView {
         let Some((pane_id, editor)) = self.agent_pane_rename.take() else {
             return;
         };
-        log::info!("agent pane rename finished for {pane_id} (save={save})");
         if save {
             let label = editor.read(cx).text(cx).trim().to_string();
             if !label.is_empty() {

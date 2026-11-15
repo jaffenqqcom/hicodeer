@@ -9,9 +9,7 @@ pub mod terminal_scrollbar;
 pub mod agent_chrome;
 
 
-use agent_chrome::{
-    AGENT_SCROLLBAR_TRACK_WIDTH, AgentScrollDrag, AgentScrollWriter, PaneScrollMetrics,
-};
+use agent_chrome::{AGENT_SCROLLBAR_TRACK_WIDTH, AgentScrollState};
 
 use editor::{
     Editor, EditorSettings, actions::SelectAll, blink_manager::BlinkManager,
@@ -203,19 +201,11 @@ pub struct TerminalView {
     rename_editor: Option<Entity<Editor>>,
     rename_editor_subscription: Option<Subscription>,
     quick_input: quick_input_ui::QuickInputState,
-    /// Scroll metrics of the agent server's front pane, for the host-drawn
-    /// scrollbar thumb.
+    /// Host-side state for the Agent terminal's scrollbar: the server metrics,
+    /// the drag in progress, the `pane.scroll` writer, and the on-demand poll
+    /// that keeps them in step.
     #[cfg(target_env = "ohos")]
-    agent_scroll: Option<PaneScrollMetrics>,
-    /// Non-null while the scrollbar thumb is being dragged.
-    #[cfg(target_env = "ohos")]
-    agent_scroll_drag: Option<AgentScrollDrag>,
-    /// Serial writer for `pane.scroll`, holding only the newest offset.
-    #[cfg(target_env = "ohos")]
-    agent_scroll_writer: Option<AgentScrollWriter>,
-    /// The 500ms poll task, kept so it is cancelled with the view.
-    #[cfg(target_env = "ohos")]
-    agent_scroll_poll_task: Option<Task<()>>,
+    agent_scroll: AgentScrollState,
     /// `(pane_id, editor)` while the host's inline rename input is open.
     #[cfg(target_env = "ohos")]
     agent_pane_rename: Option<(String, Entity<Editor>)>,
@@ -514,13 +504,7 @@ impl TerminalView {
             rename_editor_subscription: None,
             quick_input: quick_input_ui::QuickInputState::default(),
             #[cfg(target_env = "ohos")]
-            agent_scroll: None,
-            #[cfg(target_env = "ohos")]
-            agent_scroll_drag: None,
-            #[cfg(target_env = "ohos")]
-            agent_scroll_writer: None,
-            #[cfg(target_env = "ohos")]
-            agent_scroll_poll_task: None,
+            agent_scroll: AgentScrollState::default(),
             #[cfg(target_env = "ohos")]
             agent_pane_rename: None,
             _subscriptions: subscriptions,
@@ -973,6 +957,8 @@ impl TerminalView {
     }
 
     fn scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        #[cfg(target_env = "ohos")]
+        self.note_agent_scroll_activity();
         let terminal_content = self.terminal.read(cx).last_content();
 
         if self.block_below_cursor.is_some() && terminal_content.display_offset == 0 {
@@ -1268,6 +1254,10 @@ impl TerminalView {
 
     fn send_keystroke(&mut self, text: &SendKeystroke, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(keystroke) = Keystroke::parse(&text.0).log_err() {
+            // Page keys reach the TUI through this action rather than through
+            // `key_down`, so the thumb's window has to be opened here too.
+            #[cfg(target_env = "ohos")]
+            self.note_agent_scroll_activity();
             self.clear_bell(cx);
             self.blink_manager.update(cx, BlinkManager::pause_blinking);
             self.process_keystroke(&keystroke, cx);
@@ -1789,6 +1779,14 @@ impl TerminalView {
         self.clear_bell(cx);
         self.pause_cursor_blinking(window, cx);
 
+        // Page keys and modifier combinations can scroll the TUI, while
+        // printable input cannot, so only the former keeps the thumb's refresh
+        // window open.
+        #[cfg(target_env = "ohos")]
+        if !(event.prefer_character_input && event.keystroke.key_char.is_some()) {
+            self.note_agent_scroll_activity();
+        }
+
         if event.prefer_character_input
             && event.keystroke.key_char.is_some()
             && !self.terminal.read(cx).vi_mode_enabled()
@@ -1839,6 +1837,9 @@ impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // TODO: this should be moved out of render
         self.scroll_handle.update(self.terminal.read(cx));
+
+        #[cfg(target_env = "ohos")]
+        self.advance_agent_scroll_animation(window);
 
         if let Some(new_display_offset) = self.scroll_handle.future_display_offset.take() {
             self.terminal.update(cx, |term, _| {
@@ -1950,6 +1951,20 @@ impl Render for TerminalView {
                     #[cfg(not(target_env = "ohos"))]
                     {
                         let _ = (this, cx);
+                    }
+                }),
+            )
+            // A press can start the thumb drag or a touch scroll, so the thumb
+            // needs fresh metrics; a bare pointer move does not, which is why
+            // there is no equivalent handler for it here.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, _cx| {
+                    #[cfg(target_env = "ohos")]
+                    this.note_agent_scroll_activity();
+                    #[cfg(not(target_env = "ohos"))]
+                    {
+                        let _ = this;
                     }
                 }),
             )

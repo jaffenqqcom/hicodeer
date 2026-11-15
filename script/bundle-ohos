@@ -436,7 +436,7 @@ export NAPI_BUILD_TARGET_NAME=core
 # the herdr-specific one comes last.
 export RUSTFLAGS="${RUSTFLAGS:-} -A warnings --remap-path-prefix=$PROJECT_ROOT=/src --remap-path-prefix=$PROJECT_ROOT/herdr=/build"
 if [ "$IS_RELEASE" = true ]; then
-  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=2
+  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4
 else
   export CARGO_PROFILE_DEV_CODEGEN_UNITS=16
 fi

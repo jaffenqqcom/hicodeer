@@ -33,7 +33,8 @@ use fs::Fs;
 use gpui::ActivityGuard;
 use gpui::{
     Action, AnyElement, App, AsyncWindowContext, ClipboardItem, Context, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, Pixels, Render, ScrollHandle,
+    EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, Pixels, Render,
+    ScrollHandle,
     SharedString, Subscription, Task, TaskExt, WeakEntity, Window, actions, div, prelude::*, px,
     transparent_black,
 };
@@ -1035,6 +1036,24 @@ impl AgentPanel {
                 workspace.activate_item(&view, true, true, window, cx);
             }
         });
+    }
+
+    /// Gives the keyboard back to the Agent terminal after a click that did
+    /// not land in one of the panel's own inputs.
+    ///
+    /// The panel's root tracks focus, so without this a plain click anywhere in
+    /// it would leave the panel holding the keyboard and the TUI unable to
+    /// receive typing. In-place renaming is the one case where the panel must
+    /// keep focus: its editor is created by the same click, and the deferred
+    /// check below then sees it.
+    fn return_focus_to_agent_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let renaming = self.rename_editor.is_some()
+            || self.agent_rename_editor.is_some()
+            || self.history_rename_editor.is_some();
+        if renaming {
+            return;
+        }
+        self.reveal_agent_terminal(window, cx);
     }
 
     /// Focuses one space, which switches the terminal to it. A space row never
@@ -3488,6 +3507,17 @@ impl Render for AgentPanel {
             .id("agent-panel")
             .key_context("AgentPanel")
             .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_this, _: &MouseDownEvent, window, cx| {
+                    // Defer so the click's own handler runs first: a row click
+                    // focuses the terminal, and a rename entry creates the
+                    // editor this check looks for.
+                    cx.defer_in(window, move |this, window, cx| {
+                        this.return_focus_to_agent_terminal(window, cx);
+                    });
+                }),
+            )
             .size_full()
             .overflow_hidden()
             .child(self.render_actions(cx))

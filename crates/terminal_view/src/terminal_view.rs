@@ -285,6 +285,17 @@ const AGENT_TERMINAL_SOCKET_ARGUMENT: &str = "--socket";
 /// inherit the daemon's environment, so the path has to be handed to it.
 const AGENT_TERMINAL_CONFIG_ENV: &str = "HICODEER_AGENT_CONFIG_PATH";
 
+/// Whether deploying the Agent terminal moves keyboard focus into it.
+///
+/// This platform has no other text input competing for focus when the tab is
+/// first added, so taking focus is what makes the TUI usable right away
+/// instead of waiting for the user to click it.
+#[cfg(target_env = "ohos")]
+const AGENT_TERMINAL_TAKES_FOCUS_ON_DEPLOY: bool = true;
+/// Upstream leaves focus where the user left it when a new tab appears.
+#[cfg(not(target_env = "ohos"))]
+const AGENT_TERMINAL_TAKES_FOCUS_ON_DEPLOY: bool = false;
+
 
 impl EventEmitter<Event> for TerminalView {}
 impl EventEmitter<ItemEvent> for TerminalView {}
@@ -374,7 +385,13 @@ impl TerminalView {
                     view.set_pinned_title(AGENT_TERMINAL_TITLE.into(), cx);
                     view
                 });
-                workspace.add_item_to_active_pane(Box::new(view), Some(0), false, window, cx);
+                workspace.add_item_to_active_pane(
+                    Box::new(view),
+                    Some(0),
+                    AGENT_TERMINAL_TAKES_FOCUS_ON_DEPLOY,
+                    window,
+                    cx,
+                );
             })?;
             anyhow::Ok(())
         })

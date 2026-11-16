@@ -6,7 +6,6 @@
 //! adding its module, its enum variant, and one entry in [`platforms`] — no new
 //! match arms in the bridge, the manager or the settings page.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -15,15 +14,16 @@ use http_client::HttpClient;
 
 use crate::binding::{
     ConversationKind, DingTalkCredentials, FeishuCredentials, Platform, QqCredentials,
+    WechatCredentials,
 };
 use crate::dingtalk::DingTalkProvider;
 use crate::feishu::FeishuProvider;
 use crate::provider::InboundProvider;
 use crate::qq::QqProvider;
 use crate::registration::{self, DeviceFlow, PollOutcome};
+use crate::wechat::WechatProvider;
 
-/// Credential fields keyed by name, as stored.
-pub type CredentialValues = BTreeMap<String, String>;
+pub use crate::binding::CredentialValues;
 
 /// One field the settings page asks for. The names are the keys the stored
 /// binding uses, so a spec and its provider always agree.
@@ -142,7 +142,7 @@ pub fn spec(platform: Platform) -> &'static PlatformSpec {
         .expect("every platform has a spec")
 }
 
-static PLATFORMS: [PlatformSpec; 3] = [
+static PLATFORMS: [PlatformSpec; 4] = [
     PlatformSpec {
         platform: Platform::Feishu,
         display_name: "Feishu",
@@ -169,6 +169,16 @@ static PLATFORMS: [PlatformSpec; 3] = [
         route: BindingRoute::ExternalPage(crate::registration::QQ_CREATE_URL),
         fields: &QQ_FIELDS,
         build: build_qq,
+    },
+    PlatformSpec {
+        platform: Platform::Wechat,
+        display_name: "WeChat",
+        route: BindingRoute::DeviceFlow(ScanFlow {
+            begin: begin_wechat_scan,
+            poll: poll_wechat_scan,
+        }),
+        fields: &WECHAT_FIELDS,
+        build: build_wechat,
     },
 ];
 
@@ -208,6 +218,33 @@ static DINGTALK_FIELDS: [CredentialField; 3] = [
     ),
 ];
 
+static WECHAT_FIELDS: [CredentialField; 4] = [
+    CredentialField::new(
+        "bot_id",
+        "Bot ID",
+        "Bot id the QR login reports",
+        "Bot ID",
+    ),
+    CredentialField::new(
+        "bot_token",
+        "Bot Token",
+        "Token the QR login issues",
+        "Bot Token",
+    ),
+    CredentialField::new_optional(
+        "owner_id",
+        "Owner ID",
+        "WeChat user who scanned the code; only this user's messages are accepted",
+        "Owner ID",
+    ),
+    CredentialField::new_optional(
+        "base_url",
+        "API Base URL",
+        "Host the login reported; empty means the iLink host",
+        "https://ilinkai.weixin.qq.com",
+    ),
+];
+
 static QQ_FIELDS: [CredentialField; 2] = [
     CredentialField::new("app_id", "AppID", "Bot AppID from q.qq.com", "AppID"),
     CredentialField::new(
@@ -240,6 +277,19 @@ fn poll_dingtalk_scan(
     device_code: String,
 ) -> BoxFuture<'static, anyhow::Result<PollOutcome>> {
     Box::pin(async move { registration::poll_dingtalk(http.as_ref(), &device_code).await })
+}
+
+fn begin_wechat_scan(
+    http: Arc<dyn HttpClient>,
+) -> BoxFuture<'static, anyhow::Result<DeviceFlow>> {
+    Box::pin(async move { registration::begin_wechat(http.as_ref()).await })
+}
+
+fn poll_wechat_scan(
+    http: Arc<dyn HttpClient>,
+    device_code: String,
+) -> BoxFuture<'static, anyhow::Result<PollOutcome>> {
+    Box::pin(async move { registration::poll_wechat(http.as_ref(), &device_code).await })
 }
 
 fn value(values: &CredentialValues, key: &str) -> String {
@@ -284,6 +334,26 @@ fn build_dingtalk(
             client_id: value(values, "client_id"),
             client_secret: value(values, "client_secret"),
             robot_code,
+        },
+        conversation_id,
+        connection,
+    ))
+}
+
+fn build_wechat(
+    http: Arc<dyn HttpClient>,
+    values: &CredentialValues,
+    conversation_id: Option<String>,
+    _kind: ConversationKind,
+    connection: Arc<AtomicBool>,
+) -> Arc<dyn InboundProvider> {
+    Arc::new(WechatProvider::new(
+        http,
+        WechatCredentials {
+            bot_id: value(values, "bot_id"),
+            bot_token: value(values, "bot_token"),
+            owner_id: value(values, "owner_id"),
+            base_url: value(values, "base_url"),
         },
         conversation_id,
         connection,
@@ -337,5 +407,7 @@ mod tests {
         assert_eq!(spec(Platform::DingTalk).fields.len(), 3);
         assert!(!spec(Platform::Qq).is_device_flow());
         assert!(spec(Platform::Feishu).is_device_flow());
+        assert!(spec(Platform::Wechat).is_device_flow());
+        assert_eq!(spec(Platform::Wechat).fields.len(), 4);
     }
 }

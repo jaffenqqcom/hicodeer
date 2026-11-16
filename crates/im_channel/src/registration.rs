@@ -9,6 +9,7 @@
 //! credentials after the user creates a bot, so that platform stays manual.
 
 use std::io::Write as _;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -16,6 +17,9 @@ use base64::Engine as _;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use http_client::{AsyncBody, HttpClient, Method, Request};
+
+use crate::binding::CredentialValues;
+use crate::http::get_json;
 
 /// Bot name pre-filled on the confirmation page and on QQ's creation page.
 pub const BOT_NAME: &str = "HiCodeer";
@@ -48,8 +52,9 @@ pub enum PollOutcome {
     Pending,
     SlowDown,
     Ready {
-        client_id: String,
-        client_secret: String,
+        /// The credentials the platform handed back, keyed the way the
+        /// platform's spec names its fields.
+        values: CredentialValues,
         /// The scanning user, when the platform reports it. Feishu addresses a
         /// person by open_id, so a message can be sent before any chat exists.
         open_id: Option<String>,
@@ -84,14 +89,18 @@ async fn post_form(
 async fn post_json_body(
     client: &dyn HttpClient,
     uri: &str,
+    headers: &[(String, String)],
     payload: &serde_json::Value,
     error_status: ErrorStatus,
 ) -> anyhow::Result<serde_json::Value> {
-    let request = Request::builder()
+    let mut builder = Request::builder()
         .method(Method::POST)
         .uri(uri)
-        .header("Content-Type", "application/json")
-        .body(AsyncBody::from(serde_json::to_vec(payload)?))?;
+        .header("Content-Type", "application/json");
+    for (name, value) in headers {
+        builder = builder.header(name, value);
+    }
+    let request = builder.body(AsyncBody::from(serde_json::to_vec(payload)?))?;
     send_json(client, request, uri, error_status).await
 }
 
@@ -238,11 +247,10 @@ pub(crate) async fn poll_feishu(
             })
             .filter(|open_id| !open_id.is_empty())
             .map(str::to_owned);
-        return Ok(PollOutcome::Ready {
-            client_id: client_id.to_string(),
-            client_secret: client_secret.to_string(),
-            open_id,
-        });
+        let mut values = CredentialValues::new();
+        values.insert("app_id".to_string(), client_id.to_string());
+        values.insert("app_secret".to_string(), client_secret.to_string());
+        return Ok(PollOutcome::Ready { values, open_id });
     }
     match response
         .get("error")
@@ -262,6 +270,7 @@ pub(crate) async fn begin_dingtalk(client: &dyn HttpClient) -> anyhow::Result<De
     let init = post_json_body(
         client,
         &format!("{DINGTALK_BASE}/app/registration/init"),
+        &[],
         &serde_json::json!({ "source": BOT_NAME }),
         ErrorStatus::Fatal,
     )
@@ -274,6 +283,7 @@ pub(crate) async fn begin_dingtalk(client: &dyn HttpClient) -> anyhow::Result<De
     let begin = post_json_body(
         client,
         &format!("{DINGTALK_BASE}/app/registration/begin"),
+        &[],
         &serde_json::json!({ "nonce": nonce }),
         ErrorStatus::Fatal,
     )
@@ -315,6 +325,7 @@ pub(crate) async fn poll_dingtalk(
     let response = post_json_body(
         client,
         &format!("{DINGTALK_BASE}/app/registration/poll"),
+        &[],
         &serde_json::json!({ "device_code": device_code }),
         ErrorStatus::InspectBody,
     )
@@ -339,9 +350,11 @@ pub(crate) async fn poll_dingtalk(
                 .and_then(serde_json::Value::as_str)
                 .context("dingtalk success carried no client_secret")?
                 .to_string();
+            let mut values = CredentialValues::new();
+            values.insert("client_id".to_string(), client_id);
+            values.insert("client_secret".to_string(), client_secret);
             Ok(PollOutcome::Ready {
-                client_id,
-                client_secret,
+                values,
                 open_id: None,
             })
         }
@@ -354,6 +367,178 @@ pub(crate) async fn poll_dingtalk(
         }
         "EXPIRED" => anyhow::bail!("dingtalk registration window expired"),
         other => anyhow::bail!("dingtalk registration returned {other}: {response}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WeChat (iLink) QR login
+// ---------------------------------------------------------------------------
+
+/// iLink's API host. A login may report a different host for later calls, which
+/// the binding stores as its `base_url` field.
+const WECHAT_BASE: &str = "https://ilinkai.weixin.qq.com";
+/// `ilink_appid` declared by the channel package this client mirrors.
+const WECHAT_APP_ID: &str = "bot";
+/// `iLink-App-ClientVersion` packs the channel version as
+/// major<<16 | minor<<8 | patch, so 2.4.10 becomes 0x2040A.
+const WECHAT_CLIENT_VERSION: u64 = (2 << 16) | (4 << 8) | 10;
+/// The `bot_type` selecting the ClawBot channel.
+const WECHAT_BOT_TYPE: &str = "3";
+/// How long WeChat keeps the login QR code scannable.
+const WECHAT_QR_EXPIRES: Duration = Duration::from_secs(600);
+/// The status call holds the connection for up to 35 seconds, so this is only
+/// the pause between two calls.
+const WECHAT_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Host a `scaned_but_redirect` answer pointed the polling at.
+///
+/// A login runs one scan at a time, so one slot is enough; the flow clears it
+/// when it begins and when it finishes.
+static WECHAT_POLL_HOST: Mutex<Option<String>> = Mutex::new(None);
+
+fn wechat_headers() -> Vec<(String, String)> {
+    vec![
+        ("iLink-App-Id".to_string(), WECHAT_APP_ID.to_string()),
+        (
+            "iLink-App-ClientVersion".to_string(),
+            WECHAT_CLIENT_VERSION.to_string(),
+        ),
+    ]
+}
+
+/// Percent-encodes a query value, keeping the unreserved characters.
+fn encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn absolute_host(host: &str) -> String {
+    if host.starts_with("http://") || host.starts_with("https://") {
+        host.to_string()
+    } else {
+        format!("https://{host}")
+    }
+}
+
+/// Begins a WeChat login: asks for a QR code and returns the content the
+/// settings page draws.
+pub(crate) async fn begin_wechat(client: &dyn HttpClient) -> anyhow::Result<DeviceFlow> {
+    if let Ok(mut host) = WECHAT_POLL_HOST.lock() {
+        *host = None;
+    }
+    let uri = format!("{WECHAT_BASE}/ilink/bot/get_bot_qrcode?bot_type={WECHAT_BOT_TYPE}");
+    let response = post_json_body(
+        client,
+        &uri,
+        &wechat_headers(),
+        &serde_json::json!({ "local_token_list": [] }),
+        ErrorStatus::Fatal,
+    )
+    .await?;
+    let qrcode = response
+        .get("qrcode")
+        .and_then(serde_json::Value::as_str)
+        .context("wechat qr response has no qrcode")?
+        .to_string();
+    let content = response
+        .get("qrcode_img_content")
+        .and_then(serde_json::Value::as_str)
+        .context("wechat qr response has no qrcode_img_content")?
+        .to_string();
+    log::info!("im channel: wechat login qr issued");
+    Ok(DeviceFlow {
+        device_code: qrcode,
+        verification_url: content,
+        interval: WECHAT_POLL_INTERVAL,
+        expires_in: WECHAT_QR_EXPIRES,
+    })
+}
+
+/// Polls a WeChat login once. A confirmed scan hands back the bot token, the
+/// bot id and the user who scanned, which become the stored credentials.
+pub(crate) async fn poll_wechat(
+    client: &dyn HttpClient,
+    device_code: &str,
+) -> anyhow::Result<PollOutcome> {
+    let host = WECHAT_POLL_HOST
+        .lock()
+        .ok()
+        .and_then(|host| host.clone())
+        .unwrap_or_else(|| WECHAT_BASE.to_string());
+    let uri = format!(
+        "{host}/ilink/bot/get_qrcode_status?qrcode={}",
+        encode_query_value(device_code)
+    );
+    let response = get_json(client, &uri, wechat_headers()).await?;
+    let status = response
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    match status {
+        "wait" | "scaned" => Ok(PollOutcome::Pending),
+        "scaned_but_redirect" => {
+            if let Some(host) = response
+                .get("redirect_host")
+                .and_then(serde_json::Value::as_str)
+                .filter(|host| !host.is_empty())
+            {
+                if let Ok(mut slot) = WECHAT_POLL_HOST.lock() {
+                    *slot = Some(absolute_host(host));
+                }
+            }
+            Ok(PollOutcome::Pending)
+        }
+        "confirmed" => {
+            let bot_id = response
+                .get("ilink_bot_id")
+                .and_then(serde_json::Value::as_str)
+                .context("wechat login confirmed without ilink_bot_id")?
+                .to_string();
+            let bot_token = response
+                .get("bot_token")
+                .and_then(serde_json::Value::as_str)
+                .context("wechat login confirmed without bot_token")?
+                .to_string();
+            let owner = response
+                .get("ilink_user_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let mut values = CredentialValues::new();
+            values.insert("bot_id".to_string(), bot_id);
+            values.insert("bot_token".to_string(), bot_token);
+            values.insert("owner_id".to_string(), owner.clone());
+            if let Some(base_url) = response
+                .get("baseurl")
+                .and_then(serde_json::Value::as_str)
+                .filter(|base_url| !base_url.is_empty())
+            {
+                values.insert("base_url".to_string(), absolute_host(base_url));
+            }
+            if let Ok(mut host) = WECHAT_POLL_HOST.lock() {
+                *host = None;
+            }
+            log::info!("im channel: wechat login confirmed");
+            Ok(PollOutcome::Ready {
+                values,
+                open_id: (!owner.is_empty()).then_some(owner),
+            })
+        }
+        "binded_redirect" => anyhow::bail!(
+            "this WeChat account is already bound to another instance; unbind it there first"
+        ),
+        "need_verifycode" | "verify_code_blocked" => anyhow::bail!(
+            "WeChat asks for a phone verification code, which this build cannot collect"
+        ),
+        "expired" => anyhow::bail!("the WeChat login QR code expired"),
+        other => anyhow::bail!("wechat login returned {other}: {response}"),
     }
 }
 

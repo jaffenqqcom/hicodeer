@@ -426,15 +426,11 @@ async fn run_scan(platform: Platform, generation: u64) -> anyhow::Result<()> {
         match outcome {
             PollOutcome::Pending => {}
             PollOutcome::SlowDown => interval += Duration::from_secs(5),
-            PollOutcome::Ready {
-                client_id,
-                client_secret,
-                open_id,
-            } => {
+            PollOutcome::Ready { values, open_id } => {
                 if !is_current_scan(platform, generation) {
                     return Ok(());
                 }
-                bind_scanned(platform, client_id, client_secret, open_id)?;
+                bind_scanned(platform, values, open_id)?;
                 if let Ok(mut scan) = SCAN.lock() {
                     if scan.as_ref().is_some_and(|scan| {
                         scan.platform == platform && scan.generation == generation
@@ -450,22 +446,13 @@ async fn run_scan(platform: Platform, generation: u64) -> anyhow::Result<()> {
     anyhow::bail!("registration window expired before the scan was confirmed")
 }
 
-/// Stores the two credentials a device flow returns, under the names the
-/// platform's spec declares. Any further field, such as DingTalk's robot code,
-/// is filled in afterwards through [`set_field`].
+/// Stores the credentials a device flow returns. The flow keys them the way
+/// the platform's spec names its fields, so anything it did not report, such as
+/// DingTalk's robot code, can still be filled in through [`set_field`].
 fn bind_scanned(
     platform: Platform,
-    client_id: String,
-    client_secret: String,
+    values: CredentialValues,
     open_id: Option<String>,
 ) -> anyhow::Result<()> {
-    let spec = platforms::spec(platform);
-    let mut values = CredentialValues::new();
-    if let Some(field) = spec.fields.first() {
-        values.insert(field.key.to_string(), client_id);
-    }
-    if let Some(field) = spec.fields.get(1) {
-        values.insert(field.key.to_string(), client_secret);
-    }
     bind_with_conversation(platform, values, open_id)
 }

@@ -32,4 +32,6 @@ pub mod store;
 #[cfg(target_env = "ohos")]
 pub mod transport;
 #[cfg(target_env = "ohos")]
+pub mod wechat;
+#[cfg(target_env = "ohos")]
 pub mod ws;

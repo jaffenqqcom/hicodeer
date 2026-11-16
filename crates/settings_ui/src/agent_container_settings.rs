@@ -58,13 +58,28 @@ const AGENT_COLUMNS: u16 = 4;
 const DEVICE_FLOW_FIELDS: usize = 2;
 /// Channels the selector offers, in the order the page lists them. Adding an
 /// IM channel means adding a label and a choice here.
-static CHANNEL_LABELS: [&str; 4] = ["Off", "QQ", "DingTalk", "Feishu"];
-static CHANNEL_CHOICES: [Option<Platform>; 4] = [
+static CHANNEL_CHOICES: [Option<Platform>; 5] = [
     None,
     Some(Platform::Qq),
     Some(Platform::DingTalk),
     Some(Platform::Feishu),
+    Some(Platform::Wechat),
 ];
+
+/// Labels for `CHANNEL_CHOICES`, in the same order. Resolved once on first
+/// render because a channel name can be localized.
+fn channel_labels() -> &'static [&'static str; 5] {
+    static LABELS: std::sync::OnceLock<[&'static str; 5]> = std::sync::OnceLock::new();
+    LABELS.get_or_init(|| {
+        [
+            "Off",
+            "QQ",
+            "DingTalk",
+            "Feishu",
+            localization::localized_str!("WeChat"),
+        ]
+    })
+}
 
 fn sound_title() -> &'static str {
     localization::localized_str!("Sound Alerts")
@@ -453,7 +468,7 @@ fn render_im_page(
     let dropdown = EnumVariantDropdown::new_indexed(
         "im-channel",
         channel_index(status.channel),
-        &CHANNEL_LABELS,
+        channel_labels(),
         move |index, _, cx| {
             let channel = CHANNEL_CHOICES[index];
             if let Err(error) = manager::set_channel(channel) {
@@ -507,7 +522,12 @@ fn render_im_page(
 
     // Each channel keeps its own heading on the selector's level, with its
     // configuration nested under it.
-    for platform in [Platform::Qq, Platform::DingTalk, Platform::Feishu] {
+    for platform in [
+        Platform::Qq,
+        Platform::DingTalk,
+        Platform::Feishu,
+        Platform::Wechat,
+    ] {
         let (header, body) = channel_section(platform, &status, window, cx);
         content = content.child(block(header));
         if let Some(body) = body {
@@ -787,6 +807,7 @@ fn platform_name(platform: Platform) -> &'static str {
         Platform::Feishu => localization::localized_str!("Feishu"),
         Platform::DingTalk => localization::localized_str!("DingTalk"),
         Platform::Qq => "QQ",
+        Platform::Wechat => localization::localized_str!("WeChat"),
     }
 }
 
@@ -822,6 +843,7 @@ fn scan_button_id(platform: Platform) -> &'static str {
         Platform::Feishu => "im-scan-feishu",
         Platform::DingTalk => "im-scan-dingtalk",
         Platform::Qq => "im-scan-qq",
+        Platform::Wechat => "im-scan-wechat",
     }
 }
 
@@ -830,6 +852,7 @@ fn external_button_id(platform: Platform) -> &'static str {
         Platform::Feishu => "im-open-feishu",
         Platform::DingTalk => "im-open-dingtalk",
         Platform::Qq => "im-open-qq",
+        Platform::Wechat => "im-open-wechat",
     }
 }
 
@@ -838,6 +861,7 @@ fn unbind_button_id(platform: Platform) -> &'static str {
         Platform::Feishu => "im-unbind-feishu",
         Platform::DingTalk => "im-unbind-dingtalk",
         Platform::Qq => "im-unbind-qq",
+        Platform::Wechat => "im-unbind-wechat",
     }
 }
 
@@ -846,6 +870,7 @@ fn bind_button_id(platform: Platform) -> &'static str {
         Platform::Feishu => "im-bind-feishu",
         Platform::DingTalk => "im-bind-dingtalk",
         Platform::Qq => "im-bind-qq",
+        Platform::Wechat => "im-bind-wechat",
     }
 }
 

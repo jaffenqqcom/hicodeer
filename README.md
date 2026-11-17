@@ -59,3 +59,5 @@ HiCodeer 是面向鸿蒙平台的命令行 Agent 编程环境，既有体验极�
 
 # Licensing
 本项目基于Zed、Herdr开发，同时使用了GPUI的鸿蒙适配代码Openharmony-ability、gpui-ohos开源代码，以及这些软件依赖的其他开源代码。License遵照上游这些代码的License。新增代码使用Apache-2.0协议。
+
+代码编译后的image放到了HarmonyOS HAP资源站 https://www.sydxky.cn/，可以下载后用AI签名后使用

@@ -305,11 +305,9 @@ fi
 export HICODEER_LOG_LEVEL="${HICODEER_LOG_LEVEL:-$HICODEER_LOG_LEVEL_DEFAULT}"
 
 # ==================== Cargo build（OHOS 交叉编译） ====================
-# 工具链版本：本仓根 rust-toolchain.toml 指定 1.97.1。此前该工具链组件损坏
-# （bin 目录缺 rustc/cargo，cargo 每次自修复失败），故临时绕到 warp 使用的 1.92.0。
-# 1.97.1 组件已补全（rustup toolchain install 修复），且 merman 0.7.0 声明
-# rust-version="1.95"，必须用 ≥1.95 的工具链，故恢复使用 1.97.1。
-export RUSTUP_TOOLCHAIN=1.97.1
+# The toolchain version is sourced solely from the repo-root rust-toolchain.toml.
+# Do not hardcode RUSTUP_TOOLCHAIN here: cargo runs from PROJECT_ROOT (see cd below),
+# so rustup resolves the pinned channel from that file for both build and LSP.
 
 # 本机是自举编译：rustc 的 host 三元组必须就等于目标三元组。装错工具链（例如 host
 # 是 gnu 的那份）时当场报清楚，而不是拖到链接期才炸。VM 走交叉编译，不适用此断言。
@@ -436,7 +434,7 @@ export NAPI_BUILD_TARGET_NAME=core
 # the herdr-specific one comes last.
 export RUSTFLAGS="${RUSTFLAGS:-} -A warnings --remap-path-prefix=$PROJECT_ROOT=/src --remap-path-prefix=$PROJECT_ROOT/herdr=/build"
 if [ "$IS_RELEASE" = true ]; then
-  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4
+  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=2
 else
   export CARGO_PROFILE_DEV_CODEGEN_UNITS=16
 fi

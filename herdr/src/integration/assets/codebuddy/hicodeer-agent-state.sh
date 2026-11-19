@@ -3,7 +3,7 @@
 # managed by HiCodeer; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HICODEER_INTEGRATION_ID=codebuddy
-# HICODEER_INTEGRATION_VERSION=13
+# HICODEER_INTEGRATION_VERSION=14
 
 set -eu
 
@@ -52,15 +52,13 @@ if hook_input_file:
 
 hook_event_name = str(hook_input.get("hook_event_name") or "")
 
-# CodeBuddy 2.x fires PermissionRequest for every single tool call and then
-# approves it itself whenever the permission mode is not "default". An
-# auto-approved request is not a wait, so reporting blocked there makes the
-# pane flip blocked/working on every command, and each flip fires a
-# needs-attention notification. Only a real prompt parks the turn on the user.
+# CodeBuddy fires PermissionRequest for every single tool call, whether or not
+# it then approves the call itself, so the event does not mean the turn is
+# waiting. Real permission prompts arrive as a Notification with a permission
+# type, and questions arrive as AskUserQuestion, so this event always reports
+# working.
 if action == "blocked" and hook_event_name == "PermissionRequest":
-    permission_mode = str(hook_input.get("permission_mode") or "").lower()
-    if permission_mode and permission_mode != "default":
-        action = "working"
+    action = "working"
 
 # A Notification carries a wait type. Permission prompts park the turn on the
 # user (blocked); the idle prompt is just "no input lately" -- that is idle,

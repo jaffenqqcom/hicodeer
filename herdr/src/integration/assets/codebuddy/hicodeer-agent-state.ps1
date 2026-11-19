@@ -27,13 +27,12 @@ if (-not [string]::IsNullOrWhiteSpace($payload.agent_id)) { exit 0 }
 $sessionId = $payload.session_id
 if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 
-# CodeBuddy 2.x fires PermissionRequest for every tool call and then approves it
-# itself unless the permission mode is "default". An auto-approved request is
-# not a wait, so reporting blocked there makes the pane flip between blocked and
-# working on every command.
+# CodeBuddy fires PermissionRequest for every tool call, whether or not it then
+# approves the call itself, so the event does not mean the turn is waiting. Real
+# permission prompts arrive as a Notification with a permission type, and
+# questions arrive as AskUserQuestion, so this event always reports working.
 if ($Action -eq "blocked" -and $payload.hook_event_name -ceq "PermissionRequest") {
-    $permissionMode = "$($payload.permission_mode)".ToLowerInvariant()
-    if (-not [string]::IsNullOrWhiteSpace($permissionMode) -and $permissionMode -ne "default") { $Action = "working" }
+    $Action = "working"
 }
 
 if ($Action -eq "notification") {

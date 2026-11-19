@@ -115,7 +115,7 @@ const CODEBUDDY_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/codebuddy/hicodeer-agent-state.sh")
 };
-const CODEBUDDY_INTEGRATION_VERSION: u32 = 13;
+const CODEBUDDY_INTEGRATION_VERSION: u32 = 14;
 const CODEX_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "hicodeer-agent-state.ps1"
 } else {

@@ -1427,6 +1427,12 @@ pub(crate) fn uninstall_claude() -> io::Result<ClaudeUninstallResult> {
 /// the turn on that answer, so it reports `blocked`, while every other tool
 /// reports `working`. Without the split the working report stays as the hook
 /// authority for the whole parked turn and the panel keeps showing working.
+///
+/// `PermissionRequest` reports `working`: CodeBuddy raises it for every single
+/// tool call and then approves the call itself unless the permission mode is
+/// "default", so the event does not mean the turn is waiting. Real permission
+/// prompts arrive as a `Notification` with a permission type, and questions
+/// arrive as `AskUserQuestion`.
 const CODEBUDDY_HOOK_EVENTS: &[(&str, Option<&str>, &str)] = &[
     ("SessionStart", Some(CODEBUDDY_SESSION_START_MATCHER), "session"),
     ("UserPromptSubmit", None, "working"),
@@ -1437,7 +1443,7 @@ const CODEBUDDY_HOOK_EVENTS: &[(&str, Option<&str>, &str)] = &[
         "working",
     ),
     ("PostToolUse", None, "working"),
-    ("PermissionRequest", None, "blocked"),
+    ("PermissionRequest", None, "working"),
     ("Notification", None, "notification"),
     ("Stop", None, "idle"),
     ("SessionEnd", None, "idle"),
@@ -1480,6 +1486,10 @@ pub(crate) fn install_codebuddy() -> io::Result<ClaudeInstallPaths> {
     // An earlier integration reported Notification as "blocked"; clear every
     // herdr entry for the event so the stale report cannot outlive the fix.
     remove_hook_commands(hooks, "Notification", &hook_path, None)?;
+    // An earlier integration reported PermissionRequest as "blocked"; clear the
+    // entries by event name, because removing by the new action would leave the
+    // stale blocked entry in place and it would keep reporting.
+    remove_hook_commands(hooks, "PermissionRequest", &hook_path, None)?;
     for (event, matcher, action) in CODEBUDDY_HOOK_EVENTS {
         remove_hook_commands(hooks, event, &hook_path, Some(action))?;
         ensure_command_hook(
@@ -1521,6 +1531,11 @@ pub(crate) fn uninstall_codebuddy() -> io::Result<ClaudeUninstallResult> {
             "codebuddy settings",
             "codebuddy settings hooks",
         )? {
+            // Clear by event name as well, so an entry left behind by an older
+            // integration cannot survive the uninstall.
+            updated_settings |= remove_hook_commands(hooks, "Notification", &hook_path, None)?;
+            updated_settings |=
+                remove_hook_commands(hooks, "PermissionRequest", &hook_path, None)?;
             for (event, _matcher, action) in CODEBUDDY_HOOK_EVENTS {
                 updated_settings |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
             }

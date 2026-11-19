@@ -187,8 +187,11 @@ pub(crate) fn find_from_grid_point<T: EventListener>(
 ///   to the prose;
 /// * a URL stays with the URL pass.
 ///
-/// A bare number is still accepted: benchmark rows and `ls -l` columns are made
-/// of them, and the filesystem decides whether they exist.
+/// A single unseparated word is a valid path too: `ls` lists extension-less
+/// directories (`docs`, `target`) alongside files, and the filesystem decides
+/// which candidates actually exist. Requiring a `.` or `/` here would hide
+/// those directories; the view layer already rejects prose that does not
+/// resolve.
 fn looks_like_path(text: &str) -> bool {
     if text.is_empty() || text.chars().any(char::is_whitespace) {
         return false;
@@ -225,6 +228,14 @@ fn looks_like_path(text: &str) -> bool {
     if has_inner_separator {
         return false;
     }
+    // [OHOS PORT BEGIN] On OHOS a bare word (directory or extension-less file)
+    // is a valid candidate; the view layer's filesystem resolution rejects
+    // prose that does not exist. Upstream keeps its stricter shape check.
+    #[cfg(target_env = "ohos")]
+    {
+        return true;
+    }
+    // [OHOS PORT END]
     if text.contains('/') || text.contains('\\') || text.contains('.') {
         return true;
     }
@@ -416,6 +427,28 @@ mod tests {
             .map(|m| m.as_str())
             .collect();
         assert_eq!(results, expected);
+    }
+
+    #[test]
+    fn looks_like_path_accepts_bare_names() {
+        // `ls` prints extension-less directories next to files; both must reach
+        // the view layer, which is the component that checks the filesystem.
+        for bare in ["docs", "target", "移植记录", "dispatchservice", "42"] {
+            assert!(looks_like_path(bare), "bare name {bare:?} should be a candidate");
+        }
+        for path in ["Cargo.toml", "crates/terminal", "/test/cool.rs"] {
+            assert!(looks_like_path(path), "path {path:?} should be a candidate");
+        }
+    }
+
+    #[test]
+    fn looks_like_path_rejects_prose_fragments() {
+        for prose in ["", "a b", "foo,", "(src", "https://example.com"] {
+            assert!(
+                !looks_like_path(prose),
+                "prose fragment {prose:?} should not be a candidate"
+            );
+        }
     }
 
     #[test]

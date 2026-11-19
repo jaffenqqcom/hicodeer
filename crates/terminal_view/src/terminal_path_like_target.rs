@@ -13,6 +13,36 @@ use workspace::path_link::{
 };
 use workspace::{Workspace, path_link::OpenTarget};
 
+/// [OHOS PORT BEGIN] A resolved directory must actually be named by the
+/// candidate. Command output is full of dotted identifiers (`ps` process names
+/// such as `lx.danmaku.bili`) that survive path detection and can otherwise be
+/// resolved to an unrelated directory, sending Ctrl+click to the file manager.
+/// Only the directory case is guarded: file resolution may legitimately rename
+/// a candidate (canonicalized symlinks, `:line:col` suffixes, Git `a/`/`b/`
+/// prefixes), and those must keep working on every platform.
+#[cfg(target_env = "ohos")]
+fn candidate_names_directory(candidate: &str, target: &OpenTarget) -> bool {
+    if !target.is_dir() {
+        return true;
+    }
+    let candidate_name = util::paths::PathWithPosition::parse_str(candidate)
+        .path
+        .file_name()
+        .map(|name| name.to_owned());
+    let target_name = target
+        .path()
+        .path
+        .file_name()
+        .map(|name| name.to_owned());
+    match (candidate_name, target_name) {
+        (Some(candidate_name), Some(target_name)) => candidate_name == target_name,
+        // A candidate without a final component (`.`, an empty path) must not
+        // reveal a directory the user did not name.
+        _ => false,
+    }
+}
+// [OHOS PORT END]
+
 pub(super) fn hover_path_like_target(
     workspace: &WeakEntity<Workspace>,
     hovered_word: HoveredWord,
@@ -90,6 +120,10 @@ fn possible_hover_target(
             };
 
             if let Some(open_target) = resolution_task.await {
+                #[cfg(target_env = "ohos")]
+                if !candidate_names_directory(&candidate, &open_target) {
+                    continue;
+                }
                 first_match = Some((open_target, candidate_range));
                 break;
             }
@@ -199,6 +233,11 @@ fn possibly_open_target(
                 continue;
             };
 
+            #[cfg(target_env = "ohos")]
+            if !candidate_names_directory(&candidate, &open_target) {
+                continue;
+            }
+
             // A directory belongs to the system file manager, not to the editor:
             // opening it through the workspace would only focus the project
             // panel. Route it through gpui's platform abstraction so the choice
@@ -229,8 +268,40 @@ mod tests {
         terminal_settings::{AlternateScroll, CursorShape},
     };
     use util::path;
-    use util::paths::PathStyle;
+    use util::paths::{PathStyle, PathWithPosition};
     use workspace::{AppState, MultiWorkspace};
+
+    #[cfg(target_env = "ohos")]
+    #[test]
+    fn directory_guard_requires_matching_name() {
+        let directory = |text: &str| {
+            OpenTarget::Path(
+                PathWithPosition::from_path(PathBuf::from(text)),
+                true,
+                #[cfg(test)]
+                OpenTargetFoundBy::BackgroundPathResolution,
+            )
+        };
+        let file = |text: &str| {
+            OpenTarget::Path(
+                PathWithPosition::from_path(PathBuf::from(text)),
+                false,
+                #[cfg(test)]
+                OpenTargetFoundBy::BackgroundPathResolution,
+            )
+        };
+
+        // A dotted process name must not reveal an unrelated directory.
+        assert!(!candidate_names_directory("lx.danmaku.bili", &directory("/work/hicodeer")));
+        assert!(!candidate_names_directory(".xingin.xhs_hos", &directory("/work/hicodeer")));
+        // A path without a final component must not reveal a directory either.
+        assert!(!candidate_names_directory(".", &directory("/work/hicodeer")));
+        // The directory the candidate actually names is allowed.
+        assert!(candidate_names_directory("docs", &directory("/work/hicodeer/docs")));
+        assert!(candidate_names_directory("docs:4", &directory("/work/hicodeer/docs")));
+        // File targets keep every spelling, including symlink renames.
+        assert!(candidate_names_directory("link", &file("/work/hicodeer/target.rs")));
+    }
 
     async fn init_test(
         app_cx: &mut TestAppContext,

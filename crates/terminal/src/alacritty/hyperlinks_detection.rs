@@ -970,6 +970,27 @@ pub(super) fn possible_file_paths_at_point(
     expanded
 }
 
+/// [OHOS PORT BEGIN] A line range suffix `:start-end` is collapsed to its
+/// starting line `:start`. warp's `LINE_AND_COLUMN_REGEX` includes
+/// `:(\d+)-(\d+)` and keeps the first group, but zed's `parse_str` only knows a
+/// single row, so otherwise the whole range is treated as the path and the
+/// jump lands on line 1.
+#[cfg(target_env = "ohos")]
+fn path_with_line_range_start(text: &str) -> Option<(&str, usize)> {
+    let (prefix, range) = text.rsplit_once(':')?;
+    let (start, end) = range.split_once('-')?;
+    if start.is_empty()
+        || end.is_empty()
+        || !start.bytes().all(|byte| byte.is_ascii_digit())
+        || !end.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    // Drop `-end` from the tail; the caller rewinds the highlight by its width.
+    Some((&text[..prefix.len() + 1 + start.len()], end.len() + 1))
+}
+// [OHOS PORT END]
+
 /// Pushes the spellings warp's `compute_valid_paths` tries for one candidate.
 fn push_path_variants(
     viewport: &Viewport<'_>,
@@ -978,14 +999,35 @@ fn push_path_variants(
     start: GridPoint,
     end: GridPoint,
 ) {
-    // Prose punctuation that trails a path is tried first, so the resolved
-    // file, the highlight range and the extension all exclude it.
-    if let Some((trimmed, removed_width)) = path_without_trailing_sentence_punctuation(&text) {
-        let trimmed_end = advance_point_by_columns(viewport, end, removed_width, false);
+    // Prose punctuation that trails a path is removed first, so the resolved
+    // file, the highlight range and the extension all exclude it. Keep the
+    // trimmed spelling and its end point as the base for range collapsing: a
+    // trailing `,` or `.` would otherwise break the `:start-end` match.
+    let (base, base_end) = match path_without_trailing_sentence_punctuation(&text) {
+        Some((trimmed, removed_width)) => (
+            trimmed,
+            advance_point_by_columns(viewport, end, removed_width, false),
+        ),
+        None => (text.as_str(), end),
+    };
+    // Try the starting-line spelling before the range spelling so the first
+    // resolvable candidate already carries the correct row. Collapse from the
+    // punctuation-stripped base, not the raw text.
+    #[cfg(target_env = "ohos")]
+    if let Some((collapsed, removed_width)) = path_with_line_range_start(base) {
+        let collapsed_end = advance_point_by_columns(viewport, base_end, removed_width, false);
         out.push(PossiblePath {
-            text: trimmed.to_owned(),
+            text: collapsed.to_owned(),
             start,
-            end: trimmed_end,
+            end: collapsed_end,
+        });
+    }
+
+    if base_end != end {
+        out.push(PossiblePath {
+            text: base.to_owned(),
+            start,
+            end: base_end,
         });
     }
 
@@ -1103,3 +1145,99 @@ fn advance_point_by_columns(
 }
 
 
+
+/// [OHOS PORT BEGIN] Tests for collapsing a line range to its starting line.
+#[cfg(all(test, target_env = "ohos"))]
+mod line_range_tests {
+    use super::path_with_line_range_start;
+
+    #[test]
+    fn collapses_range_to_start() {
+        assert_eq!(
+            path_with_line_range_start("hyperlinks.rs:195-234"),
+            Some(("hyperlinks.rs:195", 4))
+        );
+        assert_eq!(
+            path_with_line_range_start("crates/a.rs:1-9"),
+            Some(("crates/a.rs:1", 2))
+        );
+    }
+
+    #[test]
+    fn ignores_non_ranges() {
+        // A plain single row is already understood by parse_str.
+        assert_eq!(path_with_line_range_start("file.rs:195"), None);
+        // Non-numeric or malformed ranges are left alone.
+        assert_eq!(path_with_line_range_start("file.rs:abc-def"), None);
+        assert_eq!(path_with_line_range_start("file.rs:195-"), None);
+        assert_eq!(path_with_line_range_start("file.rs:-234"), None);
+        // A hyphenated file name without a row is not a range.
+        assert_eq!(path_with_line_range_start("my-file-195-234.rs"), None);
+    }
+}
+// [OHOS PORT END]
+
+/// [OHOS PORT BEGIN] End-to-end check: the detector must offer the
+/// starting-line spelling for a ranged link, and `parse_str` must read its row.
+#[cfg(all(test, target_env = "ohos"))]
+mod line_range_e2e_tests {
+    use alacritty_terminal::{
+        index::{Column, Point as AlacPoint},
+        term::test::mock_term,
+    };
+    use util::paths::{PathStyle, PathWithPosition};
+
+    use crate::alacritty::hyperlinks::{RegexSearches, find_from_grid_point};
+
+    /// A ranged link must offer the starting-line spelling, with the correct
+    /// row, before any spelling that keeps the (unparseable) range.
+    fn assert_starting_line_first(line: &str) {
+        let term = mock_term(line);
+        let col = line.find("hyperlinks.rs:195").unwrap() + "hyperlinks.rs:19".len();
+        let point = AlacPoint::new(alacritty_terminal::index::Line(0), Column(col));
+        let link = find_from_grid_point(
+            &term,
+            point,
+            &mut RegexSearches::default(),
+            PathStyle::local(),
+        )
+        .expect("ranged link should be detected");
+
+        let candidates = std::iter::once(&link.text)
+            .chain(link.alternatives.iter().map(|c| &c.text))
+            .collect::<Vec<_>>();
+        let start = "crates/terminal/src/alacritty/hyperlinks.rs:195";
+        let start_index = candidates
+            .iter()
+            .position(|text| **text == start)
+            .expect("starting-line spelling should be among candidates");
+        let range_index = candidates
+            .iter()
+            .position(|text| text.contains("hyperlinks.rs:195-234"))
+            .expect("range spelling should be among candidates");
+        assert!(
+            start_index < range_index,
+            "starting-line spelling must precede the range spelling: {candidates:?}"
+        );
+
+        let parsed = PathWithPosition::parse_str(start);
+        assert_eq!(parsed.row, Some(195), "row must be the range start");
+        assert_eq!(
+            parsed.path,
+            std::path::Path::new("crates/terminal/src/alacritty/hyperlinks.rs")
+        );
+    }
+
+    #[test]
+    fn ranged_link_offers_starting_line_candidate() {
+        assert_starting_line_first("see crates/terminal/src/alacritty/hyperlinks.rs:195-234 here");
+    }
+
+    #[test]
+    fn ranged_link_with_trailing_punctuation() {
+        // The trailing comma/period must not defeat range collapsing.
+        assert_starting_line_first("see crates/terminal/src/alacritty/hyperlinks.rs:195-234, here");
+        assert_starting_line_first("see crates/terminal/src/alacritty/hyperlinks.rs:195-234.");
+    }
+}
+// [OHOS PORT END]

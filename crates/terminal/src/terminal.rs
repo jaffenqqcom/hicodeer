@@ -5987,7 +5987,16 @@ mod tests {
             let (terminal, cx) = init_terminal_test_with_window(cx, b"");
             let test_view = cx.new_window_entity(|window, cx| TestView::new(&terminal, window, cx));
             let test_entities = TestEntities::new(&terminal, &test_view);
-            let expected_hovered_word: HoveredWord = (ZED_DEV_STR, (0, 6)..=(0, 21), 0).into();
+            // [OHOS PORT BEGIN] On OHOS bare words are path candidates, so the
+            // stationary pointer probes `Visit` first and consumes id 0; the
+            // URL then gets id 1. Upstream keeps id 0.
+            #[cfg(target_env = "ohos")]
+            let initial_hover_id = 1;
+            #[cfg(not(target_env = "ohos"))]
+            let initial_hover_id = 0;
+            // [OHOS PORT END]
+            let expected_hovered_word: HoveredWord =
+                (ZED_DEV_STR, (0, 6)..=(0, 21), initial_hover_id).into();
             update_test_entities(&test_entities, cx, |cx: &mut HyperlinkVisualTestContext| {
                 // Set initial expected hovered word
                 cx.write_output_lines(OUTPUT_ZED_DEV, 1);

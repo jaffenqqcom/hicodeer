@@ -1568,6 +1568,13 @@ impl ScrollbarVisibility for TerminalScrollbarSettingsWrapper {
 /// an overlay over terminal output, opaque enough to stay legible.
 const FLOATING_CONTROL_OPACITY: f32 = 0.7;
 
+/// Diameter of a floating round button. Shared by rendering and by the
+/// footprint calculation so the auto-hide region always matches the buttons.
+const FLOATING_CONTROL_SIZE: Pixels = px(40.);
+
+/// Distance from the view's bottom edge to the bottom row of floating buttons.
+const FLOATING_CONTROL_BOTTOM: Pixels = px(16.);
+
 /// A floating control drawn over the terminal. `bottom` and `right` are the
 /// distances from the view's bottom-right corner, so adding a control is just
 /// picking a slot, an icon and a callback.
@@ -1582,64 +1589,112 @@ struct FloatingButton {
     right: Pixels,
 }
 
+/// Rectangle covered by every floating button, expressed as distances from
+/// the view's right and bottom edges.
+#[derive(Clone, Copy)]
+struct FloatingControlsFootprint {
+    left_from_right: Pixels,
+    right_from_right: Pixels,
+    top_from_bottom: Pixels,
+    bottom_from_bottom: Pixels,
+}
+
+/// Derives the covered rectangle from the same button list used for rendering.
+/// Adding a button to that list automatically extends the footprint, so the
+/// auto-hide logic never needs a separate list to keep in sync.
+fn floating_controls_footprint_from<'a>(
+    buttons: impl IntoIterator<Item = &'a FloatingButton>,
+) -> Option<FloatingControlsFootprint> {
+    let size = FLOATING_CONTROL_SIZE;
+    let mut right_min = Pixels::MAX;
+    let mut right_max = Pixels::MIN;
+    let mut bottom_min = Pixels::MAX;
+    let mut bottom_max = Pixels::MIN;
+    let mut any = false;
+    for button in buttons {
+        any = true;
+        right_min = right_min.min(button.right);
+        right_max = right_max.max(button.right);
+        bottom_min = bottom_min.min(button.bottom);
+        bottom_max = bottom_max.max(button.bottom);
+    }
+    any.then_some(FloatingControlsFootprint {
+        left_from_right: right_max + size,
+        right_from_right: right_min,
+        top_from_bottom: bottom_max + size,
+        bottom_from_bottom: bottom_min,
+    })
+}
+
 // Floating controls of a standalone terminal. They are always present: touch
 // input has no `shift-end`, and a full-screen app that captures the mouse keeps
 // the terminal's own offset at zero, so both need a tappable entry point.
 impl TerminalView {
-    fn render_floating_controls(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        if !matches!(self.mode, TerminalMode::Standalone) {
-            return Vec::new();
-        }
-
+    /// The single source of truth for the floating buttons. Rendering and the
+    /// auto-hide footprint both read this list, so adding a button needs no
+    /// matching change in the hide logic.
+    fn floating_control_specs(
+        &self,
+    ) -> Vec<(
+        FloatingButton,
+        Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>)>,
+    )> {
         vec![
-            self.render_floating_button(
+            (
                 FloatingButton {
                     id: "terminal-quick-input",
                     icon: IconName::BoltOutlined,
                     tooltip: localization::localized_str!("Quick Input"),
                     action: Box::new(QuickInput),
-                    bottom: px(16.),
+                    bottom: FLOATING_CONTROL_BOTTOM,
                     right: px(124.),
                 },
-                |this, window, cx| this.toggle_quick_input(window, cx),
-                cx,
+                Rc::new(|this, window, cx| this.toggle_quick_input(window, cx)),
             ),
-            self.render_floating_button(
+            (
                 FloatingButton {
                     id: "terminal-insert-files",
                     icon: IconName::FolderOpen,
                     tooltip: localization::localized_str!("Insert Files"),
                     action: Box::new(InsertFilePaths),
-                    bottom: px(16.),
+                    bottom: FLOATING_CONTROL_BOTTOM,
                     right: px(76.),
                 },
-                |this, window, cx| this.insert_picked_paths(window, cx),
-                cx,
+                Rc::new(|this, window, cx| this.insert_picked_paths(window, cx)),
             ),
-            self.render_floating_button(
+            (
                 FloatingButton {
                     id: "terminal-scroll-to-bottom",
                     icon: IconName::ArrowDown,
                     tooltip: localization::localized_str!("Bottom"),
                     action: Box::new(ScrollToBottom),
-                    bottom: px(16.),
+                    bottom: FLOATING_CONTROL_BOTTOM,
                     right: px(28.),
                 },
-                |this, _window, cx| this.jump_to_bottom(cx),
-                cx,
+                Rc::new(|this, _window, cx| this.jump_to_bottom(cx)),
             ),
         ]
+    }
+
+    fn render_floating_controls(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if !matches!(self.mode, TerminalMode::Standalone) {
+            return Vec::new();
+        }
+
+        self.floating_control_specs()
+            .into_iter()
+            .map(|(button, handler)| self.render_floating_button(button, handler, cx))
+            .collect()
     }
 
     fn render_floating_button(
         &self,
         button: FloatingButton,
-        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        handler: Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>)>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = cx.theme().colors();
         let tooltip = Tooltip::for_action_title(button.tooltip, button.action.as_ref());
-        let handler = Rc::new(on_click);
         let view = cx.entity().downgrade();
 
         div()
@@ -1649,7 +1704,7 @@ impl TerminalView {
             .absolute()
             .bottom(button.bottom)
             .right(button.right)
-            .size(px(40.))
+            .size(FLOATING_CONTROL_SIZE)
             .rounded_full()
             .bg(colors.element_background.opacity(FLOATING_CONTROL_OPACITY))
             .border_1()
@@ -1665,8 +1720,8 @@ impl TerminalView {
                 // hover styling.
                 ButtonLike::new((button.id, 0usize))
                     .style(ButtonStyle::Transparent)
-                    .width(px(40.))
-                    .height(px(40.).into())
+                    .width(FLOATING_CONTROL_SIZE)
+                    .height(FLOATING_CONTROL_SIZE.into())
                     .tooltip(tooltip)
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
@@ -1681,6 +1736,51 @@ impl TerminalView {
                     ),
             )
             .into_any_element()
+    }
+
+    /// Whether terminal output has reached the corner covered by the floating
+    /// buttons. The whole group hides in that case so text is never obscured;
+    /// the keybindings stay registered on the view either way.
+    fn floating_controls_region_occupied(&self, cx: &App) -> bool {
+        if !matches!(self.mode, TerminalMode::Standalone) {
+            return false;
+        }
+        let Some(footprint) = floating_controls_footprint_from(
+            self.floating_control_specs().iter().map(|(button, _)| button),
+        ) else {
+            return false;
+        };
+
+        let content = &self.terminal.read(cx).last_content;
+        let bounds = &content.terminal_bounds;
+        let cell_width = bounds.cell_width;
+        let line_height = bounds.line_height;
+        if cell_width <= Pixels::ZERO || line_height <= Pixels::ZERO {
+            return false;
+        }
+
+        // Convert the footprint's edge distances into x/y ranges measured from
+        // the terminal's top-left, which is where cell coordinates start.
+        let region_left = bounds.width() - footprint.left_from_right;
+        let region_right = bounds.width() - footprint.right_from_right;
+        let region_top = bounds.height() - footprint.top_from_bottom;
+        let display_offset = content.display_offset as i32;
+        let screen_lines = content.screen_lines as i32;
+
+        content.cells.iter().any(|cell| {
+            // `point.line` is a grid line that shifts with scrollback; adding
+            // the display offset yields the on-screen row.
+            let screen_row = cell.point.line + display_offset;
+            if screen_row < 0 || screen_row >= screen_lines {
+                return false;
+            }
+            let x = cell.point.column as f32 * cell_width;
+            let y = screen_row as f32 * line_height;
+            x + cell_width > region_left
+                && x < region_right
+                && y + line_height > region_top
+                && cell.cell.character() != ' '
+        })
     }
 
     /// `End` means "go to the newest output" in every case, so no branch is
@@ -1857,8 +1957,14 @@ impl Render for TerminalView {
 
         let focused = self.focus_handle.is_focused(window);
 
-        // See `render_floating_controls`.
-        let floating_controls = self.render_floating_controls(cx);
+        // Hide the floating controls when terminal output reaches the corner
+        // they cover. The actions stay registered below, so the shortcuts keep
+        // working while the buttons are hidden.
+        let floating_controls = if self.floating_controls_region_occupied(cx) {
+            Vec::new()
+        } else {
+            self.render_floating_controls(cx)
+        };
         let quick_input = self.render_quick_input(window, cx);
 
         // Reserve a gutter for the host-drawn scrollbar so it never covers the
@@ -2844,6 +2950,46 @@ mod tests {
     use util::rel_path::RelPath;
     use workspace::item::test::{TestItem, TestProjectItem};
     use workspace::{AppState, MultiWorkspace, SelectedEntry};
+
+    #[test]
+    fn test_floating_controls_footprint_tracks_button_list() {
+        let buttons = vec![
+            FloatingButton {
+                id: "first",
+                icon: IconName::BoltOutlined,
+                tooltip: "first",
+                action: Box::new(QuickInput),
+                bottom: FLOATING_CONTROL_BOTTOM,
+                right: px(124.),
+            },
+            FloatingButton {
+                id: "second",
+                icon: IconName::FolderOpen,
+                tooltip: "second",
+                action: Box::new(InsertFilePaths),
+                bottom: FLOATING_CONTROL_BOTTOM,
+                right: px(28.),
+            },
+        ];
+        let before = floating_controls_footprint_from(buttons.iter()).unwrap();
+        assert_eq!(before.left_from_right, px(164.));
+        assert_eq!(before.right_from_right, px(28.));
+
+        // Adding another button further left must widen the region without any
+        // change to the footprint helper.
+        let mut with_extra = buttons;
+        with_extra.push(FloatingButton {
+            id: "extra",
+            icon: IconName::ArrowDown,
+            tooltip: "extra",
+            action: Box::new(ScrollToBottom),
+            bottom: FLOATING_CONTROL_BOTTOM,
+            right: px(172.),
+        });
+        let after = floating_controls_footprint_from(with_extra.iter()).unwrap();
+        assert_eq!(after.left_from_right, px(212.));
+        assert!(after.left_from_right > before.left_from_right);
+    }
 
     fn expected_drop_text(paths: &[PathBuf]) -> String {
         let mut text = String::new();

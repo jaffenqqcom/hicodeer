@@ -1200,9 +1200,22 @@ impl Default for UiConfig {
             sidebar_width: 26,
             sidebar_min_width: 18,
             sidebar_max_width: 36,
-            sidebar_start_collapsed: false,
-            sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
-            mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
+            // [OHOS PORT BEGIN] HiCodeer's Agent panel replaces the TUI's own
+            // sidebar and always has room, so the OHOS build starts the sidebar
+            // fully collapsed and never switches to the narrow-screen header.
+            // Restore the upstream defaults by dropping the cfg branches.
+            sidebar_start_collapsed: cfg!(target_env = "ohos"),
+            sidebar_collapsed_mode: if cfg!(target_env = "ohos") {
+                SidebarCollapsedModeConfig::Hidden
+            } else {
+                SidebarCollapsedModeConfig::Compact
+            },
+            mobile_width_threshold: if cfg!(target_env = "ohos") {
+                0
+            } else {
+                DEFAULT_MOBILE_WIDTH_THRESHOLD
+            },
+            // [OHOS PORT END]
             mouse_capture: true,
             copy_on_select: true,
             host_cursor: HostCursorModeConfig::Auto,
@@ -1235,7 +1248,15 @@ impl Default for UiConfig {
             tab_bar_position: TabBarPositionConfig::Top,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
-            window_title: super::window_title::default_window_title(),
+            // [OHOS PORT BEGIN] The Agent panel already shows the space name;
+            // leave the terminal's outer title empty so it does not repeat it
+            // on the pane border. Restore the upstream title on other targets.
+            window_title: if cfg!(target_env = "ohos") {
+                String::new()
+            } else {
+                super::window_title::default_window_title()
+            },
+            // [OHOS PORT END]
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
@@ -1678,10 +1699,14 @@ cjk_ime_agents = ["claude", "codex"]
         let default_config = Config::default();
         assert_eq!(default_config.ui.sidebar_min_width, 18);
         assert_eq!(default_config.ui.sidebar_max_width, 36);
+        // [OHOS PORT] The OHOS build disables the narrow-screen layout.
+        #[cfg(not(target_env = "ohos"))]
         assert_eq!(
             default_config.ui.mobile_width_threshold,
             DEFAULT_MOBILE_WIDTH_THRESHOLD
         );
+        #[cfg(target_env = "ohos")]
+        assert_eq!(default_config.ui.mobile_width_threshold, 0);
 
         let toml = r#"
 [ui]
@@ -1698,7 +1723,11 @@ mobile_width_threshold = 96
     #[test]
     fn sidebar_start_collapsed_defaults_off_and_parses_on() {
         let default_config = Config::default();
+        // [OHOS PORT] The OHOS build starts the sidebar collapsed.
+        #[cfg(not(target_env = "ohos"))]
         assert!(!default_config.ui.sidebar_start_collapsed);
+        #[cfg(target_env = "ohos")]
+        assert!(default_config.ui.sidebar_start_collapsed);
 
         let toml = r#"
 [ui]
@@ -1711,9 +1740,16 @@ sidebar_start_collapsed = true
     #[test]
     fn sidebar_collapsed_mode_defaults_compact_and_parses_hidden() {
         let default_config = Config::default();
+        // [OHOS PORT] The OHOS build hides the sidebar entirely.
+        #[cfg(not(target_env = "ohos"))]
         assert_eq!(
             default_config.ui.sidebar_collapsed_mode,
             SidebarCollapsedModeConfig::Compact
+        );
+        #[cfg(target_env = "ohos")]
+        assert_eq!(
+            default_config.ui.sidebar_collapsed_mode,
+            SidebarCollapsedModeConfig::Hidden
         );
 
         let toml = r#"
@@ -1906,7 +1942,11 @@ position = "top-center"
             config.ui.toast.herdr.position,
             ToastHicodeerPosition::BottomRight
         );
-        assert!(config.ui.toast.clipboard.enabled);
+        // [OHOS PORT] The clipboard toast stays off on this platform.
+        assert_eq!(
+            config.ui.toast.clipboard.enabled,
+            !cfg!(target_env = "ohos")
+        );
         assert_eq!(
             config.ui.toast.clipboard.position,
             ToastClipboardPosition::BottomCenter

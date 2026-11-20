@@ -223,20 +223,28 @@ fn render_container_page(
     .tab_index(0_isize)
     .aria_label(sound_title())
     .aria_description(sound_description())
-    .on_click({
-        move |state, _window, cx| {
-            let enabled = *state == ToggleState::Selected;
-            if let Err(error) = herdr_settings::set_sound_enabled(enabled, cx) {
-                log::warn!("agent container settings: {error}");
-            }
-            cx.refresh_windows();
+    .on_click(move |state, window, cx| {
+        let enabled = *state == ToggleState::Selected;
+        if let Err(error) = update_settings_file(
+            SettingsUiFile::User,
+            None,
+            window,
+            cx,
+            move |settings, _| {
+                settings
+                    .agent_panel
+                    .get_or_insert_with(Default::default)
+                    .sound_enabled = Some(enabled);
+            },
+        ) {
+            log::warn!("agent container settings: cannot save sound: {error}");
         }
     })
     .into_any_element();
 
-    // One switch rather than the delivery modes: this build presents agent
-    // notifications itself, so "on" always means the system route and the
-    // terminal never draws a second copy of the same event.
+    // One switch rather than the delivery modes: the editor owns this switch
+    // and stores it in settings.json. The agent terminal's own client keeps
+    // its default delivery, independent of what the host editor shows.
     let toast = Switch::new(
         "agent-terminal-toast",
         if settings.toast == ToastDelivery::Off {
@@ -248,18 +256,21 @@ fn render_container_page(
     .tab_index(0_isize)
     .aria_label(toast_title())
     .aria_description(toast_description())
-    .on_click({
-        move |state, _window, cx| {
-            let enabled = *state == ToggleState::Selected;
-            let delivery = if enabled {
-                ToastDelivery::System
-            } else {
-                ToastDelivery::Off
-            };
-            if let Err(error) = herdr_settings::set_toast_delivery(delivery, cx) {
-                log::warn!("agent container settings: {error}");
-            }
-            cx.refresh_windows();
+    .on_click(move |state, window, cx| {
+        let enabled = *state == ToggleState::Selected;
+        if let Err(error) = update_settings_file(
+            SettingsUiFile::User,
+            None,
+            window,
+            cx,
+            move |settings, _| {
+                settings
+                    .agent_panel
+                    .get_or_insert_with(Default::default)
+                    .notifications_enabled = Some(enabled);
+            },
+        ) {
+            log::warn!("agent container settings: cannot save notifications: {error}");
         }
     })
     .into_any_element();

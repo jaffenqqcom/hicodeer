@@ -56,7 +56,7 @@ pub(crate) fn canonical_theme_name(name: &str) -> Option<&'static str> {
 /// accent = "#f5c2e7"
 /// red = "#ff6188"
 /// ```
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ThemeConfig {
     /// Built-in theme name. Default: "catppuccin".
@@ -69,6 +69,22 @@ pub struct ThemeConfig {
     pub light_name: Option<String>,
     /// Custom overrides — applied on top of the selected base theme.
     pub custom: Option<CustomThemeColors>,
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            // [OHOS PORT BEGIN] HiCodeer ships one fixed theme; the upstream
+            // catppuccin was never picked for this build. Restore the upstream
+            // default by using `None` here on other targets.
+            name: cfg!(target_env = "ohos").then(|| "dracula".to_string()),
+            // [OHOS PORT END]
+            auto_switch: false,
+            dark_name: None,
+            light_name: None,
+            custom: None,
+        }
+    }
 }
 
 impl ThemeConfig {
@@ -344,7 +360,11 @@ active_row_bg = "#131415"
     #[test]
     fn theme_defaults_when_missing() {
         let config: Config = toml::from_str("").unwrap();
+        // [OHOS PORT] The OHOS build defaults the theme to dracula.
+        #[cfg(not(target_env = "ohos"))]
         assert!(config.theme.name.is_none());
+        #[cfg(target_env = "ohos")]
+        assert_eq!(config.theme.name.as_deref(), Some("dracula"));
         assert!(!config.theme.auto_switch);
         assert!(config.theme.dark_name.is_none());
         assert!(config.theme.light_name.is_none());

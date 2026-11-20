@@ -780,6 +780,16 @@ pub struct AgentPanelSettingsContent {
     ///
     /// Default: true
     pub prevent_idle_sleep: Option<bool>,
+    /// Whether the editor plays a sound when an agent changes state in the
+    /// background. Written by the Agent Container settings page.
+    ///
+    /// Default: true
+    pub sound_enabled: Option<bool>,
+    /// Whether the editor shows a toast when an agent changes state in the
+    /// background. Written by the Agent Container settings page.
+    ///
+    /// Default: true
+    pub notifications_enabled: Option<bool>,
 }
 // [OHOS PORT END]
 

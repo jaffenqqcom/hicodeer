@@ -67,9 +67,10 @@ const REKEY_BYTE_LIMIT: usize = 1 << 30;
 /// effectively "never" for a connection that only ever carries a few kilobytes.
 const REKEY_TIME_LIMIT: std::time::Duration =
     std::time::Duration::from_secs(365 * 24 * 60 * 60);
-/// Directory under the host application's home holding the embedded agent
-/// server's state.
-const AGENT_STATE_DIR: &str = ".agentpanel";
+/// Directory under the config root holding the embedded agent server's state.
+/// On OHOS this is the herdr client's own state root, so the sockets, the
+/// client's config file and its session data all live under one directory.
+const AGENT_STATE_DIR: &str = "hicodeer/agenttui";
 /// Subdirectory of [`AGENT_STATE_DIR`] that holds the sockets.
 const AGENT_RUN_DIR: &str = "agent";
 /// Variable the agent server reads for its JSON API socket; the client socket
@@ -83,10 +84,6 @@ const AGENT_CLIENT_SOCKET_MODE_ENV: &str = "HICODEER_AGENT_SOCKET_MODE";
 /// Mode the Agent terminal's client needs: it connects from the application
 /// account, not this daemon's.
 const AGENT_CLIENT_SOCKET_MODE: &str = "0666";
-/// Variable that overrides the config file the agent server reads.
-const AGENT_CONFIG_PATH_ENV: &str = "HICODEER_AGENT_CONFIG_PATH";
-/// Config file shipped in the package's `conf` directory.
-const AGENT_CONFIG_FILE: &str = "agent-config.toml";
 /// Argument that carries the socket path the daemon reported to the host
 /// application. The two processes run under different accounts and do not
 /// share a home directory, and the terminal command does not inherit the
@@ -215,32 +212,6 @@ fn main() {
             std::process::exit(1);
         }
         std::env::set_var(AGENT_SOCKET_PATH_ENV, &unique_api_socket_path);
-        // The packaged config is read-only, and the client rewrites the file it
-        // loaded to record first-run state (its onboarding flag), so pointing it
-        // at the package fails with EACCES. Put a writable copy beside the
-        // sockets instead -- inside the application's own sandbox, which this
-        // process can write -- and let the client load that.
-        if let Some(package_config) = std::env::var_os(AGENT_CONFIG_PATH_ENV) {
-            let state_dir = Path::new(&socket_path).parent().and_then(Path::parent);
-            match state_dir {
-                Some(state_dir) => {
-                    match writable_agent_config(state_dir, Path::new(&package_config)) {
-                        Ok(local_config) => std::env::set_var(AGENT_CONFIG_PATH_ENV, local_config),
-                        Err(err) => {
-                            std::env::remove_var(AGENT_CONFIG_PATH_ENV);
-                            tui_report(&format!(
-                                "cannot prepare the config from {}: {err}",
-                                package_config.to_string_lossy()
-                            ));
-                        }
-                    }
-                }
-                None => {
-                    std::env::remove_var(AGENT_CONFIG_PATH_ENV);
-                    tui_report("cannot prepare the config: the socket path has no state directory");
-                }
-            }
-        }
         let result = agent_server::run_client_entry();
         if let Err(err) = result {
             tui_report(&format!("client stopped: {err}"));
@@ -379,29 +350,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // a UNIX socket, so the path is not derived from it.
     let agent_socket_path = agent_socket_path();
     std::env::set_var(AGENT_SOCKET_PATH_ENV, &agent_socket_path);
-    // The agent server reads its settings from this file. It ships inside the
-    // package, so the defaults this build needs (no server sidebar: the Agent panel
-    // in the editor shows the same tree) do not depend on the user's home or on the
-    // writable state directory.
-    let agent_config_path = conf.join(AGENT_CONFIG_FILE);
-    if std::env::var_os(AGENT_CONFIG_PATH_ENV).is_none() && agent_config_path.is_file() {
-        std::env::set_var(AGENT_CONFIG_PATH_ENV, &agent_config_path);
+    // The TUI client runs under the application account (a different uid) and
+    // saves its config file into this state directory, so it has to be writable
+    // from that account. Widen it; the daemon only reads the config it loads.
+    if let Some(state_dir) = agent_socket_path.parent().and_then(|path| path.parent()) {
+        if let Err(err) = widen_state_dir_for_client(state_dir) {
+            log::warn!("daemon: cannot prepare the agent state directory: {err}");
+        }
     }
     // The host application cannot open the server's owner-only API socket, so it
     // is published on loopback instead; the endpoint and this run's token travel
     // in the bootstrap payload below. A failure here costs the Agent panel, not the
     // command service, so it is reported and start-up continues.
     let agent_control = match agent_control::start(agent_socket_path.clone()) {
-        Ok(mut control) => {
-            // The TUI client runs under the application account and does not
-            // inherit this environment, so it would fall back to the defaults
-            // for everything this file sets. Hand it the path instead: the
-            // package directory is world-readable.
-            if agent_config_path.is_file() {
-                control.config_path = Some(agent_config_path.to_string_lossy().into_owned());
-            }
-            Some(control)
-        }
+        Ok(control) => Some(control),
         Err(err) => {
             log::warn!("daemon: agent control listener did not start: {err}");
             None
@@ -551,6 +513,19 @@ fn agent_socket_path() -> PathBuf {
         .join(AGENT_API_SOCKET_FILE)
 }
 
+/// Creates the agent state directory and widens it to 0777 so the TUI client,
+/// which runs under the application account, can create its config file there.
+/// The daemon still only reads that file.
+fn widen_state_dir_for_client(state_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(state_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(state_dir, std::fs::Permissions::from_mode(0o777))?;
+    }
+    Ok(())
+}
+
 /// Per-process stand-in for the API socket path, used only to derive the local
 /// client socket name.
 ///
@@ -579,107 +554,6 @@ fn client_socket_path(api_socket_path: &Path) -> PathBuf {
         .unwrap_or("agent");
     let parent = api_socket_path.parent().unwrap_or_else(|| Path::new(""));
     parent.join(format!("{stem}-client.sock"))
-}
-
-/// Copies the packaged config into `state_dir` and returns the copy.
-///
-/// The package directory is read-only, so a writable file has to exist before
-/// the client can save into the config it loaded. That file is also what the
-/// host application's settings page edits, which makes it the user's
-/// configuration rather than a copy of the package: once it exists its values
-/// win, and a package update never replaces them. The packaged config seeds a
-/// state directory that has none and supplies the tables an existing file is
-/// missing.
-fn writable_agent_config(state_dir: &Path, package_config: &Path) -> std::io::Result<PathBuf> {
-    let local_config = state_dir.join(AGENT_CONFIG_FILE);
-    if local_config.is_file() {
-        // The host application's settings page edits this file directly and can
-        // create it before the server has ever run. It only writes the keys it
-        // owns, so a file created that way starts without the packaged tables.
-        // Add the ones it lacks instead of leaving the packaged defaults out.
-        if let Err(err) = add_missing_config_tables(&local_config, package_config) {
-            log::warn!(
-                "daemon: cannot complete {} from {}: {err}",
-                local_config.display(),
-                package_config.display()
-            );
-        }
-        return Ok(local_config);
-    }
-    std::fs::create_dir_all(state_dir)?;
-    std::fs::copy(package_config, &local_config)?;
-    Ok(local_config)
-}
-
-/// Appends the tables `template` defines and `path` does not.
-///
-/// A table is copied whole, with the comments between its keys, and only when
-/// the file has no table of that name: no existing line is replaced, so a value
-/// the user set is never overwritten. Tables are compared by name, so a header
-/// written with a trailing comment or indentation still counts as present -- a
-/// second `[ui]` would make the whole file unparsable.
-fn add_missing_config_tables(path: &Path, template: &Path) -> std::io::Result<()> {
-    let existing = std::fs::read_to_string(path)?;
-    let template = std::fs::read_to_string(template)?;
-    let lines: Vec<&str> = template.lines().collect();
-    let Some(start) = lines.iter().position(|line| config_table_name(line).is_some()) else {
-        return Ok(());
-    };
-
-    let mut missing = String::new();
-    let mut index = start;
-    while index < lines.len() {
-        let Some(name) = config_table_name(lines[index]) else {
-            break;
-        };
-        let end = (index + 1..lines.len())
-            .find(|&next| config_table_name(lines[next]).is_some())
-            .unwrap_or(lines.len());
-        let present = existing
-            .lines()
-            .any(|line| config_table_name(line) == Some(name));
-        if !present {
-            missing.push('\n');
-            for line in &lines[index..end] {
-                missing.push_str(line);
-                missing.push('\n');
-            }
-        }
-        index = end;
-    }
-
-    if missing.is_empty() {
-        return Ok(());
-    }
-
-    let mut content = existing;
-    if !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(&missing);
-    write_config_atomically(path, &content)
-}
-
-/// The name inside a table header, with indentation and any trailing comment
-/// removed. A commented-out header has no content before the `#` and is not a
-/// header.
-fn config_table_name(line: &str) -> Option<&str> {
-    let line = line.trim().split('#').next()?.trim_end();
-    if !line.starts_with('[') || !line.ends_with(']') {
-        return None;
-    }
-    Some(line.trim_matches(&['[', ']'][..]).trim())
-}
-
-/// Replaces the file in one step, so a reader never sees a half-written config
-/// while the settings page is saving the same file.
-fn write_config_atomically(path: &Path, content: &str) -> std::io::Result<()> {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return Err(std::io::Error::other("config path has no file name"));
-    };
-    let temporary = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
-    std::fs::write(&temporary, content)?;
-    std::fs::rename(&temporary, path)
 }
 
 /// Resolves when the embedded agent-server task finishes. With no task it stays

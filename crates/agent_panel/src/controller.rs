@@ -152,7 +152,6 @@ pub trait AgentController: Send + Sync {
 #[allow(dead_code)]
 pub struct HostTerminalSpec {
     pub socket_path: String,
-    pub config_path: String,
 }
 
 /// The real controller: forwards to the daemon bridge in `client.rs`.
@@ -162,7 +161,6 @@ impl AgentController for HerdrController {
     fn host_terminal(&self) -> Option<HostTerminalSpec> {
         cmd_client::agent_control().map(|control| HostTerminalSpec {
             socket_path: control.socket_path,
-            config_path: control.config_path.unwrap_or_default(),
         })
     }
 

@@ -271,9 +271,6 @@ const AGENT_TERMINAL_ARGUMENT: &str = "agent-tui";
 /// does not inherit the daemon's environment, and the two processes do not
 /// share a home directory, so the path has to travel on the command line.
 const AGENT_TERMINAL_SOCKET_ARGUMENT: &str = "--socket";
-/// Variable the client reads its config path from. The client process does not
-/// inherit the daemon's environment, so the path has to be handed to it.
-const AGENT_TERMINAL_CONFIG_ENV: &str = "HICODEER_AGENT_CONFIG_PATH";
 
 /// Whether deploying the Agent terminal moves keyboard focus into it.
 ///
@@ -323,20 +320,12 @@ impl TerminalView {
     pub fn deploy_agent_terminal(
         workspace: &mut Workspace,
         socket_path: String,
-        config_path: Option<String>,
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) -> Task<anyhow::Result<()>> {
         let project = workspace.project().downgrade();
         cx.spawn_in(window, async move |workspace, cx| {
             let label = AGENT_TERMINAL_TITLE.to_string();
-            let mut env = collections::HashMap::default();
-            if let Some(config_path) = config_path {
-                // The client renders its own chrome (tab row, sidebar), and its
-                // settings are read in the client process, not the server's.
-                // Without this it falls back to the defaults.
-                env.insert(AGENT_TERMINAL_CONFIG_ENV.to_string(), config_path);
-            }
             let spawn_task = SpawnInTerminal {
                 id: TaskId(AGENT_TERMINAL_TASK_ID.to_string()),
                 full_label: label.clone(),
@@ -348,7 +337,6 @@ impl TerminalView {
                     socket_path,
                 ],
                 command_label: format!("{AGENT_TERMINAL_PROGRAM} {AGENT_TERMINAL_ARGUMENT}"),
-                env,
                 reveal: RevealStrategy::Always,
                 reveal_target: RevealTarget::Center,
                 use_new_terminal: true,

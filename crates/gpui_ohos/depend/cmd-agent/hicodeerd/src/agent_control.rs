@@ -160,8 +160,6 @@ pub(crate) fn start(socket_path: PathBuf) -> io::Result<AgentControl> {
         socket_path: socket_path.to_string_lossy().into_owned(),
         control_port: AGENT_CONTROL_PORT,
         token,
-        // Filled in by the caller, which knows where the package's config lives.
-        config_path: None,
     })
 }
 

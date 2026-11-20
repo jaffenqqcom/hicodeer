@@ -69,11 +69,6 @@ pub struct AgentControl {
     pub control_port: u16,
     /// Token this run generated; the bridge requires it as its first line.
     pub token: String,
-    /// Config file this run's agent server loaded. The TUI client runs under the
-    /// account and does not inherit the daemon's environment, so it has to be
-    /// told where the same settings live; absent when the package ships none.
-    #[serde(default)]
-    pub config_path: Option<String>,
 }
 
 /// Parses a management bootstrap request, returning the directory the client

@@ -209,6 +209,12 @@ pub struct AgentPanelSettings {
     /// Whether to keep the screen awake while an agent task is running.
     /// Written by the settings page and by the onboarding page.
     pub prevent_idle_sleep: bool,
+    /// Whether the editor plays a sound when an agent changes state in the
+    /// background. Written by the settings page.
+    pub sound_enabled: bool,
+    /// Whether the editor shows a toast when an agent changes state in the
+    /// background. Written by the settings page.
+    pub notifications_enabled: bool,
 }
 
 impl Settings for AgentPanelSettings {
@@ -225,6 +231,8 @@ impl Settings for AgentPanelSettings {
             auto_install_integrations: panel.auto_install_integrations.unwrap_or(true),
             show_history: panel.show_history.unwrap_or(true),
             prevent_idle_sleep: panel.prevent_idle_sleep.unwrap_or(true),
+            sound_enabled: panel.sound_enabled.unwrap_or(true),
+            notifications_enabled: panel.notifications_enabled.unwrap_or(true),
         }
     }
 }
@@ -234,7 +242,6 @@ pub fn init(cx: &mut App) {
     #[cfg(target_env = "ohos")]
     {
         cx.set_global(herdr_settings::AgentIntegrations::default());
-        cx.set_global(herdr_settings::TerminalSettingsCache::default());
         // Pick up a binding saved before this launch; the bridge owns its own
         // thread and is idle when nothing is bound.
         im_link::install();
@@ -714,13 +721,13 @@ impl AgentPanel {
             .retain(|pane_id| current.contains_key(pane_id));
         let previous = std::mem::replace(&mut self.last_agent_status, current);
 
-        herdr_settings::migrate_legacy_delivery(cx);
         if first_snapshot {
             return;
         }
-        let notifications_enabled = herdr_settings::notifications_enabled(cx);
+        let panel_settings = AgentPanelSettings::get_global(cx);
+        let notifications_enabled = panel_settings.notifications_enabled;
 
-        let sound_enabled = herdr_settings::sound_enabled(cx);
+        let sound_enabled = panel_settings.sound_enabled;
 
         // One event feeds all three outputs: the row mark, the sound and the
         // toast. They share the transition test, and each adds only its own
@@ -980,14 +987,8 @@ impl AgentPanel {
             // itself before adding the replacement; otherwise the pane would
             // hold two Agent terminals and only the new one would be live.
             close_agent_terminals(workspace, window, cx);
-            TerminalView::deploy_agent_terminal(
-                workspace,
-                control.socket_path,
-                control.config_path,
-                window,
-                cx,
-            )
-            .detach_and_log_err(cx);
+            TerminalView::deploy_agent_terminal(workspace, control.socket_path, window, cx)
+                .detach_and_log_err(cx);
         });
     }
 

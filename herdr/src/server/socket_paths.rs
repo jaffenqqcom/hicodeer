@@ -141,14 +141,9 @@ mod tests {
 
     #[test]
     fn prepare_socket_path_removes_stale_socket() {
-        let dir = PathBuf::from(format!(
-            "/tmp/hs-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        // Respect TMPDIR: /tmp is mounted read-only on this device. The short
+        // name keeps the socket path under SUN_LEN.
+        let dir = std::env::temp_dir().join(format!("hst-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let socket_path = dir.join("stale.sock");
 
@@ -173,14 +168,9 @@ mod tests {
 
     #[test]
     fn prepare_socket_path_rejects_live_socket() {
-        let dir = PathBuf::from(format!(
-            "/tmp/hl-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        // Respect TMPDIR: /tmp is mounted read-only on this device. The short
+        // name keeps the socket path under SUN_LEN.
+        let dir = std::env::temp_dir().join(format!("hl-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let socket_path = dir.join("live.sock");
 

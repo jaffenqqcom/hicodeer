@@ -417,16 +417,17 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        // Share one lock with every other test that rewrites process env.
+        crate::config::test_config_env_lock()
     }
 
-    fn unique_test_dir(name: &str) -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::path::PathBuf::from(format!("/tmp/ha-{name}-{}-{nanos}", std::process::id()))
+    fn unique_test_dir(_name: &str) -> std::path::PathBuf {
+        // Respect TMPDIR: this device mounts /tmp read-only, so a socket
+        // directory there cannot be created. The name is kept short because
+        // TMPDIR here is already close to the UNIX socket path limit.
+        static NEXT_DIR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let id = NEXT_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("ha{}-{id}", std::process::id()))
     }
 
     #[test]
@@ -476,7 +477,10 @@ mod tests {
         }));
     }
 
-    #[cfg(target_os = "linux")]
+    // [OHOS PORT BEGIN] Desktop-only: the assertion reads the session id with
+    // `ps -o sid=`, which this device's ps does not support.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    // [OHOS PORT END]
     #[test]
     fn server_daemon_detach_creates_new_session() {
         let mut command = Command::new("sh");

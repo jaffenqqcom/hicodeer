@@ -208,6 +208,7 @@ pub(super) fn render_visible_notification(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::shell::test_config;
 
     fn notification() -> ClientVisibleNotification {
         ClientVisibleNotification {
@@ -256,7 +257,7 @@ mod tests {
 
     #[test]
     fn unavailable_notification_target_stays_visible_and_reports_the_machine() {
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
         state.visible_notification = Some(ClientVisibleNotification {
             endpoint_id: ClientEndpointId::Local,
             event: SemanticNotification {
@@ -286,7 +287,7 @@ mod tests {
 
     #[test]
     fn immediate_finished_evidence_for_acknowledged_idle_never_toasts_or_sounds() {
-        let mut config = ClientShellConfig::from_config(&Config::default());
+        let mut config = ClientShellConfig::from_config(&test_config());
         config.toast_delivery = crate::config::ToastDelivery::Hicodeer;
         config.toast_delay_seconds = 0;
         let mut state = ClientShellState::new(config);
@@ -332,7 +333,7 @@ mod tests {
 
     #[test]
     fn finished_hint_waits_for_the_projected_completion_snapshot() {
-        let mut config = ClientShellConfig::from_config(&Config::default());
+        let mut config = ClientShellConfig::from_config(&test_config());
         config.toast_delivery = crate::config::ToastDelivery::Terminal;
         config.toast_delay_seconds = 0;
         let mut state = ClientShellState::new(config);
@@ -385,7 +386,7 @@ mod tests {
 
     #[test]
     fn retiring_one_endpoint_preserves_other_endpoint_notifications() {
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
         let mut local = notification();
         local.event.title = "local".into();
         let remote_id = ClientEndpointId::Ssh(

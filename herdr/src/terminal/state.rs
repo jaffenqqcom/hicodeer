@@ -391,7 +391,7 @@ impl TerminalState {
         let previous_state = self.state;
         let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
         let previous_detected_agent = self.detected_agent;
-        let previous_session = self.current_session_identity_for_persistence();
+        let previous_session = self.recorded_session_identity();
         let newer_custom_authority = process_exited
             && self.hook_authority.as_ref().is_some_and(|authority| {
                 crate::detect::parse_agent_label(&authority.agent_label) == agent
@@ -422,7 +422,7 @@ impl TerminalState {
                     now,
                 ),
                 session_ref_changed: previous_session
-                    != self.current_session_identity_for_persistence(),
+                    != self.recorded_session_identity(),
                 agent_released: false,
             };
         }
@@ -441,24 +441,17 @@ impl TerminalState {
                     now,
                 ),
                 session_ref_changed: previous_session
-                    != self.current_session_identity_for_persistence(),
+                    != self.recorded_session_identity(),
                 agent_released: false,
             };
         }
         self.detected_agent = agent;
-        // A released agent takes its name with it. Without this a managed name
-        // keeps the pane in `agent.list` after the process it named is gone.
-        if agent_released {
-            // The name is launch bookkeeping, so it leaves with the agent.
-            // The session itself is cleared by the exit branch above.
-            self.clear_agent_name();
-        }
         if process_exited || agent != Some(Agent::Codex) || fallback_state == AgentState::Blocked {
             self.codex_prompt_ready = false;
         }
         if let Some(agent) = agent {
             let agent_label = crate::detect::agent_label(agent);
-            self.reconcile_agent_name_owner(agent_label, None);
+            self.reconcile_agent_name_owner(agent_label, None, true);
         }
         if !process_exited {
             self.clear_full_lifecycle_hook_suppression_for_detected_agent(
@@ -482,6 +475,12 @@ impl TerminalState {
             }
         } else if agent.is_some() {
             self.recent_agent_process_exit = None;
+        }
+        // A name is launch bookkeeping. One exit observation may be a false
+        // positive, so the name leaves only once detection confirms the agent
+        // is gone while the recorded exit still stands.
+        if agent.is_none() && self.recent_agent_process_exit.is_some() {
+            self.clear_agent_name();
         }
         if process_exited {
             // A release event names no agent: it means "this pane's agent is
@@ -579,9 +578,14 @@ impl TerminalState {
                 self.hook_report_sequences.remove(&source);
                 self.hook_authority = None;
             }
-            if !newer_custom_authority {
-                // The pane lost its agent: a session left behind here would be
-                // resumed on the next start, whatever source wrote it.
+            if !newer_custom_authority
+                && self.persisted_agent_session.as_ref().is_some_and(|session| {
+                    crate::detect::parse_agent_label(&session.agent) == released_agent
+                })
+            {
+                // The pane lost this agent, so its session must not be resumed
+                // on the next start. A session recorded for another agent in
+                // the same pane is not this exit's business.
                 self.persisted_agent_session = None;
             }
             if !newer_custom_authority
@@ -678,7 +682,7 @@ impl TerminalState {
         TerminalStateMutation {
             effective_state_change,
             session_ref_changed: previous_session
-                != self.current_session_identity_for_persistence(),
+                != self.recorded_session_identity(),
             agent_released,
         }
     }
@@ -799,8 +803,17 @@ impl TerminalState {
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
         let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
-        let previous_session = self.current_session_identity_for_persistence();
-        self.reconcile_agent_name_owner(&agent_label, session_ref.as_ref());
+        let previous_session = self.recorded_session_identity();
+        // A custom source reporting a session describes a hidden transcript;
+        // it may bind a name that has none yet, but it must not invalidate the
+        // name the pane already shows.
+        let drop_name_on_session_change =
+            crate::agent_resume::is_official_agent_source(&source, &agent_label);
+        self.reconcile_agent_name_owner(
+            &agent_label,
+            session_ref.as_ref(),
+            drop_name_on_session_change,
+        );
         if foreground_takeover_allowed {
             self.suppress_current_full_lifecycle_hook_authority(
                 FullLifecycleHookSuppressionReason::HookClear,
@@ -846,7 +859,7 @@ impl TerminalState {
             reported_at: now,
             session_ref,
         });
-        let current_session = self.current_session_identity_for_persistence();
+        let current_session = self.recorded_session_identity();
         let effective_state_change = self.recompute_effective_state(
             previous_agent_label,
             previous_known_agent,
@@ -1275,7 +1288,7 @@ impl TerminalState {
         });
         for (source, agent_label, session_ref, pending) in validated_replacement_sessions {
             self.forget_stale_full_lifecycle_hook_session(&source, &agent_label, &session_ref);
-            self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
+            self.reconcile_agent_name_owner(&agent_label, Some(&session_ref), true);
             self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
                 source: source.clone(),
                 agent: agent_label,
@@ -1346,7 +1359,10 @@ impl TerminalState {
             })
     }
 
-    pub(crate) fn current_session_identity_for_persistence(
+    /// Session identity recorded for this pane, whether or not its agent is
+    /// running right now. Comparisons, owner conflicts and late reports must
+    /// use this: an agent leaving the pane does not unrecord its session.
+    pub(crate) fn recorded_session_identity(
         &self,
     ) -> Option<(
         String,
@@ -1354,12 +1370,6 @@ impl TerminalState {
         crate::agent_resume::AgentSessionRefKind,
         String,
     )> {
-        // Persist a session only for a pane that currently holds an agent.
-        // Restore resumes from this field, so writing it for a pane whose
-        // agent already exited brings that agent back on the next start.
-        if self.effective_agent_label().is_none() {
-            return None;
-        }
         if let Some(authority) = self.hook_authority.as_ref() {
             if let Some(session_ref) = authority.session_ref.as_ref() {
                 return Some((
@@ -1387,7 +1397,7 @@ impl TerminalState {
     /// a fallback together with the source still held by hook authority.
     pub(crate) fn agent_name_identity(&self) -> Option<(String, String)> {
         if let Some((source, _agent, _kind, value)) =
-            self.current_session_identity_for_persistence()
+            self.recorded_session_identity()
         {
             return Some((source, value));
         }
@@ -1415,7 +1425,7 @@ impl TerminalState {
     pub(crate) fn agent_name_in_use_keys(&self) -> Vec<String> {
         let mut keys = Vec::new();
         if let Some((source, _agent, _kind, value)) =
-            self.current_session_identity_for_persistence()
+            self.recorded_session_identity()
         {
             keys.push(crate::persist::agent_names::key_for(&source, &value));
         }
@@ -1447,7 +1457,7 @@ impl TerminalState {
     }
 
     fn current_session_owner_conflicts(&self, source: &str, agent_label: &str) -> bool {
-        self.current_session_identity_for_persistence().is_some_and(
+        self.recorded_session_identity().is_some_and(
             |(current_source, current_agent, _, _)| {
                 current_source != source || current_agent != agent_label
             },
@@ -1461,7 +1471,7 @@ impl TerminalState {
         session_ref: &crate::agent_resume::AgentSessionRef,
         session_start_source: Option<&str>,
     ) -> Option<crate::agent_resume::AgentSessionRef> {
-        self.current_session_identity_for_persistence().and_then(
+        self.recorded_session_identity().and_then(
             |(current_source, current_agent, current_kind, current_value)| {
                 (current_source == source
                     && current_agent == agent_label
@@ -1516,7 +1526,7 @@ impl TerminalState {
             (
                 "hicodeer:claude",
                 "claude",
-                Some("startup" | "clear" | "resume" | "compact")
+                Some("clear" | "resume" | "compact")
             ) | (
                 "hicodeer:codex",
                 "codex",
@@ -1681,7 +1691,7 @@ impl TerminalState {
             let now = Instant::now();
             let previous_presentation =
                 self.effective_presentation_for_state_at(previous_state, now);
-            let previous_session = self.current_session_identity_for_persistence();
+            let previous_session = self.recorded_session_identity();
             let suppressed = self
                 .suppressed_full_lifecycle_hook_reports
                 .entry(source.clone())
@@ -1709,7 +1719,7 @@ impl TerminalState {
 
             if process_present {
                 self.clear_full_lifecycle_hook_suppression_for_detected_agent(None, known_agent);
-                let current_session = self.current_session_identity_for_persistence();
+                let current_session = self.recorded_session_identity();
                 return Some(TerminalStateMutation {
                     effective_state_change: self.recompute_effective_state(
                         previous_agent_label,
@@ -1738,7 +1748,7 @@ impl TerminalState {
         let replacing_identity_only_session =
             crate::detect::session_identity_only_integration(&source, &agent_label)
                 && session_replacement_allowed
-                && self.current_session_identity_for_persistence().is_some_and(
+                && self.recorded_session_identity().is_some_and(
                     |(current_source, current_agent, current_kind, current_value)| {
                         current_source == source
                             && current_agent == agent_label
@@ -1786,7 +1796,7 @@ impl TerminalState {
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
         let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
-        let previous_session = self.current_session_identity_for_persistence();
+        let previous_session = self.recorded_session_identity();
         if session_replacement_allowed || foreground_takeover_allowed {
             self.forget_stale_full_lifecycle_hook_session(&source, &agent_label, &session_ref);
         }
@@ -1803,7 +1813,12 @@ impl TerminalState {
             );
             self.hook_authority = None;
         }
-        self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
+        // A custom source reporting a session describes a hidden transcript;
+        // it may bind a name that has none yet, but it must not invalidate the
+        // name the pane already shows.
+        let drop_name_on_session_change =
+            crate::agent_resume::is_official_agent_source(&source, &agent_label);
+        self.reconcile_agent_name_owner(&agent_label, Some(&session_ref), drop_name_on_session_change);
         let persisted_session = crate::agent_resume::PersistedAgentSession {
             source,
             agent: agent_label,
@@ -1813,7 +1828,7 @@ impl TerminalState {
             self.managed_agent_launch_session = None;
         }
         self.persisted_agent_session = Some(persisted_session);
-        let current_session = self.current_session_identity_for_persistence();
+        let current_session = self.recorded_session_identity();
         if previous_session.is_some() && previous_session != current_session {
             // Rebinding can expose a cached Working screen; only a fresh report ends acquisition.
             self.agent_process_acquisition_pending = true;
@@ -1923,7 +1938,7 @@ impl TerminalState {
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
         let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
-        let previous_session = self.current_session_identity_for_persistence();
+        let previous_session = self.recorded_session_identity();
         self.suppress_current_full_lifecycle_hook_authority(
             FullLifecycleHookSuppressionReason::HookClear,
         );
@@ -1978,7 +1993,7 @@ impl TerminalState {
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
         let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
-        let previous_session = self.current_session_identity_for_persistence();
+        let previous_session = self.recorded_session_identity();
         self.suppress_full_lifecycle_hook_report(
             source,
             agent_label,
@@ -1996,7 +2011,7 @@ impl TerminalState {
         if !preserve_foreign_persisted_session {
             self.persisted_agent_session = None;
         }
-        let current_session = self.current_session_identity_for_persistence();
+        let current_session = self.recorded_session_identity();
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
                 previous_agent_label,
@@ -2032,7 +2047,7 @@ impl TerminalState {
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
         let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
-        let previous_session = self.current_session_identity_for_persistence();
+        let previous_session = self.recorded_session_identity();
         self.hook_authority = None;
         self.set_reported_resume(None);
         self.detected_agent = None;
@@ -2040,7 +2055,7 @@ impl TerminalState {
         self.fallback_visible_blocker = false;
         self.fallback_observed_at = None;
         self.clear_agent_name();
-        let current_session = self.current_session_identity_for_persistence();
+        let current_session = self.recorded_session_identity();
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
                 previous_agent_label,
@@ -2058,7 +2073,7 @@ impl TerminalState {
         &self,
         session_ref: &crate::agent_resume::AgentSessionRef,
     ) -> bool {
-        self.current_session_identity_for_persistence()
+        self.recorded_session_identity()
             .is_some_and(|(_, _, kind, value)| {
                 kind == session_ref.kind && value == session_ref.value
             })
@@ -2580,21 +2595,20 @@ impl TerminalState {
     }
 
     pub fn is_agent_terminal(&self) -> bool {
-        // A name is a label, not evidence that an agent exists. Counting it let
-        // a leftover name keep the pane in `agent.list` after the process it
-        // named was gone. Only an observed identity counts, plus the one case
-        // that has no observation yet: a managed launch still in progress.
-        // A managed agent that already became active and then lost its
-        // observed label is a leftover: active means it had been seen, so no
-        // label now means no agent. Only a launch still in progress may list
-        // the pane without an observation.
-        self.effective_agent_label().is_some() || self.managed_agent_launch_pending()
+        // A name counts: it is assigned by a managed launch or by hook
+        // authority, and it is dropped only once detection confirms the agent
+        // is gone, so a name here means the pane still holds one. A launch
+        // still in progress has no observation yet but already owns the pane.
+        self.agent_name.is_some()
+            || self.effective_agent_label().is_some()
+            || self.managed_agent_launch_pending()
     }
 
     fn reconcile_agent_name_owner(
         &mut self,
         agent_label: &str,
         session_ref: Option<&crate::agent_resume::AgentSessionRef>,
+        drop_name_on_session_change: bool,
     ) {
         if self.agent_name.is_none() {
             return;
@@ -2607,11 +2621,12 @@ impl TerminalState {
         match self.agent_name_owner.as_mut() {
             Some(owner)
                 if owner.agent_label != agent_label
-                    || owner
-                        .session_ref
-                        .as_ref()
-                        .zip(session_ref)
-                        .is_some_and(|(current, incoming)| current != incoming) =>
+                    || (drop_name_on_session_change
+                        && owner
+                            .session_ref
+                            .as_ref()
+                            .zip(session_ref)
+                            .is_some_and(|(current, incoming)| current != incoming)) =>
             {
                 self.agent_name = None;
                 self.agent_name_owner = None;
@@ -3120,7 +3135,7 @@ mod tests {
         );
         assert_eq!(
             terminal
-                .current_session_identity_for_persistence()
+                .recorded_session_identity()
                 .map(|(_, _, _, value)| value),
             Some("codebuddy-cleared".to_owned())
         );
@@ -3389,7 +3404,7 @@ mod tests {
 
         assert!(startup.is_some());
         assert_eq!(
-            terminal.current_session_identity_for_persistence(),
+            terminal.recorded_session_identity(),
             Some((
                 "hicodeer:pi".into(),
                 "pi".into(),
@@ -5108,6 +5123,8 @@ mod tests {
     #[test]
     fn different_same_agent_session_ref_is_ignored_until_current_session_clears() {
         let mut terminal = test_terminal();
+        // Session identity persists only while the pane holds the agent.
+        terminal.detected_agent = Some(Agent::Claude);
         terminal
             .set_agent_session_ref(
                 "hicodeer:claude".into(),
@@ -5172,6 +5189,7 @@ mod tests {
     fn claude_lifecycle_session_ref_replaces_existing_session_ref() {
         for session_start_source in ["clear", "resume", "compact"] {
             let mut terminal = test_terminal();
+            terminal.detected_agent = Some(crate::detect::Agent::Claude);
             terminal
                 .set_agent_session_ref(
                     "hicodeer:claude".into(),
@@ -5211,6 +5229,8 @@ mod tests {
     fn codex_lifecycle_session_ref_replaces_existing_session_ref() {
         for session_start_source in ["startup", "clear", "resume", "compact"] {
             let mut terminal = test_terminal();
+            // Session identity persists only while the pane holds the agent.
+            terminal.detected_agent = Some(Agent::Codex);
             terminal
                 .set_agent_session_ref(
                     "hicodeer:codex".into(),
@@ -5311,6 +5331,8 @@ mod tests {
     #[test]
     fn grok_new_session_ref_replaces_existing_session_ref() {
         let mut terminal = test_terminal();
+        // Session identity persists only while the pane holds the agent.
+        terminal.detected_agent = Some(Agent::Grok);
         terminal
             .set_agent_session_ref(
                 "hicodeer:grok".into(),
@@ -5765,6 +5787,8 @@ mod tests {
     #[test]
     fn different_owner_session_ref_does_not_replace_existing_session_ref() {
         let mut terminal = test_terminal();
+        // Session identity persists only while the pane holds the agent.
+        terminal.detected_agent = Some(Agent::Droid);
         terminal
             .set_agent_session_ref(
                 "hicodeer:droid".into(),
@@ -6002,7 +6026,7 @@ mod tests {
         assert!(mutation.session_ref_changed);
         assert!(terminal.hook_authority.is_none());
         assert_eq!(
-            terminal.current_session_identity_for_persistence(),
+            terminal.recorded_session_identity(),
             Some((
                 "hicodeer:codex".into(),
                 "codex".into(),

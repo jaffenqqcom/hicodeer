@@ -35,8 +35,12 @@ impl ClientShellState {
         // below covers the whole frame. Drawing the expanded sidebar into it
         // flashed the agent and space lists for the frame presented before the
         // first pane surface arrived.
+        // Keep the sidebar hidden only for the silent startup frame; the
+        // navigator and the multi-machine picker still need their rows.
         #[cfg(target_env = "ohos")]
-        let render_expanded_sidebar = layout.sidebar.width > 0;
+        let render_expanded_sidebar = layout.sidebar.width > 0
+            || self.mode == ClientShellMode::Navigate
+            || self.endpoints.len() > 1;
         #[cfg(not(target_env = "ohos"))]
         let render_expanded_sidebar = true;
         // [OHOS PORT END]

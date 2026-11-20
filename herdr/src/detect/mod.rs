@@ -2161,7 +2161,9 @@ mod tests {
             .expect("failed to open pty")
     }
 
-    #[cfg(target_os = "linux")]
+    // [OHOS PORT] The pty on this device reports no foreground process group,
+    // so these desktop foreground-job probes stay Linux-desktop-only.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     #[test]
     fn foreground_job_detects_sleep() {
         use portable_pty::CommandBuilder;
@@ -2193,7 +2195,9 @@ mod tests {
         child.wait().ok();
     }
 
-    #[cfg(target_os = "linux")]
+    // [OHOS PORT] The pty on this device reports no foreground process group,
+    // so these desktop foreground-job probes stay Linux-desktop-only.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     #[test]
     fn foreground_job_detects_shell_running_command() {
         use portable_pty::CommandBuilder;
@@ -2229,7 +2233,9 @@ mod tests {
         child.wait().ok();
     }
 
-    #[cfg(target_os = "linux")]
+    // [OHOS PORT] The pty on this device reports no foreground process group,
+    // so these desktop foreground-job probes stay Linux-desktop-only.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     #[test]
     fn foreground_job_detects_agent_behind_shell_wrapper() {
         use portable_pty::CommandBuilder;
@@ -2269,7 +2275,9 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    // [OHOS PORT] The pty on this device reports no foreground process group,
+    // so these desktop foreground-job probes stay Linux-desktop-only.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     #[test]
     fn pane_shell_is_idle_tracks_foreground_command() {
         use portable_pty::CommandBuilder;

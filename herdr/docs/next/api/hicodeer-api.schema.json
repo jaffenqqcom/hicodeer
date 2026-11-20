@@ -2438,12 +2438,14 @@
           ]
         },
         "AgentRenameParams": {
+          "description": "Renames one agent, or resets the whole name table.\n\nA missing `name` (the CLI's `--clear`) is a global reset: it deletes\n`agent-names.json` and drops every session's name binding, not only the\ntarget's. `target` still selects the pane whose in-memory name is cleared.",
           "type": "object",
           "properties": {
             "target": {
               "type": "string"
             },
             "name": {
+              "description": "`None` clears the whole name table instead of setting one name.",
               "type": [
                 "string",
                 "null"

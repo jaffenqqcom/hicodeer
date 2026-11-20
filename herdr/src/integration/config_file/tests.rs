@@ -77,6 +77,9 @@ fn abandoned_and_failed_publication_leave_config_unchanged() {
     }
 }
 
+// [OHOS PORT] The sandbox refuses to create hard links, so the multi-link case
+// cannot be constructed on this device.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn hard_links_are_rejected_before_staging_and_rechecked_before_commit() {
     let dir = Directory::new();
@@ -104,6 +107,9 @@ fn hard_links_are_rejected_before_staging_and_rechecked_before_commit() {
     assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 2);
 }
 
+// [OHOS PORT] The sandbox refuses to create hard links, so the mixed
+// symlink/hard-link case cannot be constructed on this device.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn symlink_chains_and_dangling_targets_preserve_links() {
     let dir = Directory::new();

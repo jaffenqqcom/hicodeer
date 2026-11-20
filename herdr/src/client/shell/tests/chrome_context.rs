@@ -13,7 +13,7 @@ fn tab_overflow_controls_scroll_the_client_owned_tab_bar() {
         focused: false,
         agent_status: AgentStatus::Idle,
     }));
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot));
     state.set_pane_surface(surface());
     state.compose(80, 20).expect("overflow tab bar");
@@ -73,7 +73,7 @@ fn focused_last_overflow_tab_shows_its_full_label() {
             agent_status: AgentStatus::Idle,
         })
         .collect();
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     for number in [8, 7, 8] {
         let tab_id = format!("tab_{number}");
         projected.focused_tab_id = Some(tab_id.clone());
@@ -159,7 +159,7 @@ fn focused_workspace_change_reveals_new_workspace_in_full_sidebar() {
         })
         .collect();
 
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(initial));
     state.set_pane_surface(surface());
     state.compose(106, 20).expect("full sidebar");
@@ -193,7 +193,7 @@ fn focused_workspace_change_reveals_new_workspace_in_full_sidebar() {
 
 #[test]
 fn client_owned_sidebar_dividers_resize_live() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.compose(106, 30).expect("expanded sidebar");
@@ -296,7 +296,7 @@ fn client_owned_sidebar_dividers_resize_live() {
 
 #[test]
 fn context_menus_capture_stable_targets_and_route_actions() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.compose(106, 20).expect("composed frame");
@@ -379,7 +379,7 @@ fn context_menus_capture_stable_targets_and_route_actions() {
 
 #[test]
 fn global_menu_opens_from_sidebar_and_routes_client_actions() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.compose(106, 30).expect("shell frame");
@@ -429,7 +429,7 @@ fn global_menu_opens_from_sidebar_and_routes_client_actions() {
 
 #[test]
 fn new_tab_overlay_owns_text_cursor_and_submits_public_api_request() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let mut open = ClientShellInput::default();
@@ -475,7 +475,7 @@ fn new_tab_overlay_owns_text_cursor_and_submits_public_api_request() {
 
 #[test]
 fn close_confirmation_error_becomes_client_owned_overlay_and_stable_workspace_close() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let mut close = ClientShellInput::default();
@@ -534,7 +534,7 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_workspace_cl
 #[cfg(target_env = "ohos")]
 #[test]
 fn startup_waits_for_real_content_instead_of_flashing_the_sidebar() {
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.sidebar_start_collapsed = true;
     config.ui.sidebar_collapsed_mode = crate::config::SidebarCollapsedModeConfig::Hidden;
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));

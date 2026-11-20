@@ -674,7 +674,9 @@ mod tests {
     #[test]
     fn stop_session_times_out_when_socket_stays_open_without_response() {
         let _guard = env_lock().lock().unwrap();
-        let config_home = PathBuf::from(format!("/tmp/hs-stop-open-{}", std::process::id()));
+        // Respect TMPDIR: /tmp is mounted read-only on this device. Keep the
+        // directory name short so the socket path stays under SUN_LEN.
+        let config_home = std::env::temp_dir().join(format!("hs-open-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         let session_name = "silent";
         let socket_path = api_socket_path_for(Some(session_name));
@@ -1068,7 +1070,9 @@ mod tests {
     #[test]
     fn stop_session_fails_when_socket_remains_reachable_after_timeout() {
         let _guard = env_lock().lock().unwrap();
-        let config_home = PathBuf::from(format!("/tmp/hs-stop-{}", std::process::id()));
+        // Respect TMPDIR: /tmp is mounted read-only on this device. Keep the
+        // directory name short so the socket path stays under SUN_LEN.
+        let config_home = std::env::temp_dir().join(format!("hs-stop-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         let session_name = "slow";
         let socket_path = api_socket_path_for(Some(session_name));

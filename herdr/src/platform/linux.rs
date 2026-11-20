@@ -1378,8 +1378,8 @@ mod tests {
     use std::{cell::RefCell, collections::HashMap};
 
     fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        // Share one lock with every other test that rewrites process env.
+        crate::config::test_config_env_lock()
     }
 
     #[test]
@@ -1896,6 +1896,9 @@ mod tests {
         assert_eq!(commands[0].program, "wl-copy");
     }
 
+    // [OHOS PORT] The fake wl-copy helper is a script on the temp partition,
+    // which this device mounts noexec, so it cannot be launched here.
+    #[cfg(not(target_env = "ohos"))]
     #[test]
     fn wl_copy_owner_does_not_block_clipboard_write() {
         use std::ffi::OsString;
@@ -2154,6 +2157,9 @@ mod tests {
 
     #[test]
     fn read_clipboard_text_with_command_reads_utf8() {
+        // This test spawns an external command, so it must not race the tests
+        // that rewrite PATH.
+        let _guard = env_lock().lock().unwrap();
         let command = ClipboardCommand {
             program: "printf",
             args: &["feature/linear-302"],
@@ -2309,6 +2315,9 @@ mod tests {
 
     #[test]
     fn read_validated_clipboard_image_accepts_real_png_payload() {
+        // This test spawns an external command, so it must not race the tests
+        // that rewrite PATH.
+        let _guard = env_lock().lock().unwrap();
         assert_eq!(
             read_validated_clipboard_image(
                 "sh",
@@ -2324,6 +2333,9 @@ mod tests {
 
     #[test]
     fn read_wsl_clipboard_image_accepts_png_from_windows_command() {
+        // This test spawns an external command, so it must not race the tests
+        // that rewrite PATH.
+        let _guard = env_lock().lock().unwrap();
         assert_eq!(
             read_wsl_clipboard_image_with_command(|program| {
                 assert_eq!(program, "powershell.exe");

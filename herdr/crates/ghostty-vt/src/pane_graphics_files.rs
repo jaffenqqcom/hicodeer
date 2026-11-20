@@ -116,7 +116,9 @@ impl Default for FileStore {
 }
 
 impl FileStore {
-    fn new(base: PathBuf) -> Self {
+    /// Builds a store rooted at `base`. Exposed so tests can point the store
+    /// at a writable directory when the default base is unavailable.
+    pub fn new(base: PathBuf) -> Self {
         Self {
             base,
             generation: OnceLock::new(),
@@ -372,7 +374,14 @@ pub fn validate_native_source(path: &Path, expected_len: usize) -> io::Result<()
 }
 
 fn native_base() -> PathBuf {
-    #[cfg(unix)]
+    // [OHOS PORT BEGIN] This device has no /var/tmp and mounts /tmp read-only,
+    // so native source files go under the process temp directory (TMPDIR).
+    #[cfg(target_env = "ohos")]
+    {
+        std::env::temp_dir().join(format!("hicodeer-native-sources-{}", effective_uid()))
+    }
+    // [OHOS PORT END]
+    #[cfg(all(unix, not(target_env = "ohos")))]
     {
         PathBuf::from(format!("/var/tmp/hicodeer-native-sources-{}", effective_uid()))
     }

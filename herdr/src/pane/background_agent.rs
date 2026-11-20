@@ -42,6 +42,14 @@ impl AgentJobTracker {
         self.in_background
     }
 
+    /// Whether the process that carried the agent is still alive. A shell in
+    /// front of a live process is not an exit, but the same observation after
+    /// that process died is one.
+    pub(super) fn process_alive(&self, start_token: impl FnOnce(u32) -> Option<u64>) -> bool {
+        self.process
+            .is_some_and(|process| start_token(process.pid) == Some(process.start_token))
+    }
+
     /// `agent_missing` means the probe lost a current agent whose exit has not
     /// been reported yet. Liveness is checked only then, never per render.
     ///

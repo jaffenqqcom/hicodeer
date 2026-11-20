@@ -422,7 +422,13 @@ pub(crate) fn remote_bridge_endpoint_path(readable_name: &str, short_name: &str)
 }
 
 pub(crate) fn remote_reattach_program(program: &str) -> String {
-    shell_quote(if program.is_empty() { "herdr" } else { program })
+    // The remote side installs the binary as `hicodeerd`; a bare `herdr` in the
+    // caller's argv is that binary under its previous name.
+    let program = match program {
+        "" | "herdr" => "hicodeerd",
+        other => other,
+    };
+    shell_quote(program)
 }
 
 pub(crate) fn remote_reattach_argument(value: &str) -> String {
@@ -594,9 +600,32 @@ mod tests {
     }
 }
 
+#[cfg(all(test, target_env = "ohos"))]
+mod shared_ssh_ohos_tests {
+    use super::*;
+
+    #[test]
+    fn shared_ssh_control_path_reports_unsupported_on_this_device() {
+        let error = shared_ssh_control_path(Path::new("/config/one"), "user@host").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    }
+}
+
 /// Shared OpenSSH sockets outlive individual helpers. Never adopt a directory
 /// belonging to another uid, a symlink, or a directory accessible by others.
 pub(crate) fn shared_ssh_control_path(namespace: &Path, target: &str) -> std::io::Result<PathBuf> {
+    // [OHOS PORT BEGIN] This device has no root-owned sticky /tmp, and the only
+    // writable temp directory is too long for an OpenSSH control socket path
+    // (SUN_LEN), so shared control sockets cannot be placed here.
+    #[cfg(target_env = "ohos")]
+    {
+        let _ = (namespace, target);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "OpenSSH control sockets cannot be placed on this device",
+        ));
+    }
+    // [OHOS PORT END]
     use sha2::{Digest, Sha256};
     use std::os::unix::{
         ffi::OsStrExt,
@@ -664,7 +693,10 @@ fn validate_shared_ssh_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+// [OHOS PORT] Shared OpenSSH control sockets cannot be placed on this device,
+// so the path-shape tests stay desktop-only and one test below covers the
+// platform's explicit "unsupported" result.
+#[cfg(all(test, not(target_env = "ohos")))]
 mod shared_ssh_tests {
     use super::*;
 

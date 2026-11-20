@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn host_appearance_prefers_explicit_reports_over_background_inference() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.config.theme_runtime.auto_switch = true;
 
     let light = crate::app::client_palette_for_appearance(
@@ -80,7 +80,7 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
 fn full_host_palette_response_is_sent_as_one_theme_update() {
     use std::fmt::Write as _;
 
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let mut responses = String::new();
     for index in 0..=u8::MAX {
         let _ = write!(responses, "\x1b]4;{index};rgb:1111/2222/3333\x1b\\");
@@ -148,7 +148,7 @@ fn modal_paste_shortcut_modifiers_are_platform_specific() {
 
 #[test]
 fn modal_paste_inserts_clipboard_text_through_overlay_text_path() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
         title: "rename pane",
         input: TextEditor::new("replace me", true),
@@ -174,7 +174,7 @@ fn modal_paste_inserts_clipboard_text_through_overlay_text_path() {
 
 #[test]
 fn client_shell_graphics_follow_final_shell_origin_and_local_overlay_visibility() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
     let key = crate::protocol::SurfaceGraphicsAssetKey {
@@ -247,7 +247,7 @@ fn delayed_link_fallback_does_not_replay_against_changed_geometry() {
     ] {
         for changed in 0..4 {
             let mut state =
-                ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+                ClientShellState::new(ClientShellConfig::from_config(&test_config()));
             state.set_snapshot(Box::new(snapshot()));
             state.set_pane_surface(surface());
             state.compose(106, 20).expect("pane frame");
@@ -293,7 +293,7 @@ fn delayed_link_fallback_does_not_replay_against_changed_geometry() {
 
 #[test]
 fn invalid_experimental_reload_keeps_input_source_preference() {
-    let mut shell = ClientShellConfig::from_config(&Config::default());
+    let mut shell = ClientShellConfig::from_config(&test_config());
     shell.switch_ascii_input_source_in_prefix = true;
     let config = Config::default();
     shell.apply_live_config(&config, &[], &["experimental".to_owned()]);
@@ -327,7 +327,7 @@ fn pane_key_events(
 fn text_press_release_survives_shift_released_first_and_never_becomes_a_repeat() {
     use crate::protocol::{ClientKeyCode, ClientKeyKind};
 
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_host_reports_key_releases(true);
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -373,7 +373,7 @@ fn raw_backspace_follows_the_host_tty_erase_character() {
         ),
         (None, ClientKeyCode::Char('h'), ClientKeyCode::Char('h')),
     ] {
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
         state.set_host_erase_byte(erase);
         state.set_snapshot(Box::new(snapshot()));
         state.set_pane_surface(surface());
@@ -397,7 +397,7 @@ fn raw_backspace_follows_the_host_tty_erase_character() {
 fn shifted_punctuation_release_after_shift_reaches_the_pane() {
     use crate::protocol::{ClientKeyCode, ClientKeyKind};
 
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_host_reports_key_releases(true);
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -426,7 +426,7 @@ fn held_key_reports_keep_their_release_around_ime_commits_and_focus_loss() {
     use crate::protocol::{ClientKeyCode, ClientKeyKind};
 
     let new_state = || {
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
         state.set_host_reports_key_releases(true);
         state.set_snapshot(Box::new(snapshot()));
         state.set_pane_surface(surface());
@@ -464,7 +464,7 @@ fn held_key_reports_keep_their_release_around_ime_commits_and_focus_loss() {
 fn non_latin_ctrl_chord_release_matches_after_ctrl_is_let_go() {
     use crate::protocol::{ClientKeyCode, ClientKeyKind};
 
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_host_reports_key_releases(true);
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -494,7 +494,7 @@ fn non_latin_ctrl_chord_release_matches_after_ctrl_is_let_go() {
 fn unmatched_release_never_takes_a_held_key_while_herdr_owns_another_press() {
     use crate::protocol::{ClientKeyCode, ClientKeyKind};
 
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_host_reports_key_releases(true);
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -514,7 +514,7 @@ fn unmatched_release_never_takes_a_held_key_while_herdr_owns_another_press() {
 
 #[test]
 fn physical_release_uses_the_leased_press_code_with_current_modifiers() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let press = crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
@@ -558,7 +558,7 @@ fn physical_release_uses_the_leased_press_code_with_current_modifiers() {
 
 #[test]
 fn highlighted_search_match_copies_after_in_flight_repeat() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
     pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
@@ -653,7 +653,7 @@ fn highlighted_search_match_copies_after_in_flight_repeat() {
 
 #[test]
 fn pixel_host_reports_use_cells_without_target_pixel_mode_and_release_outside() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
     pane_surface.panes[0].mouse_reporting = true;
@@ -700,7 +700,7 @@ fn pixel_host_reports_use_cells_without_target_pixel_mode_and_release_outside() 
 
 #[test]
 fn shell_targets_unconsumed_input_and_keeps_prefix_local() {
-    let config = ClientShellConfig::from_config(&Config::default());
+    let config = ClientShellConfig::from_config(&test_config());
     let mut state = ClientShellState::new(config);
     state.set_snapshot(Box::new(snapshot()));
 
@@ -755,7 +755,7 @@ fn shell_targets_unconsumed_input_and_keeps_prefix_local() {
 
 #[test]
 fn pane_key_release_keeps_the_press_target() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
 
     let press = state.handle_input_bytes(b"\x1b[99;5u");
@@ -786,7 +786,7 @@ fn pane_key_release_keeps_the_press_target() {
 
 #[test]
 fn help_overlay_uses_live_keymap_and_owns_filter_state() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let mut open = ClientShellInput::default();
@@ -838,7 +838,7 @@ fn help_overlay_uses_live_keymap_and_owns_filter_state() {
 fn rename_pane_empty_value_is_preserved_as_a_clear_request() {
     let mut snapshot = snapshot();
     snapshot.panes[0].label = Some("build".into());
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot));
     let mut open = ClientShellInput::default();
     state.record_binding(
@@ -865,7 +865,7 @@ fn styled_client_composition_preserves_pane_hyperlinks() {
     ] {
         for draw_host_cursor in [false, true] {
             let mut state =
-                ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+                ClientShellState::new(ClientShellConfig::from_config(&test_config()));
             state.set_snapshot(Box::new(snapshot()));
             let mut pane_surface = surface();
             let linked = Buffer::with_lines(["LIVE", "PANE"]);
@@ -936,7 +936,7 @@ fn styled_client_composition_preserves_pane_hyperlinks() {
 
 #[test]
 fn every_configured_prefix_enters_prefix_mode() {
-    let mut config = Config::default();
+    let mut config = test_config();
     config.keys.prefix =
         crate::config::BindingConfig::Many(vec!["ctrl+space".to_owned(), "ctrl+s".to_owned()]);
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
@@ -979,7 +979,7 @@ fn pane_text_commits(outcome: &ClientShellInput) -> Vec<String> {
 /// mode. Plain text can still arrive: Tern ignores report-all, IMEs commit
 /// text, and Ghostty `text:` binds type their bytes (#5255).
 fn report_all_kitty_host_state(snapshot: crate::protocol::ClientShellSnapshot) -> ClientShellState {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_host_reports_key_releases(true);
     state.set_host_reports_all_keys(true);
     state.set_snapshot(Box::new(snapshot));

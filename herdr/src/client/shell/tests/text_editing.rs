@@ -2,7 +2,7 @@ use super::*;
 use crate::input::{KeybindAction, KeybindMatch, TerminalKey, TextCommit};
 
 fn shell(field: usize) -> ClientShellState {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut frame = surface();
     frame.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {

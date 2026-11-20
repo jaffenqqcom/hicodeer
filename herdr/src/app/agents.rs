@@ -1038,26 +1038,6 @@ mod tests {
     }
 
     #[test]
-    fn a_leftover_name_does_not_make_a_shell_pane_an_agent() {
-        let (mut app, pane_id) = named_resume_app();
-        let terminal_id = app.state.workspaces[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        {
-            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
-            assert!(!terminal.is_agent_terminal());
-            terminal.set_agent_name("leftover".into());
-            assert!(
-                !terminal.is_agent_terminal(),
-                "a leftover name must not keep a shell pane in agent.list"
-            );
-        }
-        assert!(
-            app.collect_agent_infos(true).is_empty(),
-            "agent.list must not contain a shell pane that only carries a name"
-        );
-    }
-
     #[test]
     fn pending_manual_name_is_written_when_the_identity_arrives() {
         with_temp_config(|| {

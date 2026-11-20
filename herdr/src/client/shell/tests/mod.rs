@@ -7,6 +7,8 @@ use crate::protocol::{
 use crossterm::event::MouseEvent;
 mod text_editing;
 
+pub(super) use crate::client::shell::test_config;
+
 pub(super) fn snapshot() -> ClientShellSnapshot {
     ClientShellSnapshot {
         boot_id: "boot-1".into(),

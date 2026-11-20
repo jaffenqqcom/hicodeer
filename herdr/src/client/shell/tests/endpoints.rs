@@ -59,7 +59,7 @@ fn current_workspace_view() -> crate::api::schema::AgentViewSetParams {
 }
 
 fn state_with_remote() -> (ClientShellState, ClientEndpointId) {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let profile = remote_profile();
     let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
     state.set_endpoint_catalog(&[profile]);
@@ -723,6 +723,9 @@ fn live_catalog_active_removal_does_not_retain_remote_projection_or_input() {
     assert!(state.overlay.is_none());
     assert_eq!(state.mode, ClientShellMode::Terminal);
     assert!(state.endpoint_has_snapshot(&ClientEndpointId::Local));
+    // The embedded client stays silent until it has painted one content frame,
+    // so mark this session as already live before composing the placeholder.
+    state.has_composed_content_frame = true;
     let frame = state.compose(100, 30).unwrap();
     let buffer = frame.to_ratatui_buffer().unwrap();
     let text = buffer
@@ -736,7 +739,7 @@ fn live_catalog_active_removal_does_not_retain_remote_projection_or_input() {
 #[test]
 fn machine_navigation_does_not_require_a_local_snapshot_or_surface() {
     for (cols, rows) in [(100, 28), (36, 18)] {
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
         let profile = remote_profile();
         let remote = ClientEndpointId::Ssh(profile.id.clone());
         state.set_endpoint_catalog(&[profile]);
@@ -745,6 +748,9 @@ fn machine_navigation_does_not_require_a_local_snapshot_or_surface() {
         state.set_endpoint_snapshot(&remote, Box::new(snapshot()));
         assert!(state.snapshot.is_none());
         assert!(state.pane_surface.is_none());
+        // The embedded client stays silent until it has painted one content
+        // frame, so mark this session as already live before composing.
+        state.has_composed_content_frame = true;
         let frame = state
             .compose(cols, rows)
             .expect("connection chrome without Local");
@@ -753,7 +759,18 @@ fn machine_navigation_does_not_require_a_local_snapshot_or_surface() {
             .machines
             .iter()
             .find(|hit| hit.endpoint_id.is_local())
-            .unwrap()
+            .unwrap_or_else(|| {
+                panic!(
+                    "no Local machine row at {cols}x{rows}; machines={:?}, mobile_targets={}",
+                    state
+                        .hits
+                        .machines
+                        .iter()
+                        .map(|hit| format!("{:?}", hit.endpoint_id))
+                        .collect::<Vec<_>>(),
+                    state.hits.mobile_targets.len()
+                )
+            })
             .rect;
         let buffer = frame.to_ratatui_buffer().unwrap();
         let local_row = (local.x..local.right())
@@ -1262,7 +1279,7 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
     use crate::api::schema::AgentStatus;
     use crate::config::{AgentSidebarToken, StatusIndicatorStyle};
 
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.status_indicators = StatusIndicatorStyle::Symbols;
     config.ui.sidebar.agents.rows = vec![vec![
         AgentSidebarToken::StateIcon,
@@ -1326,7 +1343,7 @@ fn current_workspace_agent_view_excludes_same_workspace_id_on_other_machine() {
     use crate::api::schema::AgentStatus;
     use crate::config::AgentSidebarToken;
 
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.sidebar.agents.rows =
         vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
@@ -1392,7 +1409,7 @@ fn current_workspace_or_blocked_keeps_foreign_attention_only() {
     };
     use crate::config::AgentSidebarToken;
 
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.sidebar.agents.rows =
         vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
@@ -1462,7 +1479,7 @@ fn selected_default_view_ignores_inactive_endpoint_projection() {
     };
     use crate::config::AgentSidebarToken;
 
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.sidebar.agents.rows =
         vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
@@ -1513,7 +1530,7 @@ fn selected_default_view_ignores_inactive_endpoint_projection() {
 
 #[test]
 fn newer_snapshot_does_not_reuse_stale_agent_view_projection() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let mut local = snapshot();
     local.agent_view_label = Some("current space".into());
     state.set_snapshot(Box::new(local.clone()));
@@ -1559,7 +1576,7 @@ fn legacy_custom_views_keep_v1_per_endpoint_projection() {
     use crate::api::schema::AgentStatus;
     use crate::config::AgentSidebarToken;
 
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.sidebar.agents.rows =
         vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
@@ -1604,7 +1621,7 @@ fn selected_custom_sort_orders_rendering_and_indexed_navigation() {
     };
     use crate::config::AgentSidebarToken;
 
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
     config.ui.sidebar.agents.rows =
         vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
@@ -1670,7 +1687,7 @@ fn selected_position_sort_uses_public_tab_and_pane_numbers() {
         AgentViewSortOrder,
     };
 
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let mut selected = snapshot();
     selected.agent_view_label = Some("positions".into());
 
@@ -1735,7 +1752,7 @@ fn aggregate_priority_uses_client_observed_recency_across_machines() {
     use crate::api::schema::AgentStatus;
     use crate::config::AgentSidebarToken;
 
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
     config.ui.sidebar.agents.rows =
         vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
@@ -2362,7 +2379,7 @@ fn navigator_uses_machine_parents_only_for_federated_clients() {
         assert_eq!(prefix, expected, "{target:?}");
     }
 
-    let mut local = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut local = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     local.set_snapshot(Box::new(snapshot()));
     local.set_pane_surface(surface());
     let frame = local.compose(100, 28).expect("local-only sidebar");

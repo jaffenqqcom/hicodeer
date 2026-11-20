@@ -545,7 +545,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock after epoch")
             .as_nanos();
-        std::path::PathBuf::from("/var/tmp").join(format!(
+        // Respect TMPDIR: /var/tmp does not exist on this device.
+        std::env::temp_dir().join(format!(
             "hicodeer-tab-status-{name}-{}-{stamp}",
             std::process::id()
         ))

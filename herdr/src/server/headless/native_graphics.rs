@@ -42,6 +42,18 @@ impl Pending {
     }
 }
 
+#[cfg(not(test))]
+fn default_graphics_store() -> FileStore {
+    FileStore::default()
+}
+
+/// Tests exercise real file delivery, and this device mounts /tmp read-only,
+/// so the store they write through has to live under TMPDIR.
+#[cfg(test)]
+fn default_graphics_store() -> FileStore {
+    FileStore::new(std::env::temp_dir())
+}
+
 pub(super) struct NativeGraphics {
     store: FileStore,
     pending: HashMap<u64, Pending>,
@@ -55,7 +67,7 @@ pub(super) struct NativeGraphics {
 impl Default for NativeGraphics {
     fn default() -> Self {
         Self {
-            store: FileStore::default(),
+            store: default_graphics_store(),
             pending: HashMap::new(),
             disabled: HashSet::new(),
             next_transfer: 1,

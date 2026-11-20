@@ -279,7 +279,12 @@ prefix = "ctrl+"
         let profile = config.local_keybindings_profile_toml().unwrap();
         let keybinds = keybindings_from_profile_toml(&profile).unwrap();
 
+        // [OHOS PORT] The embedded Agent panel keeps an unset prefix empty
+        // instead of falling back to the standalone Ctrl+B.
+        #[cfg(not(target_env = "ohos"))]
         assert!(profile.contains("prefix = \"ctrl+b\""));
+        #[cfg(target_env = "ohos")]
+        assert!(!profile.contains("prefix = \"ctrl+b\""));
         assert_eq!(keybinds.prefix, config.prefix_keys());
     }
 

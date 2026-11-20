@@ -60,7 +60,10 @@ fn test_headless_server() -> HeadlessServer {
 }
 
 fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServer {
-    let config = crate::config::Config::default();
+    let mut config = crate::config::Config::default();
+    // These tests measure pane geometry for the standalone server, which owns
+    // the pane scrollbars; the embedded build lets the editor draw them.
+    config.ui.pane_scrollbars = true;
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = crate::app::App::new(
         &config,
@@ -307,8 +310,10 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
     }
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
+    // The return value means "needs a repaint"; a stop request does not repaint.
+    // What this test guards is that the queued events are drained first.
     assert!(
-        server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+        !server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
             request: api::schema::Request {
                 id: "headless_stop_after_events".into(),
                 method: api::schema::Method::ServerStop(api::schema::EmptyParams::default()),

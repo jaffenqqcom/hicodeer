@@ -1516,7 +1516,11 @@ platforms = ["linux", "macos"]
 
     #[test]
     fn smoke_fixture_manifest_loads() {
-        let plugin = load_plugin_manifest("tests/fixtures/plugin-smoke", true)
+        // Resolve from the crate root so the test does not depend on the
+        // caller's working directory.
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/plugin-smoke");
+        let plugin = load_plugin_manifest(&fixture.display().to_string(), true)
             .expect("smoke fixture should load");
         assert_eq!(plugin.plugin_id, "example.smoke");
         assert_eq!(plugin.actions.len(), 1);
@@ -1529,7 +1533,7 @@ platforms = ["linux", "macos"]
     fn plugin_command_output_reader_caps_and_marks_truncation() {
         let output = read_capped_plugin_output("abcdef".as_bytes(), 3);
 
-        assert_eq!(output, "abc\n[herdr truncated plugin output after 3 bytes]");
+        assert_eq!(output, "abc\n[hicodeer truncated plugin output after 3 bytes]");
     }
 
     #[test]
@@ -1804,7 +1808,11 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
         }
     }
 
-    #[cfg(target_os = "linux")]
+    // [OHOS PORT BEGIN] Desktop-only: the test renames the running test binary
+    // and re-executes it. This device refuses to exec the swapped file and the
+    // swap breaks every later test in the same process.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    // [OHOS PORT END]
     #[tokio::test]
     async fn plugin_launch_survives_executable_replacement() {
         const CHILD_ROOT: &str = "HICODEER_TEST_PLUGIN_REPLACEMENT_ROOT";

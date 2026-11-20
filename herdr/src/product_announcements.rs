@@ -237,8 +237,8 @@ mod tests {
     use super::*;
 
     fn env_lock() -> &'static std::sync::Mutex<()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        // Share one lock with every other test that rewrites process env.
+        crate::config::test_config_env_lock()
     }
 
     fn temp_path(name: &str) -> PathBuf {

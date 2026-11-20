@@ -1298,6 +1298,9 @@ fn snapshotted_source_survives_producer_unlink_and_native_ack() {
                                 | libc::EXDEV
                                 | libc::EINVAL
                                 | libc::ENOSYS
+                                // The OHOS sandbox rejects FICLONERANGE with
+                                // EACCES instead of the usual ENOTTY.
+                                | libc::EACCES
                         )
                     ),
                 "unexpected snapshot failure: {error}"

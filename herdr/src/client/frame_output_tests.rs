@@ -101,8 +101,9 @@ mod local_files {
         fn new() -> Self {
             static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let path = PathBuf::from(format!(
-                "/var/tmp/hicodeer-output-test-{}-{id}",
+            // Respect TMPDIR: /var/tmp does not exist on this device.
+            let path = std::env::temp_dir().join(format!(
+                "hicodeer-output-test-{}-{id}",
                 std::process::id()
             ));
             std::fs::create_dir(&path).unwrap();

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn clipboard_image_targets_the_focused_pane_or_active_popup() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
 
     assert_eq!(
@@ -32,7 +32,7 @@ fn clipboard_image_targets_the_focused_pane_or_active_popup() {
 
 #[test]
 fn modal_paste_target_requires_a_focused_editable_client_field() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     assert!(!state.modal_paste_target_active());
 
     state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
@@ -133,7 +133,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
 
 #[test]
 fn non_overlay_ctrl_v_is_forwarded_to_the_focused_pane() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let key = crate::input::TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
 
@@ -149,7 +149,7 @@ fn non_overlay_ctrl_v_is_forwarded_to_the_focused_pane() {
 
 #[test]
 fn desktop_composition_keeps_shell_outside_origin_relative_surface() {
-    let config = ClientShellConfig::from_config(&Config::default());
+    let config = ClientShellConfig::from_config(&test_config());
     let mut state = ClientShellState::new(config);
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -178,7 +178,7 @@ fn desktop_composition_keeps_shell_outside_origin_relative_surface() {
 
 #[test]
 fn client_composes_popup_terminal_content_inside_client_owned_chrome() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface_with_popup());
 
@@ -208,7 +208,7 @@ fn client_composes_popup_terminal_content_inside_client_owned_chrome() {
 
 #[test]
 fn popup_owns_keys_text_paste_and_mouse_before_shell_controls() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface_with_popup());
     state.compose(106, 20).expect("popup frame");
@@ -263,7 +263,7 @@ fn popup_owns_keys_text_paste_and_mouse_before_shell_controls() {
 
 #[test]
 fn popup_transition_dismisses_client_overlays_and_restores_pane_input_after_close() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.record_binding(
@@ -291,7 +291,7 @@ fn popup_transition_dismisses_client_overlays_and_restores_pane_input_after_clos
 
 #[test]
 fn popup_target_survives_surface_invalidation_during_resize() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface_with_popup());
     state.invalidate_pane_surface();
@@ -313,7 +313,7 @@ fn popup_target_survives_surface_invalidation_during_resize() {
 
 #[test]
 fn popup_close_reprocesses_held_key_repeats_into_the_focused_pane() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface_with_popup());
 
@@ -339,7 +339,7 @@ fn popup_close_reprocesses_held_key_repeats_into_the_focused_pane() {
 
 #[test]
 fn pending_popup_suppresses_held_pane_repeats_but_preserves_release() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let key = crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty());
@@ -374,7 +374,7 @@ fn pending_popup_suppresses_held_pane_repeats_but_preserves_release() {
 
 #[test]
 fn prefix_input_source_changes_are_client_owned_and_focus_safe() {
-    let mut config = ClientShellConfig::from_config(&Config::default());
+    let mut config = ClientShellConfig::from_config(&test_config());
     config.switch_ascii_input_source_in_prefix = true;
     let mut state = ClientShellState::new(config);
     state.set_snapshot(Box::new(snapshot()));
@@ -407,7 +407,7 @@ fn prefix_input_source_changes_are_client_owned_and_focus_safe() {
 
 #[test]
 fn focus_loss_releases_held_pane_keys_before_reporting_focus() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let key = crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
@@ -445,7 +445,7 @@ fn focus_loss_releases_held_pane_keys_before_reporting_focus() {
 
 #[test]
 fn focus_loss_releases_active_pane_mouse_before_reporting_focus() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
     pane_surface.panes[0].mouse_reporting = true;
@@ -487,7 +487,7 @@ fn focus_loss_releases_active_pane_mouse_before_reporting_focus() {
 
 #[test]
 fn focus_gain_reports_focus_and_honors_redraw_policy() {
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.redraw_on_focus_gained = false;
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     let gained = state.handle_raw_events(vec![RawInputEvent::OuterFocusGained]);
@@ -501,7 +501,7 @@ fn focus_gain_reports_focus_and_honors_redraw_policy() {
 
 #[test]
 fn pane_mouse_release_survives_popup_open_transition() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
     pane_surface.panes[0].mouse_reporting = true;
@@ -547,7 +547,7 @@ fn pane_mouse_release_survives_popup_open_transition() {
 
 #[test]
 fn popup_command_blocks_underlying_input_until_surface_or_error() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let binding = crate::config::CustomCommandKeybind {
         bindings: crate::config::ActionKeybinds::prefix("t"),
         label: "prefix+t".into(),
@@ -633,7 +633,7 @@ fn popup_command_blocks_underlying_input_until_surface_or_error() {
 
 #[test]
 fn shell_refuses_mismatched_projection_and_clears_stale_hits_in_either_order() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.compose(106, 20).expect("initial frame");
@@ -645,7 +645,7 @@ fn shell_refuses_mismatched_projection_and_clears_stale_hits_in_either_order() {
     assert!(state.hits.panes.is_empty());
     assert!(state.compose(106, 20).is_none());
 
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.compose(106, 20).expect("initial frame");
@@ -658,7 +658,7 @@ fn shell_refuses_mismatched_projection_and_clears_stale_hits_in_either_order() {
 
 #[test]
 fn shell_ignores_older_same_boot_snapshot_and_surface() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let mut current_snapshot = snapshot();
     current_snapshot.revision = 2;
     current_snapshot.workspaces[0].label = "current".into();
@@ -726,7 +726,7 @@ fn shell_ignores_older_same_boot_snapshot_and_surface() {
 
 #[test]
 fn resize_invalidation_drops_stale_hits_but_preserves_gesture_release() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
     pane_surface.panes[0].mouse_reporting = true;
@@ -780,7 +780,7 @@ fn resize_invalidation_drops_stale_hits_but_preserves_gesture_release() {
 
 #[test]
 fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
     pane_surface.panes[0].scrollbar_rect = Some(SurfaceRect {
@@ -885,7 +885,7 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
 
 #[test]
 fn clear_pane_binding_targets_the_focused_endpoint_pane() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let mut input = ClientShellInput::default();
@@ -904,7 +904,7 @@ fn clear_pane_binding_targets_the_focused_endpoint_pane() {
 
 #[test]
 fn edit_scrollback_binding_targets_the_focused_endpoint_pane() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let mut input = ClientShellInput::default();
@@ -954,7 +954,7 @@ fn sidebar_scrollbars_use_proportional_shared_geometry_and_drag() {
             focused: false,
         });
     }
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
     state.compose(106, 20).expect("overflowing sidebars");
@@ -1007,7 +1007,7 @@ fn sidebar_scrollbars_use_proportional_shared_geometry_and_drag() {
 
 #[test]
 fn popup_preemption_cancels_settings_theme_preview() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.open_settings_overlay();
@@ -1030,7 +1030,7 @@ fn popup_preemption_cancels_settings_theme_preview() {
 
 #[test]
 fn pending_scroll_target_does_not_relabel_an_older_surface() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
     pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
@@ -1055,7 +1055,7 @@ fn pending_scroll_target_does_not_relabel_an_older_surface() {
 
 #[test]
 fn retained_surface_patch_updates_only_pane_cells_without_recomposing_chrome() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let pane_surface = surface();
     let mut updated_pane = pane_surface.panes[0].clone();
@@ -1115,7 +1115,7 @@ fn retained_surface_patch_updates_only_pane_cells_without_recomposing_chrome() {
 #[test]
 fn retained_surface_patch_recomposes_client_owned_mode_and_diagnostic_rows() {
     for diagnostic in [false, true] {
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
         state.set_snapshot(Box::new(snapshot()));
         let pane_surface = surface();
         let mut updated_pane = pane_surface.panes[0].clone();
@@ -1146,7 +1146,7 @@ fn retained_surface_patch_recomposes_client_owned_mode_and_diagnostic_rows() {
 
 #[test]
 fn retained_surface_patch_updates_scrollbar_cells_and_pane_hit_metadata() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
     pane_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
@@ -1226,7 +1226,7 @@ fn retained_surface_patch_updates_scrollbar_cells_and_pane_hit_metadata() {
 
 #[test]
 fn retained_surface_patch_rejects_stale_base_without_mutating_surface() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let before = state.pane_surface.clone();

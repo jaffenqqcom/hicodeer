@@ -1491,7 +1491,7 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 13);
+    assert_eq!(codex.expected_version, CODEX_INTEGRATION_VERSION);
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -2826,6 +2826,9 @@ fn opencode_v2_install_status_and_uninstall_preserve_cli_preferences() {
     let _ = fs::remove_dir_all(base);
 }
 
+// [OHOS PORT] The sandbox refuses to create hard links, so the multi-link case
+// cannot be constructed on this device.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn opencode_hard_link_rejection_precedes_install_and_uninstall_asset_changes() {
     let _lock = integration_env_lock();
@@ -2858,6 +2861,9 @@ fn opencode_hard_link_rejection_precedes_install_and_uninstall_asset_changes() {
     fs::remove_dir_all(base).unwrap();
 }
 
+// [OHOS PORT] The sandbox refuses to create hard links, so the multi-link case
+// cannot be constructed on this device.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn opencode_json_config_validation_precedes_asset_changes() {
     let _lock = integration_env_lock();
@@ -4265,7 +4271,9 @@ fn install_qwen_writes_state_hook_and_preserves_settings() {
     assert!(settings.get("permissions").is_some());
     let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
     assert!(hook_asset.contains("HICODEER_INTEGRATION_ID=qwen"));
-    assert!(hook_asset.contains("HICODEER_INTEGRATION_VERSION=7"));
+    assert!(hook_asset.contains(&format!(
+        "HICODEER_INTEGRATION_VERSION={QWEN_INTEGRATION_VERSION}"
+    )));
     assert!(hook_asset.contains("hicodeer:qwen"));
 
     install_qwen().unwrap();
@@ -6147,6 +6155,9 @@ fn uninstall_atomcode_drops_the_hooks_object_it_created() {
     let _ = fs::remove_dir_all(base);
 }
 
+// [OHOS PORT] This platform deliberately ignores XDG on the app sandbox and
+// resolves DevEco from HOME instead; the OHOS behaviour has its own test.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn deveco_dir_follows_a_custom_xdg_home() {
     let _lock = integration_env_lock();
@@ -6326,8 +6337,16 @@ fn minimax_install_writes_enabled_hook_document() {
 
     let script = installed.hook_path.display().to_string();
     for (event, _) in MINIMAX_HOOK_EVENTS {
-        let handler = &document["hooks"][event][0]["hooks"][0];
-        assert_eq!(handler["name"], json!(MINIMAX_HOOK_HANDLER_NAME));
+        // A user Hook may already occupy the first group, so look the reporter
+        // up instead of assuming it is first.
+        let handler = document["hooks"][event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+            .flatten()
+            .find(|handler| handler["name"] == json!(MINIMAX_HOOK_HANDLER_NAME))
+            .unwrap_or_else(|| panic!("{event} should carry the reporter handler"));
         #[cfg(not(windows))]
         assert!(
             handler["command"]

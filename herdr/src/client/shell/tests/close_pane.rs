@@ -11,7 +11,7 @@ fn close_state(confirm: bool, tab_count: usize) -> ClientShellState {
         tab.focused = false;
         projected.tabs.push(tab);
     }
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.config.confirm_close = confirm;
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());

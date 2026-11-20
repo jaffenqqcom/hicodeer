@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn mobile_layout_reserves_only_client_header() {
-    let config = ClientShellConfig::from_config(&Config::default());
+    let config = ClientShellConfig::from_config(&test_config());
     let state = ClientShellState::new(config);
     let layout = state.layout(44, 20);
     assert_eq!(layout.mobile_header, Rect::new(0, 0, 44, 2));
@@ -15,7 +15,7 @@ fn mobile_layout_reserves_only_client_header() {
 
 #[test]
 fn mobile_switcher_can_activate_an_online_saved_machine() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let profile = crate::client::endpoint::SavedSshEndpoint {
         id: crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
         label: "Build".into(),
@@ -108,7 +108,7 @@ fn mobile_switcher_can_activate_an_online_saved_machine() {
 
 #[test]
 fn mobile_shell_controls_remain_clickable_when_pane_mouse_capture_is_disabled() {
-    let mut config = ClientShellConfig::from_config(&Config::default());
+    let mut config = ClientShellConfig::from_config(&test_config());
     config.mouse_capture = false;
     let mut state = ClientShellState::new(config);
     state.set_snapshot(Box::new(snapshot()));
@@ -130,7 +130,7 @@ fn mobile_shell_controls_remain_clickable_when_pane_mouse_capture_is_disabled() 
 
 #[test]
 fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let mut projected = snapshot();
     projected.agents.push(ClientShellAgent {
         pane_id: "pane_1".into(),
@@ -291,7 +291,7 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
 
 #[test]
 fn mobile_background_workspace_uses_its_own_active_tab_status() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let mut projected = snapshot();
     projected.tabs.push(ClientShellTab {
         tab_id: "tab_7".into(),
@@ -351,7 +351,7 @@ fn mobile_background_workspace_uses_its_own_active_tab_status() {
 
 #[test]
 fn mobile_switcher_create_and_menu_rows_reuse_client_actions() {
-    let mut config = ClientShellConfig::from_config(&Config::default());
+    let mut config = ClientShellConfig::from_config(&test_config());
     config.prompt_new_workspace_name = true;
     config.prompt_new_tab_name = true;
     let mut state = ClientShellState::new(config);
@@ -437,7 +437,7 @@ fn mobile_switcher_create_and_menu_rows_reuse_client_actions() {
 
 #[test]
 fn mobile_menu_keeps_inert_notes_open_and_cancel_without_workspace_in_navigate() {
-    let mut source_config = Config::default();
+    let mut source_config = test_config();
     source_config.ui.prompt_new_workspace_name = true;
     let config = ClientShellConfig::from_config(&source_config);
     let mut projected = snapshot();
@@ -517,7 +517,7 @@ fn mobile_previous_workspace_action_wraps_across_expanded_entries() {
             agent_status: AgentStatus::Idle,
         });
     }
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
     state.compose(44, 20).expect("mobile layout");
@@ -539,7 +539,7 @@ fn mobile_previous_workspace_action_wraps_across_expanded_entries() {
 
 #[test]
 fn mobile_switcher_scroll_close_and_width_transition_clear_mobile_hits() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let mut projected = snapshot();
     for index in 2..=8 {
         projected.workspaces.push(ClientShellWorkspace {

@@ -678,7 +678,8 @@ fn observe_foreground_agent(
         ForegroundShellAgentAction::ReportProcessExit
             if observation.agent.is_none()
                 && observation.foreground_is_pane_shell
-                && agent_job_status != AgentJobStatus::ExitedInBackground =>
+                && agent_job_status != AgentJobStatus::ExitedInBackground
+                && agent_job.process_alive(|pid| processes.start_token(pid)) =>
         {
             ForegroundShellAgentAction::ObserveProbe
         }
@@ -5330,7 +5331,7 @@ mod tests {
             "double quotes corrupt the powershell.exe command-line round-trip: {script}"
         );
         let invoke_original = script
-            .find("@(& $global:__HerdrOriginalPrompt)")
+            .find("@(& $global:__HiCodeerOriginalPrompt)")
             .expect("wrapper must invoke the original prompt");
         let cwd_lookup = script
             .find("$loc =")

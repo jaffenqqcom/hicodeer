@@ -305,7 +305,7 @@ impl HerdrPath {
     }
 
     fn fresh_state(host: HostProfile, host_reports_all: bool) -> ClientShellState {
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
         // Mirrors the client: Herdr pushes Kitty event types on Kitty hosts.
         state.set_host_reports_key_releases(host == HostProfile::Kitty);
         state.set_host_reports_all_keys(host_reports_all);

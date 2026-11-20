@@ -281,3 +281,21 @@ fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
 
 #[cfg(test)]
 mod tests;
+
+/// Config for client-shell tests. These tests drive the standalone desktop TUI,
+/// so the platform-dependent defaults are set back to their standalone values
+/// instead of being taken from `Config::default()`: the embedded Agent panel
+/// drops the prefix key and hides the sidebar that these tests navigate.
+#[cfg(test)]
+pub(crate) fn test_config() -> crate::config::Config {
+    let mut config = crate::config::Config::default();
+    config.keys.prefix = crate::config::BindingConfig::one("ctrl+b");
+    config.ui.sidebar_start_collapsed = false;
+    config.ui.sidebar_collapsed_mode = crate::config::SidebarCollapsedModeConfig::Compact;
+    config.ui.mobile_width_threshold = crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD;
+    config.ui.show_tab_bar = true;
+    config.ui.pane_scrollbars = true;
+    config.ui.context_menu_owner = crate::config::ContextMenuOwnerConfig::Hicodeer;
+    config.ui.prompt_new_tab_name = true;
+    config
+}

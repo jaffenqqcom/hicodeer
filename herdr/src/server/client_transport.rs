@@ -1443,7 +1443,9 @@ mod tests {
         #[cfg(unix)]
         {
             let _ = name;
-            PathBuf::from("/tmp").join(filename)
+            // Respect TMPDIR: this device mounts /tmp read-only, so binding a
+            // socket there fails. On hosts where TMPDIR is unset this is /tmp.
+            std::env::temp_dir().join(filename)
         }
         #[cfg(windows)]
         {

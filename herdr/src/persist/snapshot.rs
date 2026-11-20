@@ -364,14 +364,11 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
-        // A resumable session belongs to a pane that currently holds an agent.
-        // Restore launches whatever session is written here, so writing one for
-        // a pane whose agent already exited brings that agent back on restart.
-        // The identity check and the value live in one place,
-        // `current_session_identity_for_persistence`.
+        // Restore relaunches whatever session is written here. A pane whose
+        // agent exited has already dropped that record at exit time, so what
+        // remains is the session this pane should resume.
         let agent_session = terminal.and_then(|terminal| {
-            let (source, agent, kind, value) =
-                terminal.current_session_identity_for_persistence()?;
+            let (source, agent, kind, value) = terminal.recorded_session_identity()?;
             Some(PaneAgentSessionSnapshot {
                 source,
                 agent,

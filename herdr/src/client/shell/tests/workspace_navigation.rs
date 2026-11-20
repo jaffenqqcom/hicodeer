@@ -68,7 +68,18 @@ fn workspace_rect(state: &ClientShellState, endpoint: &ClientEndpointId, workspa
                 .then_some(*rect)
             })
         })
-        .expect("visible workspace")
+        .unwrap_or_else(|| {
+            panic!(
+                "workspace {workspace} is not visible; rendered={:?}, mobile_targets={}",
+                state
+                    .hits
+                    .workspaces
+                    .iter()
+                    .map(|hit| hit.workspace_id.as_str())
+                    .collect::<Vec<_>>(),
+                state.hits.mobile_targets.len()
+            )
+        })
 }
 
 #[test]
@@ -77,7 +88,7 @@ fn local_navigation_highlight_stays_visible_with_terminal_theme() {
 
     for compact in [false, true] {
         for selection_bg in [Color::Reset, Color::Rgb(70, 63, 93)] {
-            let mut config = ClientShellConfig::from_config(&Config::default());
+            let mut config = ClientShellConfig::from_config(&test_config());
             config.palette = Palette::terminal();
             config.palette.selection_bg = selection_bg;
             let expected_bg = if selection_bg == Color::Reset {
@@ -384,6 +395,9 @@ fn workspace_navigation_respects_each_machines_visible_worktree_groups() {
         let (mut state, remote) = navigation_state(grouped_workspaces());
         state.toggle_collapsed_group(&remote, "repo".into());
         state.sidebar_collapsed = compact;
+        // The embedded client stays silent until it has painted one content
+        // frame, so draw that frame before simulating a lost pane surface.
+        state.compose(cols, 28).unwrap();
         if unavailable {
             state.pane_surface = None;
         }
@@ -482,6 +496,9 @@ fn foreign_preview_survives_local_updates_and_rejects_stale_enter() {
 fn navigation_uses_displayed_group_order_when_local_is_unavailable() {
     for cols in [100, 44] {
         let (mut state, remote) = navigation_state(grouped_workspaces());
+        // The embedded client stays silent until it has painted one content
+        // frame; draw that frame before the endpoint drops.
+        state.compose(cols, 18).unwrap();
         state.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Reconnecting);
         state.select_unavailable_local();
         state.sidebar_collapsed = true;
@@ -586,7 +603,7 @@ fn aggregate_navigation_reveals_overflow_and_preserves_order() {
 }
 
 fn local_navigation_state(compact: bool) -> ClientShellState {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.config.palette = Palette::terminal();
     state.sidebar_collapsed = compact;
     state.set_snapshot(Box::new(workspaces(3)));
@@ -868,7 +885,7 @@ fn directional_pane_focus_releases_an_accepted_workspace_highlight() {
 
 #[test]
 fn direct_agent_focus_repaints_when_releasing_a_workspace_highlight() {
-    let mut config = Config::default();
+    let mut config = test_config();
     config.keys.focus_agent = crate::config::BindingConfig::one("ctrl+alt+1");
     let mut projected = workspaces(3);
     projected.agents.push(agent("agent", AgentStatus::Idle, 1));
@@ -988,7 +1005,8 @@ fn kitty_ctrl_bracket_leaves_navigation_like_esc() {
 
 #[test]
 fn configured_ctrl_bracket_navigate_binding_wins_over_cancel() {
-    let config: Config = toml::from_str("[keys]\nnavigate_workspace_down = \"ctrl+[\"\n").unwrap();
+    let mut config = test_config();
+    config.keys.navigate_workspace_down = crate::config::BindingConfig::one("ctrl+[");
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_snapshot(Box::new(workspaces(3)));
     state.set_pane_surface(surface());

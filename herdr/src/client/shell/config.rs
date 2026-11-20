@@ -479,13 +479,14 @@ impl ClientShellConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::client::shell::test_config;
     use crossterm::event::{KeyCode, KeyModifiers};
 
     use super::*;
 
     #[test]
     fn live_reload_applies_client_owned_sections() {
-        let mut shell = ClientShellConfig::from_config(&Config::default());
+        let mut shell = ClientShellConfig::from_config(&test_config());
         let mut next = Config::default();
         next.ui.sidebar_width = 31;
         next.ui.tab_bar_position = TabBarPositionConfig::Bottom;
@@ -545,7 +546,7 @@ mod tests {
         )
         .expect("persist endpoint chrome");
         let config =
-            ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
+            ClientShellConfig::from_config(&test_config()).with_preferences_path(path.clone());
         let initial = config.initial_surface_size(100, 30);
         let state = ClientShellState::new(config);
         assert_eq!(initial, state.surface_size(100, 30));

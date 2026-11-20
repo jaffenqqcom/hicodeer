@@ -933,7 +933,7 @@ name = "catppucin"
 delivery = "system"
 
 [ui.toast]
-delivery = "herdr"
+delivery = "hicodeer"
 "#,
         )
         .unwrap();

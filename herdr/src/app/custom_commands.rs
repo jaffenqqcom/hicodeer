@@ -732,8 +732,9 @@ mod tests {
     #[test]
     fn shell_command_invocation_executes_endpoint_owned_definition() {
         let mut app = test_app();
-        let path = std::path::PathBuf::from(format!(
-            "/var/tmp/hicodeer-command-invoke-{}-{}",
+        // Respect TMPDIR: /var/tmp does not exist on this device.
+        let path = std::env::temp_dir().join(format!(
+            "hicodeer-command-invoke-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -758,11 +759,18 @@ mod tests {
         );
         let success: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(success.result, crate::api::schema::ResponseResult::Ok {});
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while !path.exists() && std::time::Instant::now() < deadline {
+        // The command runs on a worker; wait for its output rather than for
+        // the redirect to create the file, which happens before the write.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut written = String::new();
+        while std::time::Instant::now() < deadline {
+            written = std::fs::read_to_string(&path).unwrap_or_default();
+            if written == "invoked" {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "invoked");
+        assert_eq!(written, "invoked");
         let _ = std::fs::remove_file(path);
     }
 

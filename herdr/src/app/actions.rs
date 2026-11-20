@@ -1828,10 +1828,13 @@ impl AppState {
         // no name yet; give it the same name a panel start would have, so the
         // two paths cannot drift apart.
         if let Some(terminal) = self.terminals.get(&terminal_id) {
-            if terminal.agent_name.is_none() {
+            // Only an agent that announced itself gets a name: a detection is
+            // an observation, not a launch, and naming on detection would
+            // outlive the pane's identity when another agent takes over.
+            if terminal.agent_name.is_none() && terminal.hook_authority.is_some() {
                 if let Some(kind) = terminal.effective_known_agent() {
                     let remembered_name = terminal
-                        .current_session_identity_for_persistence()
+                        .recorded_session_identity()
                         .and_then(|(source, _agent, _kind, value)| {
                             crate::persist::agent_names::lookup(&source, &value)
                         });
@@ -1914,7 +1917,7 @@ impl AppState {
                     return None;
                 }
                 terminal
-                    .current_session_identity_for_persistence()
+                    .recorded_session_identity()
                     .and_then(|(source, agent, kind, value)| {
                         crate::persist::agent_names::lookup(&source, &value)
                             .map(|name| (name, agent, kind, value))
@@ -2476,7 +2479,7 @@ mod tests {
             ),
             (
                 "open ../hicodeer-worktrees/issue-1",
-                "herdr",
+                "hicodeer",
                 "../hicodeer-worktrees/issue-1",
             ),
             (
@@ -4300,7 +4303,10 @@ mod tests {
             session_ref: crate::agent_resume::AgentSessionRef::path(second_session),
         });
 
-        assert!(second_updates.is_empty());
+        assert!(
+            second_updates.is_empty(),
+            "a session-only update must not repaint: {second_updates:?}"
+        );
         assert!(state.session_dirty);
     }
 

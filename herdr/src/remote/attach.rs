@@ -2829,7 +2829,9 @@ mod tests {
         assert!(!socket.exists());
     }
 
-    #[cfg(unix)]
+    // [OHOS PORT] Shared OpenSSH control sockets cannot be placed on this
+    // device, so these transport tests stay desktop-only.
+    #[cfg(all(unix, not(target_env = "ohos")))]
     #[test]
     fn managed_ssh_config_includes_user_config_then_fallback() {
         use std::os::unix::fs::PermissionsExt;
@@ -2894,7 +2896,9 @@ mod tests {
         drop(managed_config);
     }
 
-    #[cfg(unix)]
+    // [OHOS PORT] Shared OpenSSH control sockets cannot be placed on this
+    // device, so these transport tests stay desktop-only.
+    #[cfg(all(unix, not(target_env = "ohos")))]
     #[test]
     fn shared_ssh_transport_survives_helper_config_drop() {
         let first = write_managed_ssh_config("example").unwrap();
@@ -2930,6 +2934,9 @@ mod tests {
         }
     }
 
+    // [OHOS PORT] Shared OpenSSH control sockets cannot be placed on this
+    // device, so these transport tests stay desktop-only.
+    #[cfg(all(unix, not(target_env = "ohos")))]
     #[test]
     fn bridge_options_keep_temporary_config_alive_after_helper_drop() {
         let config = write_managed_ssh_config("example").unwrap();
@@ -2941,7 +2948,9 @@ mod tests {
         assert!(!path.exists());
     }
 
-    #[cfg(unix)]
+    // [OHOS PORT] Shared OpenSSH control sockets cannot be placed on this
+    // device, so these transport tests stay desktop-only.
+    #[cfg(all(unix, not(target_env = "ohos")))]
     #[test]
     fn authentication_command_uses_shared_transport_without_askpass_or_host_key_relaxation() {
         let config = write_managed_ssh_config("example").unwrap();
@@ -3002,7 +3011,9 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    // [OHOS PORT] Shared OpenSSH control sockets cannot be placed on this
+    // device, so these transport tests stay desktop-only.
+    #[cfg(all(unix, not(target_env = "ohos")))]
     #[test]
     fn remote_ssh_command_uses_managed_config_when_present() {
         let managed_config = write_managed_ssh_config("example").expect("write managed config");
@@ -3120,7 +3131,9 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    // [OHOS PORT] Shared OpenSSH control sockets cannot be placed on this
+    // device, so these transport tests stay desktop-only.
+    #[cfg(all(unix, not(target_env = "ohos")))]
     #[test]
     fn endpoint_probe_preserves_setup_ssh_options() {
         let managed_config = write_managed_ssh_config("example").expect("write managed config");

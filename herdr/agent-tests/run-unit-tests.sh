@@ -19,6 +19,23 @@ set -euo pipefail
 
 HERDR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CRATE="hicodeer-agent"
+
+# The terminal that runs these tests may itself be an agent pane, whose shell
+# inherits HICODEER_AGENT_CONFIG_PATH pointing at the packaged config. Any test
+# that renders the config path or loads the live config would then see that file
+# instead of its own fixture, so drop the value the tests are meant to control.
+unset HICODEER_AGENT_CONFIG_PATH
+
+# The shared user filesystem (/storage/...) cannot bind a UNIX socket (bind
+# fails with EPERM), so any test that opens a socket must run from a temp dir on
+# the data partition. Point TMPDIR there; HICODEER_TEST_TMPDIR overrides it for
+# other hosts.
+if [ -z "${HICODEER_TEST_TMPDIR:-}" ]; then
+    HICODEER_TEST_TMPDIR=/data/storage/el2/base/haps/entry/files/tmp
+fi
+if mkdir -p "$HICODEER_TEST_TMPDIR" 2>/dev/null && [ -w "$HICODEER_TEST_TMPDIR" ]; then
+    export TMPDIR="$HICODEER_TEST_TMPDIR"
+fi
 WORK_DIR="${TMPDIR:-/tmp}/herdr-unit-tests"
 
 FILTER=""
@@ -40,6 +57,14 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# These tests share process-global state (environment variables, the config
+# path, the audio fallback helper), so one at a time is the only reliable mode.
+# HICODEER_TEST_THREADS overrides it when a subset is known to be independent.
+if [ -z "${HICODEER_TEST_THREADS:-}" ]; then
+    HICODEER_TEST_THREADS=1
+fi
+BINARY_ARGS+=("--test-threads=$HICODEER_TEST_THREADS")
 
 for tool in cargo strip binary-sign-tool; do
     if ! command -v "$tool" >/dev/null 2>&1; then

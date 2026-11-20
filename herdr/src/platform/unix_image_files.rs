@@ -385,7 +385,9 @@ mod tests {
     }
 
     fn test_ledger() -> TestLedger {
-        let scratch = private_directory(Path::new("/var/tmp")).unwrap();
+        // Respect TMPDIR: /var/tmp does not exist on this device and /tmp is
+        // mounted read-only.
+        let scratch = private_directory(&std::env::temp_dir()).unwrap();
         let mut ledger = Ledger::new();
         ledger.root = scratch.clone();
         // Most ledger tests start after successful query consumption.

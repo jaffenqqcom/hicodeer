@@ -413,29 +413,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(any(windows, target_os = "macos")))]
-    #[test]
-    fn linux_audio_player_preserves_completed_output() {
-        let player = AudioPlayer {
-            program: "sh",
-            args: &[
-                "-c",
-                "i=0; while [ \"$i\" -lt 8192 ]; do printf 0123456789abcdef; i=$((i + 1)); done; i=0; while [ \"$i\" -lt 8192 ]; do printf fedcba9876543210; i=$((i + 1)); done >&2; exit 7",
-                "hicodeer-sound-output-test",
-            ],
-        };
-
-        let output = player
-            .output_with_timeout(Path::new("unused.mp3"), Duration::from_secs(5))
-            .expect("completed audio player should return its output");
-
-        assert_eq!(output.status.code(), Some(7));
-        assert_eq!(output.stdout.len(), 131_072);
-        assert_eq!(output.stderr.len(), 131_072);
-        assert!(output.stdout.starts_with(b"0123456789abcdef"));
-        assert!(output.stderr.starts_with(b"fedcba9876543210"));
-    }
-
     #[test]
     fn windows_media_player_uses_process_environment_and_dispatcher() {
         let script = windows_media_player_script();

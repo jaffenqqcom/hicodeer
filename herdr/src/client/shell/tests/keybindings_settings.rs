@@ -8,16 +8,19 @@ fn plus_commands_survive_snapshots_and_reload_for_both_keybinding_sources() {
         ClientShellKeybindingSource::Endpoint,
     ] {
         let mut state = ClientShellState::new(
-            ClientShellConfig::from_config(&Config::default()).with_keybinding_source(source),
+            ClientShellConfig::from_config(&test_config()).with_keybinding_source(source),
         );
         for (revision, key, modifiers) in [
             (1, "prefix+plus", KeyModifiers::empty()),
             (2, "prefix+ctrl+plus", KeyModifiers::CONTROL),
         ] {
-            let config: Config = toml::from_str(&format!(
+            let mut config: Config = toml::from_str(&format!(
                 "[[keys.command]]\nkey = {key:?}\ntype = \"shell\"\ncommand = \"echo plus\"\n"
             ))
             .unwrap();
+            // The embedded Agent panel defaults to no prefix key; the profile
+            // these tests publish still needs the standalone prefix.
+            config.keys.prefix = crate::config::BindingConfig::one("ctrl+b");
             assert!(config.collect_diagnostics().is_empty());
             let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
             let app = crate::app::App::new(
@@ -64,7 +67,7 @@ fn plus_commands_survive_snapshots_and_reload_for_both_keybinding_sources() {
 
 #[test]
 fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.prompt_new_workspace_name = false;
     config.ui.prompt_new_tab_name = true;
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
@@ -108,11 +111,11 @@ fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
 
 #[test]
 fn remote_client_preferences_keep_the_same_identity_across_bridge_processes() {
-    let first = ClientShellConfig::from_config(&Config::default()).with_endpoint_preferences(
+    let first = ClientShellConfig::from_config(&test_config()).with_endpoint_preferences(
         std::path::Path::new("/tmp/hicodeer-remote-100-dev-agents.sock"),
         Some(r#"["dev", "agents"]"#),
     );
-    let next = ClientShellConfig::from_config(&Config::default()).with_endpoint_preferences(
+    let next = ClientShellConfig::from_config(&test_config()).with_endpoint_preferences(
         std::path::Path::new("/tmp/hicodeer-remote-200-dev-agents.sock"),
         Some(r#"["dev", "agents"]"#),
     );
@@ -146,7 +149,7 @@ fn remote_client_preferences_keep_the_same_identity_across_bridge_processes() {
         Some(r#"["dev", ""]"#),
         Some(r#"["", "agents"]"#),
     ] {
-        let config = ClientShellConfig::from_config(&Config::default())
+        let config = ClientShellConfig::from_config(&test_config())
             .with_endpoint_preferences(local_socket, identity);
         assert_eq!(
             config.preferences_path,
@@ -175,7 +178,7 @@ fn remote_client_preferences_process_child() {
         .unwrap();
     }
     let socket = crate::server::socket_paths::client_socket_path();
-    let config = ClientShellConfig::from_config(&Config::default())
+    let config = ClientShellConfig::from_config(&test_config())
         .with_process_endpoint_preferences(&socket);
     assert_eq!(config.preferences_path, Some(expected_path));
     let restored = ClientShellState::new(config);
@@ -191,7 +194,7 @@ fn manual_client_chrome_preferences_round_trip_per_endpoint() {
     ));
     let _ = std::fs::remove_file(&path);
     let config =
-        ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
+        ClientShellConfig::from_config(&test_config()).with_preferences_path(path.clone());
     let mut state = ClientShellState::new(config);
     state.sidebar_width = 31;
     state.sidebar_width_manual = true;
@@ -215,7 +218,7 @@ fn manual_client_chrome_preferences_round_trip_per_endpoint() {
     assert!(!stored.contains(&profile.target));
 
     let reloaded_config =
-        ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
+        ClientShellConfig::from_config(&test_config()).with_preferences_path(path.clone());
     let reloaded = ClientShellState::new(reloaded_config);
     assert_eq!(reloaded.sidebar_width, 31);
     assert!(reloaded.sidebar_width_manual);
@@ -265,7 +268,7 @@ fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
             agent_status: AgentStatus::Idle,
         });
     }
-    let mut config = ClientShellConfig::from_config(&Config::default());
+    let mut config = ClientShellConfig::from_config(&test_config());
     config.mobile_width_threshold = 0;
     let mut state = ClientShellState::new(config);
     state.set_snapshot(Box::new(projected));
@@ -316,7 +319,7 @@ fn inactive_auto_named_tab_label_does_not_stack_terminal_faint() {
         focused: false,
         agent_status: AgentStatus::Idle,
     });
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
     let frame = state.compose(106, 20).expect("tab bar frame");
@@ -381,7 +384,7 @@ detach = "prefix+x"
 
 #[test]
 fn prefix_endpoint_action_uses_public_api_with_stable_ids() {
-    let mut config = Config::default();
+    let mut config = test_config();
     config.ui.prompt_new_tab_name = false;
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_snapshot(Box::new(snapshot()));
@@ -539,7 +542,7 @@ new_tab = "prefix+n"
 
 #[test]
 fn custom_binding_invokes_only_the_endpoint_manifest_id() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let binding = crate::config::CustomCommandKeybind {
         bindings: crate::config::ActionKeybinds::prefix("z"),
         label: "prefix+z".into(),
@@ -582,7 +585,7 @@ fn custom_binding_invokes_only_the_endpoint_manifest_id() {
 
 #[test]
 fn plugin_command_carries_client_owned_selection_coordinates() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let binding = crate::config::CustomCommandKeybind {
         bindings: crate::config::ActionKeybinds::prefix("p"),
         label: "prefix+p".into(),
@@ -633,7 +636,7 @@ fn plugin_command_carries_client_owned_selection_coordinates() {
 
 #[test]
 fn unavailable_endpoint_method_is_disabled_without_disconnect() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     state.set_endpoint_methods(Some(vec!["pane.focus".into()]));
@@ -687,7 +690,7 @@ fn unavailable_endpoint_method_is_disabled_without_disconnect() {
 
 #[test]
 fn generic_endpoint_failures_and_control_errors_are_visible() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut outcome = ClientShellInput::default();
     state.push_endpoint_method(
@@ -743,7 +746,7 @@ fn generic_endpoint_failures_and_control_errors_are_visible() {
 
 #[test]
 fn endpoint_timeout_is_a_deduplicated_server_notice() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let mut outcome = ClientShellInput::default();
     state.push_endpoint_method(
@@ -780,7 +783,7 @@ fn endpoint_timeout_is_a_deduplicated_server_notice() {
 
 #[test]
 fn endpoint_notice_dedupe_resets_for_a_new_server_boot() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_endpoint_methods(Some(Vec::new()));
     let method = || {
@@ -810,7 +813,7 @@ fn endpoint_notice_dedupe_resets_for_a_new_server_boot() {
 
 #[test]
 fn custom_binding_missing_from_endpoint_manifest_is_not_forwarded() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     let binding = crate::config::CustomCommandKeybind {
         bindings: crate::config::ActionKeybinds::prefix("z"),
@@ -835,7 +838,7 @@ fn custom_binding_missing_from_endpoint_manifest_is_not_forwarded() {
 
 #[test]
 fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     let mut projection = snapshot();
     projection
         .commands
@@ -930,7 +933,7 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
 
 #[test]
 fn resize_mode_reuses_endpoint_resize_and_stays_active_until_done() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&test_config()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
 

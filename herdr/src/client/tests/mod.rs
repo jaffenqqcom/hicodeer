@@ -3,8 +3,8 @@ use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
 
 fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    // Share one lock with every other test that rewrites process env.
+    crate::config::test_config_env_lock()
 }
 
 #[test]
